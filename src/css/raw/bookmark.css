@@ -1,0 +1,71 @@
+@charset "UTF-8";
+@import url("font.css");
+
+@keyframes fadeIn {
+    to {
+        opacity: 1;
+    }
+}
+
+html,
+body,
+pre,
+textarea {
+    font-family: 'Noto Serif SC';
+}
+
+html,
+body {
+    margin: 0;
+    padding: 0;
+    background: transparent;
+}
+
+::-webkit-scrollbar {
+    width: 4px
+}
+
+::-webkit-scrollbar-thumb {
+    background-color: #fff
+}
+
+::-webkit-scrollbar-track {
+    background-color: #afc6de
+}
+
+a::after {
+    content: "\2197";
+}
+
+div {
+    color: honeydew;
+    padding-top: 20px;
+    margin-left: 40px;
+    min-height: 80px;
+    width: 50%;
+    transition: background 0.2s;
+}
+
+div>a {
+    color: darkgray;
+}
+
+div>a:hover {
+    color: #98fda5;
+}
+
+div:not(#del).dragover {
+    background: #cde9ff;
+}
+
+div#del.dragover {
+    background: #ffc5c5;
+}
+
+#copyright {
+    font-style: italic;
+    position: fixed;
+    bottom: 5px;
+    left: 5px;
+    color: red;
+}

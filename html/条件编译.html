@@ -1,0 +1,69 @@
+<!doctype html>
+<html>
+ <head>
+  <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+  <script src="../src/js/content.js"></script>
+  <title>条件编译</title>
+ </head>
+ <body>
+  <span id="anchor">20251026092752-其它|嵌入式开发|C</span>
+  <pre>
+条件编译就是在预处理阶段，通过宏和指令控制哪些代码会被编译，哪些会被忽略。
+它是实现跨平台、调试、功能开关的关键手段
+
+1)按不同的条件去编译不同的程序部分,因而产生不同的目标代码文件。有利于程序的移植和调试。
+2)条件编译当然也可以用条件语句来实现。 但是用条件语句将会对整个源程序进行编译,生成 的目标代码程序很长,而采用条件编译,则根据条件只编译其中的程序段1或程序段2,生成的目 标程序较短。
+##if-#else 条件编译指令
+
+常用条件编译指令
+1. #if / #elif / #else / #endif
+#define VERSION 2
+#if VERSION == 1
+    printf("Version 1\n");
+#elif VERSION == 2
+    printf("Version 2\n");
+#else
+    printf("Other version\n");
+#endif
+
+#if 判断宏值
+#elif 相当于 else if
+#else 默认分支
+#endif 结束条件编译
+
+2. #ifdef / #ifndef
+#define DEBUG
+#ifdef DEBUG
+    printf("Debug mode\n");
+#endif
+#ifndef RELEASE
+    printf("Not release mode\n");
+#endif
+
+#ifdef → 如果宏被定义，则编译
+#ifndef → 如果宏没有被定义，则编译
+
+3. #define / #undef
+#define FEATURE_X
+#ifdef FEATURE_X
+    printf("Feature X enabled\n");
+#endif
+
+#undef FEATURE_X
+
+#undef 可以取消宏定义
+与 #ifdef 配合使用非常常见
+
+4. 条件表达式中可以用算术比较
+#define LEVEL 3
+#if LEVEL >= 2
+    printf("High level\n");
+#endif
+
+条件可以使用数字比较、算术运算符（==, >=, < 等）
+不能使用变量（宏展开只在预处理阶段）
+
+
+</pre>
+ </body>
+</html>

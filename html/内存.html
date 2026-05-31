@@ -1,0 +1,101 @@
+<!doctype html>
+<html>
+ <head>
+  <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+  <script src="../src/js/content.js"></script>
+  <title>内存</title>
+ </head>
+ <body>
+  <span id="anchor">20251022175327-其它|嵌入式开发|C</span>
+  <pre>
+
+# 堆内存操作
+malloc()：分配，不清零
+    忘记检查 malloc() 返回值
+        空指针访问
+calloc()：分配并清零, malloc() + memset()
+realloc()：调整大小
+free()：释放内存
+    忘记 free()
+        内存泄漏
+    free() 两次
+        未定义行为
+    free() 栈上变量
+        未定义行为
+    使用 free() 后的指针
+        悬空指针
+
+malloc / calloc / realloc 这些在堆上分配内存的函数本质上都是堆管理器分配内存的接口, 内部都会在用户指针前面存储 头部 metadata：块大小, 分配状态（已用 / 空闲）, 可能还有链表指针、对齐信息等
+头部信息是 动态内存管理器内部维护的，程序员是看不到也不需要操作的。
+
+## malloc()
+参数：要分配的字节数
+返回值：指向分配内存的 void* 指针，失败返回 NULL
+不会初始化内存（旧内存残留）
+需要手动释放（free()）
+<code c>
+int size = 5;
+ 
+int *p = malloc(size * sizeof(int));
+if (p == NULL){
+    perror("malloc failed");
+    return 1;
+}
+ 
+memset(p, 0, size * sizeof(int));
+ 
+for (int i = 0; i &lt; size; i++)
+    printf("%d ", p[i]);
+ 
+free(p);
+p = NULL;  // 安全做法
+</code>
+当调用 malloc(n) 时：
+    堆管理器会在分配的内存前面预留一块头部信息
+    p 返回指向 用户可用内存的起始地址
+当调用 free(p) 时：
+    堆管理器通过 p 的前面地址找到头部信息, 从头部信息里知道块的大小, 将整块内存标记为可用或加入空闲链表
+
+## calloc()
+参数：元素个数, 每个元素的大小（字节）
+返回值：指向分配内存的指针，失败返回 NULL
+自动将分配的内存全部置为 0, 通常用于数组分配
+<code c>
+int *arr = calloc(5, sizeof(int));  // arr[0]~arr[4] 初始值全为0
+free(arr);
+arr = NULL;  // 安全做法
+</code>
+
+## realloc()
+参数：原内存块指针（由 malloc/calloc 分配）, 新大小
+返回值：成功返回新指针（可能与原地址不同）, 失败返回 NULL（原内存仍然有效）
+扩容时可能移动数据到新的地址，所以要小心使用返回值！
+<code c>
+int *p = malloc(3 * sizeof(int));
+for (int i = 0; i &lt; 3; i++) p[i] = i + 1;
+p = realloc(p, 5 * sizeof(int)); // 扩展为5个int
+p[3] = 4;
+p[4] = 5;
+for (int i = 0; i &lt; 5; i++) printf("%d ", p[i]);
+free(p);
+p = NULL;  // 安全做法
+</code>
+
+## free()
+参数：指向堆区内存的指针（必须是 malloc/calloc/realloc 分配的）
+调用后这块内存会被回收, 不会自动将指针设为 NULL（需手动）
+只能释放堆内存
+<code c>
+int *p = malloc(10 * sizeof(int));
+free(p);   // 释放堆内存
+p = NULL;  // 避免悬空指针
+</code>
+
+# 内存对齐
+计算机系统对基本类型数据在内存中存放的位置有限制,它们会要求这些数据的起始地址的值是 某个数k的倍数,这就是所谓的内存对齐,而这个k则被称为该数据类型的对齐模数(alignment modulus)。
+    这种强制的要求一来简化了处理器与内存之间传输系统的设计,二来可以提升读取数据的速度。
+        比如这么一种处理器,它每次读写内存的时候都从某个8倍数的地址开始,一次读出或写入8个字节的数据,假如软件能 保证double类型的数据都从8倍数地址开始,那么读或写一个double类型数据就只需要一次内存操作。
+        否则,我们就可能需要两次内存操作才能完成这个动作,因为数据或许恰好横跨在两个符合对齐要求的8字节内存块上
+</pre>
+ </body>
+</html>

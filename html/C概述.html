@@ -1,0 +1,262 @@
+<!doctype html>
+<html>
+ <head>
+  <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+  <script src="../src/js/content.js"></script>
+  <title>C概述</title>
+ </head>
+ <body>
+  <span id="anchor">20260412185048-其它|C</span>
+  <pre>
+# 开发环境
+## VS Code + MinGW
+https://github.com/brechtsanders/winlibs_mingw/releases/download/15.2.0posix-14.0.0-msvcrt-r7/winlibs-x86_64-posix-seh-gcc-15.2.0-mingw-w64msvcrt-14.0.0-r7.zip
+
+## Visual Studio
+### 中文乱码
+main() 开头改控制台编码
+    system("chcp 65001"); 
+或者控制面板,区域,管理,Beta:使用UTF-8全球语言支持
+
+### 字体配色
+安装JetBrains Mono
+工具,选项,环境
+
+### 关闭MSVC自己的_s系列安全警告
+文件开头加 #define _CRT_SECURE_NO_WARNINGS
+或者
+    工程,属性,all configurations,all platforms,预处理器定义添加_CRT_SECURE_NO_WARNINGS
+
+## 编译器 
+源代码文件是程序员编写的代码
+目标代码文件包含机器语言代码
+可执行文件包含组成可执行程序的完整机器语言代码
+编译器把源代码翻译成等价的机器语言代码（目标代码）
+链接器把编译器翻译好的源代码以及库代码和启动代码组合起来，生成一个可执行程序
+    如果程序用了标准库, 不会把整个库都打进可执行文件, 只记录“需要哪些动态库”, 运行时由动态链接器加载 .so / .dll
+Cygwin在自己的视窗运行，模仿Linux命令行环境
+MinGW在Windows的命令提示模式中运行
+
+# 开发流程
+## 规划
+不涉及具体的计算机语言
+    1.程序需要哪些信息
+    2.要进行哪些计算和控制
+    3.程序应该要报告什么信息
+## 伪代码
+伪代码有助于设计程序的逻辑。确定程序的逻辑无误之后，再把伪代码翻译成实际的编程代码
+
+
+# C库
+## 标准库
+https://zealdocs.org/download.html 文档阅读器指定docsets
+尽量优先使用 标准 C 库，因为它具有最佳的可移植性。
+标准 C 本身 不包含线程、文件遍历、图形界面、系统调用等高级能力，这些都需要平台扩展或第三方库支持。
+若需要跨平台功能，可选择：
+    跨平台库（如 SDL、GLFW、Qt、POSIX 等）, 库本身实现的平台适配
+    条件编译（#ifdef）适配不同系统。
+
+## 扩展库
+平台/编译器相关头文件, 这些头文件不是 C 标准库的一部分，而是 平台专有或编译器扩展，使用它们会导致代码对特定环境产生强依赖。例如
+windows.h
+    来自 Windows SDK，由操作系统提供。包含 Win32 API：窗口、消息、进程、线程、文件、定时器等系统功能。只能在 Windows 上使用。
+io.h
+    属于 MSVC CRT（微软 C 运行库）扩展。提供类 POSIX 的底层 I/O 函数，例如 _open、_read、_access 等。主要在 Windows/MSVC 环境可用。
+fcntl.h
+    兼容层, 来自 POSIX 标准，Windows 与类 Unix 系统均有实现，但行为存在差异。定义文件控制标志，如 _O_RDONLY、_O_CREAT 等。
+
+使用上述扩展库程序会严重依赖特定平台（如 Windows）。无法跨平台编译，甚至同一平台换编译器也可能无法编译（比如 MSVC → MinGW）。若目标是跨平台开发，应避免或隔离这些头文件的使用。
+
+## exe平台依赖
+使用标准C库函数
+    仅依赖目标平台的 C 运行库，实现跨平台（同源代码在不同平台上需重新编译）
+使用平台专有函数/扩展库
+    生成的 exe 只能在提供这些函数实现的平台上运行（例如 Windows exe 调用 windows.h API）
+使用跨平台库
+    依赖库本身实现的平台适配，代码可编译生成不同平台 exe，但仍需库支持
+
+
+# 字符编码
+Windows 的控制台是从 DOS 时代演变来的，本质上是 基于 code page 的字符模式，默认不是 UTF-8
+    英文 Windows 默认 CP437 或 CP1252（英文 ANSI 编码）
+    中文 Windows 默认 CP936（GBK 编码）
+源文件编码 UTF-8 → 编译器把每个汉字变成 3 个字节
+控制台默认是 ANSI（英文 Windows 是 CP437）
+控制台按 ANSI 解码 UTF-8 → 输出乱码
+
+UTF-8
+    文件/网络传输编码, 可变长度编码，1～4 字节/字符
+        汉字“中”, Unicode 码点：U+4E2D, UTF-8 编码：E4 B8 AD → 3 字节
+UTF-16
+    Windows 的内部 Unicode 表示, 定长编码（大部分字符）
+        汉字“中”, Unicode 码点：U+4E2D, UTF-16 编码：0x4E2D → 2 字节
+    BMP（U+0000 ~ U+FFFF）的字符用 1 个 UTF-16 单元 → 2 字节
+    超出 BMP 的字符（如部分 emoji）用 2 个 UTF-16 单元 → 4 字节
+
+char 只能存 0~255 的字符（单字节），不够表示中文, 中文字符是多字节（至少两个字节）
+    Windows 提供 wchar_t 来直接表示 Unicode 字符，这样每个字符固定占用 2 字节（UTF-16）
+    宽字符就是“Windows 原生的 Unicode”，直接和控制台对接，不依赖 code page”
+    在 Windows 上，如果想打印中文、日文、emoji 等非 ASCII 字符，最可靠的方法就是使用宽字符
+
+<code c>
+#include &lt;stdio.h>
+#include &lt;io.h>
+#include &lt;fcntl.h>
+ 
+int main() {
+    // 告诉 C 库把 stdout 当作 UTF-16 输出给控制台 
+    _setmode(_fileno(stdout), _O_U16TEXT);
+    // wprintf 输出宽字符时，Windows 默认 stdout 是 ANSI 模式, 所以需要上一行 
+    wprintf(L"中文测试\n");  //L"" 表示宽字符，存储为 UTF-16 
+ 
+    int i = 1;
+    // 继续用wprintf输出ASCII 
+    wprintf(L"%d\n", i);
+    // 混用宽字符模式输出和普通printf, 会触发断言 
+    //printf("%d", i); 
+    // 切回普通字符模式 
+    _setmode(_fileno(stdout), _O_TEXT);
+    printf("%d", i);
+    return 0;
+}
+</code>
+编译器读取源文件 UTF-8 字节流，然后在编译阶段把它转换成 UTF-16, 每个汉字在 wchar_t 数组中占用 2 字节, 这和原 UTF-8 文件中的 3 字节表示没关系了，编译器已经做了转换
+
+Unix 系的终端(Linux 或者 macOS)：
+    本身就是 UTF-8 原生支持
+    文件编码一般也 UTF-8
+    printf("中文\n"); 就直接输出到终端，终端显示 UTF-8 → 一切正常
+
+<code c>
+#define _CRT_SECURE_NO_WARNINGS
+#include &lt;stdio.h>
+#include &lt;stdlib.h>
+#include &lt;windows.h>
+ 
+/* 回显文件内容 */
+int main()
+{
+    int ch;
+    FILE* fp;
+    char fname[50];
+    printf("Enter the name of the file: ");
+    scanf("%s", fname);
+    fp = fopen(fname, "r");
+    if (fp == NULL)
+    {
+        printf("Failed to open file.");
+        exit(1);
+    }
+    // 告诉windows控制台我输出的是utf-8
+    SetConsoleOutputCP(CP_UTF8);
+    while ((ch = getc(fp)) != EOF)
+        putchar(ch);
+    fclose(fp);
+    return 0;
+}
+</code>
+
+putchar是吐字节, 用SetConsoleOutputCP(CP_UTF8)避免乱码
+wprintf是吐宽字符, 必须用_setmode(_0_U16TEXT)避免乱码
+putchar/printf靠控制台解释字节, wprintf靠c运行库+控制台
+
+
+# 可移植性
+只要坚持使用标准形式，把程序从一个编译器移至另一个编译器时就不会出什么问题。
+某些类型名在不同系统中的功能不一样。C99 新增了两个头文件stdint.h和inttypes.h，以确保C语言的类 型在各系统中的功能相同。 
+    精确宽度的整数类型
+        int8_t, int16_t, int32_t, int64_t
+        uint8_t, uint16_t, uint32_t, uint64_t
+    当硬件可能不支持精确宽度时使用, 表示“至少”有这么多位。
+        int_least8_t, int_least16_t, int_least32_t, int_least64_t
+
+当你使用像 int32_t 这样的类型时，在支持 C99 的系统中，它就表示一个“精确 32 位的有符号整数”，
+    无论是 32 位系统、64 位系统，还是其他架构，只要该系统提供stdint.h并定义了 int32_t，它的宽度一定是 32 位。
+    编译器在编译时会去stdint.h里查找 typedef 定义，比如：typedef signed int int32_t;
+        如果这个系统没有任何一种整数类型正好是 32 位宽，那 stdint.h 就不会定义 int32_t。编译时会直接报错：error: unknown type name 'int32_t'
+
+
+# 内存 
+内存布局大致如下：
+    高地址
+    │   [ 栈 ]      local, p, 栈是系统自动管理的“临时工作区”
+    │   [ 堆 ]      malloc 分配的内存 (存 3), 堆是程序员自己管理的“动态存储区”
+    │   [ 静态区 ]   global
+    │   [ 常量区 ]   "Hi"
+    │   [ 代码区 ]   foo() 函数指令
+    低地址
+
+初始化值：
+    高地址
+    ------------
+    |   栈 Stack          &lt;-- 局部变量 (没有默认初始化)
+    ------------
+    |   堆 Heap           &lt;-- malloc/new
+    ------------
+    |   .bss              &lt;-- 未初始化全局/静态变量（默认全 0）
+    |   .data             &lt;-- 已初始化全局/静态变量
+    ------------
+    |   代码区 Text       &lt;-- 程序指令
+    ------------
+    低地址
+
+<code c>
+int global = 1;      // 全局区
+const char *msg = "Hi"; // 常量区
+void foo() {
+    int local = 2;           // 栈
+    int *p = malloc(4);      // 堆
+    *p = 3;
+} // local 销毁，但 *p 仍存在（需 free）
+</code>
+
+## 栈内存
+存储局部变量、函数参数, 随函数调用自动分配/销毁
+访问速度快（连续内存 + 硬件优化）
+栈的最大尺寸固定 (MB级), 局部变量过多，过大 或 递归层数太多等会导致栈溢出
+
+## 堆内存
+堆内存可以存放任意类型的数据，但需要自己申请与释放
+    通过 malloc() / calloc() / realloc() / free() 操作
+    这四个函数是 C 语言中进行动态内存管理的核心函数，全部定义在 stdlib.h 头文件中
+访问速度较慢（需要地址寻址）
+堆大小受限于实际内存的大小和内存是否连续性
+
+
+# 关键字 
+20260412215244.webp
+
+# 数据类型
+类型及常见大小
+    char        1 字节
+    short	    2 字节
+    int	        4 字节
+    long	    Win=4 / Linux64=8
+    long long	8 字节
+    float	    4 字节
+    double	    8 字节
+    long double	平台相关
+
+当作为函数参数传递时
+    char和short被转换成int
+    float 被转换成 double
+有符号和无符号混合时
+<code c>
+int a = -1;
+unsigned int b = 1;
+a &lt; b   // false, a被转换成unsigned int, 变成 4294967295 > 1
+</code>
+标准规定 1 byte == sizeof(char)
+所有整数类型默认都是signed, 除非显式unsigned（或后缀u）
+    浮点数的二进制格式中已经包含了符号位，因此它天然可以表示正负
+当整数达到它能表示的最大值时
+    无符号整数会回绕重新从起始点开始
+    有符号整数UB
+
+_Bool类型
+    只能表示 0 或 1，赋值时所有非零值都会变成 1
+    在表达逻辑语义上更清晰，但参与运算时仍会提升为 int
+        stdbool.h让bool成为_Bool的别名，还把true和false分别定义为1和0的符号常量, 可以与C++兼容，因为C++把bool、true和false定义为关键字
+</pre>
+ </body>
+</html>

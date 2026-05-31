@@ -1,0 +1,59 @@
+<!doctype html>
+<html>
+ <head>
+  <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+  <script src="../src/js/content.js"></script>
+  <title>SQLite</title>
+ </head>
+ <body>
+  <span id="anchor">20260512130620-其它</span>
+  <pre>
+# SQLite
+SQLite 是嵌入式数据库（Embedded RDBMS）, 单文件, 零配置, 无服务器(区别于服务器数据库MySQL / PostgreSQL) 
+    2000   →  SQLite 发布并普及
+    2005+  →  移动端爆发（SQLite成为标准）
+    2008+  →  SQLCipher出现（解决隐私安全问题）
+
+它的 SQL 是标准 SQL 的简化兼容版, 基本是“标准 SQL 的子集 + 少量扩展”
+    默认不做任何加密；只有整库加密（如 SQLCipher）才是在数据库内部发生的真正加密，而字段加密和主密码派生都属于应用层逻辑
+    SQLCipher 约等于 SQLite 的加密版, 它不是独立数据库，而是 SQLite 的“加密增强分支”, 对SQLite存储引擎进行改造，使加密/解密发生在数据库内部的page读写层
+
+# SQLCipher 的 CLI 版本制作
+windows下的预编译版本sqlcipher.exe 
+<code bash>
+# vcpkg 和 Maven 的角色相似（都是依赖管理器），Maven 管的是“已编译的包”，vcpkg 管“需要编译的源码库”
+# 下载 vcpkg 的源码
+git clone https://github.com/microsoft/vcpkg.git
+cd vcpkg
+ 
+# 编译为 vcpkg.exe
+.\bootstrap-vcpkg.bat
+ 
+# 安装 openssl 的静态链接库
+vcpkg install openssl:x64-windows-static
+ 
+# 转到 x64 Native Tools Command Prompt
+# 下载 sqlcipher 的源码
+cd c:\
+git clone https://github.com/sqlcipher/sqlcipher.git
+cd sqlcipher
+ 
+# 重新生成 sqlite3.c
+nmake /f Makefile.msc clean
+nmake /f Makefile.msc sqlite3.c
+ 
+# 编译为单个exe文件
+cl -I"C:\vcpkg\installed\x64-windows-static\include" sqlite3.c shell.c -DSQLITE_TEMP_STORE=2 -DSQLITE_HAS_CODEC -DSQLITE_OS_WIN -DSQLITE_EXTRA_INIT=sqlcipher_extra_init -DSQLITE_EXTRA_SHUTDOWN=sqlcipher_extra_shutdown -DHAVE_STDINT_H /MT -link -out:sqlcipher.exe -LIBPATH:"C:\vcpkg\installed\x64-windows-static\lib" libcrypto.lib libssl.lib Crypt32.lib Ws2_32.lib advapi32.lib user32.lib gdi32.lib
+ 
+# 加入环境变量 
+setx PATH "C:\sqlcipher;%PATH%"
+exit
+ 
+# 重新打开命令窗
+sqlcipher
+PRAGMA cipher_version;
+.quit
+</code>
+</pre>
+ </body>
+</html>

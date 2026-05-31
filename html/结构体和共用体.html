@@ -1,0 +1,209 @@
+<!doctype html>
+<html>
+ <head>
+  <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+  <script src="../src/js/content.js"></script>
+  <title>结构体和共用体</title>
+ </head>
+ <body>
+  <span id="anchor">20251026092423-其它|嵌入式开发|C</span>
+  <pre>
+结构体和数组一样属于构造类型
+数组是用于保存一组相同类型数据的, 而结构体是用于保存一组不同类型数组的
+
+先定义结构体类型，再定义变量
+struct Student{
+    char *name;
+    int age;
+}
+struct Student stu;
+
+定义结构体类型的同时定义变量
+struct Student{
+    char *name;
+    int age;
+} stu;
+
+匿名结构体定义结构体变量, 不能复用
+struct {
+    char *name;
+    int age;
+} stu;
+
+一般对结构体变量的操作是以成员为单位进行的，引用的一般形式为：结构体变量名.成员名
+stu.age=18;
+printf("%d", stu.age);
+
+按序初始化
+struct Student stu = {"Tom","18"};
+
+不按序
+struct Student stu = {.age="18", .name=18};
+
+逐个初始化
+struct Student stu;
+stu.age=18;
+stu.name="Tom";
+
+定义后一次性初始化, 这是 C99 引入的复合字面量，生成一个匿名的 struct Student 对象，然后赋值给已经存在的变量。
+struct Student stu;
+stu = (struct Student){"Tom","18"};
+
+结构体别名
+typedef 的作用是 给已有类型起一个新的名字（别名）增加可读性和简化复杂类型。它不创建新类型
+typedef 原类型 新名字;
+typedef unsigned int uint;
+uint a = 100; // 现在你可以用 uint 代替 unsigned int
+
+struct Person {
+    char name[50];
+    int age;
+};
+struct Person p1;
+每次都得写 struct Person，比较麻烦。
+
+用 typedef 可以简化：
+typedef struct {
+    char name[50];
+    int age;
+} Person;
+Person p2;  // 不需要写 struct
+注意：这里的结构体 没有名字，但 Person 就成了类型名。
+如果你想保留结构体名，同时用 typedef：
+typedef struct Person {
+    char name[50];
+    int age;
+} Person;
+struct Person p3; // 可以用 struct Person
+Person p4;        // 也可以用 typedef 别名 Person 
+
+函数指针
+int (*FuncPtr)(int, int);
+使用 typedef 后，你可以直接用 FuncPtr 声明函数指针变量，而不必每次写复杂的指针语法。
+示例
+typedef int (*FuncPtr)(int, int); // 给函数指针起别名
+FuncPtr addFunc; // 声明函数指针变量
+// 定义一个函数
+int add(int a, int b) {
+    return a + b;
+}
+addFunc = add; // 将函数地址赋给函数指针
+// 或 addFunc = &add;
+int result = addFunc(3, 4); // 调用函数指针
+printf("%d\n", result);
+
+结构体嵌套
+直接嵌套
+struct Date {
+    int year;
+    int month;
+};
+struct Student {
+    char name[20];
+    int age;
+    struct Date birthday;  // 直接嵌套结构体
+};
+int main() {
+    struct Student stu = {"Alice", 18, {2007, 5}};
+    printf("姓名: %s\n", stu.name);
+    printf("生日: %d-%02d\n", stu.birthday.year, stu.birthday.month);
+    return 0;
+}
+
+结构体指针嵌套
+struct Date {
+    int year;
+    int month;
+};
+struct Student {
+    char name[20];
+    int age;
+    struct Date *birth;   // 嵌套结构体的指针
+};
+int main() {
+    struct Date d = {2005, 10};
+    struct Student stu = {"Bob", 19, &d};
+    printf("姓名: %s\n", stu.name);
+    printf("生日: %d-%02d\n", stu.birth->year, stu.birth->month); // 访问时使用->
+    return 0;
+}
+
+匿名结构体嵌套(c11)
+struct Student {
+    char name[20];
+    int age;
+    struct {
+        int year;
+        int month;
+    } birthday;  // 匿名结构体成员
+};
+int main() {
+    struct Student stu = {"Carol", 17, {2008, 12}};
+    printf("%s 的生日是 %d-%02d\n",
+           stu.name, stu.birthday.year, stu.birthday.month);
+    return 0;
+}
+
+结构体之间赋值是值拷贝, 而不是地址传递
+struct Point {
+    int x, y;
+};
+struct Point a = {1, 2};
+struct Point b = a;  // ✅ 值拷贝, a和b是独立的对象
+b.x = 100;
+printf("%d\n", a.x);  // 仍然是 1
+
+结构体变量作为函数形参时也是值传递, 在函数内修改形参, 不会影响外界实参
+void change(struct Point p) {
+    p.x = 999;
+}
+int main() {
+    struct Point pt = {1, 2};
+    change(pt);
+    printf("%d\n", pt.x);  // 输出 1，不是 999
+}
+
+若要修改外部变量，必须用指针传递
+void change(struct Point *p) {
+    p->x = 999;
+}
+int main() {
+    struct Point pt = {1, 2};
+    change(&pt);
+    printf("%d\n", pt.x);  // 输出 999
+}
+p->x 是访问结构体指针 p 所指对象中成员 x 的标准写法。是一种语法糖, p->x   等价于   (*p).x
+*p 先解引用，得到结构体对象；然后用 . 访问结构体成员。
+
+共用体内所有成员共享同一块内存。
+同一块内存意味着所有成员都从相同的地址开始存储。写入一个成员的数据会覆盖其他成员的数据。
+共用体的大小 = 最大成员的大小（加上可能的对齐填充）。
+所以在同一时间只能安全地访问最后写入的成员
+共用体的设计目标是节省内存或实现多种解释
+节省内存, 如果一个变量在不同情况下可能存储不同类型的数据，用 union 可以共用一块内存
+多种类型解释同一数据, 常见于协议解析、硬件寄存器访问、类型转换（type punning）。
+
+union DataU { int i; float f; char c; } u;
+int main() {
+    u.i = 100;
+    printf("%d\n", u.i);   // 100
+    u.f = 3.14;
+    printf("%.2f\n", u.f); // 3.14
+    printf("%d\n", u.i);   // 出现非预期, 不要去访问在u.f之前写入的u.i
+}
+内存重叠导致覆盖
+先写 u.i = 100;
+内存表示整数 100 的二进制：0x00000064
+再写 u.f = 3.14;
+内存重新解释浮点数 3.14 的二进制：0x4048F5C3（不同于 100 的二进制）
+此时 u.i 和 u.f 指向同一块内存
+所以 u.i 的值已经被 u.f 覆盖
+再访问 u.i 就不是原来的 100，而是把浮点 3.14 的二进制当作整数读取 → 未定义行为
+
+共用体的应用场景
+（1）通信中的数据包会用到共用体，因为不知道对方会发送什么样的数据包过来，用共用体的话就简单了，定义几种格式的包，收到包之后就可以根据包的格式取出数据。
+（2）节约内存。如果有2个很长的数据结构，但不会同时使用，比如一个表示老师，一个表示学生，要统计老师和学生的情况，用结构体就比较浪费内存，这时就可以考虑用共用体来设计。
+（3）某些应用需要大量的临时变量，这些变量类型不同，而且会随时更换。而你的堆栈空间有限，不能同时分配那么多临时变量。这时可以使用共用体让这些变量共享同一个内存空间，这些临时变量不用长期保存，用完即丢，和寄存器差不多，不用维护。
+</pre>
+ </body>
+</html>

@@ -1,0 +1,65 @@
+<!doctype html>
+<html>
+ <head>
+  <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+  <script src="../src/js/content.js"></script>
+  <title>字符串,常量,枚举</title>
+ </head>
+ <body>
+  <span id="anchor">20251026095803-其它|嵌入式开发|C</span>
+  <pre>
+# 字符串
+定义字符串的两种方式
+<code c>
+// 1. 字符数组
+char str[] = "hello";
+// 这是一个字符数组；编译器自动在末尾加上一个 '\0'（字符串结束符）；实际内存内容是：
+// ['h', 'e', 'l', 'l', 'o', '\0']
+ 
+// 2. 字符串指针指向字符串
+char *str = "hello";
+// 这是一个 指针变量；它指向字符串常量 "hello" 所在的内存（只读区）；
+</code>
+
+# 枚举
+枚举允许用有意义的名字代替整型常量，提高代码可读性。典型用途为状态码、选项、标志位
+本质上，枚举变量是整数类型（通常是 int）。
+<code c>
+// 枚举常量默认从 0 递增, 也可以自定义初始值
+enum Weekday { MON=11, TUE, WED, THU, FRI, SAT, SUN };
+enum Weekday today;
+today = WED;
+printf("Today is %d\n", today);  // 输出 13
+today = 12; // 等价于today = TUE;
+printf("Today is %d\n", today);  // 输出 12
+ 
+// 枚举常量相当于 const int
+enum Color { RED=0}; // 等价于const int RED = 0;
+ 
+// 可指定底层存储类型（节省空间, C11 可选）
+enum Color : unsigned char { RED, GREEN, BLUE };
+</code>
+
+## 组合标志位
+枚举和位掩码结合形成组合标志位
+利用位运算可以在一个整数中存储多个“开关”状态，非常节省空间，也很高效。
+<code c>
+enum Permission { READ=1, WRITE=2, EXECUTE=4 };
+int p = READ | EXECUTE; // 使用 | 将权限组合
+if (p & READ) { /* 可读 */ } // 使用 & 判断是否拥有某个权限
+</code>
+使用 2 的幂 给每个枚举常量赋值，这样它们的二进制位互不重叠。
+    READ = 1 → 二进制 0001
+    WRITE = 2 → 二进制 0010
+    EXECUTE = 4 → 二进制 0100
+    READ | EXECUTE：0001 | 0100 = 0101 → 十进制 5
+    表示同时拥有 读权限 和 执行权限
+<code c>
+if (p & READ) { /* 可写 */ } // 0101 & 0001 = 0001 → 非零 → 条件成立
+// 可以用同样方法判断其他权限：
+if (p & WRITE) { /* 可写 */ }   // 0101 & 0010 = 0000 → 不成立
+if (p & EXECUTE) { /* 可执行 */ } // 0101 & 0100 = 0100 → 成立
+</code>
+</pre>
+ </body>
+</html>

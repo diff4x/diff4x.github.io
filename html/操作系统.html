@@ -1,0 +1,565 @@
+<!doctype html>
+<html>
+ <head>
+  <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+  <script src="../src/js/content.js"></script>
+  <title>操作系统</title>
+ </head>
+ <body>
+  <span id="anchor">20260531082437-其它</span>
+  <pre>
+# pixel在中国地区的IMS注册
+2G,3G时代,手机里有两套网络
+    打电话,电路交换（CS）
+    上网,数据网络
+4G LTE 被设计成纯数据网络（All-IP Network）,LTE 没有语音通道
+    刚进入 4G 时，运营商用了一个临时办法, 打电话时信号从 4G 切回 3G
+VoLTE
+    Voice over LTE
+    本质是把电话变成一种“特殊的数据业务”, 即实时数据通信
+    VoLTE 依赖 IMS（IP Multimedia Subsystem）,它相当于移动网络里的 SIP 云平台
+        IMS 决定的不是“能不能打电话”，而是“是否允许成为电话终端”
+    机型只有在IMS上注册后运营商才允许呼叫建立,来电寻址,号码定位,否则只能上网(大多地区的2G / 3G 正在被关闭, 没有旧语音网络,无法建立电话), 也就是说现在的4g环境不开VoLTE基本等于没电话功能
+        注册要求
+            通过 VoLTE 实验室认证
+            已加入设备白名单
+            提供 carrier profile
+        Pixel没有中国本地的carrier config,发起的REGISTER被运营商策略系统拒绝,因而VoLTE不可用
+            运营商
+                在中国没有正式销售, 没入网许可体系参与, 没运营商联合测试
+                未知设备等于不可控风险,不允许IMS
+                如果未经认证设备出现问题, 用户不会怪手机厂商，而会怪信号不行
+            设备商
+                Pixel在中国 ≈ 非正式销售
+                不会为一个未正式销售市场, 投入运营商认证成本
+        为什么iPhone几乎免检
+            iPhone 不是“申请认证”，而是“制定规则”
+                普通流程: 手机厂商求运营商认证
+                苹果流程: 运营商必须适配 iPhone
+            iPhone用户ARPU（平均消费）最高, 高端用户集中, 用户投诉影响巨大
+                如果某运营商 iPhone 打不了电话, 用户怪运营商不怪苹果, 所以运营商必须放行
+
+权限桥与开关工具
+    权限桥通过ADB shell将权限安全转交给App, 只是“授权通道”
+        Android 限制普通 App 修改以下
+            Global settings
+            CarrierConfig
+            Telephony flags
+    开关工具执行策略修改的控制面板
+        打开隐藏 IMS 开关
+        覆盖 carrier 检查
+        强制允许 VoLTE capability
+    这种修改方案属于运行时覆盖（Runtime Override）
+        需要重新操作的场景
+            普通重启
+            系统 OTA 更新
+            Android 大版本升级
+            重置网络设置
+            更换 SIM
+
+https://cnzhx.net/blog/enable-volte-for-pixel-6-7-without-root/#i-1
+
+国行安卓的云控制
+https://www.youtube.com/watch?v=rg5Y0os_IbE 
+
+# TPM+PIN
+启用BitLocker，打印，从pdf上复制密钥文本
+组策略编辑器中打开“计算机配置”>“管理模板”>“Windows组件”>“BitLocker驱动器加密”>“操作系统驱动器”>“启动时需要附加身份验证”>切换为“已启用”
+取消“没有兼容的TPM时允许Bitlocker”功能
+允许TPM
+有TPM时需要启动PIN
+管理员运行
+<code batch>
+manage-bde -protectors -add c: -TPMAndPIN
+</code>
+
+# 代理方案
+## 现成商业代理
+多用户共享出口ip, 具备群体匿名性
+
+## 自建代理(Xray + REALITY)
+单节点自控, 侧重伪装而非匿名
+客户端先通过 REALITY 建立一个伪装成 HTTPS 的加密通道连接到 Xray，然后在这个通道里使用 VLESS 协议告诉服务器要访问的目标，由 Xray 代为连接目标网站并转发数据。
+    Xray负责协议解析和路由
+    REALITY模拟TLS行为让代理流量看起来像普通HTTPS
+    客户端作为流量入口(代理网关)解析VLESS/REALITY配置、建立连接、提供本地代理端口，把应用流量送入正确的隧道
+浏览器请求 → VLESS封装 → REALITY加密并伪装成TLS → TCP发送到VPS → VPS解密REALITY → Xray解VLESS → 重新发起到目标网站 → 目标网站返回内容 → VPS（Xray）→ REALITY加密 → 客户端 → 解密 → 浏览器
+
+### 搭建步骤
+#### 刷好ip
+termius生成ssh key
+digitalocean注册绑定结算卡
+    创建droplets
+        地址美西,系统乌班图2204,填上termius公钥
+    在ping.pe上测试分到的公共ipv4
+        例如主要用中国联通卡, 则关注CN区isp列中的CU行, 根据丢包率和延迟来确定是不是好ip, 如果是坏ip则destory掉重新droplets刷个新ip再去测试
+termius添加host,公共ipv4,22端口,用前面的私钥登录控制台
+#### xray安装
+<code sh>
+bash &lt;(cat &lt;&lt;'SCRIPT'
+ 
+#!/bin/bash
+set -euo pipefail
+ 
+echo "========== 更新系统 =========="
+apt update -y
+DEBIAN_FRONTEND=noninteractive apt upgrade -y \
+  -o Dpkg::Options::="--force-confold" \
+  -o Dpkg::Options::="--force-confdef"
+ 
+echo "========== 交换内存 =========="
+if ! swapon --show | grep -q "/swapfile"; then
+  fallocate -l 1G /swapfile || dd if=/dev/zero of=/swapfile bs=1M count=1024
+  chmod 600 /swapfile
+  mkswap /swapfile
+  swapon /swapfile
+  grep -q swapfile /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab
+fi
+ 
+echo "========== 防日志爆盘 =========="
+systemctl stop rsyslog 2>/dev/null || true
+systemctl disable rsyslog 2>/dev/null || true
+ 
+if grep -q "Storage=" /etc/systemd/journald.conf; then
+  sed -i 's/^Storage=.*/Storage=none/' /etc/systemd/journald.conf
+else
+  echo "Storage=none" >> /etc/systemd/journald.conf
+fi
+ 
+systemctl restart systemd-journald
+ 
+echo "========== 安装防火墙 =========="
+apt install -y ufw
+ufw default deny incoming
+ufw default allow outgoing
+ufw allow 22/tcp
+ufw allow 443/tcp
+ufw --force enable
+ 
+echo "========== 安装 Xray =========="
+bash &lt;(curl -Ls https://github.com/XTLS/Xray-install/raw/main/install-release.sh)
+ 
+echo "========== 生成 UUID =========="
+UUID=$(cat /proc/sys/kernel/random/uuid)
+ 
+echo "========== 生成 Reality Key =========="
+KEY_OUTPUT=$(xray x25519)
+ 
+PRIVATE_KEY=$(echo "$KEY_OUTPUT" | grep -i "privatekey" | awk -F': ' '{print $2}')
+PUBLIC_KEY=$(echo "$KEY_OUTPUT" | grep -i "publickey\|password" | awk -F': ' '{print $2}')
+ 
+echo "========== 生成 shortId =========="
+SHORT_ID=$(openssl rand -hex 4)
+ 
+echo "========== 配置 Xray =========="
+SNI="www.microsoft.com"
+ 
+cat > /usr/local/etc/xray/config.json &lt;&lt;CONF
+{
+  "log": {
+    "loglevel": "none"
+  },
+  "inbounds": [
+    {
+      "port": 443,
+      "protocol": "vless",
+      "settings": {
+        "clients": [
+          {
+            "id": "$UUID",
+            "flow": "xtls-rprx-vision"
+          }
+        ],
+        "decryption": "none"
+      },
+      "streamSettings": {
+        "network": "tcp",
+        "security": "reality",
+        "realitySettings": {
+          "show": false,
+          "dest": "$SNI:443",
+          "xver": 0,
+          "serverNames": ["$SNI"],
+          "privateKey": "$PRIVATE_KEY",
+          "shortIds": ["$SHORT_ID"]
+        }
+      }
+    }
+  ],
+  "outbounds": [
+    {
+      "protocol": "freedom"
+    }
+  ]
+}
+CONF
+ 
+echo "========== 启动 Xray =========="
+systemctl restart xray
+systemctl enable xray
+sleep 2
+systemctl status xray --no-pager
+ 
+
+SERVER_IP=$(curl -s --max-time 3 ifconfig.me || echo "unknown")
+read -rp "请输入节点名称 (回车默认时间): " NAME
+if [ -z "$NAME" ]; then
+  NAME=$(TZ="Asia/Singapore" date +"%Y%m%d%H%M")
+fi
+SAFE_NAME=$(printf "%s" "$NAME" | tr -c 'a-zA-Z0-9' '-')
+echo "=========================== VLESS LINK ==========================="
+VLESS_LINK="vless://${UUID}@${SERVER_IP}:443?type=tcp&security=reality&flow=xtls-rprx-vision&sni=${SNI}&pbk=${PUBLIC_KEY}&sid=${SHORT_ID}#${SAFE_NAME}"
+echo "$VLESS_LINK" > "/root/${SAFE_NAME}.txt"
+echo "$VLESS_LINK"
+echo "=================================================================="
+echo "Need Reboot"
+ 
+SCRIPT
+)
+</code>
+
+#### xray看门狗
+<code sh>
+bash <(cat <<'SCRIPT'
+#!/bin/bash
+ 
+# =========================
+# 1. watchdog 脚本
+# =========================
+cat > /usr/local/bin/xray-watch.sh <<'EOF'
+#!/bin/bash
+ 
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+ 
+exec 9>/tmp/xray-watch.lock
+flock -n 9 || exit 0
+ 
+STATE="/var/lib/xray-watch_fail_count"
+mkdir -p /var/lib
+touch "$STATE"
+ 
+fail=0
+ 
+# reboot/异常快速修复
+systemctl is-failed --quiet xray && systemctl restart xray
+ 
+# 检测
+systemctl is-active --quiet xray || fail=1
+pgrep -x xray >/dev/null || fail=1
+ss -lnt | grep -q ':443' || fail=1
+ 
+count=$(cat "$STATE" 2>/dev/null || echo 0)
+if [ $fail -eq 1 ]; then
+  count=$((count+1))
+  echo $count > "$STATE"
+  if [ $count -ge 2 ]; then
+    systemctl restart xray
+    echo 0 > "$STATE"
+  fi
+else
+  echo 0 > "$STATE"
+fi
+ 
+EOF
+ 
+# 赋权
+chmod +x /usr/local/bin/xray-watch.sh
+ 
+# =========================
+# 2. systemd service
+# =========================
+cat > /etc/systemd/system/xray-watch.service <<'EOF'
+[Unit]
+Description=Xray Watchdog
+After=network.target
+ 
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/xray-watch.sh
+EOF
+ 
+# =========================
+# 3. systemd timer
+# =========================
+cat > /etc/systemd/system/xray-watch.timer <<'EOF'
+[Unit]
+Description=Run Xray Watchdog Every 5 Seconds
+ 
+[Timer]
+OnBootSec=10s
+OnUnitActiveSec=5s
+AccuracySec=1s
+Persistent=true
+ 
+[Install]
+WantedBy=timers.target
+EOF
+ 
+# =========================
+# 4. 启动 timer
+# =========================
+systemctl daemon-reload
+systemctl enable --now xray-watch.timer
+ 
+echo "systemd timer installed successfully"
+SCRIPT
+)
+</code>
+##### 对应的卸载
+<code sh>
+bash <(cat <<'SCRIPT'
+#!/bin/bash
+ 
+systemctl disable --now xray-watch.timer 2>/dev/null
+ 
+rm -f /etc/systemd/system/xray-watch.service
+rm -f /etc/systemd/system/xray-watch.timer
+rm -f /usr/local/bin/xray-watch.sh
+rm -f /var/lib/xray-watch_fail_count
+rm -f /tmp/xray-watch.lock
+ 
+systemctl daemon-reload
+ 
+echo "xray-watch uninstalled successfully"
+SCRIPT
+)
+</code>
+
+https://github.com/2dust/v2rayNG/releases
+https://github.com/2dust/v2rayN/releases
+
+
+## 掌机Private DNS
+它要求填写的是一个域名(DNS over TLS（DoT）)而不是直接的IP
+<p>
+1dot1dot1dot1.cloudflare-dns.com | 1.1.1.1 / 1.0.0.1
+dns.google | 8.8.8.8 / 8.8.4.4
+dns.quad9.net | 9.9.9.9 / 149.112.112.112
+dns.adguard.com | 94.140.14.14 / 94.140.15.15
+</p>
+
+
+# 远程收发短信
+Macrodroid
+宏
+    local variables
+        number, content
+
+    triggers
+        webhook
+
+    actions
+        if(number !=0 && content !=""){
+            send sms
+            send email 内容回执
+        } else {
+            send email 错误回执
+        }
+        clear variables
+短信定义
+    remote_sms.html, 编后再点
+<code html>
+&lt;!DOCTYPE html>&lt;html lang="zh-CN">&lt;head>&lt;meta charset="UTF-8">&lt;/head>&lt;body>&lt;pre>
+&lt;!------------------------------------------&gt;
+ 
+ 
+  a
+10010
+ 
+  你好
+这是多行 content
+  可以包含任意文本
+ 
+ 
+ 
+&lt;!------------------------------------------&gt;
+&lt;/pre>&lt;/body>&lt;script>
+window.onload=()=>{const t={a:"/2c****c1/h****a",b:"/a3****84/h****b"},n=document.querySelector("pre").innerText.split(`
+`).map(o=>o.trim()).filter(o=>o),e=n[0],c=n[1]||"0",i=n.slice(2).join(`
+`);t[e]?window.location.href=`https://trigger.macrodroid.com${t[e]}?number=${encodeURIComponent(c)}&content=${encodeURIComponent(i)}`:alert("\u672A\u8BC6\u522B\u7684 client: "+e)};
+&lt;/script>&lt;/html>
+</code>
+
+# 远程桌面
+Chrome Remote Desktop
+
+# 鼠标键
+20260425184741.webp
+
+<p>
+alt+shift+numlock|启停鼠标键
+/|切为左键
+-|切为右键
+*|切为中键
+5|单击
++|双击
+0|保持按下状态(点按一次,不必长按)
+.|释放(点按一次,不必长按)
+</p>
+
+# 批处理
+## 镜像
+<code batch>
+robocopy D:\ F:\mir_D /XD "D:\Dropbox\.dropbox.cache" /MIR /MT:100
+</code>
+## GET
+Ping “能不能到那台机器”，只检查 IP 层可达性。
+    很多服务器屏蔽 ICMP，ping 可能失败，但 HTTP 请求可以成功。
+    仅能确认网络层连通性，不能确认 VPN 的路由、DNS 或应用层流量是否真的走了 VPN。
+    在中国或受防火墙限制的网络环境下，ICMP 可能被阻断而 TCP/HTTPS 可以通。
+GET 走应用层 HTTP/HTTPS 协议，不仅要到机器，还要确认能正常拿到网页/数据
+    能确认 VPN 是否真的把应用流量转发出去。
+    可以检测 DNS 解析是否走 VPN（比如访问被屏蔽网站）。
+    可以确认目标服务是否可达，以及返回的状态码是否正常。
+    相比 ping 略慢，需要完整的 TCP 三次握手 + HTTPS 握手。
+<code batch>
+@echo off
+ 
+for /F "tokens=1-4 delims=:.," %%a in ("%TIME%") do set /A START_MS=(%%c*1000)+%%d*10
+curl -I https://www.google.com
+for /F "tokens=1-4 delims=:.," %%a in ("%TIME%") do set /A END_MS=(%%c*1000)+%%d*10
+ 
+set /A DURATION_MS=END_MS-START_MS
+ 
+echo Request duration: %DURATION_MS% ms
+pause
+</code>
+
+# dropbox忽略
+<code powershell>
+Set-Content -Path 'D:\Dropbox\diff4x.github.io\.git' -Stream com.dropbox.ignored -Value 1
+Set-Content -Path 'D:\Dropbox\diff4x.github.io\_build\jar\gen\target' -Stream com.dropbox.ignored -Value 1
+ 
+Clear-Content -Path 'D:\Dropbox\diff4x.github.io\src\jar\gen\target' -Stream com.dropbox.ignored
+</code>
+
+# chrome
+## 翻译引擎
+    shortcut用多个1, 按1看提示,错了接着按1直到正确
+        引擎a, 1,翻译为中文
+        引擎b, 11,翻译为英文
+        引擎c, 111,翻译为中文
+        引擎d, 1111,翻译为英文
+    https://translate.google.com/?sl=auto&tl=en&text=%s&op=translate
+    https://translate.google.com/?tl=zh-CN&sl=auto&text=%s&op=translate
+
+# 硬件指纹
+安卓中不管是工作资料还是新用户
+    硬件指纹层面，永远是同一台手机, 区别只在“软件指纹”和“数据隔离层级”
+    隔离强度从弱到强大致是
+        普通多开
+        工作资料
+        新用户
+        容器沙箱
+        虚拟化
+        真机多设备
+vmware
+    对虚拟机里的系统来说，它看到的是 VMware 生成的一套“假硬件”
+    很多软件不仅看“硬件指纹”，还会判断
+        BIOS 字符串包含 VMware
+        网卡厂商是 VMware
+        特殊驱动 / 设备名
+    指纹不同，仍容易被识别为“虚拟环境”
+
+## 调试台
+waterfall 时间轴瀑布流
+preserve log 页面重载时保留控制台日志
+打断点进入局部作用域然后可以直接调用该作用域内的任何私有方法了
+<code js>
+function tt(mode) {
+    if (window.__tt_start == null) {
+        window.__tt_start = Date.now();
+        console.log("⏱️ 开始计时");
+    } else {
+        const diff = Date.now() - window.__tt_start;
+
+        const minutes = Math.floor(diff / 60000);
+        const seconds = Math.floor((diff % 60000) / 1000);
+        const ms = diff % 1000;
+
+        console.log(`⏱️ 耗时：${minutes}分 ${seconds}秒 ${ms}毫秒`);
+
+        if (mode === 1) {
+            delete window.__tt_start;
+            console.log("🔄 已重置计时");
+        } else {
+            console.log("⏳ 计时仍在继续..");
+        }
+    }
+}
+</code>
+
+# P2P
+P2P雏形起自Napster（1999, 主要用于 MP3 音乐分享）, 有中央服务器负责索引, 文件在用户之间传输, 因为版权争议巨大, 被法院关闭（2001）, 但理念已经扩散出去
+P2P 是“人人互相传输数据”的网络思想，而 BT（BitTorrent） 是基于这种思想实现的文件分发协议，是最成功的 P2P 应用之一
+P2P 社区的演化结果是：从“完全开放共享”，逐渐分裂成“公开混乱网络(不做种只下不传导致公共网络质量迅速下降) + 规则化私有tracker社区”，本质是在“自由”和“质量”之间做权衡
+
+DHT是一个没有服务器的“全网查找系统”（去中心化查找）
+    每个节点（BT 客户端）都参与网络, 维护一小部分“路由表”, 每个资源有一个 key（hash）
+    “谁有这个 hash？”, 先问几个节点, 他们告诉你“更接近目标的节点”, 一步步逼近, 最终找到拥有该资源的 peers
+DHT 的厉害之处在于完全去中心化, 没有 Tracker（服务器）, 抗封锁(关掉某个网站没用, 网络仍然存在)
+    但它缺三样东西：身份（谁是谁）, 规则（行为约束）, 激励（为什么要上传）, 而 private tracker 恰好补上这三点
+
+Magnet 是一套标准化 URI 协议，用“hash + 参数”的方式描述一个 P2P 文件资源，让客户端通过 DHT或私有Tracker去网络中找到真正的数据来源
+torrent 文件本质上是结构化数据, 包含文件信息和分块信息等, 如同先拿说明书再下载, 可以断点续传和进行文件完整性验证
+
+运营商对 P2P 特别敏感是因为一个热门种子可能瞬间爆发, 成千上万人同时互传, 难以预测流量峰值, 同时P2P 会绕过服务器缓存（CDN失效）导致带宽成本上升, 且可能涉及版权内容传播
+
+下载时不要用主力ip,以免收到服务器商家的侵权通知
+
+# Tor
+Tor 起源于军用匿名通信研究，后来发展为开源全球网络，通过志愿者节点和洋葱路由技术，成为现代互联网中最重要的隐私与反审查基础设施之一, 它是一种让你“通过多层中转来隐藏来源”的网络, 把你的网络请求一层层“包起来”，再通过多台节点转发
+    随机选几个节点（通常3个）
+        第1个节点只知道“你是谁”，不知道内容
+        第2个节点只知道中转
+        第3个节点只知道目标网站
+    没有人能同时知道你是谁和你访问了什么
+    Tor 的局限是速度慢, 因为多跳中转
+    不是“绝对匿名”, 例如错误配置, 浏览器指纹等问题
+
+Tor Browser是一个“客户端软件”, 引导进入中继层, 依赖的是全球志愿者运行的节点网络 + Tor 项目维护的少量目录权威节点，它不是中心服务器，而是一个用少量协调机制支撑的分布式系统
+    基于 Firefox 改造自动连接 Tor 网络, 不需要你手动配置节点
+    内置隐私保护, 禁用追踪脚本, 防指纹识别, 限制插件
+    自动识别 onion 地址, 不走 DNS
+.onion 是 Tor 专用域名, 只能在 Tor 网络里访问, 是Tor 里的“隐藏服务”和专用地址体系
+    不在普通 DNS 里
+    双向匿名(访问者匿名, 服务器也匿名)
+    没有出口节点
+Onion 服务运行在 Tor 内部, 不在公网注册真实地址, 只公布一个 .onion 地址（由公钥生成）, 外界根本不知道服务器在哪
+    服务器会随机选择几个 Tor 节点(引入点), 告诉它们“有人想找我，就来这里传话”, 这些节点充当“中间联系人”
+访问非 onion 地址 → Tor → 出口节点 → 网站
+    其中出口节点能看到未加密流量
+访问 onion 地址时
+    在 Tor 网络里找到它的引入点
+    你自己选一个“会合点”
+    通知服务器“来这个点见面”
+    双方都建立到这个点的加密通道, 最终你不知道服务器在哪, 服务器也不知道你是谁
+任何人都可以搭建onion 服务器, 只要你运行了 Tor 并开启“隐藏服务（Onion Service）”，你就已经在运行一个 onion 服务器了
+    启动 Tor 创建隐藏服务配置, Tor 自动生成一对密钥, 私钥（保存在你机器）, 用公钥计算出 .onion 地址
+    私钥是这个 .onion 身份的“唯一控制权凭证”, 拥有私钥就能通过Tor启动这个 onion 网站或冒充这个网站（如果私钥泄露）
+        如果你换服务器, 只要私钥不变, onion 地址不变, 服务可以“搬家但不换身份”
+自己生成公布 onion 地址, 或经目录网站收集 onion 地址, Tor 网络本身不会帮你“搜索所有 onion 网站”
+普通服务器必须有公网 IP, 用户直接访问 IP
+onion 服务器(任何运行 Tor 并开启隐藏服务的普通电脑或云主机)完全相反, 它不依赖公网 IP, 也不需要开放端口, 不是“别人访问服务器”，而是“双方在 Tor 内部会面”
+
+# giscus
+giscus
+https://github.com/apps/giscus
+https://giscus.app/
+GitHub CLI 
+https://cli.github.com/
+
+<code sh>
+# 授权
+gh auth login
+
+# 获取 data-repo-id
+gh api repos/diff4x/comments -q ".node_id"
+
+# 获取 data-category-id
+gh api graphql -f query="query { repository(owner: \"diff4x\", name: \"comments\") { discussionCategories(first: 10) { nodes { id name } } } }" -q ".data.repository.discussionCategories.nodes[] | \"\(.name): \(.id)\""
+</code>
+
+</pre>
+ </body>
+</html>

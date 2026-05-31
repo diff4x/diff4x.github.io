@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="utf-8">
+    <title>diff4x's digital garden</title>
+    <meta name="theme_color" content="#cae4ff">
+    <link href="data:image/x-icon;base64,AAABAAEAEBAQAAEABAAoAQAAFgAAACgAAAAQAAAAIAAAAAEABAAAAAAAgAAAAAAAAAAAAAAAEAAAAAAAAAD/794AOkprAAAAAAD/7xAA3qcAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAIiIiIiIiIiIiIiRCIiREIiIiQAQiQABCIiQAMxQzAAQiJAMzEzMABCIkBDETQzBCIiRDMTM0RCIiQDMRMzMEQiQANBJDMAAEQABBISQwAARABCEiEkAABCRCEiIhJAAEIiISIiIiREIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiL//wAA+eMAAPDBAADgAAAA4AAAAOABAADgAwAAwAEAAIEAAAACgAAAC0AAAJegAAD38QAA//8AAP//AAD//wAA" rel="icon" type="image/x-icon">
+    <script>
+        (function () {
+            if (sessionStorage.getItem("adult_verified") !== "true") {
+                const ok = confirm(
+                    "⚠️ 访问限制\n\n" +
+                    "本网站仅限年满 18 周岁的成年人访问。\n" +
+                    "继续访问即表示您已达到法定年龄并同意自行承担浏览风险。\n\n" +
+                    "点击“确定”继续访问，点击“取消”离开本站。"
+                );
+                if (ok) {
+                    sessionStorage.setItem("adult_verified", "true");
+                } else {
+                    location.href = "https://www.google.com/ncr";
+                    return;
+                }
+            }
+        })();
+    </script>
+    <!-- https://www.favicon.cc/?action=icon&file_id=761736 -->
+    <link rel="manifest" href="/manifest.json">
+    <link rel="stylesheet" type="text/css" id="css">
+</head>
+<body style="opacity:0">
+
+    <div id="search" class="hide">
+        <select id="searchResults"></select>
+        <input id="searchInput" placeholder="search..">
+        <input id="clear" type="button" value="clear">
+        <select id="searchHistory"></select>
+    </div>
+
+    <iframe id="content" name="content"></iframe>
+    <iframe id="side" name="side"></iframe>
+
+    <div id="giscus-popup" style="display: none;">
+        <div id="popup-header">
+            <button id="close-popup">✖</button>
+        </div>
+        <div id="giscus-container" style="width:100%; height: calc(100% - 30px);"></div>
+    </div>
+<!-- PROTOCOL-BEGIN -->
+<script>
+  const github_page = "diff4x.github.io";
+  const data_repo = "diff4x/comments";
+  const data_repo_id = "R_kgDOSlizXw";
+  const data_category_id = "DIC_kwDOSlizX84C9qT-";
+  const update_interval = 10000;
+  const update_interval_local = 2000;
+</script>
+<!-- PROTOCOL-END -->
+    <script id="js" type="text/javascript" charset="UTF-8"></script>
+    <script>
+        document.getElementById("js").src = "src/js/index.js";
+        document.getElementById("css").href = "src/css/index.css";
+    </script>
+
+</body>
+
+</html>

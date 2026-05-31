@@ -1,0 +1,987 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="UTF-8">
+    <title>TXT Viewer</title>
+    <style>
+        @charset "UTF-8";
+        @import url("../css/font.css");
+
+        :root {
+            --drawer-bg: rgba(30, 41, 59, 0.85);
+            --drawer-border: rgba(255, 255, 255, 0.1);
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+            --accent: #10b981;
+            --accent-hover: #059669;
+            --btn-bg: rgba(255, 255, 255, 0.1);
+            --btn-hover: rgba(255, 255, 255, 0.2);
+        }
+
+        html, body, pre, textarea {
+            font-family: 'Noto Serif SC';
+        }
+
+        html, body {
+            padding: 0;
+            margin: 0;
+            background-color: #0f172a !important; 
+            overflow: hidden; /* 彻底屏蔽原生外层滚动 */
+        }
+
+        body {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            width: 100vw;
+        }
+
+        .book-container {
+            display: block;
+            width: 94vw;
+            height: 94vh;
+            aspect-ratio: 1.414 / 1;
+            max-width: calc(94vh * 1.414);
+            max-height: calc(94vw / 1.414);
+            
+            box-shadow: 0 15px 50px rgba(0,0,0,0.8);
+            border-radius: 4px;
+            padding: 40px 56px; 
+            box-sizing: border-box;
+            position: relative;
+            transition: background-color 0.3s;
+        }
+
+        .book-container::after {
+            content: '';
+            position: absolute;
+            top: 0; left: 50%;
+            width: 4px; height: 100%;
+            background: linear-gradient(to right, rgba(0,0,0,0.05) 0%, rgba(255,255,255,0.05) 50%, rgba(0,0,0,0.05) 100%);
+            transform: translateX(-50%);
+            box-shadow: 0 0 15px rgba(0,0,0,0.15);
+            pointer-events: none;
+            z-index: 10;
+        }
+
+        pre {
+            width: 100%;
+            height: 100%;
+            margin: 0;
+            padding: 0 4px 15px 4px;
+            box-sizing: border-box;
+            
+            column-count: 2;         
+            column-gap: 80px;        
+            column-fill: auto;
+            overflow-y: hidden;
+            overflow-x: auto !important;      
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            text-align: justify;     
+        }
+
+        pre::-webkit-scrollbar {
+            height: 10px; 
+        }
+        pre::-webkit-scrollbar-track {
+            background: transparent; 
+        }
+        pre::-webkit-scrollbar-thumb {
+            background-color: rgba(148, 163, 184, 0.3); 
+            border-radius: 10px;
+            border: 2px solid transparent; 
+            background-clip: padding-box;
+        }
+        pre::-webkit-scrollbar-thumb:hover {
+            background-color: var(--accent); 
+        }
+
+        /* 顶部极简进度条 */
+        #processBar {
+            top: 0px;
+            height: 3px;
+            background: linear-gradient(90deg, #10b981, #6366f1);
+            width: 0%;
+            position: fixed;
+            z-index: 99999;
+            transition: width 0.1s ease-out;
+            box-shadow: 0 1px 5px rgba(16, 185, 129, 0.4);
+        }
+
+        /* 搜索高亮 */
+        mark {
+            background: yellow;
+            color: red;
+            border-radius: 3px;
+            padding: 0 2px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+        }
+
+        /* 拼音弹窗 */
+        .pinyin-tooltip {
+            position: absolute;
+            background: rgba(15, 23, 42, 0.9);
+            color: var(--accent);
+            padding: 6px 12px;
+            border-radius: 6px;
+            white-space: nowrap;
+            z-index: 100000;
+            display: none;
+            pointer-events: none;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+            font-family: sans-serif;
+            font-weight: bold;
+            border: 1px solid var(--drawer-border);
+        }
+
+        /* 抽屉 UI */
+        #drawer-trigger {
+            position: fixed;
+            right: 0;
+            top: 0;
+            width: 15px;
+            height: 100vh;
+            z-index: 999;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: flex-end;
+        }
+        #drawer-trigger:hover .trigger-line {
+            opacity: 1;
+            height: 60px;
+        }
+        .trigger-line {
+            width: 4px;
+            height: 30px;
+            background: var(--accent);
+            margin-right: 2px;
+            border-radius: 4px;
+            opacity: 0.3;
+            transition: all 0.3s ease;
+        }
+
+        #ui-drawer {
+            position: fixed;
+            right: 0;
+            top: 0;
+            width: 320px;
+            height: 100vh;
+            background: var(--drawer-bg);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border-left: 1px solid var(--drawer-border);
+            z-index: 1000;
+            transform: translateX(100%);
+            transition: transform 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+            display: flex;
+            flex-direction: column;
+            color: var(--text-main);
+            font-family: sans-serif;
+            box-shadow: -10px 0 30px rgba(0,0,0,0.5);
+            overflow-y: auto;
+        }
+        #ui-drawer.open {
+            transform: translateX(0);
+        }
+
+        #ui-drawer::-webkit-scrollbar { width: 6px; }
+        #ui-drawer::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.2); border-radius: 3px; }
+
+        .drawer-header {
+            padding: 20px;
+            border-bottom: 1px solid var(--drawer-border);
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+        }
+        .file-meta { flex: 1; overflow: hidden; }
+        #fileTitle {
+            font-size: 16px;
+            font-weight: bold;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            margin-bottom: 4px;
+        }
+        #fileSize {
+            font-size: 12px;
+            color: var(--accent);
+        }
+        #closeDrawer {
+            background: transparent;
+            border: none;
+            color: var(--text-muted);
+            font-size: 24px;
+            cursor: pointer;
+            line-height: 1;
+            padding: 0 0 0 10px;
+            transition: color 0.2s;
+        }
+        #closeDrawer:hover { color: #ef4444; }
+
+        .module {
+            padding: 20px;
+            border-bottom: 1px solid var(--drawer-border);
+        }
+        .module h3 {
+            margin: 0 0 15px 0;
+            font-size: 13px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: var(--text-muted);
+        }
+
+        .control-group { margin-bottom: 15px; }
+        .control-group:last-child { margin-bottom: 0; }
+        .control-group label {
+            display: flex;
+            justify-content: space-between;
+            font-size: 13px;
+            margin-bottom: 8px;
+        }
+        .val-display { color: var(--accent); font-family: monospace; }
+
+        input[type=range] {
+            -webkit-appearance: none;
+            width: 100%;
+            background: transparent;
+        }
+        input[type=range]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            height: 16px;
+            width: 16px;
+            border-radius: 50%;
+            background: var(--accent);
+            cursor: pointer;
+            margin-top: -6px;
+            box-shadow: 0 0 10px rgba(16, 185, 129, 0.5);
+        }
+        input[type=range]::-webkit-slider-runnable-track {
+            width: 100%;
+            height: 4px;
+            cursor: pointer;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 2px;
+        }
+
+        button {
+            background: var(--btn-bg);
+            border: 1px solid var(--drawer-border);
+            color: var(--text-main);
+            border-radius: 6px;
+            padding: 8px 12px;
+            cursor: pointer;
+            transition: all 0.2s;
+            font-size: 13px;
+        }
+        button:hover { background: var(--btn-hover); }
+        button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+        button.primary:hover { background: var(--accent-hover); }
+        button.reset-btn { background: rgba(239, 68, 68, 0.1); border-color: rgba(239, 68, 68, 0.3); color: #fca5a5; width: 100%; padding: 10px; font-weight: bold; }
+        button.reset-btn:hover { background: rgba(239, 68, 68, 0.3); }
+
+        input[type="text"] {
+            width: 100%;
+            background: rgba(0,0,0,0.2);
+            border: 1px solid var(--drawer-border);
+            color: #fff;
+            padding: 8px 12px;
+            border-radius: 6px;
+            margin-bottom: 10px;
+            box-sizing: border-box;
+            outline: none;
+        }
+        input[type="text"]:focus { border-color: var(--accent); }
+
+        .flex-row { display: flex; gap: 10px; align-items: center; }
+        .flex-row > * { flex: 1; }
+        
+        .color-pickers { display: flex; gap: 15px; justify-content: space-between; }
+        .color-item { display: flex; flex-direction: column; align-items: center; gap: 5px; font-size: 12px; }
+        input[type="color"] {
+            -webkit-appearance: none;
+            border: none;
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            cursor: pointer;
+            padding: 0;
+            background: transparent;
+        }
+        input[type="color"]::-webkit-color-swatch-wrapper { padding: 0; }
+        input[type="color"]::-webkit-color-swatch { border: 2px solid var(--drawer-border); border-radius: 50%; }
+
+        .theme-presets { display: flex; gap: 8px; margin-bottom: 15px; }
+        .theme-presets button { padding: 6px 0; font-size: 12px; }
+
+        .search-actions { display: flex; gap: 5px; margin-bottom: 10px; }
+        .search-actions button { padding: 8px; flex: 1; }
+        .match-info { text-align: center; font-size: 12px; color: var(--accent); font-family: monospace; background: rgba(0,0,0,0.2); padding: 4px; border-radius: 4px; }
+
+        .nav-btns button { padding: 12px; font-weight: bold; letter-spacing: 1px; }
+
+    </style>
+</head>
+
+<body>
+    <div style='top:0;left:0;width:100%;'>
+        <div id='processBar'></div>
+    </div>
+
+    <div id="drawer-trigger" title="打开控制面板">
+        <div class="trigger-line"></div>
+    </div>
+
+    <div id="ui-drawer">
+        <div class="drawer-header">
+            <div class="file-meta">
+                <div id="fileTitle" title="loading...">Loading...</div>
+                <div id="fileSize">-- KB</div>
+            </div>
+            <button id="closeDrawer" title="关闭">&times;</button>
+        </div>
+
+        <div class="module">
+            <h3>排版</h3>
+            <div class="control-group">
+                <label>Font Size <span id="fz-val" class="val-display">1.0em</span></label>
+                <input type="range" id="fontSizeSlider" min="0.8" max="4.0" step="0.1" value="1.0">
+            </div>
+            <div class="control-group">
+                <label>Line Height <span id="lh-val" class="val-display">1.7</span></label>
+                <input type="range" id="lineHeightSlider" min="1.0" max="3.5" step="0.1" value="1.7">
+            </div>
+        </div>
+
+        <div class="module">
+            <h3>色彩</h3>
+            <div class="theme-presets">
+                <button class="preset-btn" data-theme="parchment" style="background:#f4f1ea; color:#5f584e;">羊皮纸</button>
+                <button class="preset-btn" data-theme="dark" style="background:#1a1b1e; color:#c1c2c5;">黑夜</button>
+                <button class="preset-btn" data-theme="forest" style="background:#d0e8d0; color:#2d5a2d;">森林</button>
+            </div>
+            <div class="color-pickers">
+                <div class="color-item"><span>Text</span><input type="color" id="fgColor"></div>
+                <div class="color-item"><span>BG</span><input type="color" id="bgColor"></div>
+                <div class="color-item"><span>Mark</span><input type="color" id="highlightColor" value="#ffff00"></div>
+            </div>
+        </div>
+
+        <div class="module">
+            <h3>翻页</h3>
+            <div class="flex-row nav-btns">
+                <button id="prevPage">◀ Prev</button>
+                <button id="nextPage">Next ▶</button>
+            </div>
+        </div>
+
+        <div class="module">
+            <h3>搜索</h3>
+            <div>
+                <input type="text" id="searchInput" placeholder="Keyword / Regex...">
+                <div style="margin-bottom: 10px;">
+                    <label style="font-size:13px; cursor:pointer;"><input type="checkbox" id="regexToggle"> Use Regex</label>
+                </div>
+            </div>
+            <div class="search-actions">
+                <button id="searchBtn" class="primary">Find</button>
+                <button id="prevMatch" title="Previous">▲</button>
+                <button id="nextMatch" title="Next">▼</button>
+                <button id="clearHighlight" title="Clear">✖</button>
+            </div>
+            <div id="matchInfo" class="match-info">0 / 0</div>
+        </div>
+        
+        <div class="module" style="border-bottom: none;">
+            <button id="resetDefaults" class="reset-btn">恢复默认设置</button>
+        </div>
+    </div>
+
+    <div id="bookContainer" class="book-container">
+        <pre id="fileContent"></pre>
+    </div>
+
+    <script src="../js/encoding.min.js"></script>
+    <script>
+        const Utils = {
+            rgbToHex(rgb) {
+                if (!rgb) return '#000000';
+                if (rgb.startsWith('#')) return rgb;
+                const result = /^rgb\((\d+),\s*(\d+),\s*(\d+)\)$/.exec(rgb);
+                if (!result) return rgb;
+                return "#" + [1, 2, 3].map(i => parseInt(result[i]).toString(16).padStart(2, '0')).join('');
+            },
+            debounce(func, wait) {
+                let timeout;
+                return function (...args) {
+                    clearTimeout(timeout);
+                    timeout = setTimeout(() => func.apply(this, args), wait);
+                };
+            },
+            escapeHTML(str) {
+                return str.replace(/[&<>'"]/g, tag => ({
+                    '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;'
+                }[tag]));
+            },
+            escapeRegExp(string) {
+                return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            }
+        };
+
+        const Store = new Proxy({}, {
+            get(_, prop) {
+                try { return JSON.parse(localStorage.getItem(prop)); } 
+                catch { return null; }
+            },
+            set(_, prop, value) {
+                localStorage.setItem(prop, JSON.stringify(value));
+                return true;
+            }
+        });
+
+        const DEFAULTS = {
+            fontSize: 1.0,
+            lineHeight: 1.7,
+            color: '#5f584e',
+            backgroundColor: '#f4f1ea',
+            scrollX: 0, 
+            highlightColor: '#ffff00'
+        };
+
+        const State = {
+            lsKey: '',
+            rawText: '',
+            matches: [],
+            currentMatchIndex: -1,
+            settings: { ...DEFAULTS }
+        };
+
+        const UI = {
+            bookContainer: document.getElementById('bookContainer'),
+            content: document.getElementById('fileContent'),
+            title: document.getElementById('fileTitle'),
+            size: document.getElementById('fileSize'),
+            processBar: document.getElementById('processBar'),
+            
+            drawer: document.getElementById('ui-drawer'),
+            drawerTrigger: document.getElementById('drawer-trigger'),
+            closeDrawer: document.getElementById('closeDrawer'),
+            fontSlider: document.getElementById('fontSizeSlider'),
+            fzVal: document.getElementById('fz-val'),
+            lineSlider: document.getElementById('lineHeightSlider'),
+            lhVal: document.getElementById('lh-val'),
+
+            fgColor: document.getElementById('fgColor'),
+            bgColor: document.getElementById('bgColor'),
+            hlColor: document.getElementById('highlightColor'),
+            resetBtn: document.getElementById('resetDefaults'),
+            
+            searchInp: document.getElementById('searchInput'),
+            matchInfo: document.getElementById('matchInfo'),
+            regexToggle: document.getElementById('regexToggle')
+        };
+
+        const THEMES = {
+            parchment: { bg: '#f4f1ea', fg: '#5f584e' },
+            dark: { bg: '#1a1b1e', fg: '#c1c2c5' },
+            forest: { bg: '#d0e8d0', fg: '#2d5a2d' }
+        };
+
+        function triggerProgressBarUpdate() {
+            const el = UI.content;
+            const scrollWidth = el.scrollWidth - el.clientWidth;
+            const scrolled = scrollWidth === 0 ? 0 : (el.scrollLeft / scrollWidth) * 100;
+            UI.processBar.style.width = `${scrolled}%`;
+        }
+
+        const Viewer = {
+            init(title, text, sizeKB) {
+                State.rawText = text;
+                State.lsKey = "txt.history_" + title;
+                
+                UI.title.textContent = title;
+                UI.title.title = title; 
+                UI.size.textContent = sizeKB + " KB";
+                UI.content.textContent = text; 
+
+                this.loadSettings();
+                this.bindEvents();
+                
+                window.addEventListener('message', (e) => {
+                    if (e.data && e.data.type === 'OPEN_EXCERPTS_NOTEBOOK') {
+                        ExcerptsUIManager.openAndRefresh();
+                    }
+                });
+            },
+
+            calibrateBookSize() {
+                UI.bookContainer.style.width = '94vw'; 
+                UI.bookContainer.style.maxWidth = 'calc(94vh * 1.414)';
+                
+                const rawWidth = UI.bookContainer.clientWidth;
+                const availableTextWidth = rawWidth - 112 - 8;
+                
+                const col_w = Math.floor((availableTextWidth - 80) / 2);
+                const exactContainerWidth = (col_w * 2) + 80 + 8 + 112;
+                
+                UI.bookContainer.style.width = exactContainerWidth + 'px';
+                UI.bookContainer.style.maxWidth = 'none'; 
+            },
+
+            loadSettings() {
+                const saved = Store[State.lsKey];
+                if (saved) {
+                    State.settings = { ...State.settings, ...saved };
+                }
+
+                UI.fontSlider.value = State.settings.fontSize;
+                UI.fzVal.textContent = State.settings.fontSize + 'em';
+                UI.lineSlider.value = State.settings.lineHeight;
+                UI.lhVal.textContent = State.settings.lineHeight;
+                UI.fgColor.value = Utils.rgbToHex(State.settings.color);
+                UI.bgColor.value = Utils.rgbToHex(State.settings.backgroundColor);
+                UI.hlColor.value = State.settings.highlightColor;
+
+                this.calibrateBookSize();
+                this.applyStyles();
+
+                setTimeout(() => {
+                    UI.content.scrollLeft = State.settings.scrollX || 0;
+                    window.scrollTo(0, 0); 
+                }, 0);
+            },
+
+            applyStyles() {
+                UI.content.style.fontSize = State.settings.fontSize + 'em';
+                UI.content.style.lineHeight = State.settings.lineHeight + 'em';
+                UI.content.style.color = State.settings.color;
+                UI.bookContainer.style.backgroundColor = State.settings.backgroundColor;
+            },
+
+            saveSettings: Utils.debounce(() => {
+                if (!State.lsKey) return;
+                State.settings.scrollX = UI.content.scrollLeft;
+                Store[State.lsKey] = State.settings;
+            }, 500),
+
+            updateSetting(key, value) {
+                State.settings[key] = value;
+                this.applyStyles();
+                this.saveSettings();
+            },
+
+            resetToDefaults() {
+                this.updateSetting('fontSize', DEFAULTS.fontSize);
+                this.updateSetting('lineHeight', DEFAULTS.lineHeight);
+                this.updateSetting('color', DEFAULTS.color);
+                this.updateSetting('backgroundColor', DEFAULTS.backgroundColor);
+                
+                UI.fontSlider.value = DEFAULTS.fontSize;
+                UI.fzVal.textContent = DEFAULTS.fontSize + 'em';
+                UI.lineSlider.value = DEFAULTS.lineHeight;
+                UI.lhVal.textContent = DEFAULTS.lineHeight;
+                UI.fgColor.value = Utils.rgbToHex(DEFAULTS.color);
+                UI.bgColor.value = Utils.rgbToHex(DEFAULTS.backgroundColor);
+                
+                setTimeout(() => {
+                    this.calibrateBookSize();
+                    const gap = 80;
+                    const step = (UI.content.clientWidth - 8 + gap) / 2;
+                    let currentPage = Math.round(UI.content.scrollLeft / step);
+                    UI.content.scrollTo({ left: currentPage * step, behavior: 'instant' });
+                    triggerProgressBarUpdate();
+                }, 50);
+            },
+
+            bindEvents() {
+                const toggleDrawer = (forceOpen) => {
+                    const isOpen = UI.drawer.classList.contains('open');
+                    if (forceOpen === true || !isOpen) {
+                        UI.drawer.classList.add('open');
+                        UI.drawerTrigger.style.display = 'none';
+                    } else {
+                        UI.drawer.classList.remove('open');
+                        setTimeout(() => { UI.drawerTrigger.style.display = 'flex'; }, 300);
+                    }
+                };
+
+                UI.drawerTrigger.onclick = () => toggleDrawer(true);
+                UI.closeDrawer.onclick = () => toggleDrawer(false);
+
+                document.addEventListener('mousedown', (e) => {
+                    if (UI.drawer.classList.contains('open') && 
+                        !UI.drawer.contains(e.target) && 
+                        !UI.drawerTrigger.contains(e.target) &&
+                        !e.target.closest('.pinyin-tooltip') &&
+                        !e.target.closest('#excerpts-popup')) {
+                        toggleDrawer(false);
+                    }
+                });
+
+                UI.fontSlider.oninput = (e) => {
+                    const val = parseFloat(e.target.value).toFixed(1);
+                    UI.fzVal.textContent = val + 'em';
+                    this.updateSetting('fontSize', val);
+                    triggerProgressBarUpdate();
+                };
+
+                UI.lineSlider.oninput = (e) => {
+                    const val = parseFloat(e.target.value).toFixed(1);
+                    UI.lhVal.textContent = val;
+                    this.updateSetting('lineHeight', val);
+                    triggerProgressBarUpdate();
+                };
+                
+                UI.resetBtn.onclick = () => this.resetToDefaults();
+
+                document.querySelectorAll('.preset-btn').forEach(btn => {
+                    btn.onclick = (e) => {
+                        const themeKey = e.target.dataset.theme;
+                        const theme = THEMES[themeKey];
+                        if (theme) {
+                            UI.fgColor.value = theme.fg;
+                            UI.bgColor.value = theme.bg;
+                            this.updateSetting('color', theme.fg);
+                            this.updateSetting('backgroundColor', theme.bg);
+                        }
+                    };
+                });
+
+                UI.fgColor.oninput = (e) => this.updateSetting('color', e.target.value);
+                UI.bgColor.oninput = (e) => this.updateSetting('backgroundColor', e.target.value);
+                UI.hlColor.oninput = (e) => {
+                    State.settings.highlightColor = e.target.value;
+                    this.saveSettings();
+                    if (State.matches.length) Search.highlightAll(new RegExp(Utils.escapeRegExp(UI.searchInp.value.trim()), 'gi'));
+                };
+
+                const turnHorizontalPage = (direction) => {
+                    const gap = 80; 
+                    const step = (UI.content.clientWidth - 8 + gap) / 2; 
+                    
+                    let currentPage = Math.round(UI.content.scrollLeft / step);
+                    const maxScroll = UI.content.scrollWidth - UI.content.clientWidth;
+                    const maxPage = Math.ceil(maxScroll / step);
+                    
+                    currentPage += direction;
+                    if (currentPage < 0) currentPage = 0;
+                    if (currentPage > maxPage) currentPage = maxPage;
+                    
+                    UI.content.scrollTo({ left: currentPage * step, behavior: 'smooth' });
+                };
+
+                document.getElementById('nextPage').onclick = () => turnHorizontalPage(1);
+                document.getElementById('prevPage').onclick = () => turnHorizontalPage(-1);
+
+                let isPaging = false;
+                window.addEventListener('wheel', (e) => {
+                    if (UI.drawer.classList.contains('open') && e.target.closest('#ui-drawer')) return; 
+                    if (e.target.closest('#excerpts-popup')) return; 
+
+                    e.preventDefault();
+                    if (isPaging) return;
+
+                    const direction = Math.sign(e.deltaY || e.deltaX);
+                    if (direction === 0) return;
+
+                    turnHorizontalPage(direction);
+                    
+                    isPaging = true;
+                    setTimeout(() => { isPaging = false; }, 400); 
+                }, { passive: false });
+
+                // 窗口尺寸变化时，校准跨页断点并重构容器尺寸，抵御拉扯导致的断层
+                window.addEventListener('resize', Utils.debounce(() => {
+                    this.calibrateBookSize(); 
+                    
+                    const gap = 80;
+                    const step = (UI.content.clientWidth - 8 + gap) / 2; 
+                    const currScroll = UI.content.scrollLeft;
+                    const pageIndex = Math.round(currScroll / step);
+                    UI.content.scrollTo({ left: pageIndex * step, behavior: 'instant' });
+                    triggerProgressBarUpdate();
+                }, 200));
+
+                let ticking = false;
+                UI.content.addEventListener("scroll", () => {
+                    if (!ticking) { 
+                        window.requestAnimationFrame(() => { 
+                            triggerProgressBarUpdate(); 
+                            ticking = false; 
+                        }); 
+                        ticking = true; 
+                    }
+                    this.saveSettings(); 
+                }, { passive: true });
+            }
+        };
+
+        const Search = {
+            init() {
+                document.getElementById('searchBtn').onclick = () => {
+                    this.updateMatches(UI.searchInp.value.trim(), UI.regexToggle.checked);
+                    this.goNext();
+                };
+                UI.searchInp.onkeydown = (e) => {
+                    if (e.key === 'Enter') {
+                        e.preventDefault();
+                        document.getElementById('searchBtn').click();
+                    }
+                };
+
+                document.getElementById('nextMatch').onclick = () => this.goNext();
+                document.getElementById('prevMatch').onclick = () => this.goPrev();
+                document.getElementById('clearHighlight').onclick = () => this.clear();
+            },
+
+            updateMatches(keyword, useRegex) {
+                if (!keyword || keyword.length > 200) return this.clear();
+                let regex;
+                try {
+                    regex = useRegex ? new RegExp(keyword, 'gi') : new RegExp(Utils.escapeRegExp(keyword), 'gi');
+                } catch (e) {
+                    alert('Invalid regex'); return;
+                }
+
+                State.matches = [...State.rawText.matchAll(regex)];
+                State.currentMatchIndex = -1;
+                this.highlightAll(regex);
+            },
+
+            highlightAll(regex) {
+                if (!State.matches.length) return this.clear();
+
+                const hlColor = State.settings.highlightColor;
+                let result = '';
+                let lastIndex = 0;
+                let match;
+
+                regex.lastIndex = 0; 
+                while ((match = regex.exec(State.rawText)) !== null) {
+                    result += Utils.escapeHTML(State.rawText.substring(lastIndex, match.index));
+                    result += `<mark style="background:${hlColor};">${Utils.escapeHTML(match[0])}</mark>`;
+                    lastIndex = regex.lastIndex;
+                    if (match.index === regex.lastIndex) regex.lastIndex++; 
+                }
+                result += Utils.escapeHTML(State.rawText.substring(lastIndex));
+                
+                UI.content.innerHTML = result;
+                this.updateInfo();
+            },
+
+            updateInfo() {
+                UI.matchInfo.textContent = State.matches.length === 0 ? '0 / 0' : `${State.currentMatchIndex + 1} / ${State.matches.length}`;
+            },
+
+            scrollToCurrent() {
+                const marks = UI.content.querySelectorAll('mark');
+                const target = marks[State.currentMatchIndex];
+                if (target) {
+                    target.scrollIntoView({ block: 'center', inline: 'center', behavior: 'smooth' });
+                }
+            },
+
+            goNext() {
+                if (!State.matches.length) return;
+                State.currentMatchIndex = (State.currentMatchIndex + 1) % State.matches.length;
+                this.updateInfo();
+                this.scrollToCurrent();
+            },
+
+            goPrev() {
+                if (!State.matches.length) return;
+                State.currentMatchIndex = (State.currentMatchIndex - 1 + State.matches.length) % State.matches.length;
+                this.updateInfo();
+                this.scrollToCurrent();
+            },
+
+            clear() {
+                State.matches = [];
+                State.currentMatchIndex = -1;
+                UI.content.textContent = State.rawText; 
+                UI.matchInfo.textContent = '0 / 0';
+            }
+        };
+
+        const PinyinPlugin = {
+            init() {
+                this.tooltip = document.createElement("div");
+                this.tooltip.className = "pinyin-tooltip";
+                document.body.appendChild(this.tooltip);
+
+                document.addEventListener("mouseup", (e) => {
+                    const dict = window.top?.pinyinData; 
+                    if (!dict) return;
+
+                    const selection = window.getSelection().toString().trim();
+                    if (selection.length === 1 && dict[selection]) {
+                        this.tooltip.innerText = dict[selection];
+                        
+                        let leftPos = e.pageX;
+                        if (leftPos + 80 > window.innerWidth) {
+                            leftPos = window.innerWidth - 90;
+                        }
+                        
+                        this.tooltip.style.left = leftPos + "px";
+                        this.tooltip.style.top = (e.pageY - 35) + "px"; 
+                        this.tooltip.style.display = "block";
+                    } else {
+                        this.tooltip.style.display = "none";
+                    }
+                });
+
+                document.addEventListener("mousedown", (e) => {
+                    if(!e.target.closest('#ui-drawer')) {
+                        this.tooltip.style.display = "none";
+                    }
+                });
+            }
+        };
+
+        const FullscreenControl = {
+            init() {
+                this.isFullscreen = false;
+                document.body.addEventListener("mousedown", (e) => {
+                    if (e.button === 1 && !e.target.closest('#ui-drawer') && !e.target.closest('#excerpts-popup')) {
+                        e.preventDefault();
+                        this.isFullscreen ? this.exit() : this.enter();
+                        this.isFullscreen = !this.isFullscreen;
+                    }
+                });
+            },
+            enter() {
+                const el = document.documentElement;
+                if (el.requestFullscreen) el.requestFullscreen();
+                else if (el.webkitRequestFullScreen) el.webkitRequestFullScreen();
+                else if (el.mozRequestFullScreen) el.mozRequestFullScreen();
+                else if (el.msRequestFullscreen) el.msRequestFullscreen();
+            },
+            exit() {
+                if (document.exitFullscreen) document.exitFullscreen();
+                else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
+                else if (document.mozCancelFullScreen) document.mozCancelFullScreen();
+                else if (document.msExitFullscreen) document.msExitFullscreen();
+            }
+        };
+
+        function initExcerptTrigger() {
+            let btn = document.getElementById('excerpt-pop-btn');
+            if (!btn) {
+                btn = document.createElement('div');
+                btn.id = 'excerpt-pop-btn';
+                btn.textContent = '✏️';
+                btn.style.cssText = 'position: fixed; background: #516194; color: rgb(255, 255, 255); padding: 0 5px; border-radius: 6px; cursor: pointer; z-index: 2147483647; box-shadow: rgba(0, 0, 0, 0.4) 0px 4px 12px; display: none; user-select: none; left: 938px; top: 240px;';
+                document.body.appendChild(btn);
+
+                const doExcerpt = () => {
+                    const sel = window.getSelection();
+                    const text = sel.toString().trim();
+                    if (text.length > 1) {
+                        if (typeof sendToParent === 'function') {
+                            sendToParent('SAVE_EXCERPT', text);
+                        } else {
+                            window.parent.postMessage({ type: 'SAVE_EXCERPT', payload: text, from: 'content' }, '*');
+                        }
+                        
+                        const oldText = btn.textContent;
+                        btn.textContent = '✅ 已摘抄';
+                        btn.style.background = '#10b981';
+                        setTimeout(() => {
+                            btn.style.display = 'none';
+                            btn.textContent = oldText;
+                            btn.style.background = '#516194';
+                            sel.removeAllRanges(); 
+                            lastProcessedText = "";
+                        }, 800);
+                    }
+                };
+
+                const shieldEvents = ['mousedown', 'mouseup', 'click', 'touchstart', 'touchend', 'pointerdown', 'pointerup'];
+                
+                shieldEvents.forEach(evt => {
+                    window.addEventListener(evt, (e) => {
+                        if (e.target && e.target.closest && e.target.closest('#excerpt-pop-btn')) {
+                            
+                            e.stopPropagation();
+                            e.stopImmediatePropagation(); 
+
+                            if (evt === 'mousedown') {
+                                e.preventDefault();
+                            }
+                            
+                            if (evt === 'click') {
+                                doExcerpt();
+                            }
+                        }
+                    }, true);
+                });
+
+                let lastProcessedText = "";
+
+                document.addEventListener('mousedown', (e) => {
+                    if (e.target && e.target.closest && e.target.closest('#excerpt-pop-btn')) return;
+                    btn.style.display = 'none';
+                });
+
+                document.addEventListener('mouseup', (e) => {
+                    if (e.target && e.target.closest && e.target.closest('#excerpt-pop-btn')) return;
+                    
+                    setTimeout(() => {
+                        const text = window.getSelection().toString().trim();
+                        
+                        if (text.length > 1) {
+                            if (text !== lastProcessedText) {
+                                btn.style.left = Math.min(e.clientX + 5, window.innerWidth - 80) + 'px';
+                                btn.style.top = Math.min(e.clientY + 15, window.innerHeight - 40) + 'px';
+                                btn.style.display = 'block';
+                                lastProcessedText = text;
+                            }
+                        } else {
+                            btn.style.display = 'none';
+                            lastProcessedText = "";
+                        }
+                    }, 10);
+                });
+            }
+        }
+
+        function bootstrapper() {
+            Search.init();
+            PinyinPlugin.init();
+            FullscreenControl.init();
+
+            initExcerptTrigger();
+
+            const params = new URLSearchParams(window.location.search);
+            const fileUrl = params.get('file');
+            if (!fileUrl) return;
+
+            fetch(fileUrl)
+                .then(response => response.arrayBuffer())
+                .then(arrayBuffer => {
+                    let text = "";
+                    try {
+                        text = new TextDecoder("utf-8", { fatal: true }).decode(arrayBuffer);
+                    } catch (err) {
+                        text = new TextDecoder("gbk").decode(arrayBuffer);
+                    }
+
+                    const title = decodeURIComponent(fileUrl.split("/").pop());
+                    const sizeKB = (arrayBuffer.byteLength / 1024).toFixed(2);
+                    
+                    Viewer.init(title, text, sizeKB);
+                })
+                .catch(err => {
+                    UI.content.textContent = `无法加载文件: ${err.message}`;
+                });
+        }
+
+        window.addEventListener('load', bootstrapper);
+    </script>
+</body>
+
+</html>

@@ -1,0 +1,80 @@
+<!doctype html>
+<html>
+ <head>
+  <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+  <script src="../src/js/content.js"></script>
+  <title>static和extern</title>
+ </head>
+ <body>
+  <span id="anchor">20251026092853-其它|嵌入式开发|C</span>
+  <pre>
+static修饰变量, 在程序整个运行期间都存在，不会因为离开作用域而销毁。但它的作用域（可见性）取决于定义位置。
+函数内（局部）, 仅在该函数内可见
+函数外（全局）, 仅在当前源文件内可见
+void counter() {
+    static int count = 0; // 只初始化一次
+    count++;
+    printf("count = %d\n", count);
+}
+int main() {
+    counter(); // 1
+    counter(); // 2
+    counter(); // 3
+    return 0;
+}
+函数中的 static 局部变量放在静态存储区，它的生命周期与程序相同，而不是函数调用栈的一部分。
+static 局部变量只会初始化一次（在程序第一次执行到该行代码时），之后无论函数被调用多少次，它的值都会被保留。
+
+对static变量来说 → “只初始化一次，永久保存值”
+对static函数来说 → “只在当前文件可见（私有函数）”
+static 函数的生命周期与普通函数是一样的：从程序开始到程序结束
+
+与 static 相反	extern 表示“全局可见”，static 表示“仅文件内可见”
+extern 表示“外部声明” ：这个变量或函数 在别的源文件中定义过，我这里只是引用它。
+它让多个 .c 文件共享同一个变量或函数。
+最常见的用途：跨文件共享变量或函数
+
+// file1.c
+#include <stdio.h>
+int global = 42;   // 定义全局变量（具有外部链接）
+void show() {
+    printf("global = %d\n", global);
+}
+// file2.c
+#include <stdio.h>
+extern int global;  // 声明外部变量（不分配空间）
+extern void show(); // 声明外部函数
+int main() {
+    global = 100;
+    show();          // 调用 file1.c 中定义的函数
+}
+编译：
+gcc file1.c file2.c -o main
+输出：
+global = 100
+
+// file1.c
+static int inner = 10; // 仅 file1.c 可见
+int outer = 20;        // 所有文件可见
+// file2.c
+extern int outer;  // ✅ 可访问
+extern int inner;  // ❌ 编译错误（inner 是 static）
+
+变量前加 extern	声明该变量在别处定义，不分配内存
+函数前加 extern	声明该函数在别处定义（默认函数都是 extern）
+
+函数默认是 extern 的, 即使不写 extern，函数默认就是外部可见
+局部变量不是 extern，全局变量默认就是 extern（可被其他文件访问），除非显式用 static 隐藏起来。
+
+1. extern 和 static 本质上是链接类型说明符：
+extern → 外部链接
+static → 内部链接
+2. 它们还影响可见性：
+static → 只在当前文件可见
+extern → 可被其他文件访问
+3. 它们与存储期相关，但不完全等同：
+全局变量 + static → 静态存储，内部链接
+全局变量 + 默认 extern → 静态存储，外部链接
+</pre>
+ </body>
+</html>

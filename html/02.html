@@ -1,0 +1,629 @@
+<!doctype html>
+<html>
+ <head>
+  <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+  <script src="../src/js/content.js"></script>
+  <title>02</title>
+ </head>
+ <body>
+  <span id="anchor">20251130033113-其它|嵌入式开发|C|C Primer Plus</span>
+  <pre>
+
+# 逗号运算符
+逗号运算符把两个表达式连接成一个表达式，并保证最左边的表达式最先求值。
+    逗号运算符通常在for循环头的表达式中用于包含更多的信息。
+    整个逗号表达式的值是逗号右侧表达式的值
+        x = (y = 3, (z = ++y + 2) + 5)
+            先把3赋给y，递增y为4，然后把 4加2之和（6）赋给z，接着加上5，最后把结果11赋给 x
+假设在写数字时不小心输入了 逗号
+    houseprice = 249,500;
+        这不是语法错误，C 编译器会将其解释为一个逗号表达式，即 houseprice = 249 是逗号左侧的子表达式，500 是右侧的子表达式。
+            houseprice = 249;
+            500; //也是一条语句，但是什么也不做。
+
+# 循环
+入口条件循环
+    while和for, 在循环的每次迭代之前检查测试条件，所以有可能根本不执行循环体中的内容。
+        for ( ; test ; ) 等同： while ( test )
+出口条件循环
+    do while, 在循环的每次迭代之后检查测试条件，这保证了至少执行循环体中的内容一次。
+
+接收数据到数组
+<code c>
+#include &lt;stdio.h>
+#define SIZE 5
+#define PAR 72
+int main(void)
+{
+    int index, score[SIZE];
+    int sum = 0;
+    float average;
+ 
+    printf("Enter %d golf scores:\n", SIZE);
+    for (index = 0; index &lt; SIZE; index++)
+        scanf("%d", &score[index]);
+ 
+    printf("The scores read in are as follows:\n");
+    for (index = 0; index &lt; SIZE; index++)
+        printf("%-5d", score[index]);
+    printf("\n");
+ 
+    for (index = 0; index &lt; SIZE; index++)
+        sum += score[index];
+    average = (float)sum / SIZE;
+ 
+    printf("Sum of scores = %d, average = %.2f\n", sum, average);
+    printf("That's a handicap of %.0f.\n", average - PAR);
+    return 0;
+}
+</code>
+
+幂计算
+<code c>
+#include &lt;stdio.h>
+ 
+double power(double n, int p);
+ 
+int main(void)
+{
+    double x, xpow;
+    int exp;
+    printf("Enter a number and the positive integer power to which\nthe number will be raised. Enter q to quit.\n");
+    while (scanf("%lf%d", &x, &exp) == 2)
+    {
+        xpow = power(x, exp);
+        printf("%.3g to the power %d is %.5g\n", x, exp, xpow);
+        printf("Enter next pair of numbers or q to quit.\n");
+    }
+    printf("-- bye!\n");
+    return 0;
+}
+ 
+double power(double n, int p)
+{
+    double pow = 1;
+    int i;
+    for (i = 1; i &lt;= p; i++)
+        pow *= n;
+    return pow;
+}
+</code>
+<code c>
+#include &lt;stdio.h>
+int main(void)
+{
+    const int FREEZING = 0;
+    float temperature;
+    int cold_days = 0;
+    int all_days = 0;
+    printf("Enter the list of daily low temperatures.\n");
+    printf("Use Celsius, and enter q to quit.\n");
+    while (scanf("%f", &temperature) == 1)
+    {
+        all_days++;
+        if (temperature &lt; FREEZING)
+            cold_days++;
+    }
+    else
+        printf("%d days total: %.1f%% were below freezing.\n", all_days, 100.0 * (float)cold_days / all_days);
+    if (all_days == 0)
+        printf("No data entered!\n");
+    return 0;
+}
+</code>
+对表达式100.0 * cold_days求值，由于C的自动转换类型规则，乘积会被强制转换成浮点数。
+    使用强制类型转换可以明确表达转换类型的意图，保护程序免受不同版本编译器的影响。
+
+从输入读取字符，空格就原样输出，否则输出ASCII +1，直到遇到换行符, 最后输出换行符
+<code c>
+#include &lt;stdio.h>
+#define SPACE ' '
+int main(void)
+{
+    char ch;
+    //ch = getchar();
+    //while (ch != '\n')
+    while ((ch = getchar()) != '\n')
+    {
+        if (ch == SPACE)
+            putchar(ch);
+        else
+            putchar(ch + 1);
+        //ch = getchar();
+    }
+    putchar(ch);
+    return 0;
+}
+</code>
+<code c>
+#include &lt;stdio.h>
+#include &lt;ctype.h>
+int main(void)
+{
+    char ch;
+    while ((ch = getchar()) != '\n')
+    {
+        if (isalpha(ch))
+            putchar(ch + 1);
+        else
+            putchar(ch);
+    }
+    putchar(ch);
+    return 0;
+}
+</code>
+<code c>
+#include &lt;stdio.h>
+#include &lt;stdbool.h>
+int main(void)
+{
+    unsigned long num;
+    unsigned long div;
+    bool isPrime;
+    printf("Enter integer or quit.\n");
+    while (scanf("%lu", &num) == 1)
+    {
+        for (div = 2, isPrime = true; (div * div) &lt;= num; div++)
+        {
+            if (num % div == 0)
+            {
+                if ((div * div) != num)
+                    printf("%lu is divisible by %lu and %lu.\n", num, div, num / div);
+                else
+                    printf("%lu is divisible by %lu.\n", num, div);
+                isPrime = false;
+            }
+        }
+        if (isPrime)
+            printf("%lu is prime.\n", num);
+
+        printf("continue or quit.\n");
+    }
+    printf("Bye.\n");
+    return 0;
+}
+</code>
+
+# 求值顺序
+算术表达式中
+    x = f() + g(); 不保证先调用 f() 还是 g()
+    apples = (5 + 3) * (9 + 6); 不保证先计算左部或右部
+逻辑表达式中
+    求值顺序是从左往右, 左边已经决定整个结果则右侧不会求值
+    对于 && 和 ||，左操作数的求值先发生并完成其副作用，然后才可能求值右操作数。
+        while ((c = getchar()) != ' ' && c != '\n')
+            第1 个子表达 式把读取的值赋给c，后面的子表达式会用到c的值。如果没有求值循序的保证，编译器可能在给c赋值之前先对后面的表达式求值。
+        if (number != 0 && 12/number == 2)
+            避免除0
+        while ( x++ &lt; 10 && x + y &lt; 20) 
+            在对&&右侧的表达式求值之前， 已经递增了x。
+
+<code c>
+#include &lt;stdio.h>
+#include &lt;ctype.h>
+#include &lt;stdbool.h>
+ 
+int main(void)
+{
+    char c;
+    long n_chars = 0L;
+    int n_lines = 0, n_words = 0, p_lines = 0;
+    bool inword = false;
+    bool at_line_start = true;
+    bool line_has_midbar = false; // 本行是否出现过行中 '|'
+ 
+    while ((c = getchar()) != EOF)
+    {
+        // ---- END condition: '|' at line start ----
+        if (at_line_start && c == '|')
+            break;
+        n_chars++;
+        // ---- detect mid-line '|' ----
+        if (!at_line_start && c == '|')
+            line_has_midbar = true;
+        // ---- count lines ----
+        if (c == '\n')
+        {
+            n_lines++;
+            // 若本行出现过 mid-line '|'
+            if (line_has_midbar)
+                p_lines++;
+            // reset for next line
+            at_line_start = true;
+            line_has_midbar = false;
+        }
+        else
+        {
+            at_line_start = false;
+        }
+        // ---- word counting ----
+        if (!isspace(c) && !inword)
+        {
+            inword = true;
+            n_words++;
+        }
+        else if (isspace(c) && inword)
+        {
+            inword = false;
+        }
+    }
+    // EOF, input ended but last line had mid-bar and no newline
+    if (!at_line_start && line_has_midbar)
+        p_lines++;
+ 
+    printf("characters = %ld, words = %d, lines = %d, partial lines = %d\n",
+           n_chars, n_words, n_lines, p_lines);
+ 
+    return 0;
+}
+</code>
+
+# 三目运算
+<code c>
+#include &lt;stdio.h>
+ 
+#define COVERAGE 350
+ 
+int main(void)
+{
+    int sq_feet, cans;
+    printf("Enter number of square feet to be painted:\n");
+    while (scanf("%d", &sq_feet) == 1)
+    {
+        cans = sq_feet / COVERAGE;
+        cans += ((sq_feet % COVERAGE == 0)) ? 0 : 1;
+        printf("You need %d %s of paint.\n", cans, cans == 1 ? "can" : "cans");
+        printf("Enter next value (q to quit):\n");
+    }
+    return 0;
+}
+</code>
+
+<code c>
+#include &lt;stdio.h>
+int main(void)
+{
+    const float MIN = 0.0f;
+    const float MAX = 100.0f;
+    float score;
+    float total = 0.0f;
+    int n = 0;
+    // min设MAX,保证第一次的分数必然能触发更新逻辑
+    float min = MAX;
+    float max = MIN;
+    printf("Enter the first score (q to quit): ");
+    while (scanf("%f", &score) == 1)
+    {
+        if (score &lt; MIN || score > MAX)
+        {
+            printf("%0.1f is an invalid value.Try again: ", score);
+            continue;
+        }
+        printf("Accepting %0.1f:\n", score);
+        // 如果更小就更新最小值
+        // 如果更大就更新最大值
+        min = (score &lt; min) ? score : min;
+        max = (score > max) ? score : max;
+        total += score;
+        n++;
+        printf("Enter next score (q to quit): ");
+    }
+    if (n > 0)
+    {
+        printf("Average of %d scores is %0.1f.\n", n, total / n);
+        printf("Low = %0.1f, high = %0.1f\n", min, max);
+    }
+    else
+        printf("No valid scores were entered.\n");
+    return 0;
+}
+</code>
+
+# switch
+<code c>
+#include &lt;stdio.h>
+#include &lt;ctype.h>
+int main(void)
+{
+    char ch;
+    while ((ch = getchar()) != '#')
+    {
+        if ('\n' == ch)
+            continue;
+        if (islower(ch))
+            switch (ch)
+            {
+            case 'a':
+                printf("argali, a wild sheep of Asia\n");
+                break;
+            case 'b':
+                printf("babirusa, a wild pig of Malay\n");
+                break;
+            default:
+                printf("That's a stumper!\n");
+            }
+        else
+            printf("I recognize only lowercase letters.\n");
+        // 丢弃当前输入行换行符前的所有字符, 输入完一行按下回车,getchar缓存的最后一个字符即\n
+        // 如果不清除，下一次 getchar() 会直接读缓冲区里残留的字符，而不是等待用户输入。
+        while (getchar() != '\n')
+            continue;
+        printf("Please type another letter or a #.\n");
+    }
+    printf("Bye!\n");
+    return 0;
+}
+</code>
+
+switch测试表达式只接受整型(包括char)
+多个值指向同一行为时使用多重case
+<code c>
+#include &lt;stdio.h>
+int main(void)
+{
+    char ch;
+    int ab_ct, cd_ct;
+    ab_ct = cd_ct = 0;
+    printf("Enter some text; enter # to quit.\n");
+    while ((ch = getchar()) != '#')
+    {
+        switch (ch)
+        {
+        case 'a':
+        case 'b':
+            ab_ct++;
+            break;
+        case 'c':
+        case 'd':
+            cd_ct++;
+            break;
+        default:
+            break;
+        }
+    }
+    printf("%4d %4d\n", ab_ct, cd_ct);
+    return 0;
+}
+</code>
+
+# goto
+出现问题时从一组嵌套循环中跳出（一条break语句只能跳出当前循循环）：
+<code c>
+while (funct > 0) {
+    for (i = 1, i &lt;= 100; i++) {
+        for (j = 1; j &lt;= 50; j++) {
+            //其他语句
+            if (sth)
+                goto help;
+            //其他语句
+        }
+        //其他语句
+    }
+    //其他语句
+}
+//其他语句
+help: //语句
+</code>
+
+# 缓冲输入
+ANSI C和后续的C标准都规定输入是缓冲的
+用户输入的字符被收集并储存在缓冲区，按下Enter键后，程序才可使用用户输入的字符
+为什么要有缓冲区？
+    首先，把若干字符作为一个块进行传输比逐个发送 这些字符节约时间。
+    其次，如果用户打错字符，可以直接通过键盘修正错误。当最后按下Enter键时，传输的是正确的输入。
+虽然缓冲输入好处很多，但是某些交互式程序也需要无缓冲输入。例如在游戏中你希望按下一个键就执行相应的指令。
+
+缓冲分为两类：完全缓冲I/O和行缓冲I/O。
+完全缓冲输入指的是当缓冲区被填满时才刷新缓冲区（内容被发送至目的地），通常出现在文件输入 中。缓冲区的大小取决于系统，常见的大小是 512 字节和 4096字节。行缓 冲I/O指的是在出现换行符时刷新缓冲区。键盘输入通常是行缓冲输入，所以在按下Enter键后才刷新缓冲区。
+
+# EOF
+无论操作系统实际使用何种方法检测文件结尾, getchar()读取文件检测到文件结尾时都将返回EOF（end of file）。
+    scanf()函数检测到文件结尾时也返回EOF。
+    通常EOF定义 在stdio.h文件中#define EOF (-1)
+        不用关心EOF的实际值，因为EOF在stdio.h中用#define预处理指令定义，可直接使用，不必再编写代码假定EOF为某值。
+
+# getchar
+getchar()成功时返回读到的字符(转换为 unsigned char[0~255] 再提升为 int), 失败或到达文件结尾返回EOF
+    读取的是“编码后的字节”，而不是“字符”。
+    ascii以外的字符底层都是由多个 0~255 的字节序列构成的。
+
+# 重定向输入输出
+重定向输入让程序使用文件而不是键盘来输入，重定向输出让程序输出至文件而不是屏幕。
+
+组合重定向
+    假设你希望制作一份mywords文件的副本，并命名为savewords
+        echo_eof &lt; mywords > savewords
+            &lt; mywords 表示将文件 mywords 的内容作为 标准输入 提供给 echo_eof。
+            > savewords 表示将 echo_eof 的 标准输出 写入文件 savewords。
+        echo_eof > savewords &lt; mywords
+            > savewords 仍然把标准输出重定向到 savewords。
+            &lt; mywords 仍然把标准输入从 mywords 读取。
+    重定向符号的顺序无关紧要
+        无论 &lt; 和 > 写在命令前、后或中间，Shell 都会在执行命令前统一处理所有重定向。两条命令效果完全相同
+    把mywords 的内容交给 echo_eof，再由 echo_eof 输出到 savewords。因此生成了 savewords 文件的副本。
+
+# 清理多余字符
+<code c>
+#include &lt;stdio.h>
+void display(char cr, int lines, int width);
+int main(void)
+{
+    int ch;
+    int rows, cols;
+    printf("Enter a character and two integers:\n");
+    while ((ch = getchar()) != '\n')
+    {
+        if (scanf("%d %d", &rows, &cols) != 2)
+            break;
+        display(ch, rows, cols);
+        while (getchar() != '\n')
+            continue;
+        printf("Enter another character and two integers;\n");
+        printf("Enter a newline to quit.\n");
+    }
+    printf("Bye.\n");
+    return 0;
+}
+void display(char cr, int lines, int width)
+{
+    int row, col;
+    for (row = 1; row &lt;= lines; row++)
+    {
+        for (col = 1; col &lt;= width; col++)
+            putchar(cr);
+        putchar('\n');
+    }
+}
+</code>
+
+用户可能输入: a 3 5 xyz ↵
+字符a通过 getchar() 读走
+数字 3 和 5被scan读走
+输入缓冲区中仍然残留xyz
+子while的作用, 不断读取并丢弃字符，直到读到本行的换行符 \n 为止。
+但如果不清理缓冲区，之前残留的字符会立即被下一次 getchar() 读到，导致行为异常。
+
+long get_long(void)
+{
+    long input;
+    char ch;
+    while (scanf("%ld", &input) != 1)
+    {
+        while ((ch = getchar()) != '\n')
+            putchar(ch); // 处理错误的输入
+        printf(" is not an integer.\nPlease enter an ");
+        printf("integer value, such as 25, -178, or 3: ");
+    }
+}
+
+
+菜单给用户提供了一份响应程序的选项。
+理想状态是，用户输入程序所列选项之一，然后程序根据用户所选项完 成任务。
+第1个目标是：当用户遵循指令时程序顺利运行；
+第2个目标是：当用户没有遵循指 令时，程序也能顺利运行。
+要实现第 2 个目标难度较大，因为很难预料用户在使用程序时的所有错误情况。
+
+#include &lt;stdio.h>
+char get_choice(void);
+void count(void);
+char get_first(void);
+int get_int(void);
+
+int main(void)
+{
+    int choice;
+    while ((choice = get_choice()) != 'q')
+    {
+        switch (choice)
+        {
+        case 'a':
+            printf("Buy low, sell high.\n");
+            break;
+        case 'b':
+            putchar('\a'); /* ANSI 蜂鸣 */
+            break;
+        case 'c':
+            count();
+            break;
+        default:
+            printf("Program error!\n");
+            break;
+        }
+    }
+    return 0;
+}
+
+char get_choice(void)
+{
+    int ch;
+    printf("Enter the letter of your choice:\n");
+    printf("a. advice        b. bell\n");
+    printf("c. count         q. quit\n");
+    ch = get_first();
+    while ((ch &lt; 'a' || ch > 'c') && ch != 'q')
+    {
+        printf("Please respond with a, b, c, or q.\n");
+        ch = get_first();
+    }
+    return ch;
+}
+
+void count(void)
+{
+    int n, i;
+    printf("Count how far? Enter an integer:\n");
+    n = get_int();
+    for (i = 1; i &lt;= n; i++)
+        printf("%d\n", i);
+    while (getchar() != '\n')
+        continue;
+}
+
+char get_first(void)
+{
+    int ch;
+    ch = getchar(); /* 读取下一个字符 */
+    while (getchar() != '\n')
+        continue; /* 跳过该行剩下的内容 */
+    return ch;
+}
+
+int get_int(void)
+{
+    int input;
+    char ch;
+    while (scanf("%d", &input) != 1)
+    {
+        while ((ch = getchar()) != '\n')
+            putchar(ch); // 处理错误输出
+        printf(" is not an integer.\nPlease enter an ");
+        printf("integer value, such as 25, -178, or 3: ");
+    }
+    return input;
+}
+
+
+#include &lt;stdio.h>
+#include &lt;string.h>
+
+#define NAME "GIGATHINK, INC."
+#define ADDRESS "101 Megabuck Plaza"
+#define PLACE "Megapolis, CA 94904"
+#define WIDTH 40
+#define SPACE ' '
+
+void show_n_char(char ch, int num);
+
+int main(void)
+{
+    int spaces;
+    show_n_char('*', WIDTH);
+    putchar('\n');
+    show_n_char(SPACE, 12);
+    printf("%s\n", NAME);
+    spaces = (WIDTH - strlen(ADDRESS)) / 2;
+    show_n_char(SPACE, spaces);
+    printf("%s\n", ADDRESS);
+    show_n_char(SPACE, (WIDTH - strlen(PLACE)) / 2);
+    printf("%s\n", PLACE);
+    show_n_char('*', WIDTH);
+    putchar('\n');
+    return 0;
+}
+
+void show_n_char(char ch, int num)
+{
+    int count;
+    for (count = 1; count &lt;= num; count++)
+        putchar(ch);
+}
+
+
+c编译器不检查数组下标是否越界
+
+如果char类型的数组末尾包含一个表示字符串末尾的空字符\0，则该数组既是字符数组, 也是字符串
+
+满船清梦压星河
+</pre>
+ </body>
+</html>

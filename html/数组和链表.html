@@ -1,0 +1,731 @@
+<!doctype html>
+<html>
+ <head>
+  <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+  <script src="../src/js/content.js"></script>
+  <title>数组和链表</title>
+ </head>
+ <body>
+  <span id="anchor">20251022204626-其它|嵌入式开发|C</span>
+  <pre>
+# 数组
+内存连续分配
+随机访问快
+    直接根据下标访问到第 n 个元素, 而不需要从第一个开始一个个走过去
+    很多查找算法依赖快速定位, 这必须是随机访问结构（数组）才行，链表无法做到直接定位。
+非未尾增删元素后需移动元素
+固定大小
+
+## 数组退化
+数组名在函数参数中会退化为指针，函数无法直接知道数组长度
+<code c>
+void foo(int a[]) {
+    // a 已经是 int*，等于&a[0], 不能直接知道长度
+}
+</code>
+
+## 数组长度
+C 语言本身更底层，强调性能和内存控制, 不提供内置数组长度属性，需要程序员自己管理
+<code c>
+int arr[5];
+int count = sizeof(arr) / sizeof(arr[0]);
+</code>
+
+## 计数排序
+适合：
+    元素是整数（或可映射为整数）
+    数值范围不大（例如 0~1000）
+    数据量较大
+不适合：
+    元素范围特别大（如身份证号、浮点数）
+    稀疏数据
+
+20251026095227.webp
+20251026095226.webp
+两图中示例简单、好理解、速度快
+不需要额外的输出数组
+对于 整数、范围较小 的数据很实用
+缺点
+    不是稳定排序（同值元素的相对顺序可能乱掉）
+    → 例如要给“带编号的学生分数排序”，就不适合。
+    不能直接扩展到有符号数、浮点数或复杂键值对
+    只能用于 简单整数排序，范围还得提前知道。
+
+因此下面是“标准计数排序”（教材/算法版）
+    1. 建立计数数组；
+    2. 对计数数组做 累加（变成位置索引）；
+    3. 反向遍历原数组，把每个元素放入正确位置；
+    4. （可选）再复制回原数组。
+它看起来多了几步，但：
+    ✅ 能保持稳定性（相同元素顺序不乱）
+    ✅ 能处理带属性的对象（比如“学生分数+姓名”）
+    ✅ 是更通用的版本，后续算法（比如基数排序）都依赖它
+<code c>
+#include &lt;stdio.h>
+#include &lt;string.h>
+ 
+void countingSort(int arr[], int n) {
+    int output[n];
+    int max = arr[0];
+    for (int i = 1; i &lt; n; i++)
+        if (arr[i] > max) max = arr[i];
+ 
+    int count[max + 1];
+    memset(count, 0, sizeof(count));
+ 
+    // 计数
+    for (int i = 0; i &lt; n; i++)
+        count[arr[i]]++;
+ 
+    // 累加
+    for (int i = 1; i &lt;= max; i++)
+        count[i] += count[i - 1];
+ 
+    // 反向放置（保持稳定性）
+    for (int i = n - 1; i >= 0; i--) {
+        output[count[arr[i]] - 1] = arr[i];
+        count[arr[i]]--;
+    }
+ 
+    // 拷贝回原数组
+    for (int i = 0; i &lt; n; i++)
+        arr[i] = output[i];
+}
+ 
+int main() {
+    int arr[] = {2, 5, 3, 0, 2, 3, 0, 3};
+    int n = sizeof(arr) / sizeof(arr[0]);
+    countingSort(arr, n);
+ 
+    for (int i = 0; i &lt; n; i++)
+        printf("%d ", arr[i]);
+ 
+    return 0;
+}
+</code>
+
+# 链表
+内存分散
+增删只需改指针
+    增改两条指针, 删只改一条指针
+    实际上还需要做内存分配（malloc）或释放（free），否则就会内存泄漏或悬空指针
+可动态增长
+随机访问慢
+    需要从第一个开始一个个向下找
+
+链表实现了内存零碎数据的有效组织。比如，当我们用 malloc 来进行内存申请的时候，当内存足够，但是由于碎片太多，没有连续内存时，只能以申请失败而告终，而用链表这种数据结构来组织数据，就可以解决上类问题。
+
+静态链表（栈上变量）由系统自动销毁，不能也不需要手动释放。
+动态链表（malloc创建）由程序员负责释放，否则内存泄漏。
+
+## 静态链表
+静态链表的意义止于“理解原理”
+    节点数固定无法在运行时按需插入
+    栈空间有限
+    栈变量不能跨线程共享或持久使用
+实际工程中几乎不用静态链表, 而是通过 malloc() 申请堆里的空间进行动态分配
+<code c>
+// 1.定义链表节点
+typedef struct node{
+    int data;
+    struct node *next;
+} Node;
+int main(){
+    // 2.创建链表节点
+    Node a;
+    Node b;
+    Node c;
+    // 3.初始化节点数据
+    a.data = 1;
+    b.data = 3;
+    c.data = 5;
+    // 4.链接节点
+    a.next = &b;
+    b.next = &c;
+    c.next = NULL;
+    // 5.创建链表头
+    Node *head = &a; 
+    // 6.使用链表
+    while(head != NULL){
+        int currentData = head->data;
+        printf("currentData = %i\n", currentData);
+        head = head->next; // 切至下一节点
+    }
+    return 0;
+}
+</code>
+
+## 动态链表
+表头 head：总是指向链表第一个节点的指针
+节点 Node：存储数据和指向下一个节点的指针
+链表操作总是通过修改 head 来访问整个链表
+<code c>
+#include &lt;stdio.h>
+#include &lt;stdlib.h>
+ 
+struct Node {
+    int data;            // 数据区, 4字节, 存储节点值 
+    struct Node *next;   // 指针变量, 4字节, 存储指向下一个节点的地址（或 NULL） 
+};
+ 
+// 如果只传指针 head（类型 struct Node *）, 函数里只能修改 head 的副本, 外部的 head 不会改变 
+// 修改外部指针，必须传指向指针的指针 
+void insertHead(struct Node **head, int value) {
+    struct Node *newNode = malloc(sizeof(struct Node));  // 结构体字节数包括可能的对齐填充 
+    newNode->data = value;
+    newNode->next = *head;  // 新节点的 next 指向次新节点 
+    *head = newNode;        // (修改外部指针) 更新表头使之指向新节点 
+}
+ 
+// 尾插
+void insertTail(struct Node **head, int value) {
+    struct Node *newNode = malloc(sizeof(struct Node));
+    newNode->data = value;
+    newNode->next = NULL; // 新节点next指向NULL
+
+    if (*head == NULL) { // 当前链表无节点时
+        *head = newNode;
+        return;
+    }
+
+    struct Node *p = *head;
+    while (p->next != NULL) // 遍历出最旧节点
+        p = p->next;
+
+    p->next = newNode; // 修改最旧节点使之指向新节点
+}
+ 
+void printList(struct Node *head) {
+    for (struct Node *p = head; p != NULL; p = p->next)
+        printf("%d -> ", p->data);
+    printf("NULL\n");
+}
+ 
+void deleteList(struct Node **head) {
+    struct Node *cur = *head;
+    while (cur) {              // 指针变量在条件中使用时, 非 NULL → 非 0 → 真 
+        struct Node *tmp = cur->next;
+        free(cur);
+        cur = tmp;
+    }
+    *head = NULL;
+}
+ 
+int main() {
+    struct Node *head = NULL;  // head是指向Node * 类型的指针, 表头 
+    insertHead(&head, 30);     // &head 是指针的指针 
+    insertHead(&head, 20);
+    insertTail(&head, 98);
+    insertHead(&head, 10);
+    insertTail(&head, 99);
+    printList(head);           // 输出: 10 -> 20 -> 30 -> 98 -> 99 -> NULL 
+    deleteList(&head);
+    return 0;
+}
+</code>
+每次头插：
+    新节点的 next 指向次新节点
+    更新表头使之指向新节点
+链表方向：
+    head → 最新插入的节点 → … → 最旧节点 → NULL
+20251022223707.webp
+
+头插, 快速, 不需要遍历链表, 常用于临时反转顺序的构建（如栈）
+尾插, 保持插入顺序, 需遍历或使用尾指针, 常用于构造队列或有序链表
+
+### 尾插优化
+如果链表经常需要在尾部插入，可以维护一个“尾指针”, 不再需要循环遍历
+<code c>
+struct Node *head = NULL;
+struct Node *tail = NULL;
+ 
+void insertTailFast(struct Node **head, struct Node **tail, int value) {
+    struct Node *newNode = malloc(sizeof(struct Node));
+    newNode->data = value;
+    newNode->next = NULL;
+ 
+    if (*head == NULL) {
+        *head = *tail = newNode;  // 链表无节点时
+    } else {
+        (*tail)->next = newNode;  // 接在尾后
+        *tail = newNode;          // 更新尾指针
+    }
+}
+</code>
+tail 的作用只是“加速尾部插入”
+head 仍然承担着几个关键职责
+    遍历起点
+        遍历链表必须从 head 开始（tail 只指向最后一个节点）
+    删除释放
+        删除整个链表时，必须从 head 开始逐一 free 
+    访问链表数据	
+        head 是链表的唯一入口，没有它无法访问前面的节点
+    判断空链表
+        一般判断 if (head == NULL) 表示链表为空
+
+### 单一查找
+<code c>
+#include &lt;stdio.h>
+#include &lt;stdlib.h>
+ 
+struct Node {
+    int data;
+    struct Node *next;
+};
+ 
+struct Node* findNode(struct Node *head, int target) {
+    struct Node *p = head;
+    while (p != NULL) {
+        if (p->data == target)
+            return p;
+        p = p->next;
+    }
+    return NULL;
+}
+ 
+int main() {
+    // 手动创建链表: 10 -> 20 -> 30 -> NULL
+    struct Node n3 = {30, NULL};
+    struct Node n2 = {20, &n3};
+    struct Node n1 = {10, &n2};
+    struct Node *head = &n1;
+ 
+    int key = 20;
+    struct Node *result = findNode(head, key);
+ 
+    if (result)
+        printf("找到了: %d\n", result->data);
+    else
+        printf("未找到 %d\n", key);
+ 
+    return 0;
+}
+</code>
+
+### 单一删除
+<code c>
+#include &lt;stdio.h>
+#include &lt;stdlib.h>
+ 
+struct Node {
+    int data;
+    struct Node *next;
+};
+ 
+// 删除第一个等于 target 的节点
+void deleteNode(struct Node **head, int target) {
+    struct Node *curr = *head;
+    struct Node *prev = NULL;
+ 
+    while (curr != NULL) {
+        if (curr->data == target) {
+            // 情况1：删除的是头节点
+            if (prev == NULL)
+                *head = curr->next;
+            else
+                prev->next = curr->next;
+
+            free(curr);
+            printf("删除成功: %d\n", target);
+            return;
+        }
+        prev = curr;
+        curr = curr->next;
+    }
+    printf("未找到要删除的值: %d\n", target);
+}
+ 
+int main() {
+    // 创建链表：10 → 20 → 30 → 40
+    struct Node *n4 = malloc(sizeof(struct Node)); n4->data = 40; n4->next = NULL;
+    struct Node *n3 = malloc(sizeof(struct Node)); n3->data = 30; n3->next = n4;
+    struct Node *n2 = malloc(sizeof(struct Node)); n2->data = 20; n2->next = n3;
+    struct Node *n1 = malloc(sizeof(struct Node)); n1->data = 10; n1->next = n2;
+    struct Node *head = n1;
+ 
+    deleteNode(&head, 30);  // 删除中间节点
+    deleteNode(&head, 10);  // 删除头节点
+    deleteNode(&head, 99);  // 删除不存在的值
+ 
+    // 输出结果
+    for (struct Node *p = head; p != NULL; p = p->next)
+        printf("%d -> ", p->data);
+    printf("NULL\n");
+
+    // 释放剩余节点
+    while (head != NULL) {
+        struct Node *tmp = head->next;
+        free(head);
+        head = tmp;
+    }
+ 
+    return 0;
+}
+</code>
+
+工程实践中
+允许重复但按顺序处理
+常见于「日志链表」「任务队列」；
+删除时只删第一个匹配（先进先出）。
+不允许重复
+唯一标识（ID、指针、索引）型数据
+插入前查重；
+或使用哈希表、红黑树来保证唯一性。
+
+### 多个匹配结果
+非唯一属性（名字、数值、状态）型数据
+实际工程中链表节点并非只有 data 和 next 两个成员而是封装更多信息，否则“多个相同 data”意义不大
+<code c>
+#include &lt;stdio.h>
+#include &lt;stdlib.h>
+
+struct Node {
+    int data;
+    struct Node *next;
+};
+
+typedef int (*CompareFunc)(int a, int b);
+
+struct Node* findAll(struct Node *head, int key, CompareFunc cmp) {
+    struct Node *resultHead = NULL;
+    struct Node *resultTail = NULL;
+
+    while (head) {
+        if (cmp(head->data, key) == 0) {
+            // 新建一个节点拷贝匹配结果
+            struct Node *newNode = malloc(sizeof(struct Node));
+            newNode->data = head->data;
+            newNode->next = NULL;
+            
+            // 空链表时头和尾都指向新节点
+            if (resultHead == NULL)
+                resultHead = resultTail = newNode;
+            else {
+                // 尾插
+                resultTail->next = newNode; // 次新指向最新, 也即最新接在次新之后
+                resultTail = newNode; // 尾指针指向最新
+            }
+        }
+        head = head->next;
+    }
+    return resultHead; // 返回包含所有匹配项的新链表
+}
+
+int cmpInt(int a, int b) { return a - b; }
+
+int main() {
+    // 构造链表: 10 → 20 → 10 → 30 → 10
+    struct Node n5 = {10, NULL};
+    struct Node n4 = {30, &n5};
+    struct Node n3 = {10, &n4};
+    struct Node n2 = {20, &n3};
+    struct Node n1 = {10, &n2};
+
+    struct Node *matches = findAll(&n1, 10, cmpInt);
+
+    printf("匹配结果: ");
+    // 除了 0 和 指针常量NULL，其它所有值都被认为是真 (true)。
+    for (struct Node *p = matches; p; p = p->next)
+        printf("%d ", p->data);
+    printf("\n");
+
+    // 释放结果链表
+    while (matches) {
+        struct Node *tmp = matches->next;
+        free(matches);
+        matches = tmp;
+    }
+}
+</code>
+
+### 迭代查找 + 删除
+迭代查找（多次调用）	Node*	
+无需新分配内存, 调用略复杂, 适用于链表很大且性能敏感
+“迭代查找 + 删除”最常见于：
+    定时任务清理（timeout）
+    连接管理（关闭失效连接）
+    缓存清理（LRU过期）
+    消息队列回收
+    嵌入式设备的资源管理
+<code c>
+#include &lt;stdio.h>
+#include &lt;stdlib.h>
+#include &lt;time.h>
+ 
+struct Task {
+    int id;
+    time_t expireAt;   // 任务过期时间戳
+    int done;          // 任务是否已完成
+    struct Task *next;
+};
+ 
+// 创建任务节点
+struct Task* createTask(int id, int ttl) {
+    struct Task *t = malloc(sizeof(struct Task));
+    t->id = id;
+    t->expireAt = time(NULL) + ttl;  // 当前时间 + TTL
+    t->done = 0;
+    t->next = NULL;
+    return t;
+}
+ 
+// 添加到链表头（头插法）
+void addTask(struct Task **head, struct Task *t) {
+    t->next = *head;
+    *head = t;
+}
+ 
+// 模拟任务完成
+void markDone(struct Task *head, int id) {
+    for (; head; head = head->next)
+        if (head->id == id)
+            head->done = 1;
+}
+ 
+// 清理过期或完成的任务（迭代查找+删除）
+void cleanupTasks(struct Task **head) {
+    struct Task *curr = *head;
+    struct Task *prev = NULL;
+    time_t now = time(NULL);
+ 
+    while (curr) {
+        struct Task *next = curr->next;
+ 
+        if (curr->done || curr->expireAt &lt;= now) {
+            printf("清理任务 #%d (done=%d, expire=%ld)\n",
+                   curr->id, curr->done, curr->expireAt);
+            if (prev == NULL)
+                *head = next;      // 删除头节点
+            else
+                prev->next = next; // 删除中间节点
+            free(curr);
+        } else {
+            prev = curr;           // 仅未删除时更新前驱
+        }
+ 
+        curr = next;
+    }
+}
+ 
+// 打印链表
+void printTasks(struct Task *head) {
+    printf("当前任务链表: ");
+    for (; head; head = head->next)
+        printf("#%d ", head->id);
+    printf("\n");
+}
+ 
+int main() {
+    struct Task *taskList = NULL;
+ 
+    addTask(&taskList, createTask(1, 3)); // 3 秒后过期
+    addTask(&taskList, createTask(2, 10));
+    addTask(&taskList, createTask(3, 1)); // 1 秒后过期
+ 
+    printf("初始任务:\n");
+    printTasks(taskList);
+ 
+    sleep(2); // 模拟时间流逝
+    markDone(taskList, 2); // 标记任务2已完成
+ 
+    printf("\n清理前:\n");
+    printTasks(taskList);
+ 
+    cleanupTasks(&taskList); // 删除超时/已完成任务
+ 
+    printf("\n清理后:\n");
+    printTasks(taskList);
+ 
+    return 0;
+}
+</code>
+
+### 链表长度
+遍历统计
+<code c>
+int listLength(struct Node *head) {
+    int count = 0;
+    struct Node *p = head;
+    while (p != NULL) {
+        count++;
+        p = p->next;
+    }
+    return count;
+}
+</code>
+
+如果链表频繁增删节点，可以在链表结构里维护一个 length 变量
+<code c>
+struct LinkedList {
+    struct Node *head;
+    int length;
+};
+
+void addNode(struct LinkedList *list, int value) {
+    struct Node *newNode = malloc(sizeof(struct Node));
+    newNode->data = value;
+    newNode->next = list->head;
+    list->head = newNode;
+    list->length++;  // 插入时增加计数
+}
+
+void deleteNode(struct LinkedList *list, int value) {
+    struct Node *curr = list->head;
+    struct Node *prev = NULL;
+    while (curr) {
+        if (curr->data == value) {
+            if (prev == NULL)
+                list->head = curr->next;
+            else
+                prev->next = curr->next;
+            free(curr);
+            list->length--; // 删除时减少计数
+            return;
+        }
+        prev = curr;
+        curr = curr->next;
+    }
+}
+</code>
+
+### 链表排序
+链表特别适合插入排序, 因为链表不能快速随机访问
+插入节点只需修改指针，不用移动元素
+
+在嵌入式系统中，排序算法的选择通常取决于：
+    内存限制
+        动态内存少，递归要小心栈溢出
+    实时性要求
+        必须可预测执行时间（常用 O(n²) 简单排序）
+    数据规模
+        通常数据量小（几十到几百项）
+    代码空间限制
+        不宜引入复杂算法或递归逻辑
+    可靠性优先
+        简单、可维护、可验证的逻辑比极致性能更重要
+<code c>
+// 对传入的无序单链表 head 进行升序排序，返回排好序的新表头。
+struct Node* insertionSort(struct Node *head) {
+    struct Node *sorted = NULL;
+    struct Node *curr = head;
+
+    while (curr) {
+        struct Node *next = curr->next;
+        if (!sorted || curr->data &lt; sorted->data) {
+            curr->next = sorted;
+            sorted = curr;
+        } else {
+            struct Node *p = sorted;
+            // 将待排节点与新链表从小到大依次比较
+            // 例如2在1,3中找位置
+            // 假设p是0, 0链向1, 第一次在(1,3)里找, 2大于1, 游标p前移到1, 接着循环, 第二次在(3)里找, 2小于3, 循环中止, 2在3前落座
+            // 循环终止的两种情况：p->next == NULL → 说明要插在尾部；p->next->data >= curr->data → 说明要插在 p 和 p->next 之间。
+            while (p->next && p->next->data &lt; curr->data)
+                p = p->next;
+            curr->next = p->next; // 待排节点链接到3
+            p->next = curr; // 1原先链到3, 现在改链待排节点
+        }
+        curr = next;
+    }
+    return sorted;
+}
+</code>
+
+对于大链表(千个节点以上)使用归并排序更高效
+很多时候你会选择 插入排序、冒泡排序（因为简单、稳定、空间小）；
+只有在链表较大、或者确实有“实时排序需求”时，才会考虑归并排序；
+即使用归并排序，往往也是直接用别人写好的、经过验证的实现。
+归并排序是分而治之的排序方式，时间复杂度 O(n log n)，稳定、适合链表”
+“通过快慢指针拆分链表，再递归合并两个有序子链表”
+归并排序 O(n log n)，冒泡/插入排序 O(n²)；
+当数据量大（>几百）时，O(n log n) 才明显更优。
+你不需要能“造出发动机”，
+但你要懂“发动机的工作原理、什么时候该加速、什么时候容易过热”。
+<code c>
+struct Node* mergeSort(struct Node *head) {
+    if (!head || !head->next) return head;  // 只有0或1个节点时返回
+ 
+    // 1️⃣ 找中间节点
+    struct Node *slow = head, *fast = head->next;
+    while (fast && fast->next) {
+        slow = slow->next;
+        fast = fast->next->next;
+    }
+ 
+    // 2️⃣ 拆分成左右两半
+    struct Node *mid = slow->next;
+    slow->next = NULL;
+
+    // 3️⃣ 递归排序左右两半
+    struct Node *left = mergeSort(head);
+    struct Node *right = mergeSort(mid);
+ 
+    // 4️⃣ 合并左右两半
+    return merge(left, right);
+}
+ 
+struct Node* merge(struct Node *a, struct Node *b) {
+    if (!a) return b;
+    if (!b) return a;
+    if (a->data &lt; b->data) {
+        a->next = merge(a->next, b);
+        return a;
+    } else {
+        b->next = merge(a, b->next);
+        return b;
+    }
+}
+</code>
+
+### 链表反转
+链表反转的核心是：用三个指针（prev, curr, next）依次翻转方向，直到遍历完。
+    迭代法
+        安全,无栈,适合嵌入式, 小系统, 大数据链表
+    递归法
+        简洁, 适合算法学习和非嵌入式
+        占用栈空间；
+        栈深度不可控（风险大）；
+        实时系统里容易导致栈溢出。
+<code c>
+struct Node {
+    int data;
+    struct Node *next;
+};
+// 迭代法
+struct Node* reverseList(struct Node *head) {
+    struct Node *prev = NULL;
+    struct Node *curr = head;
+
+    while (curr != NULL) {
+        struct Node *next = curr->next; // 保存下一个节点
+        curr->next = prev;              // 反转指针方向
+        prev = curr;                    // 前移 prev
+        curr = next;                    // 前移 curr
+    }
+
+    return prev;  // prev 变成新的头节点
+}
+</code>
+初始
+    prev = NULL
+    curr = [1]->[2]->[3]->NULL
+第一次
+    next = [2]
+    curr->next = NULL   // [1]->NULL
+    prev = [1]
+    curr = [2]
+第二次
+    next = [3]
+    curr->next = [1]
+    prev = [2]->[1]->NULL
+    curr = [3]
+第三次
+    next = NULL
+    curr->next = [2]
+    prev = [3]->[2]->[1]->NULL
+    curr = NULL
+结束返回prev
+
+</pre>
+ </body>
+</html>
