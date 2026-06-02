@@ -98,10 +98,10 @@ li:before {
 }
 
 .recent:after {
+    font-size: .6rem;
     margin-left: 5px;
-    background: yellow;
-    content: " revised";
-    color: red;
+    background: lightgreen;
+    content: " NEW";
 }
 
 #a {
@@ -284,4 +284,11 @@ a#a1 {
 
 .o {
     color: #d2691e !important;
+}
+
+.m {
+    background-repeat: no-repeat!important;
+    background-image: url('data:image/x-icon;base64,AAABAAEAEBAQAAEABAAoAQAAFgAAACgAAAAQAAAAIAAAAAEABAAAAAAAgAAAAAAAAAAAAAAAEAAAAAAAAAD/794AOkprAAAAAAD/7xAA3qcAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAIiIiIiIiIiIiIiRCIiREIiIiQAQiQABCIiQAMxQzAAQiJAMzEzMABCIkBDETQzBCIiRDMTM0RCIiQDMRMzMEQiQANBJDMAAEQABBISQwAARABCEiEkAABCRCEiIhJAAEIiISIiIiREIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiL//wAA+eMAAPDBAADgAAAA4AAAAOABAADgAwAAwAEAAIEAAAACgAAAC0AAAJegAAD38QAA//8AAP//AAD//wAA')!important;
+    cursor: default!important;
+    background-position: center!important;
 }

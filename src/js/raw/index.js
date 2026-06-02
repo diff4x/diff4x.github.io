@@ -1336,8 +1336,8 @@ function updateSearchResults(results) {
             let option = document.createElement('option');
             const isPrivate = (result.localOnly === true || result.info === "localOnly");
             const title = result.type === "html" ? result.title.replace(/\.html$/, '') : result.title;
-            option.text = ((isPrivate && store.online_flag === "1") ? "🔒 " : "") + `${title} [${result.count}]`;
-            option.style.opacity = (isPrivate ? 0.5 : 1);
+            option.text = (isPrivate ? (store.online_flag === "1" ? "🔒 " : "🔓 ") : "") + `${title} [${result.count}]`;
+            option.style.opacity = (isPrivate ? (store.online_flag === "1" ? 0.5 : 1) : 1);
             option.dataset.path = result.path;
             option.dataset.type = result.type;
             if (isPrivate) {
@@ -2601,7 +2601,7 @@ async function random_bg() {
 
 // 首屏壁纸引导序列
 async function boot_wallpaper() {
-    const FIXED_WALLPAPER_A = "gallery/wallpaper/pexels-kayaartss-33562216.jpg";
+    const FIXED_WALLPAPER_A = "gallery/wallpaper/20260602224057.webp";
     try {
         await preloadImage(FIXED_WALLPAPER_A);
         $("#content").style.backgroundImage = `url("${FIXED_WALLPAPER_A}")`;
