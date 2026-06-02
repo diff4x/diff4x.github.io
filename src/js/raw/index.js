@@ -1147,6 +1147,46 @@ function search_box() {
         }
     });
 
+// ==================== 新增：统一刷新历史记录显示的辅助函数 ====================
+    function refreshHistoryList() {
+        const val = elSearchInput.value.trim();
+        elSearchHistory.innerHTML = "";
+        const history = store.searchHistory || [];
+        
+        if (val === "") {
+            showSearchHistoryByTime();
+        } else {
+            const matchingHistory = history.filter(item => 
+                item.keyword.startsWith(val) || item.keyword.includes(val)
+            );
+            if (matchingHistory.length === 0) {
+                showSearchHistoryByTime();
+            } else {
+                matchingHistory.forEach(item => {
+                    const option = document.createElement("option");
+                    option.text = item.keyword;
+                    elSearchHistory.appendChild(option);
+                });
+                elSearchHistory.setAttribute("size", Math.max(2, Math.min(10, elSearchHistory.options.length)));
+            }
+        }
+    }
+
+    // 右击删除记录
+    elSearchHistory.addEventListener("contextmenu", function (e) {
+        if (e.target.tagName === 'OPTION') {
+            e.preventDefault();
+            e.stopPropagation();
+            const keywordToDelete = e.target.text;
+            let history = [...(store.searchHistory || [])];
+            history = history.filter(item => item.keyword !== keywordToDelete);
+            store.searchHistory = history;
+            
+            refreshHistoryList();
+        }
+    });
+    elSearchHistory.title = "右键点击可删除该条历史记录";
+
     // 列表动作
     clickOrChange(elSearchHistory, function (index) {
         elSearchInput.value = elSearchHistory.options[index].text;

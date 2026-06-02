@@ -24,6 +24,11 @@ body {
     background-color: #cae4ff;
 }
 
+iframe {
+    width: 80vw;
+    height: 80vh;
+}
+
 ::-webkit-scrollbar {
     width: 4px;
 }
