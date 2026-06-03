@@ -292,3 +292,15 @@ a#a1 {
     cursor: default!important;
     background-position: center!important;
 }
+
+a[data-local-only]::before {
+    margin-right: 4px;
+}
+
+a.locked::before {
+    content: "🔒";
+}
+
+a.unlocked::before {
+    content: "🔓";
+}

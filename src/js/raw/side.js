@@ -254,10 +254,11 @@ function renderStructuredTree(node, parentElement, bucketType, currentPrefix) {
             if (isPrivate) {
                 a.dataset.localOnly = "true";
 
-                title = (isOnline ? "🔒 " : "🔓 ") + title;
-
                 if (isOnline) {
-                    a.style.opacity = "0.5";
+                    a.classList.add('locked');
+                    a.style.opacity = '0.5';
+                } else {
+                    a.classList.add('unlocked');
                 }
             }
             
