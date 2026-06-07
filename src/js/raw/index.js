@@ -1734,14 +1734,43 @@ function generateSrcdoc(type, payload) {
     
     if (type === 'image') {
         const { imageUrl, info } = payload;
+        const jsUrl = JSON.stringify(imageUrl);
+        const jsInfo = JSON.stringify(info);
+
         htmlStr = `<!DOCTYPE html><html><head><meta charset="utf-8"/>${viewportMeta}<style>${commonStyles} p{position:absolute;top:0;left:0;color:#fff}img{z-index:1;max-height:100vh;max-width:100vw;visibility:hidden}#loader{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:9999}.bar-spinner{width:40px;height:40px;position:relative;animation:spin 1s linear infinite}.bar{width:4px;height:20px;background:pink;border-radius:2px;position:absolute;top:10px;left:18px;transform-origin:center bottom}@keyframes spin{0%{transform:rotate(0deg)}100%{transform:rotate(360deg)}}</style></head><body>
         <div id="loader"><div class="bar-spinner"><div class="bar"></div></div></div>
-        <img src="${imageUrl}" id="img" onload="document.getElementById('loader').style.display='none'; this.style.visibility='visible';" onerror="document.getElementById('loader').style.display='none';">
+        <img id="img">
         <div class="span-container"><span id="fs" title="全屏(或按鼠标中键)">[F]</span><span id="c"></span><span id="p">prev</span><span id="i"></span><span id="n">next</span><span id="f"></span></div>
-        <p>${info}</p>
+        <p id="info-display"></p>
         <script>
-            (${iframeCommonLogic.toString()})();
-            (${imageLogic.toString()})();
+            (function() {
+                var _img = document.getElementById('img');
+                var _loader = document.getElementById('loader');
+                var _infoP = document.getElementById('info-display');
+                
+                if (_infoP) { _infoP.textContent = ${jsInfo}; }
+
+                if (_img) {
+                    _img.onload = function() { 
+                        if(_loader) _loader.style.display = 'none'; 
+                        _img.style.visibility = 'visible'; 
+                    };
+                    _img.onerror = function() { 
+                        if(_loader) _loader.style.display = 'none'; 
+                    };
+                }
+
+                setTimeout(function() {
+                    if (_img) _img.src = ${jsUrl};
+                }, 40);
+
+                try {
+                    (${iframeCommonLogic.toString()})();
+                    (${imageLogic.toString()})();
+                } catch(e) {
+                    console.warn(e);
+                }
+            })();
         </script></body></html>`;
     }
     if (type === 'video') {
@@ -1750,15 +1779,41 @@ function generateSrcdoc(type, payload) {
         const filename = videoUrl.split('/').pop();
         const basename = filename.includes('.') ? filename.substring(0, filename.lastIndexOf('.')) : filename;
         const vttUrl = isMkv ? `video/vtt/${basename}.vtt` : '';
-        const trackHtml = isMkv ? `<track id="main-track" label="中文" kind="subtitles" srclang="zh" src="${vttUrl}" default>` : '';
+        
+        const jsVideoUrl = JSON.stringify(videoUrl);
+        const jsVttUrl = JSON.stringify(vttUrl);
+        const jsIsMkv = JSON.stringify(isMkv);
+
+        const trackHtml = isMkv ? `<track id="main-track" label="中文" kind="subtitles" srclang="zh" default>` : '';
         const delayUiHtml = isMkv ? `<span id="delay-info" title="按 [ 提前0.5s，按 ] 延后0.5s" style="color:#ffeb3b;margin-right:10px;">偏移: 0.0s</span>` : '';
-  
+
         htmlStr = `<!DOCTYPE html><html><head><meta charset="utf-8"/>${viewportMeta}<style>${commonStyles} video{max-width:100%;max-height:100%}video::cue{font-size:26px;color:#fff;background:rgba(0,0,0,0.4);text-shadow:2px 2px 4px rgba(0,0,0,0.8);font-family:'Noto Serif SC'}</style></head><body>
-        <video id="video" controls loop playsinline><source id="source" src="${videoUrl}">${trackHtml}</video>
+        
+        <video id="video" controls loop playsinline>${trackHtml}</video>
+        
         <div class="span-container">${delayUiHtml}<span id="fs" title="全屏(或按鼠标中键)">[F]</span><span id="c"></span><span id="p">prev</span><span id="i"></span><span id="n">next</span><span id="f"></span></div>
         <script>
-            (${iframeCommonLogic.toString()})();
-            (${videoLogic.toString()})();
+            (function() {
+                var _video = document.getElementById('video');
+                var _track = document.getElementById('main-track');
+
+                setTimeout(function() {
+                    if (_video) {
+                        _video.src = ${jsVideoUrl};
+                        
+                        if (${jsIsMkv} && _track) {
+                            _track.src = ${jsVttUrl};
+                        }
+                    }
+                }, 50);
+
+                try {
+                    (${iframeCommonLogic.toString()})();
+                    (${videoLogic.toString()})();
+                } catch(e) {
+                    console.warn('Video iframe logic init error:', e);
+                }
+            })();
         </script></body></html>`;
     }
     return htmlStr.replace(/>\s+</g, '><').replace(/\n/g, '').trim();
