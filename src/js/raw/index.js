@@ -5,6 +5,8 @@ if (window.top !== window.self) {
 window.data = [];
 window.isDataSyncing = false;
 window._searchToken = 0;
+window.cachedFaviconImg = null;
+window.faviconBlinkTimer = null;
 
 const store = createStore({
     resource_type: "",
@@ -14,7 +16,7 @@ const store = createStore({
 });
 store.github_page = github_page;
 store.protocol_name = github_page.split(".")[0];
-// 端口隔离机仿线上
+// 端口隔离仿线上
 const isLocalEnv = (location.hostname === 'localhost' || location.hostname === '127.0.0.1' || location.protocol === 'file:') && location.port !== '9000';
 store.online_flag = isLocalEnv ? "0" : "1";
 store.bookmarkhtml_modifing = "0";
@@ -29,6 +31,7 @@ const dbProxy = createDBProxy('MainDB', 'chunks');
 const popup = $("#giscus-popup");
 const header = $("#popup-header");
 const random_bg_timer = 30000;
+const doc_title = document.title;
 const iframes = {
     content: $('#content'),
     side: $('#side')
@@ -372,6 +375,12 @@ window.onload = () => {
     cmt_mapper();
     comments();
     loadPinyinData();
+
+    updateTitle();
+    setTimeout(() => {
+        updateTitle();
+        window.updateTitleTimer = safeInterval(updateTitle, 60 * 1000);
+    }, (60 - new Date().getSeconds()) * 1000 - new Date().getMilliseconds()); // 分钟对齐
 
     window.bgTimer = safeInterval(random_bg, random_bg_timer);
     window.alertTimer = safeInterval(ls_alert, 60000);
@@ -2667,6 +2676,72 @@ async function boot_wallpaper() {
     } catch (err) {
         console.error("首屏固定壁纸异常:", err);
         random_bg();
+    }
+}
+
+// 标签页时钟
+function updateTitle() {
+    const now = new Date();
+    const h = now.getHours();
+    const mm = String(now.getMinutes()).padStart(2, "0");
+    const hh = String(h).padStart(2, "0");
+    const time = `${hh}:${mm}`;
+    const isRestTime = (h >= 23 || h < 6);
+    document.title = isRestTime ? `该歇息了 - ${time}` : `${doc_title} - ${time}`;
+    if (isRestTime) {
+        startFaviconBlink();
+    } else {
+        stopFaviconBlink();
+    }
+}
+function startFaviconBlink() {
+    if (window.faviconBlinkTimer) return;
+    const faviconLink = document.getElementById('favicon');
+    if (!faviconLink) return;
+
+    const originalSrc = faviconLink.getAttribute('href');
+
+    const toggleOpacityAndApply = (img, opacity) => {
+        const canvas = document.createElement('canvas');
+        canvas.width = 16;
+        canvas.height = 16;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return;
+
+        ctx.clearRect(0, 0, 16, 16);
+        ctx.globalAlpha = opacity;
+        ctx.drawImage(img, 0, 0, 16, 16);
+        
+        faviconLink.href = canvas.toDataURL('image/x-icon');
+    };
+
+    const initBlink = (img) => {
+        let isVisible = true;
+        window.faviconBlinkTimer = setInterval(() => {
+            isVisible = !isVisible;
+            toggleOpacityAndApply(img, isVisible ? 1 : 0);
+        }, 500);
+    };
+
+    if (window.cachedFaviconImg) {
+        initBlink(window.cachedFaviconImg);
+    } else {
+        const img = new Image();
+        img.onload = function() {
+            window.cachedFaviconImg = img;
+            initBlink(img);
+        };
+        img.src = originalSrc;
+    }
+}
+function stopFaviconBlink() {
+    if (window.faviconBlinkTimer) {
+        clearInterval(window.faviconBlinkTimer);
+        window.faviconBlinkTimer = null;
+    }
+    const faviconLink = document.getElementById('favicon');
+    if (faviconLink && window.cachedFaviconImg) {
+        faviconLink.href = window.cachedFaviconImg.src;
     }
 }
 
