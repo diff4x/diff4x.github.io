@@ -1771,7 +1771,7 @@ function generateSrcdoc(type, payload) {
 
                 setTimeout(function() {
                     if (_img) _img.src = ${jsUrl};
-                }, 40);
+                }, 60);
 
                 try {
                     (${iframeCommonLogic.toString()})();
@@ -1814,7 +1814,7 @@ function generateSrcdoc(type, payload) {
                             _track.src = ${jsVttUrl};
                         }
                     }
-                }, 50);
+                }, 60);
 
                 try {
                     (${iframeCommonLogic.toString()})();

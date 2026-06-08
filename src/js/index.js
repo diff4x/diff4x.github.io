@@ -23,7 +23,7 @@ window.top!==window.self&&(window.top.location.href=location.origin),window.data
 
                 setTimeout(function() {
                     if (_img) _img.src = ${r};
-                }, 40);
+                }, 60);
 
                 try {
                     (${iframeCommonLogic.toString()})();
@@ -50,7 +50,7 @@ window.top!==window.self&&(window.top.location.href=location.origin),window.data
                             _track.src = ${d};
                         }
                     }
-                }, 50);
+                }, 60);
 
                 try {
                     (${iframeCommonLogic.toString()})();
