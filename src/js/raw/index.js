@@ -154,33 +154,39 @@ window.addEventListener('message', async (e) => {
 
         case "image":
             store.resource_type = "image";
-            let imgInfo = "";
-            const imageRecord = records.find(r => r.path === store.image_path);
-            if (imageRecord) imgInfo = imageRecord.info;
-            iframes.content.srcdoc = generateSrcdoc('image', { imageUrl: '../' + store.image_path, info: imgInfo });
+            iframes.content.src = "about:blank";
+            setTimeout(() => {
+                const doc = iframes.content.contentWindow.document;
+                doc.open();
+                doc.write(generateDoc('image', { imageUrl: '../' + store.image_path }));
+                doc.close();
+            }, 20);
             break;
 
         case "video":
             store.resource_type = "video";
-            iframes.content.srcdoc = generateSrcdoc('video', { videoUrl: '../' + store.video_path });
+            iframes.content.src = "about:blank";
+            setTimeout(() => {
+                const doc = iframes.content.contentWindow.document;
+                doc.open();
+                doc.write(generateDoc('video', { videoUrl: '../' + store.video_path }));
+                doc.close();
+            }, 20);
             break;
 
         case "pdf":
-            $("#content").removeAttribute("srcdoc");
             await AsyncUtils.wait(50);
             $("#content").src = "src/tpl/pdf.html?file=../../" + store.pdf_path;
             $("#content").focus();
             break;
 
         case "epub":
-            $("#content").removeAttribute("srcdoc");
             await AsyncUtils.wait(50);
             $("#content").src = "src/tpl/epub.html?book=../../" + store.epub_path;
             $("#content").focus();
             break;
 
         case "txt":
-            $("#content").removeAttribute("srcdoc");
             await AsyncUtils.wait(50);
             $("#content").src = "src/tpl/txt.html?file=../../" + store.txt_path;
             $("#content").focus();
@@ -1367,7 +1373,7 @@ function updateSearchResults(results) {
     }
 }
 
-// srcdoc 公共逻辑
+// doc 公共逻辑
 const iframeCommonLogic = function () {
     window.$ = (s) => document.querySelector(s);
     window.$$ = (s) => document.querySelectorAll(s);
@@ -1443,7 +1449,7 @@ const iframeCommonLogic = function () {
     };
 };
 
-// srcdoc-gallery 专属逻辑
+// doc-gallery 专属逻辑
 const imageLogic = function () {
     const store = createStore({ lightbox_stauts: "0" });
     const img = $('#img');
@@ -1639,7 +1645,7 @@ const imageLogic = function () {
     });
 };
 
-// srcdoc-video 专属逻辑
+// doc-video 专属逻辑
 const videoLogic = function () {
     const store = createStore({ lightbox_stauts: "0" });
     const video = $('#video');
@@ -1734,31 +1740,27 @@ const videoLogic = function () {
     };
 };
 
-// srcdoc 引擎
-function generateSrcdoc(type, payload) {
+// doc 引擎
+function generateDoc(type, payload) {
     const commonStyles = `@charset "UTF-8";@import url("../src/css/font.css");html,body,pre,textarea{font-family:'Noto Serif SC'}html{background-color:#000;touch-action:none;}body{margin:0;display:flex;justify-content:center;align-items:center;height:100vh;position:relative;overflow:hidden;touch-action:none;}.span-container{position:absolute;bottom:10px;right:10px;background:plum;z-index:999}.span-container span{margin-bottom:5px;padding:0 10px;cursor:pointer}.hide{opacity:.2!important}#f{display:none}`;
     
+    const baseTag = `<base href="${window.location.href}">`;
     const viewportMeta = `<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"/>`;
     let htmlStr = '';
     
     if (type === 'image') {
-        const { imageUrl, info } = payload;
+        const { imageUrl } = payload;
         const jsUrl = JSON.stringify(imageUrl);
-        const jsInfo = JSON.stringify(info);
 
-        htmlStr = `<!DOCTYPE html><html><head><meta charset="utf-8"/>${viewportMeta}<style>${commonStyles} p{position:absolute;top:0;left:0;color:#fff}img{z-index:1;max-height:100vh;max-width:100vw;visibility:hidden}#loader{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:9999}.bar-spinner{width:40px;height:40px;position:relative;animation:spin 1s linear infinite}.bar{width:4px;height:20px;background:pink;border-radius:2px;position:absolute;top:10px;left:18px;transform-origin:center bottom}@keyframes spin{0%{transform:rotate(0deg)}100%{transform:rotate(360deg)}}</style></head><body>
+        htmlStr = `<!DOCTYPE html><html><head><meta charset="utf-8"/>${baseTag}${viewportMeta}<style>${commonStyles} img{z-index:1;max-height:100vh;max-width:100vw;visibility:hidden}#loader{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:9999}.bar-spinner{width:40px;height:40px;position:relative;animation:spin 1s linear infinite}.bar{width:4px;height:20px;background:pink;border-radius:2px;position:absolute;top:10px;left:18px;transform-origin:center bottom}@keyframes spin{0%{transform:rotate(0deg)}100%{transform:rotate(360deg)}}</style></head><body>
         <div id="loader"><div class="bar-spinner"><div class="bar"></div></div></div>
         <img id="img">
         <div class="span-container"><span id="fs" title="全屏(或按鼠标中键)">[F]</span><span id="c"></span><span id="p">prev</span><span id="i"></span><span id="n">next</span><span id="f"></span></div>
-        <p id="info-display"></p>
         <script>
             (function() {
                 var _img = document.getElementById('img');
                 var _loader = document.getElementById('loader');
-                var _infoP = document.getElementById('info-display');
                 
-                if (_infoP) { _infoP.textContent = ${jsInfo}; }
-
                 if (_img) {
                     _img.onload = function() { 
                         if(_loader) _loader.style.display = 'none'; 
@@ -1771,7 +1773,7 @@ function generateSrcdoc(type, payload) {
 
                 setTimeout(function() {
                     if (_img) _img.src = ${jsUrl};
-                }, 60);
+                }, 40);
 
                 try {
                     (${iframeCommonLogic.toString()})();
@@ -1796,7 +1798,7 @@ function generateSrcdoc(type, payload) {
         const trackHtml = isMkv ? `<track id="main-track" label="中文" kind="subtitles" srclang="zh" default>` : '';
         const delayUiHtml = isMkv ? `<span id="delay-info" title="按 [ 提前0.5s，按 ] 延后0.5s" style="color:#ffeb3b;margin-right:10px;">偏移: 0.0s</span>` : '';
 
-        htmlStr = `<!DOCTYPE html><html><head><meta charset="utf-8"/>${viewportMeta}<style>${commonStyles} video{max-width:100%;max-height:100%}video::cue{font-size:26px;color:#fff;background:rgba(0,0,0,0.4);text-shadow:2px 2px 4px rgba(0,0,0,0.8);font-family:'Noto Serif SC'}</style></head><body>
+        htmlStr = `<!DOCTYPE html><html><head><meta charset="utf-8"/>${baseTag}${viewportMeta}<style>${commonStyles} video{max-width:100%;max-height:100%}video::cue{font-size:26px;color:#fff;background:rgba(0,0,0,0.4);text-shadow:2px 2px 4px rgba(0,0,0,0.8);font-family:'Noto Serif SC'}</style></head><body>
         
         <video id="video" controls loop playsinline>${trackHtml}</video>
         
