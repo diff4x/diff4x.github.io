@@ -544,7 +544,24 @@ function bindDualClick(element, onSingleClick, onDoubleClick, delay = 250) {
 // 菜单渲染
 async function menu() {
     const menuB = $('#menu-b');
-    if (menuB) {
+    const bContainer = $('#b'); 
+
+    if (menuB && bContainer) {
+        let menuBHoverTimer = null;
+        bContainer.addEventListener('mouseenter', () => {
+            if (menuBHoverTimer) clearTimeout(menuBHoverTimer);
+            menuB.style.visibility = 'visible';
+            menuB.style.opacity = '1';
+            menuB.style.pointerEvents = 'auto';
+        });
+        bContainer.addEventListener('mouseleave', () => {
+            menuBHoverTimer = setTimeout(() => {
+                menuB.style.visibility = 'hidden';
+                menuB.style.opacity = '0';
+                menuB.style.pointerEvents = 'none';
+            }, 200); 
+        });
+
         const logBtn = document.createElement('a');
         logBtn.textContent = "What's new?";
         logBtn.style.cursor = 'pointer';

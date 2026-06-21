@@ -1162,7 +1162,6 @@ function search_box() {
         }
     });
 
-// ==================== 新增：统一刷新历史记录显示的辅助函数 ====================
     function refreshHistoryList() {
         const val = elSearchInput.value.trim();
         elSearchHistory.innerHTML = "";
@@ -1368,6 +1367,13 @@ function updateSearchResults(results) {
         resultsBox.appendChild(fragment); 
         resultsBox.setAttribute("size", Math.max(2, Math.min(10, resultsBox.options.length)));
         resultsBox.style.display = "block";
+        
+        // 根据当前已稳定的视口计算出真实的极限宽度
+        if ($("#content") && $("#search")) {
+            const maxW = Math.max(0, $("#content").clientWidth - $("#search").offsetWidth - 10);
+            resultsBox.style.maxWidth = maxW + "px";
+        }
+        
         resultsBox.style.left = `-${resultsBox.offsetWidth}px`;
         resultsBox.selectedIndex = -1;
     }

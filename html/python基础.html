@@ -1,0 +1,364 @@
+<!doctype html>
+<html>
+ <head>
+  <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+  <script src="../src/js/content.js"></script>
+  <title>python基础</title>
+ </head>
+ <body>
+  <span id="anchor">20260616191806-其它|python</span>
+  <pre>
+没有 {}, 靠缩进表示代码块
+#普通注释
+不需要分号(可以使用分号,如果想把多条语句写在同一行)
+变量类型由解释器自动决定
+
+# 字符串
+## title,upper,lower
+<code py>
+name = "ada lovelace" 
+print(name.title())
+print(name.upper()) 
+print(name.lower()) 
+</code>
+
+## 格式输出 f,{}
+<code py>
+first_name = "ada"  
+last_name = "lovelace" 
+
+full_name = f"{first_name} {last_name}"  
+print(full_name)
+
+print(f"Hello, {full_name.title()}!")
+</code>
+
+## 删空白 lstrip, rstrip, strip
+左, 右, 两端
+<code py>
+favorite_language = 'python '
+favorite_language = favorite_language.rstrip()
+</code>
+
+## 删前缀 removeprefix
+<code py>
+nostarch_url = 'https://nostarch.com' 
+simple_url = nostarch_url.removeprefix('https://')
+</code>
+
+# 浮点数, 精度, 乘方, 下划线
+只要有操作数是浮点数，默认得到的就总是浮点
+精度问题
+    0.2 + 0.1 得 0.30000000000000004
+乘方表示
+    3 ** 2 得 9
+    10 ** 6 得 1000000
+数字中的下划线
+    Python在存储这种数时，会忽略其中的下划线。
+    在对数字位分组时，即便不是将每三位分成一组，也不会影响最终的值。
+    这种表示法既适用于整数，也适用于浮点数。
+<code py>
+universe_age = 14_000_000_000 
+print(universe_age) 
+</code>
+
+# 同时给多个变量赋值
+用逗号将变量名分开；对于要赋给变量的值，也需要做同样的处理才能正确地将变量和值关联起来
+<code py>
+x, y, z = 0, 0, 0
+</code>
+
+# 列表
+<code py>
+bicycles = ['trek', 'cannondale', 'redline', 'specialized'] 
+print(bicycles)
+print(bicycles[0])
+print(bicycles[0].title())
+</code>
+
+## 负数索引
+将索引指定为 -1，返回最后一个列表元素, -2 返回倒数第二个列表元素，依此类推。
+<code py>
+message = f"My first bicycle was a {bicycles[0].title()}."
+print(message)
+</code>
+
+## append, insert, del, pop, remove
+<code py>
+motorcycles = []  
+motorcycles.append('honda')
+motorcycles.append('yamaha')
+
+motorcycles.insert(1, 'ducati')
+print(motorcycles)
+
+del motorcycles[0]
+print(motorcycles)
+
+# 弹出栈顶元素(同时从列表尾部删除此元素)
+popped_motorcycle = motorcycles.pop()
+print(motorcycles)
+print(popped_motorcycle)
+
+# 带参 pop(), 从任意索引位置删除元素
+motorcycles = ['honda', 'yamaha', 'suzuki']
+print(motorcycles)
+first_owned = motorcycles.pop(1) 
+print(motorcycles)
+
+# 根据值删除元素, remove() 方法只删除第一个指定的值
+motorcycles = ['honda', 'yamaha', 'suzuki', 'ducati', 'suzuki'] 
+print(motorcycles)  
+motorcycles.remove('suzuki') 
+print(motorcycles)
+</code>
+
+## sort, sorted, reverse
+<code py>
+#永久排序
+cars = ['bmw', 'audi', 'toyota', 'subaru'] 
+cars.sort() 
+print(cars)
+cars.sort(reverse=True) 
+print(cars)
+
+#临时排序
+cars = ['bmw', 'audi', 'toyota', 'subaru'] 
+print("Here is the original list:")  
+print(cars)  
+print("\nHere is the sorted list:") 
+print(sorted(cars))  
+#print(sorted(cars, reverse=True))
+print("\nHere is the original list again:") 
+print(cars)
+</code>
+
+## 区间 range, min, max, sum 
+左闭右开
+<code py>
+for value in range(1, 5):
+    print(value)
+
+# range(5), 默认从0开始,依次取0,1,2,3,4代入
+
+# 创建数值列表
+numbers = list(range(1, 6)) 
+print(numbers)
+
+# 指定步长
+even_numbers = list(range(2, 11, 2)) 
+print(even_numbers) 
+
+squares = []  
+for value in range(1, 11): 
+    squares.append(value**2)
+print(squares)
+
+digits = [1, 2, 3, 4, 5, 6, 7, 8, 9, 0] 
+min(digits)
+max(digits)
+sum(digits)
+
+#列表推导式
+squares = [value**2 for value in range(1, 11)] print(squares)
+</code>
+
+## 切片
+<code py>
+players = ['charles', 'martina', 'michael', 'florence', 'eli']
+print(players[0:2)
+['charles', 'martina']
+print(players[:4]) # 自动从表头开始
+print(players[2:]) # 终止于列表结尾
+players[-3:] # 支持负数索引, 最后三个元素
+</code>
+
+## 复制列表
+<code py>
+my_foods = ['pizza', 'falafel', 'carrot cake'] 
+# 这里两个变量指向同一个列表： 
+# friend_foods = my_foods  
+# 这样才是真正的独立副本
+friend_foods = my_foods[:] 
+my_foods.append('cannoli') 
+friend_foods.append('ice cream')   
+print("My favorite foods are:")  
+print(my_foods)   
+print("\nMy friend's favorite foods are:")  
+print(friend_foods)
+</code>
+
+#元组
+元组是不可变数组, 用圆括号表示
+<code py>
+dimensions = (200, 50) 
+dimensions[0] = 250 #试图修改元组会报错
+
+# 如果你要定义只包含一个元素的元组，必须在这个元素后面加上逗号： 
+my_t = (3,) 
+# 创建只包含一个元素的元组通常没有意义，但自动生成的元组有可能只有一个元素
+
+#虽然不能修改元组的元素，但可以给表示元组的变量赋值。例如要修改前述矩形的尺寸，可重新定义整个元组 
+dimensions = (200, 50) 
+print("Original dimensions:") 
+for dimension in dimensions: 
+    print(dimension)  
+dimensions = (400, 100) 
+print("\nModified dimensions:") 
+for dimension in dimensions: 
+    print(dimension)
+
+cars = ['audi', 'bmw', 'subaru', 'toyota']   
+for car in cars: 
+    if car == 'bmw': 
+        print(car.upper())  
+    else: 
+        print(car.title())
+</code>
+
+
+
+
+#and,or
+
+#in
+requested_toppings = ['mushrooms', 'onions', 'pineapple'] 
+if  'mushrooms' in requested_toppings:
+    print(1)
+if  'mushroom' not in requested_toppings:
+    print(0)
+
+#布尔
+game_active = True 
+can_edit = False
+
+age = 17
+if age >= 18: 
+    print("You are old enough to vote!")  
+    print("Have you registered to vote yet?") 
+else: 
+    print("Sorry, you are too young to vote.")
+    print("Please register to vote as soon as you turn 18!")
+
+if-elif-elif-else, 可省略else
+
+#判断列表非空
+在 if 语句中将列表名用作条件表达式 时，Python 将在列表至少包含一个元素时返回 True，在列表为空时 返回 False
+requested_toppings = []  
+if requested_toppings: 
+    for requested_topping in requested_toppings: 
+        print(f"Adding {requested_topping}.")  
+    print("\nFinished making your pizza!") 
+else: 
+    print("Are you sure you want a plain pizza?")
+
+#字典
+alien_0 = {'color': 'green', 'points': 5} 
+print(alien_0)
+print(alien_0['color']) 
+alien_0['y_position'] = 25
+print(alien_0['points'])
+print(alien_0)
+
+alien_0 = {}  
+alien_0['color'] = 'green' 
+alien_0['points'] = 5  
+print(alien_0)
+del alien_0['points']  
+print(alien_0)
+
+#get, 在指定的键不存在时返回一个默认值。如果没有指定第二个参数且指定的键不存在，将返回None
+alien_0 = {'color': 'green', 'speed': 'slow'}
+point_value = alien_0.get('points', 'No point value assigned.') 
+print(point_value)
+
+#遍历键值对
+user_0 = {  'username': 'efermi',  'first': 'enrico',  'last': 'fermi',  }  
+for key, value in user_0.items(): 
+    print(f"\nKey: {key}")  
+    print(f"Value: {value}")
+
+#遍历键, 可以省略.keys()
+favorite_languages = {  'jen': 'python',  'sarah': 'c',  'edward': 'rust',  'phil': 'python',  }  
+friends = ['phil', 'sarah']  
+for name in favorite_languages.keys(): 
+    print(f"Hi {name.title()}.")  
+    if name in friends: 
+        language = favorite_languages[name].title()  
+        print(f"\t{name.title()}, I see you love {language}!")
+
+#按特定的顺序遍历字典中的所有键
+favorite_languages = {  'jen': 'python',  'sarah': 'c',  'edward': 'rust',  'phil': 'python',}  
+for name in sorted(favorite_languages.keys()): 
+    print(f"{name.title()}, thank you for taking the poll.")
+
+#遍历字典中的所有值
+favorite_languages = {  'jen': 'python',  'sarah': 'c',  'edward': 'c',  'phil': 'python',  }  
+print("The following languages have been mentioned:") 
+for language in favorite_languages.values(): 
+    print(language.title())
+    
+#用set剔除重复项
+print('\n')
+for language in set(favorite_languages.values()): 
+    print(language.title())
+    
+集合和字典很容易混淆，因为它们都是用一对花括号定义的
+
+#input
+prompt = "If you share your name, we can personalize the messages you see."
+prompt += "\nWhat is your first name? "  
+name = input(prompt) 
+print(f"\nHello, {name}!")
+
+#数值转换
+age = input("How old are you? ") 
+age = int(age)  
+print(age >= 18)
+
+prompt = "\nTell me something, and I will repeat it back to you:" 
+prompt += "\nEnter 'quit' to end the program. "  
+message = "" 
+while message != 'quit': 
+    message = input(prompt) 
+    if message != 'quit': 
+        print(message)
+        
+#标志位       
+active = True 
+while active: 
+    message = input(prompt)   
+    if message == 'quit': 
+        active = False  
+    else: 
+        print(message)
+        
+while True: 
+    city = input(prompt)   
+    if city == 'quit': 
+        break  
+    else: 
+        print(f"I'd love to go to {city.title()}!")
+
+unconfirmed_users = ['alice', 'brian', 'candace']  
+confirmed_users = []
+while unconfirmed_users: 
+    current_user = unconfirmed_users.pop()   
+    print(f"Verifying user: {current_user.title()}") 
+    confirmed_users.append(current_user)
+print("\nThe following users have been confirmed:")
+for confirmed_user in confirmed_users: 
+    print(confirmed_user.title())
+    
+pets = ['dog', 'cat', 'dog', 'goldfish', 'cat', 'rabbit', 'cat'] 
+print(pets)
+while 'cat' in pets: 
+    pets.remove('cat')  
+print(pets)
+
+#使用用户输入填充字典
+
+
+</pre>
+ </body>
+</html>
