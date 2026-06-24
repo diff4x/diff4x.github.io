@@ -6,7 +6,7 @@
   <title>操作系统</title>
  </head>
  <body>
-  <span id="anchor">20260531082437-其它</span>
+  <span id="anchor">20260625014515-其它</span>
   <pre>
 # pixel在中国地区的IMS注册
 2G,3G时代,手机里有两套网络
@@ -74,6 +74,14 @@ manage-bde -protectors -add c: -TPMAndPIN
 </code>
 
 # 代理方案
+## 情报
+https://gfw.report/zh/
+https://www.nodeseek.com/categories/info
+
+## 测试
+https://ipleak.net/
+https://ping.pe/
+
 ## 现成商业代理
 多用户共享出口ip, 具备群体匿名性
 
@@ -85,16 +93,15 @@ manage-bde -protectors -add c: -TPMAndPIN
     客户端作为流量入口(代理网关)解析VLESS/REALITY配置、建立连接、提供本地代理端口，把应用流量送入正确的隧道
 浏览器请求 → VLESS封装 → REALITY加密并伪装成TLS → TCP发送到VPS → VPS解密REALITY → Xray解VLESS → 重新发起到目标网站 → 目标网站返回内容 → VPS（Xray）→ REALITY加密 → 客户端 → 解密 → 浏览器
 
-### 搭建步骤
-#### 刷好ip
-termius生成ssh key
-digitalocean注册绑定结算卡
-    创建droplets
-        地址美西,系统乌班图2204,填上termius公钥
-    在ping.pe上测试分到的公共ipv4
-        例如主要用中国联通卡, 则关注CN区isp列中的CU行, 根据丢包率和延迟来确定是不是好ip, 如果是坏ip则destory掉重新droplets刷个新ip再去测试
-termius添加host,公共ipv4,22端口,用前面的私钥登录控制台
-#### xray安装
+### 搭建
+#### Droplet
+https://cloud.digitalocean.com/droplets
+美西,乌班图2204
+    ping.pe测试分到的公共ipv4
+        例如主要用中国联通卡, 则关注CN区isp列中的CU行, 根据丢包率和延迟来确定是不是好ip
+寻找美西某个冷门但支持TLS1.3的域名作为SNI
+
+#### 脚本
 <code sh>
 bash &lt;(cat &lt;&lt;'SCRIPT'
  
@@ -218,113 +225,7 @@ SCRIPT
 )
 </code>
 
-#### xray看门狗
-<code sh>
-bash <(cat <<'SCRIPT'
-#!/bin/bash
- 
-# =========================
-# 1. watchdog 脚本
-# =========================
-cat > /usr/local/bin/xray-watch.sh <<'EOF'
-#!/bin/bash
- 
-PATH=/usr/sbin:/usr/bin:/sbin:/bin
- 
-exec 9>/tmp/xray-watch.lock
-flock -n 9 || exit 0
- 
-STATE="/var/lib/xray-watch_fail_count"
-mkdir -p /var/lib
-touch "$STATE"
- 
-fail=0
- 
-# reboot/异常快速修复
-systemctl is-failed --quiet xray && systemctl restart xray
- 
-# 检测
-systemctl is-active --quiet xray || fail=1
-pgrep -x xray >/dev/null || fail=1
-ss -lnt | grep -q ':443' || fail=1
- 
-count=$(cat "$STATE" 2>/dev/null || echo 0)
-if [ $fail -eq 1 ]; then
-  count=$((count+1))
-  echo $count > "$STATE"
-  if [ $count -ge 2 ]; then
-    systemctl restart xray
-    echo 0 > "$STATE"
-  fi
-else
-  echo 0 > "$STATE"
-fi
- 
-EOF
- 
-# 赋权
-chmod +x /usr/local/bin/xray-watch.sh
- 
-# =========================
-# 2. systemd service
-# =========================
-cat > /etc/systemd/system/xray-watch.service <<'EOF'
-[Unit]
-Description=Xray Watchdog
-After=network.target
- 
-[Service]
-Type=oneshot
-ExecStart=/usr/local/bin/xray-watch.sh
-EOF
- 
-# =========================
-# 3. systemd timer
-# =========================
-cat > /etc/systemd/system/xray-watch.timer <<'EOF'
-[Unit]
-Description=Run Xray Watchdog Every 5 Seconds
- 
-[Timer]
-OnBootSec=10s
-OnUnitActiveSec=5s
-AccuracySec=1s
-Persistent=true
- 
-[Install]
-WantedBy=timers.target
-EOF
- 
-# =========================
-# 4. 启动 timer
-# =========================
-systemctl daemon-reload
-systemctl enable --now xray-watch.timer
- 
-echo "systemd timer installed successfully"
-SCRIPT
-)
-</code>
-##### 对应的卸载
-<code sh>
-bash <(cat <<'SCRIPT'
-#!/bin/bash
- 
-systemctl disable --now xray-watch.timer 2>/dev/null
- 
-rm -f /etc/systemd/system/xray-watch.service
-rm -f /etc/systemd/system/xray-watch.timer
-rm -f /usr/local/bin/xray-watch.sh
-rm -f /var/lib/xray-watch_fail_count
-rm -f /tmp/xray-watch.lock
- 
-systemctl daemon-reload
- 
-echo "xray-watch uninstalled successfully"
-SCRIPT
-)
-</code>
-
+#### 客户端
 https://github.com/2dust/v2rayNG/releases
 https://github.com/2dust/v2rayN/releases
 
