@@ -502,6 +502,7 @@ function click_func() {
 }
 function dbl_click_func() {
     function copy_to_clipboard(text) {
+        text = text.replace(/\s*\[(?:Mark|UnMark)\]\s*$/, "");
         if (navigator.clipboard) navigator.clipboard.writeText(text).catch(err => console.warn("复制失败", err));
     }
 

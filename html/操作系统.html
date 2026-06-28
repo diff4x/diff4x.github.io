@@ -92,28 +92,32 @@ https://ping.pe/
     REALITY模拟TLS行为让代理流量看起来像普通HTTPS
     客户端作为流量入口(代理网关)解析VLESS/REALITY配置、建立连接、提供本地代理端口，把应用流量送入正确的隧道
 浏览器请求 → VLESS封装 → REALITY加密并伪装成TLS → TCP发送到VPS → VPS解密REALITY → Xray解VLESS → 重新发起到目标网站 → 目标网站返回内容 → VPS（Xray）→ REALITY加密 → 客户端 → 解密 → 浏览器
+SNI最好冷门且支持TLS1.3
 
-### 搭建
-#### Droplet
+### GCP
+https://console.cloud.google.com/compute/instances
+vm实例选e2-micro
+Debian 13, 日本东京
+vpc network - firewall
+    allow-xray-443
+        来源 IPv4 范围  0.0.0.0/0
+        指定的协议和端口勾选 TCP 填入：443
+
+### DO
 https://cloud.digitalocean.com/droplets
-美西,乌班图2204
-    ping.pe测试分到的公共ipv4
-        例如主要用中国联通卡, 则关注CN区isp列中的CU行, 根据丢包率和延迟来确定是不是好ip
-寻找美西某个冷门但支持TLS1.3的域名作为SNI
+基础常规版
+Debian 13, 美国旧金山
+Inbound Rules
+    Type: HTTPS
+    Protocol: TCP
+    Port Range: 443
+    Sources: All IPv4 (0.0.0.0/0) 和 All IPv6 (::/0)
 
-#### 脚本
+### install.sh
 <code sh>
-bash &lt;(cat &lt;&lt;'SCRIPT'
- 
 #!/bin/bash
 set -euo pipefail
- 
-echo "========== 更新系统 =========="
-apt update -y
-DEBIAN_FRONTEND=noninteractive apt upgrade -y \
-  -o Dpkg::Options::="--force-confold" \
-  -o Dpkg::Options::="--force-confdef"
- 
+
 echo "========== 交换内存 =========="
 if ! swapon --show | grep -q "/swapfile"; then
   fallocate -l 1G /swapfile || dd if=/dev/zero of=/swapfile bs=1M count=1024
@@ -126,7 +130,7 @@ fi
 echo "========== 防日志爆盘 =========="
 systemctl stop rsyslog 2>/dev/null || true
 systemctl disable rsyslog 2>/dev/null || true
- 
+
 if grep -q "Storage=" /etc/systemd/journald.conf; then
   sed -i 's/^Storage=.*/Storage=none/' /etc/systemd/journald.conf
 else
@@ -136,7 +140,7 @@ fi
 systemctl restart systemd-journald
  
 echo "========== 安装防火墙 =========="
-apt install -y ufw
+apt update && apt install -y ufw
 ufw default deny incoming
 ufw default allow outgoing
 ufw allow 22/tcp
@@ -151,7 +155,6 @@ UUID=$(cat /proc/sys/kernel/random/uuid)
  
 echo "========== 生成 Reality Key =========="
 KEY_OUTPUT=$(xray x25519)
- 
 PRIVATE_KEY=$(echo "$KEY_OUTPUT" | grep -i "privatekey" | awk -F': ' '{print $2}')
 PUBLIC_KEY=$(echo "$KEY_OUTPUT" | grep -i "publickey\|password" | awk -F': ' '{print $2}')
  
@@ -159,7 +162,7 @@ echo "========== 生成 shortId =========="
 SHORT_ID=$(openssl rand -hex 4)
  
 echo "========== 配置 Xray =========="
-SNI="www.microsoft.com"
+SNI="itunes.apple.com"
  
 cat > /usr/local/etc/xray/config.json &lt;&lt;CONF
 {
@@ -206,26 +209,26 @@ systemctl restart xray
 systemctl enable xray
 sleep 2
 systemctl status xray --no-pager
- 
 
 SERVER_IP=$(curl -s --max-time 3 ifconfig.me || echo "unknown")
 read -rp "请输入节点名称 (回车默认时间): " NAME
 if [ -z "$NAME" ]; then
   NAME=$(TZ="Asia/Singapore" date +"%Y%m%d%H%M")
 fi
+
 SAFE_NAME=$(printf "%s" "$NAME" | tr -c 'a-zA-Z0-9' '-')
 echo "=========================== VLESS LINK ==========================="
 VLESS_LINK="vless://${UUID}@${SERVER_IP}:443?type=tcp&security=reality&flow=xtls-rprx-vision&sni=${SNI}&pbk=${PUBLIC_KEY}&sid=${SHORT_ID}#${SAFE_NAME}"
-echo "$VLESS_LINK" > "/root/${SAFE_NAME}.txt"
 echo "$VLESS_LINK"
 echo "=================================================================="
-echo "Need Reboot"
- 
-SCRIPT
-)
 </code>
 
-#### 客户端
+<code sh>
+sudo bash install.sh
+</code>
+
+### 客户端
+指纹不要留空,选chrome或ff
 https://github.com/2dust/v2rayNG/releases
 https://github.com/2dust/v2rayN/releases
 
