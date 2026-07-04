@@ -87,6 +87,7 @@ https://ping.pe/
 
 ## 自建代理(Xray + REALITY)
 单节点自控, 侧重伪装而非匿名
+    再次强调: 伪装而非匿名, 不要用它反CCP
 客户端先通过 REALITY 建立一个伪装成 HTTPS 的加密通道连接到 Xray，然后在这个通道里使用 VLESS 协议告诉服务器要访问的目标，由 Xray 代为连接目标网站并转发数据。
     Xray负责协议解析和路由
     REALITY模拟TLS行为让代理流量看起来像普通HTTPS
@@ -96,17 +97,27 @@ SNI最好冷门且支持TLS1.3
 
 ### GCP
 https://console.cloud.google.com/compute/instances
-vm实例选e2-micro
-Debian 13, 日本东京
+丐版e2-micro
+    vCPU: 2
+    RAM: 1 GB
+    Disk: Standard persistent disk 10 GB
+Debian 13, 日本东京, 延迟约100ms, 费用约$8.36/月
+改为标准永久磁盘
+取消计划快照
 vpc network - firewall
     allow-xray-443
         来源 IPv4 范围  0.0.0.0/0
-        指定的协议和端口勾选 TCP 填入：443
+        指定的协议和端口勾选 TCP 端口443
+        应用到所有实例
+其中 Create similar 以相同配置开启新空白机器
 
 ### DO
 https://cloud.digitalocean.com/droplets
 基础常规版
-Debian 13, 美国旧金山
+    vCPU: 1
+    RAM: 512 MB
+    Disk: SSD 10 GB
+Debian 13, 美国旧金山, 延迟约300ms, 费用约$4/月
 Inbound Rules
     Type: HTTPS
     Protocol: TCP

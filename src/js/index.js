@@ -28,7 +28,7 @@ window.top!==window.self&&(window.top.location.href=location.origin),window.data
                     console.warn(e);
                 }
             })();
-        <\/script></body></html>`}if(o==="video"){const{videoUrl:i}=t,r=i.toLowerCase().endsWith(".mkv"),l=i.split("/").pop(),c=l.includes(".")?l.substring(0,l.lastIndexOf(".")):l,p=r?`video/vtt/${c}.vtt`:"",d=JSON.stringify(i),f=JSON.stringify(p),u=JSON.stringify(r);n=`<!DOCTYPE html><html><head><meta charset="utf-8"/>${s}${e}<style>${a} video{max-width:100%;max-height:100%}video::cue{font-size:26px;color:#fff;background:rgba(0,0,0,0.4);text-shadow:2px 2px 4px rgba(0,0,0,0.8);font-family:'Noto Serif SC'}</style></head><body>
+        <\/script></body></html>`}if(o==="video"){const{videoUrl:i}=t,r=i.toLowerCase().endsWith(".mkv"),l=i.split("/").pop(),c=l.includes(".")?l.substring(0,l.lastIndexOf(".")):l,p=r?`video/vtt/${c}.vtt`:"",d=JSON.stringify(i),f=JSON.stringify(p),u=JSON.stringify(r);n=`<!DOCTYPE html><html><head><meta charset="utf-8"/>${s}${e}<style>${a} video{max-width:100%;max-height:100%}video::cue{font-size:26px;color:#fff;background:rgba(0,0,0,0.9);text-shadow:2px 2px 4px rgba(0,0,0,0.8);font-family:'Noto Serif SC'}</style></head><body>
         
         <video id="video" controls loop playsinline>${r?'<track id="main-track" label="中文" kind="subtitles" srclang="zh" default>':""}</video>
         
