@@ -474,7 +474,6 @@ gh api repos/diff4x/comments -q ".node_id"
 # 获取 data-category-id
 gh api graphql -f query="query { repository(owner: \"diff4x\", name: \"comments\") { discussionCategories(first: 10) { nodes { id name } } } }" -q ".data.repository.discussionCategories.nodes[] | \"\(.name): \(.id)\""
 </code>
-
 </pre>
  </body>
 </html>

@@ -110,6 +110,7 @@ window.onload = () => {
     );
 
     document.getElementById("a2").setAttribute("href", store.protocol_name+"://3{/Dropbox/diff4x.github.io");
+    document.getElementById("a3").setAttribute("href", store.protocol_name+"://8");
 }
 
 // postMessage 封装

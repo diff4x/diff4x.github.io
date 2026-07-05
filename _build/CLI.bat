@@ -107,6 +107,7 @@ if not "!input_arg:://=!"=="!input_arg!" (
     if "!action!"=="5" goto case_overwrite
     if "!action!"=="6" goto run_gen
     if "!action!"=="7" goto case_jump_txn_file_line
+    if "!action!"=="8" goto case_go
     goto end
 )
 
@@ -248,6 +249,15 @@ if not exist "!txn_file!" (
 start "" "%vscode_path%" -g "!txn_file!:!line_num!"
 
 goto end
+
+
+:: =====================================================
+:: URL动作：打开KaTrain
+:: =====================================================
+:case_go
+powershell -NoProfile -Command "Start-Process -FilePath 'uv' -ArgumentList 'run python -m katrain' -WorkingDirectory 'D:\game\Go\client\katrain-1.18.1' -WindowStyle Hidden"
+goto end
+
 
 :: =====================================================
 :: [补充] 自动推送入口
