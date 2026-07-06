@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>摆盘</title>
+    <style>
+        :root {
+            --board-bg-img: url('../css/icon/board.jpg');
+            --black-img: url('../css/icon/black.png');
+            --white-img: url('../css/icon/white.png');
+            
+            --grid-lines: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='600' height='600' viewBox='0 0 600 600'%3E%3Cg stroke='%23333' stroke-width='1'%3E%3Cpath d='M15.79 15.79h568.42v568.42H15.79z' stroke-width='2' fill='none'/%3E%3Cstyle%3E.l %7Bstroke:%23333;%7D%3C/style%3E%3Cpath class='l' d='M47.37 15.79v568.42M78.95 15.79v568.42M110.53 15.79v568.42M142.11 15.79v568.42M173.68 15.79v568.42M205.26 15.79v568.42M236.84 15.79v568.42M268.42 15.79v568.42M300 15.79v568.42M331.58 15.79v568.42M363.16 15.79v568.42M394.74 15.79v568.42M426.32 15.79v568.42M457.89 15.79v568.42M489.47 15.79v568.42M521.05 15.79v568.42M552.63 15.79v568.42M15.79 47.37h568.42M15.79 78.95h568.42M15.79 110.53h568.42M15.79 142.11h568.42M15.79 173.68h568.42M15.79 205.26h568.42M15.79 236.84h568.42M15.79 268.42h568.42M15.79 300h568.42M15.79 331.58h568.42M15.79 363.16h568.42M15.79 394.74h568.42M15.79 426.32h568.42M15.79 457.89h568.42M15.79 489.47h568.42M15.79 521.05h568.42M15.79 552.63h568.42'/%3E%3C/g%3E%3Cg fill='%23333'%3E%3Ccircle cx='110.53' cy='110.53' r='4'/%3E%3Ccircle cx='300' cy='110.53' r='4'/%3E%3Ccircle cx='489.47' cy='110.53' r='4'/%3E%3Ccircle cx='110.53' cy='300' r='4'/%3E%3Ccircle cx='300' cy='300' r='4'/%3E%3Ccircle cx='489.47' cy='300' r='4'/%3E%3Ccircle cx='110.53' cy='489.47' r='4'/%3E%3Ccircle cx='300' cy='489.47' r='4'/%3E%3Ccircle cx='489.47' cy='489.47' r='4'/%3E%3C/g%3E%3C/svg%3E");
+        }
+
+        body {
+            margin: 0;
+            padding: 20px;
+            box-sizing: border-box;
+            min-height: 100vh;
+            
+            background-color: #052800;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            user-select: none;
+        }
+
+        .board-container {
+            width: min(100vw - 40px, 100vh - 120px);
+            height: min(100vw - 40px, 100vh - 120px);
+            
+            max-width: 900px;
+            max-height: 900px;
+
+            background-image: var(--grid-lines), var(--board-bg-img);
+            background-size: cover;
+            position: relative;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+            border-radius: 4px;
+        }
+
+        .interaction-grid {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            display: grid;
+            grid-template-columns: repeat(19, 1fr);
+            grid-template-rows: repeat(19, 1fr);
+        }
+
+        .intersection {
+            position: relative;
+            cursor: pointer;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .stone {
+            width: 94%;
+            height: 94%;
+            background-size: contain;
+            background-repeat: no-repeat;
+            background-position: center;
+            z-index: 10;
+            pointer-events: none;
+            animation: dropEffect 0.1s ease-out;
+        }
+
+        @keyframes dropEffect {
+            0% { transform: scale(1.15); opacity: 0.8; }
+            100% { transform: scale(1); opacity: 1; }
+        }
+
+        .stone.black { background-image: var(--black-img); }
+        .stone.white { background-image: var(--white-img); }
+
+        .toolbar {
+            margin-top: 20px;
+            background-color: rgba(255, 255, 255, 0.08);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            padding: 8px 18px;
+            border-radius: 20px;
+            font-size: 13px;
+            color: rgba(255, 255, 255, 0.75);
+            display: flex;
+            align-items: center;
+            gap: 24px;
+            backdrop-filter: blur(5px);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+
+        .tips-group {
+            display: flex;
+            gap: 16px;
+        }
+
+        .tip-item {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            display: inline-block;
+        }
+        .dot.black { background-color: #1a1a1a; box-shadow: 0 0 0 1px rgba(255,255,255,0.3); }
+        .dot.white { background-color: #ffffff; }
+        .dot.remove { background-color: #ff4d4f; }
+
+        .divider {
+            width: 1px;
+            height: 14px;
+            background-color: rgba(255, 255, 255, 0.2);
+        }
+
+        .clear-btn {
+            background-color: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            color: rgba(255, 255, 255, 0.85);
+            padding: 4px 12px;
+            border-radius: 12px;
+            cursor: pointer;
+            font-size: 12px;
+            font-family: inherit;
+            transition: all 0.2s ease;
+        }
+
+        .clear-btn:hover {
+            background-color: #ff4d4f;
+            border-color: #ff4d4f;
+            color: #ffffff;
+            box-shadow: 0 0 8px rgba(255, 77, 79, 0.4);
+        }
+        
+        .clear-btn:active {
+            transform: scale(0.96);
+        }
+
+        @media (max-width: 480px) {
+            .toolbar { gap: 12px; padding: 10px 14px; }
+            .tips-group { gap: 10px; }
+            .divider { display: none; }
+        }
+    </style>
+</head>
+<body>
+
+    <div class="board-container" id="goBoardContainer">
+        <div class="interaction-grid" id="interactionGrid"></div>
+    </div>
+    
+    <div class="toolbar">
+        <div class="tips-group">
+            <div class="tip-item"><span class="dot black"></span> 左击落黑</div>
+            <div class="tip-item"><span class="dot white"></span> 右击落白</div>
+            <div class="tip-item"><span class="dot remove"></span> 中击拿掉</div>
+        </div>
+        <div class="divider"></div>
+        <button id="clearBtn" class="clear-btn">清空棋盘</button>
+    </div>
+
+    <script>
+        const grid = document.getElementById('interactionGrid');
+        const boardContainer = document.getElementById('goBoardContainer');
+        const clearBtn = document.getElementById('clearBtn');
+        const LOCAL_STORAGE_KEY = 'goBoardSaveData';
+
+        // 1. 初始化网格
+        for (let i = 0; i < 361; i++) {
+            const intersection = document.createElement('div');
+            intersection.classList.add('intersection');
+            intersection.dataset.state = 'none'; 
+            intersection.dataset.index = i; // 记录索引方便存储
+            grid.appendChild(intersection);
+        }
+
+        boardContainer.addEventListener('contextmenu', e => e.preventDefault());
+
+        grid.addEventListener('mousedown', (e) => {
+            const target = e.target.closest('.intersection');
+            if (!target) return;
+
+            if (e.button === 1) e.preventDefault();
+
+            switch (e.button) {
+                case 0: placeStone(target, 'black'); break;
+                case 1: removeStone(target); break;
+                case 2: placeStone(target, 'white'); break;
+            }
+        });
+
+        // 增加了 isUserAction 参数。如果是读取本地数据时（false），不重复保存到 storage
+        function placeStone(element, color, isUserAction = true) {
+            if (element.dataset.state === color) return;
+            element.innerHTML = '';
+            const stone = document.createElement('div');
+            stone.classList.add('stone', color);
+            element.appendChild(stone);
+            element.dataset.state = color;
+            
+            if (isUserAction) saveBoardState();
+        }
+
+        function removeStone(element, isUserAction = true) {
+            if (element.dataset.state !== 'none') {
+                element.innerHTML = '';
+                element.dataset.state = 'none';
+                
+                if (isUserAction) saveBoardState();
+            }
+        }
+
+        clearBtn.addEventListener('click', () => {
+            const intersections = document.querySelectorAll('.intersection');
+            // 批量删除时不逐次保存，全删完后保存一次即可
+            intersections.forEach(el => removeStone(el, false));
+            saveBoardState();
+        });
+
+        // ================= 新增：LocalStorage 存储与读取逻辑 ================= //
+
+        // 获取当前棋盘的快照并保存
+        function saveBoardState() {
+            const intersections = document.querySelectorAll('.intersection');
+            const boardState = Array.from(intersections).map(el => el.dataset.state);
+            localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(boardState));
+        }
+
+        // 读取历史数据并恢复
+        function loadBoardState() {
+            const savedData = localStorage.getItem(LOCAL_STORAGE_KEY);
+            if (!savedData) return; // 如果没有存过数据，直接退出
+
+            try {
+                const boardState = JSON.parse(savedData);
+                const intersections = document.querySelectorAll('.intersection');
+                
+                boardState.forEach((state, index) => {
+                    const el = intersections[index];
+                    if (state === 'black' || state === 'white') {
+                        placeStone(el, state, false);
+                    } else {
+                        removeStone(el, false);
+                    }
+                });
+            } catch (error) {
+                console.error("恢复棋盘数据失败：", error);
+            }
+        }
+
+        // 页面初始化完成后立刻读取数据
+        loadBoardState();
+    </script>
+</body>
+</html>

@@ -28,16 +28,18 @@ Go
             openclReTunePerBoardSize = true
     engine
         katago_TensorRT-10.12.0.36
+            katago 1.6.5
         katago_opencl
-            katrain 自带的 opencl 版本的 katago
+            katrain 自带的 opencl 版本的 katago 1.6.0
     model
         b18c384nbt-humanv0.bin.gz
         kata1-zhizi-b40c768nbt-s11272M-d5935M.bin.gz
 </code>
 
 ## katrain配置
-C:\Users\diff\.katrain\config.json
-D:\game\Go\client\katrain-1.18.1\katrain\config.json
+程序启动时，会先读取 D 盘的默认配置“打底”，然后再读取 C 盘的用户配置。如果两者有冲突，以 C 盘的为准（C 覆盖 D）
+    C:\Users\diff\.katrain\config.json
+    D:\game\Go\client\katrain-1.18.1\katrain\config.json
 
 ### 赛博棋风
 <code json>
@@ -52,7 +54,7 @@ D:\game\Go\client\katrain-1.18.1\katrain\config.json
         "max_visits": 2000,
         "fast_visits": 200,
         "max_time": 5.0,
-        "wide_root_noise": 0.02,
+        "wide_root_noise": 0.05,
         "_enable_ownership": true
     }
 </code>
@@ -70,7 +72,7 @@ D:\game\Go\client\katrain-1.18.1\katrain\config.json
         "max_visits": 2000,
         "fast_visits": 200,
         "max_time": 5.0,
-        "wide_root_noise": 0.02,
+        "wide_root_noise": 0.05,
         "_enable_ownership": true
     }
 </code>
@@ -214,7 +216,7 @@ logSearchInfo = true
 logSearchInfoForChosenMove = false
 logToStderr = false
 
-reportAnalysisWinratesAs = SIDETOMOVE
+reportAnalysisWinratesAs = BLACK
 analysisIgnorePreRootHistory = true
 
 rules = tromp-taylor
