@@ -57,7 +57,6 @@ public class BookmarkManager {
             }
 
             if (matchedA != null) {
-                Element currentBlock = matchedA.parent();
                 // 同块置顶 与 不同块移动 逻辑
                 Element next = matchedA.nextElementSibling();
                 matchedA.remove();

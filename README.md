@@ -92,7 +92,9 @@ Workflow design by diff4x | Optimized by Gemini & ChatGPT
     - `gallery/wallpaper` 默认为首页(书签页)壁纸随机源
 - 其它
   - 侧栏菜单条目 `What's new?` 查看版本日志
-  - 侧栏菜单条目 `txn_parser` 当前流水解析
+  - 书签栏
+    - `txn_parser` 当前流水解析
+    - `street_view_uploader` 谷歌全景上传
   - `cmt_mapper` 中 `records` 记录评论与页面 `title` 的对应关系, `orphanIds` 记录孤立失联的评论便于定点清除
 ---
 

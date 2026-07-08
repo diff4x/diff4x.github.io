@@ -106,9 +106,9 @@ Debian 13, 日本东京, 延迟约100ms, 费用约$8.36/月
 取消计划快照
 vpc network - firewall
     allow-xray-443
+        应用到所有实例
         来源 IPv4 范围  0.0.0.0/0
         指定的协议和端口勾选 TCP 端口443
-        应用到所有实例
 其中 Create similar 以相同配置开启新空白机器
 
 ### DO
@@ -473,6 +473,111 @@ gh api repos/diff4x/comments -q ".node_id"
 
 # 获取 data-category-id
 gh api graphql -f query="query { repository(owner: \"diff4x\", name: \"comments\") { discussionCategories(first: 10) { nodes { id name } } } }" -q ".data.repository.discussionCategories.nodes[] | \"\(.name): \(.id)\""
+</code>
+
+# GCP 之 Street View Publish
+在谷歌街景中发布个人全景图
+## 参考
+    REST
+        https://developers.google.com/streetview/publish/reference/rest/?apix=true
+    Place ID Finder
+        https://developers.google.com/maps/documentation/javascript/examples/places-placeid-finder
+
+## 准备
+Google Cloud Console 创建新项目
+    https://console.cloud.google.com/projectcreate
+API & Services
+    Enable APIs and services
+        搜索并启用 Street View Publish API
+    OAuth consent screen 
+        User type
+            External
+        Audience
+            Test users
+                Add users
+        Clients
+            Create OAuth client ID
+                Application type
+                    Web app
+                Authorized JavaScript origins
+                    例如 http://localhost:8000
+            保存 client_id
+
+## 交互
+先向 Google 服务器请求一个专门的、临时的上传地址。
+    POST： https://streetviewpublish.googleapis.com/v1/photo:startUpload
+    Header： 需要附带你的 OAuth 2.0 Authorization: Bearer YOUR_ACCESS_TOKEN。
+    响应： 服务器会返回一个 JSON，其中包含一个 uploadUrl。你需要将这个 URL 提取出来用于下一步。
+将本地 JPEG 图像文件作为二进制流上传到第一步获取的 uploadUrl
+    POST： 上一步返回的 uploadUrl。
+    Header： Authorization: Bearer YOUR_ACCESS_TOKEN 以及 Content-Type: image/jpeg。
+    Body： 全景图的原始二进制字节流 (Raw image bytes)。
+提交元数据（如经纬度、朝向）正式发布
+    POST： https://streetviewpublish.googleapis.com/v1/photo
+    Header： Authorization: Bearer YOUR_ACCESS_TOKEN 以及 Content-Type: application/json。
+    Body (JSON 示例)： 
+<code json>
+{
+  "uploadReference": {
+    "uploadUrl": "前面获取的临时上传地址"
+  },
+  "pose": {
+    "latLngPair": {
+      "latitude": 22.390738,        // 南纬, 西经用负数
+      "longitude": 113.370427
+    },
+    "heading": 105                  // 照片正中心的朝向（正北为 0，正东为 90）
+  },
+  "captureTime": {
+    "seconds": "1755360000"         // Unix 时间戳
+  },
+  "places": [
+    {
+      "placeId": "Place_ID"
+    }
+  ]
+}
+</code>
+
+更新
+<code json>
+{
+  "pose": {
+    "heading": 95
+  },
+  "places": [
+    {
+      "placeId": "新 Place_ID"
+    }
+  ]
+}
+</code>
+
+## 全景图要求
+JPEG 格式
+宽高比 2:1
+至少 750 万像素
+单张图片不应超过 50MB
+带有全景 XMP 标签
+
+## 旧 webp 全景加工
+### 转 jpeg
+<code bash>
+pip install Pillow
+</code>
+<code py>
+from PIL import Image
+
+im = Image.open("input.webp")
+# 必须转换为 RGB 模式（因为 WebP 可能包含 Alpha 透明通道，而 JPEG 不支持）
+im_rgb = im.convert("RGB")
+im_rgb.save("output.jpg", "JPEG", quality=95)
+</code>
+
+### 注入 XMP 标签
+https://sourceforge.net/projects/exiftool/files/exiftool-13.59_64.zip/download
+<code batch>
+exiftool -ProjectionType="equirectangular" -UsePanoramaViewer="True" 20250817165030.jpg
 </code>
 </pre>
  </body>

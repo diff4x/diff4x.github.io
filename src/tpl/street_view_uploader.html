@@ -1,0 +1,488 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>street_view_uploader</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+  </style>
+</head>
+<body class="bg-gray-100 text-gray-800 min-h-screen p-4 md:p-8 font-sans">
+
+  <div class="max-w-7xl mx-auto flex flex-col lg:flex-row gap-6">
+    
+    <div class="flex-1 space-y-6">
+      
+      <div class="bg-white p-6 rounded-lg shadow-sm border-t-4 border-blue-500 border-x border-b border-gray-200">
+        <div class="flex items-center justify-between mb-4">
+          <span id="authStatusBadge" class="text-xs bg-gray-200 text-gray-600 px-3 py-1 rounded-full font-medium">未授权</span>
+        </div>
+        <div class="flex flex-col md:flex-row gap-4 items-end">
+          <div class="flex-1 w-full">
+            <input id="clientId" type="text" placeholder="Client ID" class="w-full text-sm font-mono px-4 py-2.5 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:outline-none" />
+          </div>
+          <button id="authBtn" onclick="handleAuthClick()" class="w-full md:w-auto bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold py-2.5 px-6 rounded-md transition duration-200">
+            浏览器登录授权
+          </button>
+        </div>
+      </div>
+
+      <div class="bg-white p-6 rounded-lg shadow-sm border-t-4 border-green-500 border-x border-b border-gray-200">
+        <div class="space-y-5">
+          <div>
+            <input id="imageFile" type="file" accept="image/jpeg,image/jpg" class="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-gray-100 file:text-gray-700 hover:file:bg-gray-200 border border-gray-300 rounded-md cursor-pointer" onchange="handleFileSelect(event)" />
+          </div>
+
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-4 bg-gray-50 p-4 rounded-md border border-gray-200">
+            <div>
+              <label class="block text-sm font-medium text-gray-700 mb-1">纬度 (Latitude)</label>
+              <input id="metaLat" type="number" step="any" placeholder="例如: 22.390738" class="w-full text-sm px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-green-500" />
+            </div>
+            <div>
+              <label class="block text-sm font-medium text-gray-700 mb-1">经度 (Longitude)</label>
+              <input id="metaLng" type="number" step="any" placeholder="例如: 113.370427" class="w-full text-sm px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-green-500" />
+            </div>
+            <div>
+              <label class="block text-sm font-medium text-gray-700 mb-1">相机朝向 (Heading 0-360°)</label>
+              <input id="metaHeading" type="number" step="any" placeholder="正北为 0, 正东为 90" class="w-full text-sm px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-green-500" />
+            </div>
+            <div>
+              <label class="block text-sm font-medium text-gray-700 mb-1">地点 ID (Place ID) - 选填</label>
+              <input id="metaPlaceId" type="text" class="w-full text-sm font-mono px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-green-500" />
+            </div>
+            <div class="md:col-span-2 grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label class="block text-sm font-medium text-gray-700 mb-1">拍摄时间 (本地时间)</label>
+                <input id="metaDateTime" type="datetime-local" class="w-full text-sm px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-green-500" />
+              </div>
+              <div>
+                <label class="block text-sm font-medium text-gray-700 mb-1">所在时区 (Timezone)</label>
+                <select id="metaTimezone" class="w-full text-sm px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-green-500">
+                  <option value="-12">UTC-12:00</option>
+                  <option value="-11">UTC-11:00</option>
+                  <option value="-10">UTC-10:00 夏威夷</option>
+                  <option value="-9">UTC-09:00 阿拉斯加</option>
+                  <option value="-8">UTC-08:00 太平洋时间 (美加)</option>
+                  <option value="-7">UTC-07:00 山地时间 (美加)</option>
+                  <option value="-6">UTC-06:00 中部时间 (美加)</option>
+                  <option value="-5">UTC-05:00 东部时间 (美加)</option>
+                  <option value="-4">UTC-04:00 大西洋时间 (美加)</option>
+                  <option value="-3">UTC-03:00 巴西利亚</option>
+                  <option value="-2">UTC-02:00 中大西洋</option>
+                  <option value="-1">UTC-01:00 亚速尔群岛</option>
+                  <option value="0">UTC±00:00 伦敦/格林威治</option>
+                  <option value="1">UTC+01:00 巴黎/柏林</option>
+                  <option value="2">UTC+02:00 雅典/耶路撒冷</option>
+                  <option value="3">UTC+03:00 莫斯科</option>
+                  <option value="4">UTC+04:00 迪拜</option>
+                  <option value="5">UTC+05:00 孟买</option>
+                  <option value="6">UTC+06:00 达卡</option>
+                  <option value="7">UTC+07:00 曼谷/雅加达</option>
+                  <option value="8" selected>UTC+08:00 北京/台北/新加坡</option>
+                  <option value="9">UTC+09:00 东京/首尔</option>
+                  <option value="10">UTC+10:00 悉尼</option>
+                  <option value="11">UTC+11:00 索罗门群岛</option>
+                  <option value="12">UTC+12:00 奥克兰</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          <button id="uploadSubmitBtn" onclick="startExecutionFlow()" disabled class="w-full bg-green-600 hover:bg-green-700 disabled:bg-gray-300 disabled:cursor-not-allowed text-white text-base font-bold py-3 px-6 rounded-md transition duration-200">
+            执行完整上传流程
+          </button>
+        </div>
+      </div>
+
+      <div class="bg-white p-6 rounded-lg shadow-sm border-t-4 border-purple-500 border-x border-b border-gray-200">
+        <div class="space-y-4">
+          <div>
+            <input id="updatePhotoId" type="text" placeholder="目标 Photo ID" class="w-full text-sm font-mono px-3 py-2 border border-purple-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500 bg-purple-50" />
+          </div>
+
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label class="block text-sm font-medium text-gray-700 mb-1">新纬度 (Latitude)</label>
+              <input id="updateLat" type="number" step="any" placeholder="留空则不修改" class="w-full text-sm px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500" />
+            </div>
+            <div>
+              <label class="block text-sm font-medium text-gray-700 mb-1">新经度 (Longitude)</label>
+              <input id="updateLng" type="number" step="any" placeholder="留空则不修改" class="w-full text-sm px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500" />
+            </div>
+            <div>
+              <label class="block text-sm font-medium text-gray-700 mb-1">新相机朝向 (Heading)</label>
+              <input id="updateHeading" type="number" step="any" placeholder="留空则不修改" class="w-full text-sm px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500" />
+            </div>
+            <div>
+              <label class="block text-sm font-medium text-gray-700 mb-1">新地点 ID (Place ID)</label>
+              <input id="updatePlaceId" type="text" placeholder="留空则不修改" class="w-full text-sm font-mono px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500" />
+            </div>
+            
+            <div class="md:col-span-2 grid grid-cols-1 md:grid-cols-2 gap-4 pt-2 border-t border-gray-100">
+              <div>
+                <label class="block text-sm font-medium text-gray-700 mb-1">新拍摄时间 (留空则不修改)</label>
+                <input id="updateDateTime" type="datetime-local" class="w-full text-sm px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500" />
+              </div>
+              <div>
+                <label class="block text-sm font-medium text-gray-700 mb-1">新时间所在时区</label>
+                <select id="updateTimezone" class="w-full text-sm px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500">
+                  <option value="-12">UTC-12:00</option>
+                  <option value="-11">UTC-11:00</option>
+                  <option value="-10">UTC-10:00 夏威夷</option>
+                  <option value="-9">UTC-09:00 阿拉斯加</option>
+                  <option value="-8">UTC-08:00 太平洋时间 (美加)</option>
+                  <option value="-7">UTC-07:00 山地时间 (美加)</option>
+                  <option value="-6">UTC-06:00 中部时间 (美加)</option>
+                  <option value="-5">UTC-05:00 东部时间 (美加)</option>
+                  <option value="-4">UTC-04:00 大西洋时间 (美加)</option>
+                  <option value="-3">UTC-03:00 巴西利亚</option>
+                  <option value="-2">UTC-02:00 中大西洋</option>
+                  <option value="-1">UTC-01:00 亚速尔群岛</option>
+                  <option value="0">UTC±00:00 伦敦/格林威治</option>
+                  <option value="1">UTC+01:00 巴黎/柏林</option>
+                  <option value="2">UTC+02:00 雅典/耶路撒冷</option>
+                  <option value="3">UTC+03:00 莫斯科</option>
+                  <option value="4">UTC+04:00 迪拜</option>
+                  <option value="5">UTC+05:00 孟买</option>
+                  <option value="6">UTC+06:00 达卡</option>
+                  <option value="7">UTC+07:00 曼谷/雅加达</option>
+                  <option value="8" selected>UTC+08:00 北京/台北/新加坡</option>
+                  <option value="9">UTC+09:00 东京/首尔</option>
+                  <option value="10">UTC+10:00 悉尼</option>
+                  <option value="11">UTC+11:00 索罗门群岛</option>
+                  <option value="12">UTC+12:00 奥克兰</option>
+                </select>
+              </div>
+            </div>
+          </div>
+          
+          <button id="updateSubmitBtn" onclick="updatePhotoMetadata()" disabled class="w-full bg-purple-600 hover:bg-purple-700 disabled:bg-gray-300 disabled:cursor-not-allowed text-white text-base font-bold py-3 px-6 rounded-md transition duration-200">
+            发送元数据更新请求
+          </button>
+        </div>
+      </div>
+
+    </div>
+
+    <div class="w-full lg:w-[450px] bg-[#1e1e1e] rounded-lg shadow-xl overflow-hidden flex flex-col h-[600px] lg:h-auto lg:min-h-screen">
+      <div id="consoleOutput" class="flex-1 overflow-y-auto p-4 space-y-3 font-mono text-[13px] text-gray-300">
+        <div class="text-gray-500">>> 等待授权...</div>
+      </div>
+    </div>
+
+  </div>
+
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
+
+  <script>
+    // ==========================================
+    // 全局状态管理
+    // ==========================================
+    let tokenClient;
+    let currentAccessToken = "";
+    let selectedFileBytes = null;
+
+    // 初始化上传模块的时间选择器为当前时间
+    function initDateTime() {
+      const now = new Date();
+      const year = now.getFullYear();
+      const month = String(now.getMonth() + 1).padStart(2, '0');
+      const day = String(now.getDate()).padStart(2, '0');
+      const hours = String(now.getHours()).padStart(2, '0');
+      const minutes = String(now.getMinutes()).padStart(2, '0');
+      document.getElementById('metaDateTime').value = `${year}-${month}-${day}T${hours}:${minutes}`;
+    }
+    initDateTime();
+
+    // 控制台输出函数
+    function printToConsole(message, type = 'info') {
+      const consoleBox = document.getElementById('consoleOutput');
+      const div = document.createElement('div');
+      
+      let colorClass = 'text-gray-300';
+      if (type === 'success') colorClass = 'text-green-400';
+      if (type === 'error') colorClass = 'text-red-400';
+      if (type === 'warning') colorClass = 'text-yellow-400';
+      if (type === 'api') colorClass = 'text-blue-300';
+
+      const timeStr = new Date().toLocaleTimeString();
+      div.innerHTML = `<span class="text-gray-500">[${timeStr}]</span> <span class="${colorClass} break-all">${message}</span>`;
+      
+      consoleBox.appendChild(div);
+      consoleBox.scrollTop = consoleBox.scrollHeight;
+    }
+
+    // 根据输入框 ID 获取计算后的 Unix 时间戳 (秒)
+    function getUnixTimestamp(dateInputId, tzInputId) {
+      const dtVal = document.getElementById(dateInputId).value; // YYYY-MM-DDTHH:mm
+      const tzVal = parseInt(document.getElementById(tzInputId).value, 10);
+      
+      if (!dtVal) return null;
+      
+      // 拼装符合 ISO 8601 格式的字符串以确保时区正确解析
+      const sign = tzVal >= 0 ? '+' : '-';
+      const padTz = String(Math.abs(tzVal)).padStart(2, '0') + ':00';
+      const isoString = `${dtVal}:00${sign}${padTz}`;
+      
+      return Math.floor(new Date(isoString).getTime() / 1000);
+    }
+
+    // 检查按键是否应该被激活
+    function checkButtonState() {
+      const isAuth = currentAccessToken !== "";
+      const hasFile = selectedFileBytes !== null;
+      
+      const uploadBtn = document.getElementById('uploadSubmitBtn');
+      if (isAuth && hasFile) {
+        uploadBtn.removeAttribute('disabled');
+      } else {
+        uploadBtn.setAttribute('disabled', 'true');
+      }
+
+      const updateBtn = document.getElementById('updateSubmitBtn');
+      if (isAuth) {
+        updateBtn.removeAttribute('disabled');
+      } else {
+        updateBtn.setAttribute('disabled', 'true');
+      }
+    }
+
+    // ==========================================
+    // 本地文件读取
+    // ==========================================
+    function handleFileSelect(event) {
+      const file = event.target.files[0];
+      if (!file) return;
+
+      printToConsole(`已选择文件: ${file.name} (${(file.size / 1024 / 1024).toFixed(2)} MB)`);
+
+      const reader = new FileReader();
+      reader.onload = function(e) {
+        selectedFileBytes = new Uint8Array(e.target.result);
+        printToConsole(`文件加载完成，等待上传。`, 'success');
+        checkButtonState();
+      };
+      reader.readAsArrayBuffer(file);
+    }
+
+    // ==========================================
+    // OAuth 2.0 隐式授权流
+    // ==========================================
+    function handleAuthClick() {
+      const clientId = document.getElementById('clientId').value.trim();
+      if (!clientId) {
+        printToConsole("错误：必须输入 Client ID 才能进行授权。", "error");
+        return;
+      }
+
+      printToConsole("拉起 Google OAuth 浏览器授权窗口...");
+
+      tokenClient = google.accounts.oauth2.initTokenClient({
+        client_id: clientId,
+        scope: 'https://www.googleapis.com/auth/streetviewpublish',
+        callback: (tokenResponse) => {
+          if (tokenResponse && tokenResponse.access_token) {
+            currentAccessToken = tokenResponse.access_token;
+            printToConsole("OAuth 授权成功，已在后台安全存储 Access Token。", "success");
+            
+            const badge = document.getElementById('authStatusBadge');
+            badge.innerText = '✅ 授权成功';
+            badge.className = 'text-xs bg-green-100 text-green-800 px-3 py-1 rounded-full font-medium border border-green-200';
+            
+            checkButtonState();
+          } else {
+            printToConsole("未能获取 Token，用户取消或配置错误。", "error");
+          }
+        },
+      });
+
+      tokenClient.requestAccessToken();
+    }
+
+    // ==========================================
+    // API 1: 执行图片上传与发布流程
+    // ==========================================
+    async function startExecutionFlow() {
+      const lat = parseFloat(document.getElementById('metaLat').value);
+      const lng = parseFloat(document.getElementById('metaLng').value);
+      const heading = parseFloat(document.getElementById('metaHeading').value);
+      const placeId = document.getElementById('metaPlaceId').value.trim();
+      
+      // 读取上传模块的时间
+      const captureTime = getUnixTimestamp('metaDateTime', 'metaTimezone');
+
+      if (isNaN(lat) || isNaN(lng)) {
+        printToConsole("错误：纬度或经度不能为空/非法。", "error");
+        return;
+      }
+
+      printToConsole("--- 🚀 开始发布流程 ---");
+
+      let uploadUrl = "";
+
+      try {
+        printToConsole("阶段 1/3: 申请临时上传链接...", "api");
+        const url = "https://streetviewpublish.googleapis.com/v1/photo:startUpload";
+        const response = await fetch(url, {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${currentAccessToken}`,
+            "Content-Type": "application/json"
+          }
+        });
+
+        if (!response.ok) throw new Error(await response.text());
+        const data = await response.json();
+        uploadUrl = data.uploadUrl;
+        printToConsole(`阶段 1 完成。获取到端点。`, "success");
+      } catch (err) {
+        printToConsole(`阶段 1 失败: ${err.message}`, "error");
+        return;
+      }
+
+      try {
+        printToConsole("阶段 2/3: 正在传输图片字节流...", "api");
+        const response = await fetch(uploadUrl, {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${currentAccessToken}`,
+            "Content-Type": "image/jpeg",
+            "X-Goog-Upload-Protocol": "raw",
+            "X-Goog-Upload-Content-Length": selectedFileBytes.length.toString()
+          },
+          body: selectedFileBytes
+        });
+
+        if (!response.ok) throw new Error(await response.text());
+        printToConsole(`阶段 2 完成。图片已安全送达。`, "success");
+      } catch (err) {
+        printToConsole(`阶段 2 失败: ${err.message}`, "error");
+        return;
+      }
+
+      try {
+        printToConsole("阶段 3/3: 绑定地理坐标与地点信息...", "api");
+        const createUrl = "https://streetviewpublish.googleapis.com/v1/photo";
+        
+        const payload = {
+          uploadReference: { uploadUrl: uploadUrl },
+          pose: { latLngPair: { latitude: lat, longitude: lng } }
+        };
+
+        if (!isNaN(heading)) payload.pose.heading = heading;
+        if (captureTime) payload.captureTime = { seconds: captureTime.toString() };
+        if (placeId) payload.places = [{ placeId: placeId }];
+
+        printToConsole(`正在发送 Payload:<br>${JSON.stringify(payload, null, 2).replace(/\n/g, '<br>').replace(/ /g, '&nbsp;')}`);
+
+        const response = await fetch(createUrl, {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${currentAccessToken}`,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify(payload)
+        });
+
+        if (!response.ok) throw new Error(await response.text());
+        const result = await response.json();
+        
+        printToConsole(`🎉 发布成功!`, "success");
+        printToConsole(`生成 Photo ID: ${result.photoId.id}`, "success");
+      } catch (err) {
+        printToConsole(`阶段 3 失败: ${err.message}`, "error");
+      }
+    }
+
+    // ==========================================
+    // API 2: 更新现有照片元数据
+    // ==========================================
+    async function updatePhotoMetadata() {
+      const photoId = document.getElementById('updatePhotoId').value.trim();
+      if (!photoId) {
+        printToConsole("错误：必须填写需要更新的 Photo ID。", "error");
+        return;
+      }
+
+      const latVal = document.getElementById('updateLat').value;
+      const lngVal = document.getElementById('updateLng').value;
+      const headingVal = document.getElementById('updateHeading').value;
+      const placeIdVal = document.getElementById('updatePlaceId').value.trim();
+      
+      // 读取更新模块的时间
+      const captureTime = getUnixTimestamp('updateDateTime', 'updateTimezone');
+
+      const updateMask = [];
+      const payload = { pose: {} };
+
+      // 组装坐标
+      if (latVal !== "" && lngVal !== "") {
+        payload.pose.latLngPair = {
+          latitude: parseFloat(latVal),
+          longitude: parseFloat(lngVal)
+        };
+        updateMask.push("pose.latLngPair");
+      } else if (latVal !== "" || lngVal !== "") {
+        printToConsole("错误：更新坐标必须同时提供纬度和经度。", "error");
+        return;
+      }
+
+      // 组装朝向
+      if (headingVal !== "") {
+        payload.pose.heading = parseFloat(headingVal);
+        updateMask.push("pose.heading");
+      }
+
+      // 组装 Place ID
+      if (placeIdVal !== "") {
+        payload.places = [{ placeId: placeIdVal }];
+        updateMask.push("places");
+      }
+      
+      // 组装拍摄时间
+      if (captureTime) {
+        payload.captureTime = { seconds: captureTime.toString() };
+        updateMask.push("captureTime");
+      }
+
+      if (updateMask.length === 0) {
+        printToConsole("错误：请至少填写一项需要更新的数据。", "warning");
+        return;
+      }
+
+      printToConsole(`--- 🔄 开始更新 Photo ID: ${photoId} ---`);
+      printToConsole(`更新掩码 (Update Mask): ${updateMask.join(",")}`);
+      
+      // 打印准备发送的 Payload
+      printToConsole(`正在发送 Payload:<br>${JSON.stringify(payload, null, 2).replace(/\n/g, '<br>').replace(/ /g, '&nbsp;')}`);
+
+      try {
+        const url = `https://streetviewpublish.googleapis.com/v1/photo/${photoId}?updateMask=${updateMask.join(",")}`;
+        const response = await fetch(url, {
+          method: "PUT",
+          headers: {
+            "Authorization": `Bearer ${currentAccessToken}`,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify(payload)
+        });
+
+        if (!response.ok) {
+          const errText = await response.text();
+          throw new Error(`HTTP ${response.status}: ${errText}`);
+        }
+
+        const result = await response.json();
+        printToConsole(`✅ 元数据更新成功!`, "success");
+      } catch (err) {
+        printToConsole(`更新请求失败: ${err.message}`, "error");
+      }
+    }
+  </script>
+</body>
+</html>
