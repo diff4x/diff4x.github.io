@@ -1,6 +1,6 @@
 // 触发 SW 更新检查
-self.SW_VERSION = '1783542064527';
-importScripts('/src/js/core-list.js?v=1783542064527');
+self.SW_VERSION = '1784117474795';
+importScripts('/src/js/core-list.js?v=1784117474795');
 
 // 缓存池隔离命名
 const CACHE_NAME_CORE = 'core-cache-' + BUILD_VERSION;

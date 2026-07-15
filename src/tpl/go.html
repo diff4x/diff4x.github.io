@@ -175,6 +175,11 @@
         const clearBtn = document.getElementById('clearBtn');
         const LOCAL_STORAGE_KEY = 'goBoardSaveData';
 
+        // ================= 新增：音频配置 ================= //
+        // 请将此处替换为你实际的 wav 文件路径
+        const SOUND_PATH = '../css/sound/stone2.wav'; 
+        const stoneSound = new Audio(SOUND_PATH);
+
         // 1. 初始化网格
         for (let i = 0; i < 361; i++) {
             const intersection = document.createElement('div');
@@ -199,7 +204,7 @@
             }
         });
 
-        // 增加了 isUserAction 参数。如果是读取本地数据时（false），不重复保存到 storage
+        // 修改：在落子成功且属于玩家操作时播放声音
         function placeStone(element, color, isUserAction = true) {
             if (element.dataset.state === color) return;
             element.innerHTML = '';
@@ -208,7 +213,16 @@
             element.appendChild(stone);
             element.dataset.state = color;
             
-            if (isUserAction) saveBoardState();
+            if (isUserAction) {
+                // ================= 新增：播放音效 ================= //
+                stoneSound.currentTime = 0; // 进度归零，保证连续快速点击时每次都能发出声音
+                stoneSound.play().catch(error => {
+                    // 捕获可能由于浏览器策略（未交互前禁止发声）导致的异常
+                    console.warn("音频播放受阻:", error);
+                });
+                
+                saveBoardState();
+            }
         }
 
         function removeStone(element, isUserAction = true) {
@@ -227,7 +241,7 @@
             saveBoardState();
         });
 
-        // ================= 新增：LocalStorage 存储与读取逻辑 ================= //
+        // ================= LocalStorage 存储与读取逻辑 ================= //
 
         // 获取当前棋盘的快照并保存
         function saveBoardState() {

@@ -3465,7 +3465,7 @@ function showGlobalBookmarkMenu(x, y, source) {
     }
 
     let targetLeft = absoluteX - menuWidth / 2;
-    let targetTop = absoluteY - menuHeight / 2;
+    let targetTop = absoluteY;
 
     if (targetLeft < 0) {
         targetLeft = 0;
