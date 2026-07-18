@@ -183,8 +183,6 @@ function buildCatalogFromLiteData(liteData) {
     }
     if (typeof updateRecentLinks === 'function') updateRecentLinks();
 
-    store.wallpaperPaths = get_wallpaperPaths();
-
     if (!window._markSystemBound) {
         mark();
         window._markSystemBound = true;
@@ -503,7 +501,7 @@ function click_func() {
 }
 function dbl_click_func() {
     function copy_to_clipboard(text) {
-        text = text.replace(/\s*\[(?:Mark|UnMark)\]\s*$/, "");
+        text = text.replace(/\[(?:Mark|UnMark)\]/g, "");
         if (navigator.clipboard) navigator.clipboard.writeText(text).catch(err => console.warn("复制失败", err));
     }
 
@@ -525,21 +523,23 @@ function dbl_click_func() {
     }
 }
 function bindDualClick(element, onSingleClick, onDoubleClick, delay = 250) {
-    let clickTimer = null;
-    element.addEventListener('click', function(event) {
-        event.preventDefault(); 
-        
-        clearTimeout(clickTimer);
-        clickTimer = setTimeout(() => { 
-            if (typeof onSingleClick === 'function') onSingleClick.call(this, event); 
-        }, delay);
-    });
-    
-    element.addEventListener('dblclick', function(event) {
-        event.preventDefault(); 
-        
-        clearTimeout(clickTimer);
-        if (typeof onDoubleClick === 'function') onDoubleClick.call(this, event);
+    let timer = null;
+
+    element.addEventListener("click", (e) => {
+        e.preventDefault();
+
+        if (e.detail === 1) {
+            timer = setTimeout(() => {
+                timer = null;
+                onSingleClick(e);
+            }, delay);
+        } else if (e.detail === 2) {
+            if (timer) {
+                clearTimeout(timer);
+                timer = null;
+            }
+            onDoubleClick(e);
+        }
     });
 }
 
@@ -581,7 +581,7 @@ async function menu() {
         }
 
         const excerptsBtn = document.createElement('a');
-        excerptsBtn.textContent = "摘抄本";
+        excerptsBtn.textContent = "Excerpts";
         excerptsBtn.style.cursor = 'pointer';
         excerptsBtn.className = 'o';
         excerptsBtn.onclick = () => {
@@ -797,12 +797,6 @@ function parse_date(dp) {
 function adj_width() {
     $("#c").addEventListener("click", function () { sendToParent("adj_side_width", { op: "+" }); });
     $("#d").addEventListener("click", function () { sendToParent("adj_side_width", { op: "-" }); });
-}
-
-function get_wallpaperPaths() {
-    return Array.from(document.querySelectorAll('span.category'))
-        .filter(span => span.textContent.trim() === 'wallpaper' && span.nextElementSibling?.tagName === 'UL')
-        .flatMap(span => Array.from(span.nextElementSibling.querySelectorAll('a')).map(a => a.dataset.path.replace(/^..\//, '')));
 }
 
 function go_top() {

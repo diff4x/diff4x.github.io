@@ -2773,7 +2773,7 @@ const PROTOCOL_OPTIONS = [
     { key: 'pdfjs', label: 'PDF 阅读进度' },
     { key: 'bibi', label: 'EPUB 阅读进度' },
     { key: 'txt', label: 'TXT 阅读进度' },
-    { key: 'excerpts', label: '摘抄本' }
+    { key: 'excerpts', label: '摘抄薄' }
 ];
 
 // UI 工厂
@@ -3187,7 +3187,7 @@ const ExcerptsUIManager = {
         const html = `
         <div id="excerpts-popup" style="display:none; position:fixed; top:10vh; left:20vw; width:60vw; max-width:900px; min-width:700px; height:80vh; background:#fff; box-shadow:0 20px 50px rgba(0,0,0,0.35); z-index:99999; flex-direction:column; border-radius:4px; overflow:hidden; border:1px solid #cbd5e1;">
             <div id="excerpts-header" style="height:40px; background:#eee; cursor:move; display:flex; justify-content:space-between; align-items:center; padding:0 16px; flex-shrink:0; border-bottom:1px solid #e2e8f0; user-select:none;">
-                <span style="letter-spacing: .1rem;">摘抄本</span>
+                <span style="letter-spacing: .1rem;">摘抄薄</span>
                 <button id="close-excerpts" style="background:transparent; border:none; font-size:20px; cursor:pointer; color:#94a3b8; transition:color 0.2s; padding:0; line-height:1;">✕</button>
             </div>
             
@@ -3202,7 +3202,7 @@ const ExcerptsUIManager = {
                 </div>
                 
                 <div id="exc-records-zone" style="flex:1; overflow-y:auto; display:flex; flex-direction:column; background:#fff;">
-                    <div style="color:#94a3b8; text-align:center; margin-top:25vh; font-size:13px; letter-spacing:0.5px;">请在左侧选择一个摘抄本查看明细</div>
+                    <div style="color:#94a3b8; text-align:center; margin-top:25vh; font-size:13px; letter-spacing:0.5px;">请在左侧选择一个摘抄薄查看明细</div>
                 </div>
             </div>
             
@@ -3322,7 +3322,7 @@ const ExcerptsUIManager = {
                     font-size:13px;
                     letter-spacing:0.5px;
                 ">
-                    请在左侧选择一个摘抄本查看明细
+                    请在左侧选择一个摘抄薄查看明细
                 </div>
             `;
         }
@@ -3396,7 +3396,7 @@ const ExcerptsUIManager = {
         zone.innerHTML = '';
 
         if (!data.excerpts || data.excerpts.length === 0) {
-            zone.innerHTML = '<div style="color:#94a3b8; text-align:center; margin-top:25vh; font-size:13px;">当前摘抄本空空如也</div>';
+            zone.innerHTML = '<div style="color:#94a3b8; text-align:center; margin-top:25vh; font-size:13px;">当前摘抄薄空空如也</div>';
             return;
         }
 

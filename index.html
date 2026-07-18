@@ -8,8 +8,8 @@
         (function () {
             if (sessionStorage.getItem("adult_verified") !== "true") {
                 const ok = confirm(
-                    "本站包含成人内容\n" +
-                    "点击【确定】表示您已满18周岁并继续访问，点击【取消】离开本站。"
+                    "⚠️ 本站包含成人内容\n" +
+                    "点击【确定】表示您已满18周岁并继续访问，点击【取消】离开本站"
                 );
                 if (ok) {
                     sessionStorage.setItem("adult_verified", "true");
@@ -32,7 +32,7 @@
     </div>
 
     <iframe id="content" name="content"></iframe>
-    <iframe id="side" name="side"></iframe>
+    <iframe id="side" name="side" allow="clipboard-write"></iframe>
 
     <div id="giscus-popup" style="display: none;">
         <div id="popup-header">

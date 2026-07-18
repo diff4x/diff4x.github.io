@@ -66,7 +66,7 @@
             clearTimeout(debounceTimer);
             statusBar.textContent = "检测到输入，等待保存...";
             debounceTimer = setTimeout(() => {
-                saveDraft(zhText.value);
+                saveDraft(zhText.innerText);
             }, 2000);
         }
 
@@ -101,28 +101,35 @@
 
         zhText.addEventListener('click', () => {
             if (!insertMode) return;
-            if (zhText.selectionStart === zhText.selectionEnd) {
-                insertAtCursor(zhText, "\n　　");
+            const sel = window.getSelection();
+            if (sel.rangeCount > 0 && sel.isCollapsed && zhText.contains(sel.anchorNode)) {
+                insertAtCursor(zhText, "\n  ");
                 syncHeight();
                 triggerAutoSave();
             }
         });
 
         function insertAtCursor(field, text) {
-            const start = field.selectionStart;
-            const end = field.selectionEnd;
-            field.value = field.value.slice(0, start) + text + field.value.slice(end);
-            const pos = start + text.length;
-            field.selectionStart = field.selectionEnd = pos;
+            const sel = window.getSelection();
+            if (!sel.rangeCount) return;
+            const range = sel.getRangeAt(0);
+            
+            const textNode = document.createTextNode(text);
+            range.insertNode(textNode);
+            
+            range.setStartAfter(textNode);
+            range.setEndAfter(textNode);
+            sel.removeAllRanges();
+            sel.addRange(range);
         }
 
         async function bootstrap() {
             try {
                 const draftText = await loadDraft();
-                if (draftText !== undefined && draftText !== null && draftText !== zhText.value) {
+                if (draftText !== undefined && draftText !== null && draftText !== zhText.innerText) {
                     lockMsg.textContent = "发现本地草稿，正在回填反序列化...";
                     await new Promise(r => setTimeout(r, 200));
-                    zhText.value = draftText;
+                    zhText.innerText = draftText;
                     statusBar.textContent = "已恢复上次草稿";
                 } else {
                     statusBar.textContent = "就绪 (暂无草稿)";
@@ -144,10 +151,18 @@
             const htmlClone = document.documentElement.cloneNode(true);
 
             const clonedZhText = htmlClone.querySelector('#zhText');
-            clonedZhText.textContent = zhText.value;
+            clonedZhText.textContent = zhText.innerText;
 
             htmlClone.querySelector('#engText').style.height = '';
             clonedZhText.style.height = '';
+            
+            const clonedToggleBtn = htmlClone.querySelector('#toggleBtn');
+            if (clonedToggleBtn) {
+                clonedToggleBtn.textContent = "快速换行: 关";
+                clonedToggleBtn.style.background = "";
+                clonedToggleBtn.style.color = "";
+                clonedToggleBtn.style.borderColor = "";
+            }
 
             // 摘除所有由 content.js 动态注入的运行时挂件
             const garbageSelectors = [

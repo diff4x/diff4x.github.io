@@ -1,50 +1,65 @@
-> 基于本地 CLI 工具链 + Vanilla JS 开发的内容构建与增量发布系统
-
-Workflow design by diff4x | Optimized by Gemini & ChatGPT
-
-## 特点
-- 统一多媒体浏览入口
-  - 支持 html、 pdf、epub、txt、常见音频、视频、图片、全景图
-- 高效检索
-- 公私文件并存
-- 线上增量热更
+# 花园里有什么?
+- 有趣的
+- 有启发性的
+- 阴暗的
+- 备忘
+- 总结
+- 导航
 ---
 
-## 架构
-- 本地工具链
-  - VSCode, IntelliJ IDEA, 自定义 URL 协议, Batch, PowerShell, 虚拟服务器, 压缩工具（esbuild、libwebp）
-- Vanilla JS
-  - iframe, postMessage, Proxy, localStorage, Service Worker, Web Worker, IndexedDB
+# 系统概览
+- DIY 轻量级 Web OS, 为个人数字花园而作
+  - 聚合浏览
+    - HTML、PDF、EPUB、TXT、图片、音视频、全景图
+  - 高效检索
+  - 增量热更
+  - 离线可用
+  - 公私并存
+- 工具链
+  - HTTP Server、Custom URL Protocol、Batch、Java、Git
+- 前端
+  - Vanilla JS、iframe、postMessage、Proxy
+- 浏览器 API
+  - localStorage、Service Worker、Web Worker、IndexedDB
+> Workflow design by diff4x | Optimized by Gemini & ChatGPT
 ---
 
-## 目录树
-```text
-📂 _build
- ┣ 📂 esbuild | libwebp                # 压缩
- ┣ 📂 server                           # 虚拟服务器
- ┣ 📂 jar                              # 数据清洗
- ┣ 📂 woff2_split                      # 字体切片
- ┣ 📜 CLI.bat                          # 构建入口
- ┗ 📜 config.properties
-📂 audio | ebook | gallery | video     # 多层级媒体库 (类资源管理器)
-📂 html                                # 单一层级 HTML (遵循预设规则)
-📂 src
- ┣ 📂 css | js
- ┣ 📂 third
- ┣  ┣ 📂 bibi
- ┣  ┣ 📂 pdfjs
- ┣  ┣ 📂 photo-sphere-viewer
- ┣  ┗ 📂 prism
- ┣ 📂 tpl
- ┗ 📜 cmt_mapper.json                  # giscus 映射
-📜 .gitignore                          # 私有节点清单
-📜 index.html
-📜 README.md
-📜 sw.js
-```
----
-
-## 使用说明
+## 使用
+- 搜索
+  - 按 `\` 定位到搜索框, 不同类型的结果区别着色
+  - 按日期搜索
+    - html 页面时间戳和 `img` 图片名皆按格式`yyyymmddhhmmss`, 因此可以实现按日期搜索
+    - 例如查找2024年1月份更新过的页面, 可输入 `202401` 或更短的 `2401`
+  - `exclude` 大型 `html` 条目未建立正文索引, 自动退化为页面内搜索
+  - 搜索框内置命令 `@bomb`, `@rebirth` 分别进行可选式重置与恢复个人数据
+- 页面
+  - 本地按页面左上角 `edit` 即以本地编辑器打开对应实体页同时覆写时间戳, 编辑完回到页面, 双击顶部菜单中 `CLI` 即时构建呈现
+  - `html`, `pdf`, `epub`, `txt` 页面选中单字提示拼音, 多字提示摘抄
+  - `pdf`, `epub`, `txt` 横向对开
+  - `gallery`, `video`, `pdf`, `txt` 中击全屏
+  - `code` 区域双击编辑
+  - 线上时私有条目自动加小锁提示
+  - 本地首页(书签页)通过拖拽内部或外部书签实现即时增删移, 这些操作都是固化的
+  - 本地双语比对支持页面内即时修改与固化
+  - 侧栏支持条目 `mark`
+  - 侧栏双击条目复制条目名
+  - 侧栏右键单击弹出书签, 右键双击调出原始菜单
+  - 侧栏栏宽可调, 分类附有其下的文件数量,近期更新过的页面数量并有颜色醒目
+  - 侧栏菜单条目
+    - What's new? 查看版本日志
+    - History 浏览记录
+    - Fav 音乐收藏
+    - Excerpts 摘抄薄
+    - CLI.bat 单击选择操作, 双击直接构建
+    - root/ 本地 repo
+    - Katrain 本地围棋
+    - go_board 棋盘
+    - street_view_uploader 全景上传
+    - txn_parser 当前流水解析
+  - 音频播放器支持 `fav` 标记和竖直播放进度
+  - 灯箱支持拖动, 滚轮缩放
+  - `gallery` 中全景图片文件名称约定前缀 `pano_`, 双击进入沉浸式浏览
+    - `gallery/img` 默认为 `HTML` 页面同级引用源
 - HTML 预设规则
   - 正文: 直接写在 `<pre>` 标签内，免除 `<br>`
   - h 标签：行首 `n`个`#` + 空格，自动转换为 `<h{n}>` 参与页内目录生成
@@ -52,13 +67,6 @@ Workflow design by diff4x | Optimized by Gemini & ChatGPT
   - 链接解析：相对路径或完整 `URL` 自动被 `<img>` 或 `<a>` 包裹
   - 轻量表格：写在 `<p>` 标签中，行间以 `|` 分隔，自动渲染为 `<table><td>`
   - 代码着色：使用 `<code c>` 即表示要渲染的目标语种为 `c`
-- 搜索
-  - 按 `\` 定位到搜索框, 宽容查找, 不同类型的结果区别着色
-  - 按日期搜索
-    - html 页面时间戳和 `img` 图片名皆按格式`yyyymmddhhmmss`, 因此可以实现按日期搜索
-    - 例如查找2024年1月份更新过的页面, 可输入 `202401` 或更短的 `2401`
-  - `exclude` 大型 `html` 条目未建立正文索引, 自动退化为页面内搜索
-  - 内置命令 `@bomb`, `@rebirth` 分别进行可选式重置与恢复个人数据
 - CLI
   - `gen` 核心构建, 扫描资源目录与 `html` 正文生成数据切片, 压缩源码, 维护文件哈希账本与评论映射
   - `new` 交互指定标题和分类链, 分类链中以`|`作为子类分隔符
@@ -69,38 +77,45 @@ Workflow design by diff4x | Optimized by Gemini & ChatGPT
   - `webp` 将配置的截图目录下的图片转为 `webp` 并落盘至 `gallery/img`, 同时将文件名复制到剪贴板, 贴进 `html` 双击页面右上角标题重载即显
   - `static-web-server` 本地运维, 启用本地虚拟服务器 [8000 error] 同时打开站点首页
   - `push` git push
-  - `registering-protocol` 本地协议注册
+  - `registering-protocol` 本地 `url` 协议注册
   - `simulation` 线上仿真, 启用本地虚拟服务器 [9000 info] 同时在隐身窗口打开站点首页
   - `vpn-heartbeat-tray` 任务栏常驻互联网状态标识
-- 页面
-  - 本地按页面左上角 `edit` 即以本地编辑器打开对应实体页同时覆写时间戳, 编辑完回到页面, 双击顶部菜单中 `CLI` 即时构建呈现
-  - `html`, `pdf`, `epub`, `txt` 页面选中单字提示拼音, 多字提示摘抄
-  - `pdf`, `epub`, `txt` 横向对开
-  - `gallery`, `video`, `pdf`, `txt` 中击全屏
-  - `code` 区域双击编辑
-  - 线上时私有条目自动加小锁提示
-  - 本地首页(书签页)通过拖拽内部或外部书签实现即时增删移, 这些操作都是固化的
-  - 本地双语比对支持页面内即时修改与固化
-  - 支持条目 `mark`, 已阅标记
-  - 侧栏右键单击弹出书签, 右键双击调出原始菜单
-  - 侧栏栏宽可调, 分类附有其下的文件数量,近期更新过的页面数量并有颜色醒目
-  - 音频播放器支持`fav` 标记和竖直进度
-  - 灯箱支持拖动, 滚轮缩放
-  - `gallery` 中全景图文件的命名, 约定以 `pano_` 为前缀, 页面中将以红色的图片边框作为全景图提示, 双击进入沉浸式浏览
-    - `gallery/img` 默认为 `HTML` 页面同级引用源
 - 其它
-  - 侧栏菜单条目 `What's new?` 查看版本日志
-  - 书签栏
-    - `txn_parser` 当前流水解析
-    - `street_view_uploader` 谷歌全景上传
   - `cmt_mapper` 中 `records` 记录评论与页面 `title` 的对应关系, `orphanIds` 记录孤立失联的评论便于定点清除
+---
+
+## 目录结构
+```text
+📂 _build 
+ ┣ 📂 esbuild | libwebp                # 压缩
+ ┣ 📂 server                           # 本地服务器
+ ┣ 📂 jar                              # 数据清洗
+ ┣ 📂 woff2_split                      # 字体切片
+ ┣ 📜 CLI.bat                          # 构建入口
+ ┗ 📜 config.properties                # 配置
+📂 audio | ebook | gallery | video     # 多层级 (类资源管理器)
+📂 html                                # 单一层级 (遵循 HTML 预设规则)
+📂 src
+ ┣ 📂 css | js
+ ┣ 📂 third                            # 三方库
+ ┣  ┣ 📂 bibi
+ ┣  ┣ 📂 pdfjs
+ ┣  ┣ 📂 photo-sphere-viewer
+ ┣  ┗ 📂 prism
+ ┣ 📂 tpl                              # 样板
+ ┗ 📜 cmt_mapper.json                  # 评论映射
+📜 .gitignore                          # 私有节点清单
+📜 index.html
+📜 README.md                           # 即你所见
+📜 sw.js                               # 缓存路由
+```
 ---
 
 ## 数据演变
 - HTML
-  - fileName、title、htmlContent（源码）、cleanText（纯文本）
+  - fileName、title、htmlContent、cleanText
   - 状态标记
-    - timeStamp（时间戳）
+    - timeStamp
     - isGitIgnored（是否命中私有文件清单）
     - isExcluded（是否命中大型文档清单）
   - 评论映射
@@ -116,11 +131,11 @@ Workflow design by diff4x | Optimized by Gemini & ChatGPT
 - 影子数据
   - currentRecordId -> cleanText (私有)
 - 核心包
-  - 虚拟路由路径 -> htmlContent（源码）
-  - 实际路由路径 -> css | json（源码）
+  - 虚拟路由路径 -> htmlContent
+  - 实际路由路径 -> css | json
 - 哈希表
   - path -> FileMeta [hash, source]
-  - 压缩后 `目录|文件名:hash:来源标记*文件名:hash:来源标记`
+  - 压缩后 `目录|文件1:hash:来源标记*文件2:hash:来源标记`
   - source[0: standalone, 1: core-bundle.json, 2: no_cache]
 - window.data
   - 标题, 正文, 路径, 类型
@@ -134,6 +149,6 @@ Workflow design by diff4x | Optimized by Gemini & ChatGPT
       - 私有媒体： "localOnly"
     - 路径
       - HTML： 固定的二级虚拟路由：html/文件名.html
-      - 媒体： 保持原本完整的相对物理路径
+      - 媒体： 相对物理路径
     - 类型
-      - "html" | "image" | "ebook" (细分格式 pdf/epub/txt) | "video" | "audio"
+      - "html" | "image" | "ebook" (pdf/epub/txt) | "video" | "audio" 
