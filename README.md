@@ -38,7 +38,6 @@ Workflow design by diff4x | Optimized by Gemini & ChatGPT
  ┣ 📂 tpl
  ┗ 📜 cmt_mapper.json                  # giscus 映射
 📜 .gitignore                          # 私有节点清单
-📜 manifest.json
 📜 index.html
 📜 README.md
 📜 sw.js
@@ -89,7 +88,6 @@ Workflow design by diff4x | Optimized by Gemini & ChatGPT
   - 灯箱支持拖动, 滚轮缩放
   - `gallery` 中全景图文件的命名, 约定以 `pano_` 为前缀, 页面中将以红色的图片边框作为全景图提示, 双击进入沉浸式浏览
     - `gallery/img` 默认为 `HTML` 页面同级引用源
-    - `gallery/wallpaper` 默认为首页(书签页)壁纸随机源
 - 其它
   - 侧栏菜单条目 `What's new?` 查看版本日志
   - 书签栏

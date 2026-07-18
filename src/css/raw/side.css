@@ -140,7 +140,7 @@ li:before {
     cursor: pointer;
     user-select: none;
 }
-a#a1 {
+a#a1,a#a2,a#a3 {
     color: teal!important;
 }
 #menu-b {
@@ -173,17 +173,6 @@ a#a1 {
 
 #menu-b a:hover {
     background-color: #333;
-}
-
-#menu-b::before {
-    content: "";
-    position: absolute;
-    top: -15px;
-    bottom: -15px;
-    left: -20px;
-    right: -20px;
-    background: transparent;
-    z-index: -1;
 }
 
 .history-list span[data-path] {
@@ -281,8 +270,6 @@ a#a1 {
 }
 
 .m {
-    background-repeat: no-repeat!important;
-    background-image: url('data:image/x-icon;base64,AAABAAEAEBAQAAEABAAoAQAAFgAAACgAAAAQAAAAIAAAAAEABAAAAAAAgAAAAAAAAAAAAAAAEAAAAAAAAAD/794AOkprAAAAAAD/7xAA3qcAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAIiIiIiIiIiIiIiRCIiREIiIiQAQiQABCIiQAMxQzAAQiJAMzEzMABCIkBDETQzBCIiRDMTM0RCIiQDMRMzMEQiQANBJDMAAEQABBISQwAARABCEiEkAABCRCEiIhJAAEIiISIiIiREIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiL//wAA+eMAAPDBAADgAAAA4AAAAOABAADgAwAAwAEAAIEAAAACgAAAC0AAAJegAAD38QAA//8AAP//AAD//wAA')!important;
     cursor: default!important;
     background-position: center!important;
 }

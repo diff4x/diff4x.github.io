@@ -30,7 +30,6 @@ const AsyncUtils = createAsyncUtils();
 const dbProxy = createDBProxy('MainDB', 'chunks');
 const popup = $("#giscus-popup");
 const header = $("#popup-header");
-const random_bg_timer = 30000;
 const doc_title = document.title;
 const iframes = {
     content: $('#content'),
@@ -388,7 +387,6 @@ window.onload = () => {
         window.updateTitleTimer = safeInterval(updateTitle, 60 * 1000);
     }, (60 - new Date().getSeconds()) * 1000 - new Date().getMilliseconds()); // 分钟对齐
 
-    window.bgTimer = safeInterval(random_bg, random_bg_timer);
     window.alertTimer = safeInterval(ls_alert, 60000);
 
     initBackupReminder();
@@ -683,7 +681,6 @@ async function loadScripts(concurrency) {
             })
             .finally(() => {
                 document.querySelector("#search")?.classList.remove("hide");
-                boot_wallpaper();
             });
         
         // 静默下载胖数据
@@ -2645,47 +2642,6 @@ async function showChangelog() {
         content.innerHTML = html;
     } catch (e) {
         content.innerHTML = '<div style="color: red;">读取日志失败</div>';
-    }
-}
-
-// 壁纸预加载
-function preloadImage(url) {
-    return new Promise((resolve, reject) => {
-        const ghostImg = new Image();
-        ghostImg.onload = () => resolve(url);
-        ghostImg.onerror = () => reject(new Error(`壁纸加载失败: ${url}`));
-        ghostImg.src = url;
-    });
-}
-
-// 异步随机壁纸
-async function random_bg() {
-    if (store.wallpaperPaths && store.wallpaperPaths.length > 0) {
-        const randomIndex = Math.floor(Math.random() * store.wallpaperPaths.length);
-        const targetUrl = store.wallpaperPaths[randomIndex];
-        try {
-            await preloadImage(targetUrl);
-            $("#content").style.backgroundImage = "url(" + targetUrl + ")";
-
-        } catch (error) {
-            console.warn("随机壁纸下载中断，维持当前壁纸:", error);
-        }
-    }
-}
-
-// 首屏壁纸引导序列
-async function boot_wallpaper() {
-    const FIXED_WALLPAPER_A = "gallery/wallpaper/20260602224057.webp";
-    try {
-        await preloadImage(FIXED_WALLPAPER_A);
-        $("#content").style.backgroundImage = `url("${FIXED_WALLPAPER_A}")`;
-
-        setTimeout(() => {
-            random_bg();
-        }, random_bg_timer);
-    } catch (err) {
-        console.error("首屏固定壁纸异常:", err);
-        random_bg();
     }
 }
 

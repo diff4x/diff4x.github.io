@@ -573,8 +573,12 @@ async function menu() {
             menuB.style.display = 'none';
             setTimeout(() => menuB.style.display = '', 100);
         };
-        if (menuB.children.length > 1) menuB.insertBefore(logBtn, menuB.children[1]);
-        else menuB.appendChild(logBtn);
+        const a1Node = document.getElementById('a1');
+        if (a1Node) {
+            menuB.insertBefore(logBtn, a1Node);
+        } else {
+            menuB.appendChild(logBtn);
+        }
 
         const excerptsBtn = document.createElement('a');
         excerptsBtn.textContent = "摘抄本";
@@ -585,7 +589,11 @@ async function menu() {
             menuB.style.display = 'none';
             setTimeout(() => menuB.style.display = '', 100);
         };
-        menuB.insertBefore(excerptsBtn, logBtn.nextSibling);
+        if (a1Node) {
+            menuB.insertBefore(excerptsBtn, a1Node);
+        } else {
+            menuB.appendChild(excerptsBtn);
+        }
 
         const historyWrapper = document.createElement('div');
         historyWrapper.className = 'history-wrapper';
@@ -605,9 +613,8 @@ async function menu() {
         
         historyWrapper.appendChild(historyBtn);
         historyWrapper.appendChild(historyList);
-        
-        if (menuB.children.length > 1) menuB.insertBefore(historyWrapper, menuB.children[2]);
-        else menuB.appendChild(historyWrapper);
+
+        menuB.insertBefore(historyWrapper, excerptsBtn);
 
         let historyHideTimer = null;
         historyWrapper.addEventListener('mouseenter', () => {
