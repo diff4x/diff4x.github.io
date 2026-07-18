@@ -2986,13 +2986,19 @@ function rebirth() {
 // 定时备份
 function initBackupReminder() {
     const BACKUP_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000; 
-    
+
     const checkBackupStatus = async () => {
         const lastBackupStr = localStorage.getItem('last_backup_timestamp');
         const now = Date.now();
-        
-        if (!lastBackupStr || (now - parseInt(lastBackupStr) > BACKUP_INTERVAL_MS)) {
+
+        if (!lastBackupStr) {
+            localStorage.setItem('last_backup_timestamp', now.toString());
+            return;
+        }
+
+        if (now - parseInt(lastBackupStr, 10) > BACKUP_INTERVAL_MS) {
             if (confirm("距离上次备份已超过 7 天。\n是否重新下载备份？")) {
+
                 await (async function () {
                     let data = { timestamp: Date.now() };
                     
@@ -3048,12 +3054,13 @@ function initBackupReminder() {
                     document.body.removeChild(a); 
                     URL.revokeObjectURL(a.href);
                 })();
-                
+
+                // 只有真正完成备份后才更新时间
                 localStorage.setItem('last_backup_timestamp', now.toString());
-                
+
             } else {
-                // 如果取消，往后推迟 1 天再次提醒
-                const delayOneDay = now - BACKUP_INTERVAL_MS + (24 * 60 * 60 * 1000);
+                // 取消后一天后再提醒
+                const delayOneDay = now - BACKUP_INTERVAL_MS + 24 * 60 * 60 * 1000;
                 localStorage.setItem('last_backup_timestamp', delayOneDay.toString());
             }
         }
