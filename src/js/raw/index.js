@@ -390,6 +390,8 @@ window.onload = () => {
 
     window.bgTimer = safeInterval(random_bg, random_bg_timer);
     window.alertTimer = safeInterval(ls_alert, 60000);
+
+    initBackupReminder();
 }
 
 // postMessage 封装
@@ -2866,8 +2868,8 @@ const restoreData = async (data, selections) => {
     if (selections.includes('positions') && data.positions !== undefined) store.positions = data.positions;
     if (selections.includes('searchHistory') && data.searchHistory !== undefined) store.searchHistory = data.searchHistory;
     if (selections.includes('pdfjs') && data['pdfjs.history'] !== undefined) store['pdfjs.history'] = data['pdfjs.history'];
-    if (selections.includes('bibi') && data.BibiBiscuits) for (const [k, v] of Object.entries(data.BibiBiscuits)) store[k] = v;
-    if (selections.includes('txt') && data.txts) for (const [k, v] of Object.entries(data.txts)) store[k] = v;
+    if (selections.includes('bibi') && data.BibiBiscuits) for (const [k, v] of Object.entries(data.BibiBiscuits)) localStorage.setItem(k, v);
+    if (selections.includes('txt') && data.txts) for (const [k, v] of Object.entries(data.txts)) localStorage.setItem(k, v);
     if (selections.includes('excerpts') && data.excerpts_backup !== undefined && typeof ExcerptsSys !== 'undefined') {
         try { 
             const db = await ExcerptsSys.init(); 
@@ -2897,42 +2899,46 @@ function bomb() {
                 if ('caches' in window) clearTasks.push(caches.keys().then(ks => Promise.all(ks.map(k => caches.delete(k)))));
                 if ('serviceWorker' in navigator) clearTasks.push(navigator.serviceWorker.getRegistrations().then(rs => Promise.all(rs.map(r => r.unregister()))));
                 await Promise.all(clearTasks);
+                await new Promise(resolve => setTimeout(resolve, 300));
             };
 
             const getSelectedData = async (selections) => {
-                let data = { timestamp: Date.now(), version: '2.0', source: 'ReaderEcosystem' };
+                let data = { timestamp: Date.now() };
                 if (selections.includes('favList')) data.favList = store.favList || [];
-                if (selections.includes('marks')) data.marks = store.ss_marks_lifepod || [];
+                if (selections.includes('marks')) {
+                    let marksArray = [];
+                    try {
+                        if (iframes.side && iframes.side.contentWindow && iframes.side.contentWindow.MarkSystem) {
+                            marksArray = Array.from(iframes.side.contentWindow.MarkSystem.urls);
+                        }
+                    } catch (e) {
+                        console.warn("无法穿透获取 Mark 数据", e);
+                    }
+                    data.marks = marksArray;
+                }
                 if (selections.includes('last_li_a')) data.last_li_a = store.last_li_a || [];
                 if (selections.includes('layout')) { data.layout_content_flex = store.layout_content_flex; data.layout_side_flex = store.layout_side_flex; }
                 if (selections.includes('positions')) data.positions = store.positions || {};
                 if (selections.includes('searchHistory')) data.searchHistory = store.searchHistory || [];
                 if (selections.includes('pdfjs')) data['pdfjs.history'] = store['pdfjs.history'] || {};
-                if (data.BibiBiscuits) { data.BibiBiscuits = {}; for (let i = 0; i < localStorage.length; i++) { let k = localStorage.key(i); if (k.startsWith('BibiBiscuit')) data.BibiBiscuits[k] = localStorage.getItem(k); } }
+                if (selections.includes('bibi')) { data.BibiBiscuits = {}; for (let i = 0; i < localStorage.length; i++) { let k = localStorage.key(i); if (k.startsWith('BibiBiscuit')) data.BibiBiscuits[k] = localStorage.getItem(k); } }
                 if (selections.includes('txt')) { data.txts = {}; for (let i = 0; i < localStorage.length; i++) { let k = localStorage.key(i); if (k.startsWith('txt.history')) data.txts[k] = localStorage.getItem(k); } }
                 if (selections.includes('excerpts') && typeof ExcerptsSys !== 'undefined') { data.excerpts_backup = {}; try { const booksMeta = await ExcerptsSys.getAllBooks(); await Promise.all(booksMeta.map(async (b) => { const bData = await ExcerptsSys.getBookData(b.name); data.excerpts_backup[b.name] = bData; })); } catch(err) { console.error("摘抄备份异常: ", err); } }
                 return data;
-            };
-
-            const restoreData = async (data) => {
-                if (data.favList !== undefined) store.favList = data.favList;
-                if (data.marks !== undefined) store.ss_marks_lifepod = data.marks;
-                if (data.last_li_a !== undefined) store.last_li_a = data.last_li_a;
-                if (data.layout_content_flex !== undefined) store.layout_content_flex = data.layout_content_flex;
-                if (data.layout_side_flex !== undefined) store.layout_side_flex = data.layout_side_flex;
-                if (data.positions !== undefined) store.positions = data.positions;
-                if (data.searchHistory !== undefined) store.searchHistory = data.searchHistory;
-                if (data['pdfjs.history'] !== undefined) store['pdfjs.history'] = data['pdfjs.history'];
-                if (data.BibiBiscuits) { for (const [k, v] of Object.entries(data.BibiBiscuits)) store[k] = v; }
-                if (data.txts) { for (const [k, v] of Object.entries(data.txts)) store[k] = v; }
-                if (data.excerpts_backup !== undefined && typeof ExcerptsSys !== 'undefined') { try { const db = await ExcerptsSys.init(); await new Promise((res, rej) => { const tx = db.transaction(ExcerptsSys.storeName, 'readwrite'); const storeInstance = tx.objectStore(ExcerptsSys.storeName); storeInstance.clear(); for (const [bookName, bookObj] of Object.entries(data.excerpts_backup)) { storeInstance.put(bookObj, bookName); } tx.oncomplete = () => res(); tx.onerror = () => rej(tx.error); }); } catch(err) { console.error("摘抄恢复异常: ", err); } }
             };
 
             box.querySelector('#btn-plan-a').onclick = async () => {
                 window._isBombing = true; lockButtons("正在保存选中数据...");
                 const selections = Array.from(box.querySelectorAll('input[type="checkbox"]:checked')).map(cb => cb.value);
                 const backupData = await getSelectedData(selections);
-                await doWipe(); await restoreData(backupData);
+                await doWipe(); 
+                const mockSelections = Object.keys(backupData).map(k => {
+                    if (k === 'BibiBiscuits') return 'bibi';
+                    if (k === 'txts') return 'txt';
+                    if (k === 'excerpts_backup') return 'excerpts';
+                    return k;
+                });
+                await restoreData(backupData, mockSelections);
                 if (typeof takeSnapshot === 'function') takeSnapshot(true); else window.location.reload();
             };
 
@@ -2942,7 +2948,7 @@ function bomb() {
                 const backupData = await getSelectedData(selections);
                 const a = document.createElement('a');
                 a.href = URL.createObjectURL(new Blob([JSON.stringify(backupData, null, 2)], { type: 'application/json' }));
-                a.download = `backup_${new Date().toISOString().slice(0, 10).replace(/-/g, "")}.json`;
+                a.download = `backup_${Date.now()}.json`;
                 document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(a.href);
                 setTimeout(async () => { lockButtons("执行清理..."); await doWipe(); window.location.reload(); }, 1500);
             };
@@ -3019,6 +3025,90 @@ function rebirth() {
             };
         }
     });
+}
+
+// 定时备份
+function initBackupReminder() {
+    const BACKUP_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000; 
+    
+    const checkBackupStatus = async () => {
+        const lastBackupStr = localStorage.getItem('last_backup_timestamp');
+        const now = Date.now();
+        
+        if (!lastBackupStr || (now - parseInt(lastBackupStr) > BACKUP_INTERVAL_MS)) {
+            if (confirm("距离上次备份已超过 7 天。\n是否重新下载备份？")) {
+                await (async function () {
+                    let data = { timestamp: Date.now() };
+                    
+                    data.favList = store.favList || [];
+                    data.last_li_a = store.last_li_a || [];
+                    data.layout_content_flex = store.layout_content_flex; 
+                    data.layout_side_flex = store.layout_side_flex;
+                    data.positions = store.positions || {};
+                    data.searchHistory = store.searchHistory || [];
+                    data['pdfjs.history'] = store['pdfjs.history'] || {};
+
+                    let marksArray = [];
+                    try {
+                        if (iframes.side && iframes.side.contentWindow && iframes.side.contentWindow.MarkSystem) {
+                            marksArray = Array.from(iframes.side.contentWindow.MarkSystem.urls);
+                        }
+                    } catch (e) {
+                        console.warn("自动备份: 无法穿透获取 Mark 数据", e);
+                    }
+                    data.marks = marksArray;
+
+                    data.BibiBiscuits = {}; 
+                    for (let i = 0; i < localStorage.length; i++) { 
+                        let k = localStorage.key(i); 
+                        if (k.startsWith('BibiBiscuit')) data.BibiBiscuits[k] = localStorage.getItem(k); 
+                    }
+                    
+                    data.txts = {}; 
+                    for (let i = 0; i < localStorage.length; i++) { 
+                        let k = localStorage.key(i); 
+                        if (k.startsWith('txt.history')) data.txts[k] = localStorage.getItem(k); 
+                    }
+
+                    if (typeof ExcerptsSys !== 'undefined') { 
+                        data.excerpts_backup = {}; 
+                        try { 
+                            const booksMeta = await ExcerptsSys.getAllBooks(); 
+                            await Promise.all(booksMeta.map(async (b) => { 
+                                const bData = await ExcerptsSys.getBookData(b.name); 
+                                data.excerpts_backup[b.name] = bData; 
+                            })); 
+                        } catch(err) { 
+                            console.error("自动备份: 摘抄备份异常", err); 
+                        } 
+                    }
+
+                    const a = document.createElement('a');
+                    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+                    a.href = URL.createObjectURL(blob);
+                    a.download = `backup_${Date.now()}.json`;
+                    document.body.appendChild(a); 
+                    a.click(); 
+                    document.body.removeChild(a); 
+                    URL.revokeObjectURL(a.href);
+                })();
+                
+                localStorage.setItem('last_backup_timestamp', now.toString());
+                
+            } else {
+                // 如果取消，往后推迟 1 天再次提醒
+                const delayOneDay = now - BACKUP_INTERVAL_MS + (24 * 60 * 60 * 1000);
+                localStorage.setItem('last_backup_timestamp', delayOneDay.toString());
+            }
+        }
+    };
+
+    setTimeout(checkBackupStatus, 5000);
+    
+    // 如果一直挂着网页不关，利用现成的 safeInterval 每天做一次静默巡检
+    if (typeof safeInterval === 'function') {
+        safeInterval(checkBackupStatus, 24 * 60 * 60 * 1000); 
+    }
 }
 
 // 摘抄库引擎
