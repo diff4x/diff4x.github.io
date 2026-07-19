@@ -421,3 +421,27 @@ audio {
     color: #333;
 }
 
+#center-snippet-preview {
+    position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+    width: 450px; height: 350px;
+    background: rgba(40, 44, 52, 0.98); color: #abb2bf;
+    border: 1px solid #61afef; border-radius: 8px;
+    box-shadow: 0 15px 40px rgba(0,0,0,0.6);
+    z-index: 2147483647; overflow: hidden; display: none;
+    pointer-events: none;
+    font-family: 'Noto Serif SC', serif; font-size: 13px; line-height: 1.6;
+    transition: border-color 0.3s;
+    flex-direction: column;
+}
+
+#preview-header {
+    padding: 8px 15px; background: #21252b;
+    border-bottom: 1px solid #4b5263; color: #abb2bf;
+    font-weight: bold; flex-shrink: 0;
+    display: flex; justify-content: space-between; align-items: center;
+    transition: color 0.3s;
+}
+
+#preview-scroll-wrapper{
+    flex: 1; padding: 15px; overflow: hidden; position: relative;
+}

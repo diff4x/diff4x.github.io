@@ -1250,6 +1250,131 @@ function search_box() {
 
     updateSearchResults([]);
     $("#search").style.right = ($("#side").offsetWidth + 4) + "px";
+
+    // snippet
+    let previewBox = document.getElementById('center-snippet-preview');
+    if (!previewBox) {
+        previewBox = document.createElement('div');
+        previewBox.id = 'center-snippet-preview';
+        
+        let header = document.createElement('div');
+        header.id = 'preview-header';
+        
+        let scrollWrapper = document.createElement('div');
+        scrollWrapper.id = 'preview-scroll-wrapper';
+        
+        let scrollContent = document.createElement('div');
+        scrollContent.id = 'preview-scroll-content';
+        
+        scrollWrapper.appendChild(scrollContent);
+        previewBox.appendChild(header);
+        previewBox.appendChild(scrollWrapper);
+        document.body.appendChild(previewBox);
+    }
+
+    let previewScrollFrame = null;
+    let previewTimeoutId = null;
+    let currentScrollY = 0;
+    let lastHoveredPath = null;
+    let isPaused = true;
+
+    const escapeRegExp = (string) => string.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+    elSearchResults.addEventListener('mousemove', (e) => {
+        if (e.target.tagName.toUpperCase() === 'OPTION') {
+            const path = e.target.dataset.path;
+            if (path === lastHoveredPath) return; 
+            lastHoveredPath = path;
+
+            isPaused = true;
+            previewBox.style.borderColor = '#61afef';
+
+            const resultData = (window._currentRenderedResults || []).find(r => r.path === path);
+            const keyword = elSearchInput.value.trim();
+            const header = document.getElementById('preview-header');
+            const scrollWrapper = document.getElementById('preview-scroll-wrapper');
+            const scrollContent = document.getElementById('preview-scroll-content');
+            
+            if (resultData && resultData.snippets && resultData.snippets.length > 0) {
+                previewBox.style.display = 'flex';
+                header.style.color = '#abb2bf';
+                
+                let displayCount = resultData.snippets.length;
+                let countStr = displayCount == 1 ? `1 snippet` : `${displayCount} snippets`;
+                
+                header.innerHTML = `
+                    <span style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 75%;">${resultData.title}</span>
+                    <span style="color: #61afef; font-size: 11px;">${countStr}</span>
+                `;
+
+                const hlRegex = new RegExp(`(${escapeRegExp(keyword)})`, 'gi');
+
+                let singleHtml = resultData.snippets.map((snip, index) => {
+                    let safeSnip = snip.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+                    let highlighted = safeSnip.replace(hlRegex, '<span style="color: #e5c07b; font-weight: bold; background: rgba(229, 192, 123, 0.2);">$1</span>');
+                    return `<div style="margin-bottom: 12px; border-bottom: 1px dashed #4b5263; padding-bottom: 8px;"><span style="color: #61afef; font-size: 11px;">[${index + 1}]</span> ${highlighted}</div>`;
+                }).join('');
+                
+                scrollContent.innerHTML = `<div class="loop-block">${singleHtml}</div><div class="loop-block">${singleHtml}</div>`;
+                
+                currentScrollY = 0;
+                scrollContent.style.transform = `translateY(0px)`;
+                
+                if (previewTimeoutId) clearTimeout(previewTimeoutId);
+                if (previewScrollFrame) cancelAnimationFrame(previewScrollFrame);
+
+                previewTimeoutId = setTimeout(() => {
+                    const loopBlock = scrollContent.querySelector('.loop-block');
+                    if (!loopBlock) return;
+                    
+                    const blockHeight = loopBlock.offsetHeight;
+                    const visibleHeight = scrollWrapper.offsetHeight; 
+
+                    if (blockHeight > visibleHeight) {
+                        const autoScroll = () => {
+                            if (!isPaused) {
+                                currentScrollY += 0.5;
+                                if (currentScrollY >= blockHeight) {
+                                    currentScrollY -= blockHeight; 
+                                }
+                                scrollContent.style.transform = `translateY(-${currentScrollY}px)`;
+                            }
+                            previewScrollFrame = requestAnimationFrame(autoScroll);
+                        };
+                        previewScrollFrame = requestAnimationFrame(autoScroll);
+                    } else {
+                        scrollContent.innerHTML = `<div class="loop-block">${singleHtml}</div>`;
+                    }
+                }, 10);
+            } else {
+                previewBox.style.display = 'none';
+            }
+        }
+    });
+
+    elSearchResults.addEventListener('contextmenu', (e) => {
+        if (previewBox.style.display === 'flex') {
+            e.preventDefault(); 
+            isPaused = !isPaused; 
+            
+            previewBox.style.borderColor = !isPaused ? '#e5c07b' : '#61afef';
+            const header = document.getElementById('preview-header');
+            if (header) header.style.color = !isPaused ? '#e5c07b' : '#abb2bf';
+        }
+    });
+
+    elSearchResults.addEventListener('mouseleave', () => {
+        previewBox.style.display = 'none';
+        lastHoveredPath = null;
+        isPaused = true; 
+        
+        if (previewTimeoutId) clearTimeout(previewTimeoutId);
+        if (previewScrollFrame) cancelAnimationFrame(previewScrollFrame);
+    });
+    
+    elSearchResults.addEventListener('click', () => {
+        previewBox.style.display = 'none';
+    });
 }
 function processAndShowResults(results, keyword) {
     let finalResults = [...(results || [])];
@@ -1328,6 +1453,9 @@ async function search(rawKeyword) {
 
 // 搜索结果填充
 function updateSearchResults(results) {
+    // 将最新结果挂载到全局供 Hover 读取
+    window._currentRenderedResults = results;
+
     let resultsBox = $('#searchResults');
     resultsBox.innerHTML = '';
     

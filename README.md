@@ -1,32 +1,28 @@
-# 花园里有什么?
-- 有趣的
-- 有启发性的
-- 阴暗的
-- 备忘
-- 总结
-- 导航
+# 花园培植
+- 本人觉得有趣的、有启发性的、阴暗的东西，以及各类总结、备忘、导航
 ---
 
-# 系统概览
-- DIY 轻量级 Web OS, 为个人数字花园而作
+# 工程概况
+- 这是一个 DIY 轻量级 Web OS, 特点包括：
   - 聚合浏览
     - HTML、PDF、EPUB、TXT、图片、音视频、全景图
   - 高效检索
-  - 增量热更
+  - 增量热更新
   - 离线可用
-  - 公私并存
+  - 公私文件并存
+  - 状态快照
 - 工具链
   - HTTP Server、Custom URL Protocol、Batch、Java、Git
-- 前端
-  - Vanilla JS、iframe、postMessage、Proxy
-- 浏览器 API
-  - localStorage、Service Worker、Web Worker、IndexedDB
-> Workflow design by diff4x | Optimized by Gemini & ChatGPT
+- 前端 & API
+  - Vanilla JS、iframe、postMessage、Proxy、localStorage、Service Worker、Web Worker、IndexedDB
+> Workflow designed by diff4x | Optimized by Gemini & ChatGPT
 ---
 
 ## 使用
 - 搜索
   - 按 `\` 定位到搜索框, 不同类型的结果区别着色
+  - html 条目精度确认
+    - hover 条目将弹窗显示包含搜索词的上下文片段, 右键单击开始或停止滚动
   - 按日期搜索
     - html 页面时间戳和 `img` 图片名皆按格式`yyyymmddhhmmss`, 因此可以实现按日期搜索
     - 例如查找2024年1月份更新过的页面, 可输入 `202401` 或更短的 `2401`
@@ -57,6 +53,7 @@
     - street_view_uploader 全景上传
     - txn_parser 当前流水解析
   - 音频播放器支持 `fav` 标记和竖直播放进度
+  - 视频频播放器支持外挂字幕、字幕延迟微调
   - 灯箱支持拖动, 滚轮缩放
   - `gallery` 中全景图片文件名称约定前缀 `pano_`, 双击进入沉浸式浏览
     - `gallery/img` 默认为 `HTML` 页面同级引用源
