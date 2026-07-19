@@ -2653,7 +2653,7 @@ function updateTitle() {
     const hh = String(h).padStart(2, "0");
     const time = `${hh}:${mm}`;
     const isRestTime = (h >= 23 || h < 6);
-    document.title = isRestTime ? `该歇息了 - ${time}` : `${doc_title} - ${time}`;
+    document.title = isRestTime ? `该睡觉了 - ${time}` : `${doc_title} - ${time}`;
     if (isRestTime) {
         startFaviconBlink();
     } else {
