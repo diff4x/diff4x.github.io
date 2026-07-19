@@ -140,7 +140,7 @@ li:before {
     cursor: pointer;
     user-select: none;
 }
-a#a1,a#a2,a#a3 {
+a#a1,a#a2,a#a3,a#a4 {
     color: teal!important;
 }
 #menu-b {

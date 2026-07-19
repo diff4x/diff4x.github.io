@@ -1,10 +1,11 @@
 // 触发 SW 更新检查
-self.SW_VERSION = '1784451300650';
-importScripts('/src/js/core-list.js?v=1784451300650');
+self.SW_VERSION = '1784477100734';
+importScripts('/src/js/core-list.js?v=1784477100734');
 
 // 缓存池隔离命名
 const CACHE_NAME_CORE = 'core-cache-' + BUILD_VERSION;
 const CACHE_NAME_MEDIA = 'media-cache';
+const CACHE_NAME_MODEL = 'model-cache';
 
 const IS_LOCAL_MODE = (self.location.hostname === 'localhost' || self.location.hostname === '127.0.0.1' || self.location.protocol === 'file:') && self.location.port !== '9000';
 
@@ -268,7 +269,27 @@ self.addEventListener('fetch', event => {
         return; 
     }
 
-    // [规则 3] 本地虚拟服务器：强制网络优先
+    // [规则 3] Lazy Caching：模型权重文件请求命中后永久化为离线资产
+    if (
+        url.pathname.includes('/web-llm/') || 
+        url.pathname.endsWith('llm-worker.js')
+    ) {
+        event.respondWith(
+            caches.open(CACHE_NAME_MODEL).then(async (cache) => {
+                const cachedResponse = await cache.match(event.request);
+                if (cachedResponse) return cachedResponse;
+                
+                const response = await fetch(event.request, { cache: 'no-cache' });
+                if (response.status === 200) {
+                    cache.put(event.request, response.clone());
+                }
+                return response;
+            })
+        );
+        return;
+    }
+
+    // [规则 4] 本地虚拟服务器：强制网络优先
     if (IS_LOCAL_MODE) {
         event.respondWith(
             fetch(event.request, { cache: 'no-store' })
@@ -277,7 +298,7 @@ self.addEventListener('fetch', event => {
         return; 
     }
 
-    // [规则 4] Lazy Caching：请求命中后永久化为离线资产
+    // [规则 5] Lazy Caching：媒体文件请求命中后永久化为离线资产
     if (
         url.pathname.startsWith('/audio/') || 
         url.pathname.startsWith('/video/') || // ⚠️ 长视频受 HTTP 206 限制无法按范围进行缓存
@@ -297,8 +318,10 @@ self.addEventListener('fetch', event => {
                 });
             })
         );
+        return;
     } 
-    // [规则 5] Cache-First：核心强缓存静默策略
+
+    // [规则 6] Cache-First：核心强缓存静默策略
     else {
         event.respondWith(
             // ignoreSearch: 忽略URL的时间戳或哈希参数，保证离线状态下能够稳定命中

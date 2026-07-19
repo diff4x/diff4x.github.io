@@ -46,6 +46,7 @@
     - History 浏览记录
     - Fav 音乐收藏
     - Excerpts 摘抄薄
+    - 最后一页 离线 AI
     - CLI.bat 单击选择操作, 双击直接构建
     - root/ 本地 repo
     - Katrain 本地围棋
@@ -98,7 +99,8 @@
  ┣  ┣ 📂 bibi
  ┣  ┣ 📂 pdfjs
  ┣  ┣ 📂 photo-sphere-viewer
- ┣  ┗ 📂 prism
+ ┣  ┣ 📂 prism
+ ┣  ┗ 📂 web-llm                       # 模型
  ┣ 📂 tpl                              # 样板
  ┗ 📜 cmt_mapper.json                  # 评论映射
 📜 .gitignore                          # 私有节点清单

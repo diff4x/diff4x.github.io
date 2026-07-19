@@ -80,7 +80,7 @@ window.addEventListener('message', async (e) => {
     const { type, payload, from } = e.data || {};
     if (!type || !from) return;
     switch (type) {
-                case "LOCAL_SEARCH_RESULT":
+        case "LOCAL_SEARCH_RESULT":
             let hist = store.last_li_a;
             if (!Array.isArray(hist)) hist = hist ? [hist] : [];
             let globalResults = (await store.SearchCache.get(payload.keyword || store.keyword)) || [];
@@ -341,6 +341,10 @@ window.addEventListener('message', async (e) => {
 
         case 'CLOSE_GLOBAL_BOOKMARKS':
             if (window._closeGlobalMenu) window._closeGlobalMenu();
+            break;
+
+        case "open_ai_assistant":
+            showAIAssistant();
             break;
 
         default:
@@ -2576,27 +2580,25 @@ function makeDraggable(popupSelector, headerSelector) {
         isDragging = true;
         
         const rect = popup.getBoundingClientRect();
+        
         startX = e.clientX - rect.left;
         startY = e.clientY - rect.top;
-
-        popup.style.width = rect.width + 'px';
-        popup.style.height = rect.height + 'px';
         
         popup.style.position = 'fixed';
+        popup.style.left = rect.left + 'px';
+        popup.style.top = rect.top + 'px';
         popup.style.margin = '0';
-        popup.style.transform = 'none';
+        popup.style.transform = 'none'; // 移除 transform 避免计算偏移
 
-        header.style.cursor = 'moving';
+        header.style.cursor = 'grabbing';
         e.preventDefault();
     });
 
     document.addEventListener('mousemove', (e) => {
         if (!isDragging) return;
-        const left = e.clientX - startX;
-        const top = e.clientY - startY;
         
-        popup.style.left = left + 'px';
-        popup.style.top = top + 'px';
+        popup.style.left = (e.clientX - startX) + 'px';
+        popup.style.top = (e.clientY - startY) + 'px';
     });
 
     document.addEventListener('mouseup', () => {
@@ -3676,4 +3678,152 @@ function showGlobalBookmarkMenu(x, y, source) {
         document.removeEventListener('click', closeMenu);
         window._closeGlobalMenu = null;
     };
+}
+
+// 最后一页 
+let aiEngine = null;
+let aiWorker = null;
+let currentModel = null;
+let isGenerating = false;
+
+async function showAIAssistant() {
+    let popup = $('#ai-popup');
+
+    if (!popup) {
+        popup = document.createElement('div');
+        popup.id = 'ai-popup';
+        popup.style.cssText = 'display:none; position:fixed; top:20vh; left:50vw; transform:translateX(-50%); width:750px; height:520px; background:#fff; box-shadow:0 10px 40px rgba(0,0,0,0.2); z-index:99999; flex-direction:column; border-radius:8px; border:1px solid #e0e0e0;';
+
+        const header = document.createElement('div');
+        header.id = 'ai-header';
+        header.innerHTML = `<span style="font-weight:bold; color:#333;">最后一页</span><button id="close-ai" style="background:none; border:none; font-size:20px; cursor:pointer; color:#888;">&times;</button>`;
+        header.style.cssText = 'padding:10px 15px; background:#f8f9fa; border-bottom:1px solid #e0e0e0; border-radius:8px 8px 0 0; cursor:move; display:flex; justify-content:space-between; align-items:center; user-select:none;';
+
+        const body = document.createElement('div');
+        body.style.cssText = 'display:flex; flex:1; overflow:hidden;';
+
+        const leftPanel = document.createElement('div');
+        leftPanel.style.cssText = 'flex:1; padding:15px; border-right:1px solid #e0e0e0; display:flex; flex-direction:column; gap:10px; background:#fff;';
+
+        // 增加模型选择下拉框
+        leftPanel.innerHTML = `
+            <label style="color:#555; font-weight:bold; font-size:13px;">选择模型:</label>
+            <select id="ai-model-select" style="width:100%; padding:8px; border:1px solid #ccc; border-radius:4px; font-family:inherit; font-size:12px; outline:none; box-sizing:border-box;">
+                <option value="Llama-3.1-8B-Instruct-q4f16_1-MLC">Llama-3.1-8B-Instruct-q4f16_1-MLC</option>
+                <option value="Qwen2.5-7B-Instruct-q4f16_1-MLC">Qwen2.5-7B-Instruct-q4f16_1-MLC</option>
+            </select>
+            <label style="color:#555; font-weight:bold; font-size:13px;">角色设定:</label>
+            <textarea id="ai-sys-prompt" style="width:100%; height:80px; resize:none; padding:8px; border:1px solid #ccc; border-radius:4px; font-family:inherit; font-size:12px; outline:none; box-sizing:border-box;">你是一位拥有全学科背景的顶级知识型助手，擅长逻辑推理、批判性思维与复杂问题拆解。
+请严格遵循以下规则：
+1.深度思考：在回答复杂问题前，先在后台进行逻辑推演。如果问题存在模糊之处，请先指出，不要臆测。
+2.结构化输出：回答时使用清晰的逻辑结构（使用 Markdown 标题、列表、加粗强调关键点），确保要点鲜明。
+3.事实准确性：基于逻辑事实，而非主观偏见。如果你不确定某个事实，请明确告知。
+4.零冗余原则：跳过‘作为 AI 助手我很高兴回答你’等废话，直接进入核心分析。
+5.迭代思维：如果一个问题有多种解法，请对比它们的优劣，并给出你的最优推荐。
+现在，请准备好应对挑战。</textarea>
+            <label style="color:#555; font-weight:bold; font-size:13px;">问题:</label>
+            <textarea id="ai-question" placeholder="在此输入问题..." style="flex:1; resize:none; padding:12px; border:1px solid #ccc; border-radius:6px; font-family:inherit; font-size:14px; outline:none; box-sizing:border-box;"></textarea>
+            <button id="ai-ask-btn" style="padding:12px; background:#007bff; color:white; border:none; border-radius:6px; cursor:pointer; font-weight:bold; transition:background 0.2s;">Ask</button>
+            <button id="ai-stop-btn" style="padding:12px; background:#ff4d4f; color:white; border:none; border-radius:6px; cursor:pointer; font-weight:bold; display:none;">Stop</button>
+        `;
+        const rightPanel = document.createElement('div');
+        rightPanel.id = 'ai-right-panel';
+        rightPanel.style.cssText = 'flex:1.5; padding:15px; overflow-y:auto; background:#fafafa;';
+        rightPanel.innerHTML = `<div id="ai-answer" style="white-space:pre-wrap; line-height:1.6; font-size:14px; color:#333;">待命中...</div>`;
+
+        body.append(leftPanel, rightPanel);
+        popup.append(header, body);
+        document.body.appendChild(popup);
+
+        $('#close-ai').onclick = () => popup.style.display = 'none';
+        makeDraggable('#ai-popup', '#ai-header');
+
+        // 事件逻辑
+        $('#ai-ask-btn').onclick = async () => {
+            const question = $('#ai-question').value.trim();
+            const sysPrompt = $('#ai-sys-prompt').value.trim();
+            const selectedModel = $('#ai-model-select').value;
+            const answerBox = $('#ai-answer');
+            const askBtn = $('#ai-ask-btn');
+            const stopBtn = $('#ai-stop-btn');
+
+            if (!question) return;
+
+            isGenerating = true;
+            askBtn.style.display = 'none';
+            stopBtn.style.display = 'block';
+
+            // 模型切换与初始化逻辑
+            if (!aiEngine || currentModel !== selectedModel) {
+                try {
+                    answerBox.innerText = `正在加载/切换模型: ${selectedModel}...\n(首次加载可能需要一些时间读取缓存或下载权重)`;
+                    const webLLM = await import("../third/web-llm/web-llm.js");
+                    
+                    // 核心操作：如果存在旧的 Worker，强制销毁释放内存，防止显存爆炸
+                    if (aiWorker) {
+                        aiWorker.terminate();
+                    }
+                    aiWorker = new Worker("src/js/llm-worker.js", { type: "module" });
+
+                    aiEngine = await webLLM.CreateWebWorkerMLCEngine(
+                        aiWorker,
+                        selectedModel,
+                        {
+                            initProgressCallback: (r) => {
+                                // 将加载进度输出到界面，避免用户以为卡死了
+                                answerBox.innerText = `[模型加载中] ${r.text}`;
+                            },
+                            engineConfig: { contextWindowSize: 4096 }
+                        }
+                    );
+                    currentModel = selectedModel;
+                } catch (err) {
+                    answerBox.innerText = "引擎初始化失败: " + err.message;
+                    isGenerating = false;
+                    askBtn.style.display = 'block';
+                    stopBtn.style.display = 'none';
+                    return;
+                }
+            }
+
+            // 加载完成后开始推演
+            answerBox.innerText = "正在思考中...";
+            try {
+                const stream = await aiEngine.chat.completions.create({
+                    messages: [
+                        { role: "system", content: sysPrompt },
+                        { role: "user", content: question }
+                    ],
+                    stream: true,
+                    temperature: 0.7,
+                    max_tokens: 4096
+                });
+
+                let fullText = "";
+                answerBox.innerText = "";
+                
+                stopBtn.onclick = () => { isGenerating = false; };
+
+                for await (const chunk of stream) {
+                    if (!isGenerating) {
+                        answerBox.innerText += "\n\n[已手动终止]";
+                        break;
+                    }
+                    const delta = chunk.choices[0].delta.content;
+                    if (delta) {
+                        fullText += delta;
+                        answerBox.innerText = fullText;
+                        rightPanel.scrollTop = rightPanel.scrollHeight;
+                    }
+                }
+            } catch (error) {
+                answerBox.innerText = "生成失败: " + error.message;
+            } finally {
+                isGenerating = false;
+                askBtn.style.display = 'block';
+                stopBtn.style.display = 'none';
+            }
+        };
+    }
+    popup.style.display = 'flex';
 }
