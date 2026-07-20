@@ -4037,7 +4037,7 @@ const UnifiedWorkspace = {
         if ($('#unified-workspace')) return;
         
         const html = `
-        <div id="unified-workspace" style="display:none; position:fixed; top:8vh; left:50vw; transform:translateX(-50%); width:1100px; height:82vh; min-height:650px; background:#fff; box-shadow:0 10px 40px rgba(0,0,0,0.25); z-index:99999; flex-direction:column; border-radius:8px; border:1px solid #cbd5e1; overflow:hidden;">
+        <div id="unified-workspace" style="display:none; position:fixed; top:8vh; left:50vw; transform:translateX(-50%); width:900px; height:80vh; min-height:650px; background:#fff; box-shadow:0 10px 40px rgba(0,0,0,0.25); z-index:99999; flex-direction:column; border-radius:8px; border:1px solid #cbd5e1; overflow:hidden;">
             <!-- 统一拖拽顶栏与 Tab 栏 -->
             <div id="unified-header" style="height:46px; background:linear-gradient(45deg, black, transparent); border-bottom:1px solid #cbd5e1; cursor:move; display:flex; justify-content:space-between; align-items:flex-end; padding:0 10px 0 0; flex-shrink: 0;">
                 <div id="unified-tabs" style="display:flex; height: 100%; align-items: flex-end; gap: 4px; padding-left: 12px;">
