@@ -350,44 +350,43 @@ function search() {
         currentPos += val.length;
     });
 
-    const buildRegex = (kw) => {
-        const escapeRegExp = (string) => {
-            return string.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-        };
+    const buildRegex = (kw, isTolerant = false) => {
+        const escapeRegExp = (string) => string.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-        // 只有字母/数字等普通字符才开启模糊空格模式
         if (/[\\":\-]/.test(kw)) {
             return new RegExp(escapeRegExp(kw), "gi");
         } else {
-            // 先去掉用户输入的空格，再在字符间插可选空格
             const cleanKw = kw.replace(/\s+/g, "");
-            const pattern = cleanKw.split("")
-                                .map(c => escapeRegExp(c))
-                                .join("\\s*");
+            const tokens = cleanKw.split("").map(c => escapeRegExp(c));
+            
+            // 与 worker 保持一致的 gap
+            const gap = isTolerant ? "\\s*(?:[\\s\\S]{0,3}?)\\s*" : "\\s*";
+            const pattern = tokens.join(gap);
             return new RegExp(pattern, "gi");
         }
     };
+
     let rawMatches = [];
-    const collect = (kw) => {
-        try {
-            if (!kw || kw.trim() === "") return;
-            const regex = buildRegex(kw);
-            let m;
-            // 显式重置 index
-            regex.lastIndex = 0; 
-            while ((m = regex.exec(globalText)) !== null) {
-                // 防止零宽匹配或正则空跑死循环
-                if (m.index === regex.lastIndex && m[0].length === 0) {
-                    regex.lastIndex++;
-                    continue;
-                }
-                rawMatches.push({ start: m.index, end: m.index + m[0].length });
+    const collect = (kw, isTolerant = false) => {
+        if (!kw || kw.trim() === "") return;
+        const regex = buildRegex(kw, isTolerant);
+        let m;
+        regex.lastIndex = 0; 
+        while ((m = regex.exec(globalText)) !== null) {
+            if (m.index === regex.lastIndex && m[0].length === 0) {
+                regex.lastIndex++;
+                continue;
             }
-        } catch (e) {
-            console.error("高亮正则构建失败:", e);
+            // 核心改动：把 isTolerant 状态存进去
+            rawMatches.push({ start: m.index, end: m.index + m[0].length, isTolerant });
         }
     };
-    collect(rawKeyword);
+
+    // 触发二次探查
+    collect(rawKeyword, false);
+    if (rawMatches.length === 0) {
+        collect(rawKeyword, true);
+    }
 
     if (!rawMatches.length) {
         sendToParent("LOCAL_SEARCH_RESULT", { keyword: rawKeyword, count: 0, title: document.title });
@@ -430,9 +429,16 @@ function search() {
             if (localEnd > localStart) {
                 const span = document.createElement("span");
                 span.className = "match-highlight";
-                // 给属于同一个词的所有碎片打上相同的索引
-                span.setAttribute("data-match-index", m.index); 
-                span.style.cssText = "background-color: yellow !important; color: black !important; z-index: 10; position: relative;";
+                span.setAttribute("data-match-index", m.index);
+                
+                // 核心改动：根据是否是宽容模式，赋予不同的背景色，并打上 data-tolerant 标记
+                if (m.isTolerant) {
+                    span.setAttribute("data-tolerant", "true");
+                    span.style.cssText = "background-color: #fcd34d !important; color: black !important; border-bottom: 2px dashed #f59e0b; z-index: 10; position: relative;"; // 柔和的琥珀色，带虚线下划线
+                } else {
+                    span.style.cssText = "background-color: yellow !important; color: black !important; z-index: 10; position: relative;";
+                }
+                
                 span.appendChild(document.createTextNode(nodeText.substring(localStart, localEnd)));
                 fragment.appendChild(span);
             }
@@ -484,7 +490,12 @@ function search() {
 
         // 清除所有旧状态
         document.querySelectorAll("span.match-highlight").forEach(s => {
-            s.style.cssText = "background-color: yellow !important; color: black !important; z-index: 10; position: relative;";
+            // 根据 data-tolerant 标记恢复对应的颜色
+            if (s.dataset.tolerant === "true") {
+                s.style.cssText = "background-color: #fcd34d !important; color: black !important; border-bottom: 2px dashed #f59e0b; z-index: 10; position: relative;";
+            } else {
+                s.style.cssText = "background-color: yellow !important; color: black !important; z-index: 10; position: relative;";
+            }
         });
 
         // 激活当前组的所有碎片

@@ -27,6 +27,7 @@
     - html 页面时间戳和 `img` 图片名皆按格式`yyyymmddhhmmss`, 因此可以实现按日期搜索
     - 例如查找2024年1月份更新过的页面, 可输入 `202401` 或更短的 `2401`
   - `exclude` 大型 `html` 条目未建立正文索引, 自动退化为页面内搜索
+  - 无结果时降级宽容搜索
   - 搜索框内置命令 `@bomb`, `@rebirth` 分别进行可选式重置与恢复个人数据
 - 页面
   - 本地按页面左上角 `edit` 即以本地编辑器打开对应实体页同时覆写时间戳, 编辑完回到页面, 双击顶部菜单中 `CLI` 即时构建呈现
@@ -46,7 +47,7 @@
     - History 浏览记录
     - Fav 音乐收藏
     - Excerpts 摘抄薄
-    - 最后一页 离线 AI
+    - 最后一页 本地 AI (gemma-2-9b)
     - CLI.bat 单击选择操作, 双击直接构建
     - root/ 本地 repo
     - Katrain 本地围棋
@@ -100,7 +101,7 @@
  ┣  ┣ 📂 pdfjs
  ┣  ┣ 📂 photo-sphere-viewer
  ┣  ┣ 📂 prism
- ┣  ┗ 📂 web-llm                       # 模型
+ ┣  ┗ 📂 last-page                     # 模型
  ┣ 📂 tpl                              # 样板
  ┗ 📜 cmt_mapper.json                  # 评论映射
 📜 .gitignore                          # 私有节点清单

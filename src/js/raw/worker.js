@@ -18,32 +18,77 @@ self.onmessage = function(e) {
     }
 };
 
+// 正则表达式构建工厂
+function buildRegex(kw, isTolerant = false) {
+    const escapeRegExp = (str) => str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+    try {
+        if (/[\\":\-]/.test(kw)) {
+            // 特殊符号进入精确严格匹配
+            return new RegExp(escapeRegExp(kw), "gi");
+        } else {
+            const cleanKw = kw.replace(/\s+/g, "");
+            const tokens = cleanKw.split("").map(c => escapeRegExp(c));
+            
+            // 核心改动：普通模式仅容忍空格，宽容模式容忍 0-3 个任意字符
+            const gap = isTolerant ? "\\s*(?:[\\s\\S]{0,3}?)\\s*" : "\\s*";
+            const pattern = tokens.join(gap);
+            
+            return new RegExp(pattern, "gi");
+        }
+    } catch (e) {
+        return new RegExp("^$"); // 异常降级兜底
+    }
+}
+
+// 调度引擎
 function doSearch(kw) {
     if (!kw || localData.length === 0) return [];
 
-    const escapeRegExp = (str) =>
-        str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    // 第一遍：精准模式
+    let regex = buildRegex(kw, false);
+    let results = executeSearchLoop(regex);
 
-    let regex;
-    try {
-        if (/[\\":\-]/.test(kw)) {
-            regex = new RegExp(escapeRegExp(kw), "gi");
-        } else {
-            const cleanKw = kw.replace(/\s+/g, "");
-            const pattern = cleanKw
-                .split("")
-                .map(c => escapeRegExp(c))
-                .join("\\s*");
-            regex = new RegExp(pattern, "gi");
+    // 第二遍：无结果时触发静默降级（宽容模式）
+    if (results.length === 0) {
+        regex = buildRegex(kw, true);
+        results = executeSearchLoop(regex);
+        
+        // 可选：给宽容匹配到的结果打上标记，供给前台 index.js 做 UI 标识
+        if (results.length > 0) {
+            results.forEach(r => r.isTolerantMatch = true);
         }
-    } catch (e) {
-        return [];
     }
 
+    return results.sort((a, b) => {
+        // 第一优先级：综合得分 (Score)
+        if (b.score !== a.score) {
+            return b.score - a.score;
+        }
+        
+        // 第二优先级：真实匹配数量 (Count)
+        if (b.count !== a.count) {
+            return b.count - a.count;
+        }
+
+        // 第三优先级：标题字典序拼音排序
+        return a.title.localeCompare(
+            b.title,
+            "zh-Hans-CN"
+        );
+    });
+}
+
+// 搜索执行单元与 Snippet 提取
+function executeSearchLoop(regex) {
     const HIT_CONTEXT = 20;
     const CLUSTER_GAP = 30;
     const MAX_CLUSTER_SPAN = 120;
     const MAX_SNIPPET_LENGTH = 200;
+    
+    const WEIGHT_TITLE = 50;         // 标题命中 1 次，相当于内容命中 50 次
+    const WEIGHT_CONTENT = 1;        // 内容基础得分
+    const WEIGHT_CLUSTER_BONUS = 15; // 聚集度奖励：每多一个词与前一个词在 CLUSTER_GAP 范围内，额外加 15 分
 
     const PUNCT = /[，。！？；：,.!?;:\n]/;
 
@@ -122,9 +167,9 @@ function doSearch(kw) {
         };
     }
 
-    let results = [];
+    let loopResults = [];
     for (let i = 0; i < localData.length; i += 4) {
-        let rawTitle = localData[i] || "";
+        // let rawTitle = localData[i] || ""; // 未使用变量省略以提升性能
         let rawContent = localData[i + 1] || "";
         let path = localData[i + 2] || "";
         let type = localData[i + 3] || "";
@@ -146,8 +191,11 @@ function doSearch(kw) {
         let hits = [];
         let m;
         while ((m = regex.exec(searchableContent)) !== null) {
-            if (m.index === regex.lastIndex)
+            // 防止零宽匹配或正则空跑死循环拦截
+            if (m.index === regex.lastIndex && m[0].length === 0) {
                 regex.lastIndex++;
+                continue;
+            }
             hits.push({
                 start: m.index,
                 end: m.index + m[0].length
@@ -186,6 +234,22 @@ function doSearch(kw) {
             }
         }
 
+        let densityBonus = 0;
+        for (const cluster of clusters) {
+            // 如果一个聚簇里包含超过 1 个匹配项，说明关键词非常密集
+            if (cluster.hits.length > 1) {
+                // 每多聚集一个词，给予一次奖励分
+                densityBonus += (cluster.hits.length - 1) * WEIGHT_CLUSTER_BONUS;
+            }
+        }
+        
+        // 综合得分 = (标题命中数 * 标题权重) + (内容命中数 * 内容基础权重) + 聚集度额外奖励
+        let score = (titleHits * WEIGHT_TITLE) + (contentHits * WEIGHT_CONTENT) + densityBonus;
+        // 如果是在无匹配情况下的 path 兜底命中，给予基础分
+        if (titleHits === 0 && contentHits === 0 && count > 0) {
+            score = count * WEIGHT_CONTENT; 
+        }
+
         let snippets = [];
         for (const cluster of clusters) {
             let start = Math.max(
@@ -217,9 +281,10 @@ function doSearch(kw) {
             );
         }
 
-        results.push({
+        loopResults.push({
             title,
             count,
+            score,       // 新增：暗箱排序得分
             type,
             path,
             localOnly: isLocalOnly,
@@ -227,13 +292,5 @@ function doSearch(kw) {
         });
     }
 
-    return results.sort((a, b) => {
-        if (b.count !== a.count)
-            return b.count - a.count;
-
-        return a.title.localeCompare(
-            b.title,
-            "zh-Hans-CN"
-        );
-    });
+    return loopResults;
 }

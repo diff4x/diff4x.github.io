@@ -1,4 +1,4 @@
-import { WebWorkerMLCEngineHandler } from "../third/web-llm/web-llm.js";
+import { WebWorkerMLCEngineHandler } from "../third/last-page/web-llm.js";
 
 try {
     const handler = new WebWorkerMLCEngineHandler();

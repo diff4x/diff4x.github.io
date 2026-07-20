@@ -1,6 +1,6 @@
 // 触发 SW 更新检查
-self.SW_VERSION = '1784477100734';
-importScripts('/src/js/core-list.js?v=1784477100734');
+self.SW_VERSION = '1784541266225';
+importScripts('/src/js/core-list.js?v=1784541266225');
 
 // 缓存池隔离命名
 const CACHE_NAME_CORE = 'core-cache-' + BUILD_VERSION;
@@ -271,7 +271,7 @@ self.addEventListener('fetch', event => {
 
     // [规则 3] Lazy Caching：模型权重文件请求命中后永久化为离线资产
     if (
-        url.pathname.includes('/web-llm/') || 
+        url.pathname.includes('/last-page/') || 
         url.pathname.endsWith('llm-worker.js')
     ) {
         event.respondWith(

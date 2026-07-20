@@ -607,8 +607,11 @@ async function menu() {
             setTimeout(() => menuB.style.display = '', 100);
         };
         
-        if (excerptsBtn.nextSibling) {
-            menuB.insertBefore(aiBtn, excerptsBtn.nextSibling);
+        const a3Node = menuB.querySelector('#a3');
+        if (a3Node && a3Node.nextSibling) {
+            menuB.insertBefore(aiBtn, a3Node.nextSibling);
+        } else if (a3Node) {
+            menuB.appendChild(aiBtn);
         } else {
             menuB.appendChild(aiBtn);
         }
