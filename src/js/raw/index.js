@@ -3737,8 +3737,8 @@ async function initAITab() {
                 <div style="display:flex; justify-content:space-between; align-items:center;">
                     <label style="color:#475569; font-weight:bold; font-size:12px; text-transform: uppercase;">🎭 预设人设</label>
                     <div style="display:flex; gap:6px;">
-                        <button id="ai-persona-add" style="border:none; background:#f1f5f9; border-radius:4px; padding:4px 8px; cursor:pointer; color:#0ea5e9; font-weight:bold;" title="新建人设">➕</button>
                         <button id="ai-persona-del" style="border:none; background:#fee2e2; border-radius:4px; padding:4px 8px; cursor:pointer; color:#ef4444; font-weight:bold;" title="删除当前人设">🗑️</button>
+                        <button id="ai-persona-add" style="border:none; background:#f1f5f9; border-radius:4px; padding:4px 8px; cursor:pointer; color:#0ea5e9; font-weight:bold;" title="新建人设">➕</button>
                     </div>
                 </div>
                 <select id="ai-persona-select" style="padding:8px; border-radius:6px; border:1px solid #cbd5e1; outline:none; font-size:13px; background: #d1d7df; color:#334155; font-weight:bold;"></select>
