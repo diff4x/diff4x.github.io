@@ -1,7 +1,0 @@
-{
-  "version": 3,
-  "sources": ["raw/llm-worker.js"],
-  "sourcesContent": ["import { WebWorkerMLCEngineHandler } from \"../third/last-page/web-llm.js\";\r\n\r\ntry {\r\n    const handler = new WebWorkerMLCEngineHandler();\r\n    self.onmessage = (msg) => {\r\n        handler.onmessage(msg);\r\n    };\r\n    console.log(\"llm-Worker 初始化成功\");\r\n} catch (err) {\r\n    console.error(\"llm-Worker 内部初始化崩溃:\", err);\r\n}"],
-  "mappings": "AAAA,OAAS,6BAAAA,MAAiC,gCAE1C,GAAI,CACA,MAAMC,EAAU,IAAID,EACpB,KAAK,UAAaE,GAAQ,CACtBD,EAAQ,UAAUC,CAAG,CACzB,EACA,QAAQ,IAAI,kBAAkB,CAClC,OAASC,EAAK,CACV,QAAQ,MAAM,sBAAuBA,CAAG,CAC5C",
-  "names": ["WebWorkerMLCEngineHandler", "handler", "msg", "err"]
-}

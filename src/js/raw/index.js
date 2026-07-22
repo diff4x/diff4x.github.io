@@ -80,7 +80,7 @@ window.addEventListener('message', async (e) => {
     const { type, payload, from } = e.data || {};
     if (!type || !from) return;
     switch (type) {
-        case "LOCAL_SEARCH_RESULT":
+                case "LOCAL_SEARCH_RESULT":
             let hist = store.last_li_a;
             if (!Array.isArray(hist)) hist = hist ? [hist] : [];
             let globalResults = (await store.SearchCache.get(payload.keyword || store.keyword)) || [];
@@ -281,6 +281,10 @@ window.addEventListener('message', async (e) => {
         }
         break;
 
+        case "show_changelog":
+            showChangelog();
+            break;
+
         case "play_fav_list":
             const existingPlayer = $("#audio");
             const existingHeader = existingPlayer ? existingPlayer.querySelector('.header') : null;
@@ -313,6 +317,10 @@ window.addEventListener('message', async (e) => {
             }, 50);
             break;
 
+        case "OPEN_EXCERPTS_NOTEBOOK":
+            ExcerptsUIManager.openAndRefresh();
+            break;
+            
         case "SAVE_EXCERPT":
             let bookName = "html";
             if (store.resource_type === 'txt' && store.txt_path) bookName = store.txt_path.split('/').pop();
@@ -333,18 +341,6 @@ window.addEventListener('message', async (e) => {
 
         case 'CLOSE_GLOBAL_BOOKMARKS':
             if (window._closeGlobalMenu) window._closeGlobalMenu();
-            break;
-
-        case "OPEN_EXCERPTS_NOTEBOOK":
-            UnifiedWorkspace.open('excerpts');
-            break;
-
-        case "show_changelog":
-            UnifiedWorkspace.open('changelog');
-            break;
-
-        case "open_ai_assistant":
-            UnifiedWorkspace.open('ai');
             break;
 
         default:
@@ -1337,7 +1333,7 @@ function search_box() {
                     
                     return `<div style="margin-bottom: 12px; border-bottom: 1px dashed #4b5263; padding-bottom: 8px;"><span style="color: #61afef; font-size: 11px;">[${index + 1}]</span> ${highlighted}</div>`;
                 }).join('');
-
+                
                 scrollContent.innerHTML = `<div class="loop-block">${singleHtml}</div><div class="loop-block">${singleHtml}</div>`;
                 
                 currentScrollY = 0;
@@ -2603,25 +2599,27 @@ function makeDraggable(popupSelector, headerSelector) {
         isDragging = true;
         
         const rect = popup.getBoundingClientRect();
-        
         startX = e.clientX - rect.left;
         startY = e.clientY - rect.top;
+
+        popup.style.width = rect.width + 'px';
+        popup.style.height = rect.height + 'px';
         
         popup.style.position = 'fixed';
-        popup.style.left = rect.left + 'px';
-        popup.style.top = rect.top + 'px';
         popup.style.margin = '0';
-        popup.style.transform = 'none'; // 移除 transform 避免计算偏移
+        popup.style.transform = 'none';
 
-        header.style.cursor = 'grabbing';
+        header.style.cursor = 'moving';
         e.preventDefault();
     });
 
     document.addEventListener('mousemove', (e) => {
         if (!isDragging) return;
+        const left = e.clientX - startX;
+        const top = e.clientY - startY;
         
-        popup.style.left = (e.clientX - startX) + 'px';
-        popup.style.top = (e.clientY - startY) + 'px';
+        popup.style.left = left + 'px';
+        popup.style.top = top + 'px';
     });
 
     document.addEventListener('mouseup', () => {
@@ -2732,30 +2730,40 @@ function ls_alert() {
     idleRun(runCheck);
 }
 
-// 日志层
-async function renderChangelogTab() {
-    const container = $('#tab-changelog');
-    // 如果内部尚未渲染，则构建骨架
-    if (container.innerHTML === '') {
-        container.innerHTML = `
-            <button id="clear-changelog" style="position: absolute;width: 5rem;right: 1rem;padding:6px 14px;border:1px solid #cbd5e1;border-radius:6px;">clear</button>
-            <div id="changelog-content" style="flex:1; padding:20px 25px; overflow-y:auto; background:#d1d7df;"></div>
-        `;
+// 日志弹出层
+async function showChangelog() {
+    let popup = $('#changelog-popup');
+
+    if (!popup) {
+        popup = document.createElement('div');
+        popup.id = 'changelog-popup';
+
+        const header = document.createElement('div');
+        header.id = 'changelog-header';
+        header.innerHTML = `<span class="cl-title">What's new?</span><div><button id="clear-changelog" class="cl-btn">Clear log</button><button id="close-changelog" class="cl-btn">Close</button></div>`;
+
+        const content = document.createElement('div');
+        content.id = 'changelog-content';
+        popup.append(header, content);
+        document.body.appendChild(popup);
+
+        $('#close-changelog').onclick = () => popup.style.display = 'none';
         $('#clear-changelog').onclick = async () => {
             if (confirm("确定要清空所有更新记录吗？")) {
                 await dbProxy.clearLogs();
-                $('#changelog-content').innerHTML = '<div style="color: #94a3b8; text-align:center; margin-top:20vh;">暂无记录</div>';
+                $('#changelog-content').innerHTML = '<div style="color: gray;">暂无记录</div>';
             }
         };
+        makeDraggable('#changelog-popup', '#changelog-header');
     }
 
-    // 每次打开刷新数据流
+    popup.style.display = 'flex';
     const content = $('#changelog-content');
-    content.innerHTML = '<div style="color: #94a3b8; text-align:center; margin-top:20vh;">加载中...</div>';
+    content.innerHTML = '<div style="color: gray;">加载中...</div>';
     try {
         const logs = await dbProxy.getLogs();
         if (logs.length === 0) {
-            content.innerHTML = '<div style="color: #94a3b8; text-align:center; margin-top:20vh;">暂无记录</div>';
+            content.innerHTML = '<div style="color: gray;">暂无记录</div>';
             return;
         }
         logs.sort((a, b) => b.ts - a.ts);
@@ -2764,23 +2772,27 @@ async function renderChangelogTab() {
         let lastTs = null;
         logs.forEach(log => {
             if (lastTs !== null && (lastTs - log.ts > 60000)) {
-                html += `<div style="color: #f259ad; margin: 8px 0; font-weight: bold; opacity: 0.5; overflow:hidden;">----------------------------------------------------------------------------------------------------------------------------------</div>`;
+                html += `<div style="color: #000; margin: 4px 0; overflow: hidden; white-space: nowrap; font-weight: bold; opacity: 0.5;">------------------------------------------------------------------------------------------------------------------------</div>`;
             }
             lastTs = log.ts;
 
             const d = new Date(log.ts);
             const dateStr = `[${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:${String(d.getSeconds()).padStart(2, '0')}]`;
 
-            let textColor = '#334155';
-            if (/删除/.test(log.msg)) textColor = '#ef4444';
-            else if (/新增/.test(log.msg)) textColor = '#10b981';
-            else if (/更新/.test(log.msg)) textColor = '#3b82f6';
+            let textColor = '#333333';
+            if (/删除/.test(log.msg)) {
+                textColor = '#cc0000';
+            } else if (/新增/.test(log.msg)) {
+                textColor = '#008000';
+            } else if (/更新/.test(log.msg)) {
+                textColor = '#0033cc';
+            }
 
-            html += `<div style="color: ${textColor}; margin-bottom: 5px;">${dateStr} ${log.msg}</div>`;
+            html += `<div style="color: ${textColor}; margin-bottom: 2px;">${dateStr} ${log.msg}</div>`;
         });
         content.innerHTML = html;
     } catch (e) {
-        content.innerHTML = '<div style="color: red; text-align:center; margin-top:20vh;">读取日志失败</div>';
+        content.innerHTML = '<div style="color: red;">读取日志失败</div>';
     }
 }
 
@@ -2912,8 +2924,7 @@ const PROTOCOL_OPTIONS = [
     { key: 'pdfjs', label: 'PDF 阅读进度' },
     { key: 'bibi', label: 'EPUB 阅读进度' },
     { key: 'txt', label: 'TXT 阅读进度' },
-    { key: 'excerpts', label: '摘抄薄' },
-    { key: 'personas', label: 'AI人设' }
+    { key: 'excerpts', label: '摘抄薄' }
 ];
 
 // UI 工厂
@@ -2973,10 +2984,6 @@ const restoreData = async (data, selections) => {
             await new Promise((res, rej) => { const txPut = db.transaction(ExcerptsSys.storeName, 'readwrite'); const storePut = txPut.objectStore(ExcerptsSys.storeName); for (const [bookName, bookObj] of Object.entries(data.excerpts_backup)) { storePut.put(bookObj, bookName); } txPut.oncomplete = () => res(); txPut.onerror = () => rej(txPut.error); }); 
         } catch(err) { console.error("恢复失败: ", err); }
     }
-    if (selections.includes('personas') && data.ai_personas !== undefined) {
-        store.ai_personas = data.ai_personas;
-        store.ai_current_persona_id = data.ai_current_persona_id;
-    }
 };
 
 // 数据重置 (Bomb)
@@ -3024,10 +3031,6 @@ function bomb() {
                 if (selections.includes('bibi')) { data.BibiBiscuits = {}; for (let i = 0; i < localStorage.length; i++) { let k = localStorage.key(i); if (k.startsWith('BibiBiscuit')) data.BibiBiscuits[k] = localStorage.getItem(k); } }
                 if (selections.includes('txt')) { data.txts = {}; for (let i = 0; i < localStorage.length; i++) { let k = localStorage.key(i); if (k.startsWith('txt.history')) data.txts[k] = localStorage.getItem(k); } }
                 if (selections.includes('excerpts') && typeof ExcerptsSys !== 'undefined') { data.excerpts_backup = {}; try { const booksMeta = await ExcerptsSys.getAllBooks(); await Promise.all(booksMeta.map(async (b) => { const bData = await ExcerptsSys.getBookData(b.name); data.excerpts_backup[b.name] = bData; })); } catch(err) { console.error("摘抄备份异常: ", err); } }
-                if (selections.includes('personas')) {
-                    data.ai_personas = store.ai_personas;
-                    data.ai_current_persona_id = store.ai_current_persona_id;
-                }
                 return data;
             };
 
@@ -3040,7 +3043,6 @@ function bomb() {
                     if (k === 'BibiBiscuits') return 'bibi';
                     if (k === 'txts') return 'txt';
                     if (k === 'excerpts_backup') return 'excerpts';
-                    if (k === 'ai_personas' || k === 'ai_current_persona_id') return 'personas'; 
                     return k;
                 });
                 await restoreData(backupData, mockSelections);
@@ -3107,7 +3109,6 @@ function rebirth() {
                                 case 'bibi': hasData = !!loadedData.BibiBiscuits; break;
                                 case 'txt': hasData = !!loadedData.txts; break;
                                 case 'excerpts': hasData = !!loadedData.excerpts_backup; break;
-                                case 'personas': hasData = !!loadedData.ai_personas; break;
                             }
                             if (hasData) {
                                 listArea.insertAdjacentHTML('beforeend', `<label class="proto-label"><input type="checkbox" checked value="${opt.key}"> ${opt.label}</label>`);
@@ -3332,37 +3333,47 @@ const ExcerptsUIManager = {
     sortConfig: { type: 'updated', asc: false },
 
     initPanel: function() {
-        const container = document.getElementById('tab-excerpts');
-        // 保证内部环境只渲染一次
-        if (container.innerHTML !== '') return;
+        if (document.getElementById('excerpts-popup')) return;
 
-        container.innerHTML = `
+        const html = `
+        <div id="excerpts-popup" style="display:none; position:fixed; top:10vh; left:20vw; width:60vw; max-width:900px; min-width:700px; height:80vh; background:#fff; box-shadow:0 20px 50px rgba(0,0,0,0.35); z-index:99999; flex-direction:column; border-radius:4px; overflow:hidden; border:1px solid #cbd5e1;">
+            <div id="excerpts-header" style="height:40px; background:#eee; cursor:move; display:flex; justify-content:space-between; align-items:center; padding:0 16px; flex-shrink:0; border-bottom:1px solid #e2e8f0; user-select:none;">
+                <span style="letter-spacing: .1rem;">摘抄薄</span>
+                <button id="close-excerpts" style="background:transparent; border:none; font-size:20px; cursor:pointer; color:#94a3b8; transition:color 0.2s; padding:0; line-height:1;">✕</button>
+            </div>
+            
             <div style="flex:1; display:flex; overflow:hidden; background:#f8fafc;">
-                <div style="width:280px; border-right:1px solid #e2e8f0; display:flex; flex-direction:column; padding:10px; gap:10px; flex-shrink:0; background:#e4e8ee;">
-                    <input type="text" id="exc-search" placeholder="搜索过滤键名..." style="width:100%; padding:8px 10px; border:1px solid #cbd5e1; border-radius:4px; box-sizing:border-box; outline:none; font-size:12px; background:#d1d7df;">
+                <div style="width:240px; border-right:1px solid #e2e8f0; display:flex; flex-direction:column; padding:5px; gap:10px; flex-shrink:0; background:#516194;">
+                    <input type="text" id="exc-search" placeholder="搜索过滤键名..." style="width:100%; padding:6px 10px; border:1px solid #cbd5e1; box-sizing:border-box; outline:none; font-size:12px; background:#fff;">
                     <div style="display:flex; gap:6px;">
-                        <button id="sort-create" style="flex:1; padding:6px; font-size:11px; background:#d1d7df; border:1px solid #cbd5e1; border-radius:4px; cursor:pointer; color:#64748b;">创建时间</button>
-                        <button id="sort-update" style="flex:1; padding:6px; font-size:11px; background:#d1d7df; border:1px solid #10b981; border-radius:4px; cursor:pointer; font-weight:bold; color:#10b981;">修改时间 ▽</button>
+                        <button id="sort-create" style="flex:1; padding:5px; font-size:11px; background:#fff; border:1px solid #cbd5e1; border-radius:4px; cursor:pointer; color:#64748b;">创建时间</button>
+                        <button id="sort-update" style="flex:1; padding:5px; font-size:11px; background:#fff; border:1px solid #10b981; border-radius:4px; cursor:pointer; font-weight:bold; color:#10b981;">修改时间 ▽</button>
                     </div>
-                    <div id="exc-book-list" style="flex:1; overflow-y:auto; display:flex; flex-direction:column; gap:5px; margin-top:4px; padding-right:4px;"></div>
+                    <div id="exc-book-list" style="flex:1; overflow-y:auto; display:flex; flex-direction:column; gap:5px; margin-top:4px; padding-right:2px;"></div>
                 </div>
                 
-                <div id="exc-records-zone" style="flex:1; overflow-y:auto; display:flex; flex-direction:column; background:#d7dbe2; padding: 25px;">
+                <div id="exc-records-zone" style="flex:1; overflow-y:auto; display:flex; flex-direction:column; background:#fff;">
                     <div style="color:#94a3b8; text-align:center; margin-top:25vh; font-size:13px; letter-spacing:0.5px;">请在左侧选择一个摘抄薄查看明细</div>
                 </div>
             </div>
             
-            <div style="background:#d1d7df; border-top:1px solid #e2e8f0; display:flex; align-items:center; justify-content:flex-end; flex-shrink:0; padding:14px 25px; gap:12px;">
-                <button id="exc-btn-save" style="padding:10px 20px; background:#fff; border:1px solid #cbd5e1; border-radius:6px; cursor:pointer; font-size:13px; color:#475569; font-weight:bold; transition:all 0.2s;">应用修改</button>
-                <button id="exc-btn-save-and-copy" style="padding:10px 20px; background:#0ea5e9; color:#fff; border:none; border-radius:6px; cursor:pointer; font-size:13px; font-weight:bold; transition:all 0.2s;">应用修改然后复制</button>
+            <div style="background:#f8fafc; border-top:1px solid #e2e8f0; display:flex; align-items:center; justify-content:flex-end; flex-shrink:0;">
+                <button id="exc-btn-save">应用修改</button>
+                <button id="exc-btn-save-and-copy">应用修改然后复制</button>
             </div>
-        `;
+        </div>`;
         
+        document.body.insertAdjacentHTML('beforeend', html);
         this.bindPanelEvents();
     },
 
     bindPanelEvents: function() {
+        const popup = document.getElementById('excerpts-popup');
         const searchInput = document.getElementById('exc-search');
+        
+        makeDraggable("#excerpts-popup", "#excerpts-header");
+        
+        document.getElementById('close-excerpts').onclick = () => popup.style.display = "none";
         searchInput.oninput = () => this.renderLeftList();
         
         document.getElementById('sort-create').onclick = () => this.toggleSort('created');
@@ -3440,9 +3451,13 @@ const ExcerptsUIManager = {
 
     openAndRefresh: async function() {
         this.initPanel();
+        document.getElementById('excerpts-popup').style.display = "flex";
         this.allBooksCache = await ExcerptsSys.getAllBooks();
 
-        if (this.currentBook && !this.allBooksCache.some(b => b.name === this.currentBook)) {
+        if (
+            this.currentBook &&
+            !this.allBooksCache.some(b => b.name === this.currentBook)
+        ) {
             this.currentBook = null;
         }
         this.renderLeftList();
@@ -3451,7 +3466,15 @@ const ExcerptsUIManager = {
             await this.renderRightRecords();
         } else {
             document.getElementById('exc-records-zone').innerHTML = `
-                <div style="color:#94a3b8; text-align:center; margin-top:25vh; font-size:13px; letter-spacing:0.5px;">请在左侧选择一个摘抄薄查看明细</div>
+                <div style="
+                    color:#94a3b8;
+                    text-align:center;
+                    margin-top:25vh;
+                    font-size:13px;
+                    letter-spacing:0.5px;
+                ">
+                    请在左侧选择一个摘抄薄查看明细
+                </div>
             `;
         }
     },
@@ -3472,7 +3495,7 @@ const ExcerptsUIManager = {
             const item = document.createElement('div');
             item.className = 'exc-book-item-row';
             item.style.cssText = `
-                background:#d1d7df; border:1px solid #e2e8f0;
+                background:#fff; border:1px solid #e2e8f0;
                 cursor:pointer; font-size:12px; display:flex; align-items:center;
                 transition:all 0.15s; gap:6px; position:relative; overflow:hidden;
             `;
@@ -3530,7 +3553,7 @@ const ExcerptsUIManager = {
 
         data.excerpts.forEach(item => {
             const row = document.createElement('div');
-            row.style.cssText = "border-bottom: 1px dotted #a5a5fe;position:relative; display:flex; align-items:flex-start; transition:all 0.2s; padding:0; margin:0 0 1rem 0; border-bottom:#1px dashed rgb(159 176 236);";
+            row.style.cssText = "position:relative; display:flex; align-items:flex-start; transition:all 0.2s; padding:0; margin:0 0 2rem 0; border-bottom:1px dashed #cbd5e1;";
             
             const idLabel = document.createElement('div');
             idLabel.style.cssText = "width:32px; height:22px; background:#f1f5f9; color:#64748b; text-align:center; border-radius:4px; font-size:11px; font-weight:bold; font-family:monospace; flex-shrink:0; cursor:default; transition:all 0.2s; line-height:22px; margin: 3px 0px 0px 10px";
@@ -3677,417 +3700,3 @@ function showGlobalBookmarkMenu(x, y, source) {
         window._closeGlobalMenu = null;
     };
 }
-
-// 最后一页 
-let aiEngine = null;
-let lastLoadedSysPrompt = null;
-let isGenerating = false;
-let chatHistory = [];
-
-async function loadAIEngineUI() {
-    if (window.marked) return;
-    
-    const style = document.createElement('style');
-    style.innerHTML = `
-        @import url("src/third/last-page/atom-one-dark.min.css");
-        #ai-answer { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; line-height: 1.6; color: #24292f; word-wrap: break-word; text-align: left !important; }
-        #ai-answer h1, #ai-answer h2, #ai-answer h3, #ai-answer h4 { margin-top: 24px; margin-bottom: 16px; font-weight: 600; border-bottom: 1px solid #d0d7de; padding-bottom: 0.3em; }
-        #ai-answer table { border-collapse: collapse; width: 100%; margin: 16px 0; display: block; overflow-x: auto; }
-        #ai-answer table th, #ai-answer table td { border: 1px solid #d0d7de; padding: 8px 13px; }
-        #ai-answer table tr:nth-child(2n) { background-color: #f6f8fa; }
-        #ai-answer pre { background-color: #282c34; border-radius: 6px; padding: 16px; overflow: auto; margin: 16px 0; }
-        #ai-answer pre code { background: transparent; padding: 0; color: #abb2bf; font-size: 13.5px; }
-        #ai-answer p code, #ai-answer li code { background-color: rgba(175, 184, 193, 0.2); border-radius: 4px; padding: 0.2em 0.4em; font-size: 85%; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
-        #ai-answer blockquote { margin: 0; padding: 0 1em; color: #57606a; border-left: 0.25em solid #d0d7de; }
-        #ai-answer ul, #ai-answer ol { padding-left: 2em; margin-bottom: 16px; }
-        #ai-answer li + li { margin-top: 0.25em; }
-    `;
-    document.head.appendChild(style);
-
-    const scripts = [
-        'src/third/last-page/marked.min.js',
-        'src/third/last-page/highlight.min.js'
-    ];
-    
-    // 改为并发拉取提升速度
-    await Promise.all(scripts.map(src => new Promise(res => {
-        const s = document.createElement('script');
-        s.src = src; 
-        s.onload = res;
-        document.head.appendChild(s);
-    })));
-}
-
-async function initAITab() {
-    const container = $('#tab-ai');
-    
-    // 1. 初始化预设人设数据 (如果 localStorage 中为空)
-    if (!store.ai_personas || !Array.isArray(store.ai_personas) || store.ai_personas.length === 0) {
-        store.ai_personas = [{
-            id: 'default_1',
-            name: '全能学者',
-            prompt: '你是一位拥有全学科背景的顶级知识型助手，擅长逻辑推理、批判性思维与复杂问题拆解。\n请严格遵循以下规则：\n1. 深度思考：在回答复杂问题前，先进行逻辑推演。指出模糊之处，拒绝臆测。\n2. 结构化输出：使用 Markdown 确保要点鲜明。\n3. 零冗余原则：跳过废话，直接进入核心分析。'
-        }];
-        store.ai_current_persona_id = 'default_1';
-    }
-
-    if (container.innerHTML === '') {
-        container.innerHTML = `
-            <div style="width:340px; padding:20px; border-right:1px solid #e0e0e0; display:flex; flex-direction:column; gap:12px; background:#e3e8ef; flex-shrink: 0; box-shadow: 2px 0 10px rgba(0,0,0,0.02);">
-                <div style="display:flex; justify-content:space-between; align-items:center;">
-                    <label style="color:#475569; font-weight:bold; font-size:12px; text-transform: uppercase;">🎭 预设人设</label>
-                    <div style="display:flex; gap:6px;">
-                        <button id="ai-persona-del" style="border:none; background:#fee2e2; border-radius:4px; padding:4px 8px; cursor:pointer; color:#ef4444; font-weight:bold;" title="删除当前人设">🗑️</button>
-                        <button id="ai-persona-add" style="border:none; background:#f1f5f9; border-radius:4px; padding:4px 8px; cursor:pointer; color:#0ea5e9; font-weight:bold;" title="新建人设">➕</button>
-                    </div>
-                </div>
-                <select id="ai-persona-select" style="padding:8px; border-radius:6px; border:1px solid #cbd5e1; outline:none; font-size:13px; background: #d1d7df; color:#334155; font-weight:bold;"></select>
-                <input type="text" id="ai-persona-name" placeholder="人设名称 (如: 感性诗人)" style="padding:8px; border:1px solid #cbd5e1; border-radius:6px; font-size:13px; outline:none; background: #d1d7df; color:#334155;">
-                <textarea id="ai-sys-prompt" placeholder="系统提示词设定..." style="flex:0.6; resize:none; padding:10px; border:1px solid #cbd5e1; border-radius:6px; font-size:12px; outline:none; box-sizing:border-box; background: #d1d7df; color:#334155; line-height:1.5;"></textarea>
-
-                <label style="color:#475569; font-weight:bold; font-size:12px; text-transform: uppercase; margin-top: 5px;">💬 Input</label>
-                <textarea id="ai-question" placeholder="在此输入问题 (Enter 发送, Shift+Enter 换行)" style="flex:1; resize:none; padding:12px; border:1px solid #cbd5e1; border-radius:6px; font-size:13px; outline:none; box-sizing:border-box; box-shadow: inset 0 1px 2px rgba(0,0,0,0.05);background: #d1d7df;"></textarea>
-                
-                <div style="display:flex; gap:8px;">
-                    <button id="ai-ask-btn" style="flex:1; padding:12px; background:#0ea5e9; color:white; border:none; border-radius:6px; cursor:pointer; font-weight:bold; transition:background 0.2s;">发送请求</button>
-                    <button id="ai-stop-btn" style="flex:1; padding:12px; background:#ef4444; color:white; border:none; border-radius:6px; cursor:pointer; font-weight:bold; display:none; transition:background 0.2s;">⏹ 强制停止</button>
-                    <button id="ai-clear-btn" style="flex:0.3; padding:12px; background:#f1f5f9; color:#475569; border:1px solid #cbd5e1; border-radius:6px; cursor:pointer; font-weight:bold; transition:all 0.2s;" title="清空对话上下文记忆">🗑️</button>
-                </div>
-            </div>
-            
-            <div id="ai-right-panel" style="flex:1; padding:25px 35px; overflow-y:auto; background:#e3e8ef; scroll-behavior: smooth;">
-                <div id="ai-answer"><div style="font-size:14px; color:#64748b; text-align:center; margin-top: 40%;">就绪状态，等待指令输入。</div></div>
-            </div>
-        `;
-
-        const sel = $('#ai-persona-select');
-        const nameInp = $('#ai-persona-name');
-        const promptInp = $('#ai-sys-prompt');
-        const questionInp = $('#ai-question');
-        const answerBox = $('#ai-answer');
-
-        // ✨ 人设列表渲染函数
-        const renderPersonas = () => {
-            sel.innerHTML = '';
-            store.ai_personas.forEach(p => {
-                const opt = document.createElement('option');
-                opt.value = p.id;
-                opt.textContent = p.name;
-                sel.appendChild(opt);
-            });
-            sel.value = store.ai_current_persona_id;
-            
-            const current = store.ai_personas.find(p => p.id === store.ai_current_persona_id);
-            if (current) {
-                nameInp.value = current.name;
-                promptInp.value = current.prompt;
-            }
-        };
-
-        // 首次加载渲染
-        renderPersonas();
-
-        // 切换人设事件
-        sel.onchange = () => {
-            store.ai_current_persona_id = sel.value;
-            renderPersonas();
-            
-            // 切换时强行截断当前记忆
-            chatHistory = [];
-            store.ai_chat_history = [];
-            store.ai_chat_html = '';
-            if (aiEngine) aiEngine.resetChat();
-            answerBox.innerHTML = `<div style="font-size:14px; color:#64748b; text-align:center; margin-top: 40%;">已切换至人设：[${nameInp.value}]，等待指令输入。</div>`;
-        };
-
-        // 实时固化：名称修改
-        nameInp.oninput = () => {
-            const personas = store.ai_personas;
-            const current = personas.find(p => p.id === store.ai_current_persona_id);
-            if (current) {
-                current.name = nameInp.value || '未命名';
-                store.ai_personas = personas;
-                const opt = sel.querySelector(`option[value="${current.id}"]`);
-                if (opt) opt.textContent = current.name;
-            }
-        };
-
-        // 实时固化：提示词修改
-        promptInp.oninput = () => {
-            const personas = store.ai_personas;
-            const current = personas.find(p => p.id === store.ai_current_persona_id);
-            if (current) {
-                current.prompt = promptInp.value;
-                store.ai_personas = personas;
-            }
-        };
-
-        // 新建人设
-        $('#ai-persona-add').onclick = () => {
-            const personas = store.ai_personas;
-            const newId = 'p_' + Date.now();
-            personas.push({ id: newId, name: '新人设', prompt: '新的系统提示词...' });
-            store.ai_personas = personas;
-            store.ai_current_persona_id = newId;
-            renderPersonas();
-            promptInp.focus();
-            
-            chatHistory = [];
-            store.ai_chat_history = [];
-            store.ai_chat_html = '';
-            if (aiEngine) aiEngine.resetChat();
-            answerBox.innerHTML = `<div style="font-size:14px; color:#64748b; text-align:center; margin-top: 40%;">就绪状态，等待指令输入。</div>`;
-        };
-
-        // 删除人设
-        $('#ai-persona-del').onclick = () => {
-            if (confirm('确定要删除当前人设吗？')) {
-                let personas = store.ai_personas;
-                personas = personas.filter(p => p.id !== store.ai_current_persona_id);
-                // 防止误删全部，兜底生成一个默认人设
-                if (personas.length === 0) {
-                    personas.push({ id: 'default_1', name: '全能学者', prompt: '你是一位拥有全学科背景的顶级知识型助手...' });
-                }
-                store.ai_personas = personas;
-                store.ai_current_persona_id = personas[0].id;
-                renderPersonas();
-                
-                chatHistory = [];
-                store.ai_chat_history = [];
-                store.ai_chat_html = '';
-                if (aiEngine) aiEngine.resetChat();
-                answerBox.innerHTML = `<div style="font-size:14px; color:#64748b; text-align:center; margin-top: 40%;">就绪状态，等待指令输入。</div>`;
-            }
-        };
-
-        // ✨ 实时缓存用户输入的草稿
-        questionInp.oninput = () => {
-            store.ai_last_question = questionInp.value;
-        };
-
-        questionInp.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                if (!isGenerating && questionInp.value.trim() !== '') {
-                    $('#ai-ask-btn').click();
-                }
-            }
-        });
-
-        $('#ai-clear-btn').onclick = async () => {
-            if (isGenerating) return;
-            chatHistory = []; 
-            store.ai_chat_history = [];
-            store.ai_chat_html = '';
-            if (aiEngine) {
-                await aiEngine.resetChat(); 
-            }
-            answerBox.innerHTML = `<div style="font-size:14px; color:#10b981; text-align:center; margin-top: 40%;">✨ 记忆已清空，开启全新对话。</div>`;
-        };
-    }
-    
-    // 每次点击菜单展开时，执行状态恢复
-    if (store.ai_last_question) {
-        $('#ai-question').value = store.ai_last_question;
-    }
-    if (store.ai_chat_history && store.ai_chat_history.length > 0) {
-        chatHistory = store.ai_chat_history;
-        if (store.ai_chat_html) {
-            $('#ai-answer').innerHTML = store.ai_chat_html;
-        }
-    }
-    $('#ai-persona-select').value = store.ai_current_persona_id; // 强制UI对齐Store
-
-    await loadAIEngineUI();
-
-    $('#ai-question').focus();
-
-    $('#ai-ask-btn').onclick = async () => {
-        const question = $('#ai-question').value.trim();
-        const sysPrompt = $('#ai-sys-prompt').value.trim();
-        const answerBox = $('#ai-answer');
-        const askBtn = $('#ai-ask-btn');
-        const stopBtn = $('#ai-stop-btn');
-        const scrollPanel = $('#ai-right-panel');
-
-        if (!question) return;
-
-        askBtn.style.display = 'none';
-        stopBtn.style.display = 'block';
-
-        stopBtn.onclick = async () => {
-            if (isGenerating && aiEngine) {
-                await aiEngine.interruptGenerate();
-                isGenerating = false;
-                
-                if (window._aiRenderTimer) {
-                    clearTimeout(window._aiRenderTimer);
-                    window._aiRenderTimer = null;
-                }
-                updateUI(true); 
-                
-                answerBox.innerHTML += `<br><br><span style="color:#ef4444; font-weight:bold; font-size:12px;">[ 🛑 生成已由用户强制中断 ]</span>`;
-                askBtn.style.display = 'block';
-                stopBtn.style.display = 'none';
-                
-                // 中断也需要保存视觉状态
-                store.ai_chat_html = answerBox.innerHTML;
-            }
-        };
-
-        try {
-            const webLLM = await import("../third/last-page/web-llm.js");
-
-            if (!aiEngine || lastLoadedSysPrompt !== sysPrompt) {
-                answerBox.innerHTML = "<div style='color:#0ea5e9; font-weight:bold; text-align:center; margin-top:40%;'>⚙️ 预热中...</div>";
-                if (aiEngine) {
-                    await aiEngine.unload();
-                }
-                
-                aiEngine = await webLLM.CreateWebWorkerMLCEngine(
-                    new Worker("src/js/llm-worker.js", { type: "module" }),
-                    "gemma-2-9b-it-q4f16_1-MLC",
-                    {
-                        initProgressCallback: (r) => { 
-                            answerBox.innerHTML = `<div style="color:#64748b; text-align:center; margin-top:40%;">模型加载进度: <strong style="color:#0ea5e9;">${Math.round(r.progress * 100)}%</strong><br><span style="font-size:11px;">${r.text}</span></div>`; 
-                        },
-                        engineConfig: { contextWindowSize: 4096 }
-                    }
-                );
-                
-                lastLoadedSysPrompt = sysPrompt;
-                chatHistory = []; // 环境重载，清空记忆
-            }
-
-            isGenerating = true;
-            $('#ai-question').value = ''; 
-            store.ai_last_question = ''; // 成功发问，清空草稿缓存
-            answerBox.innerHTML = "<div style='color:#8b5cf6; font-weight:bold; text-align:center; margin-top:40%; animation: pulse 1.5s infinite;'>🧠 深度思考中...</div>";
-            
-            const messagesPayload = [
-                { role: "system", content: sysPrompt },
-                ...chatHistory,
-                { role: "user", content: question }
-            ];
-
-            const stream = await aiEngine.chat.completions.create({
-                messages: messagesPayload,
-                stream: true,
-                temperature: 0.7
-            }); 
-
-            let fullText = "";
-            window._aiRenderTimer = null;
-            let isError = false;
-            
-            const updateUI = (isFinal = false) => {
-                answerBox.innerHTML = marked.parse(fullText);
-                if (isFinal) {
-                    answerBox.querySelectorAll('pre code').forEach((block) => {
-                        hljs.highlightElement(block);
-                    });
-                }
-                scrollPanel.scrollTop = scrollPanel.scrollHeight;
-            };
-
-            for await (const chunk of stream) {
-                if (!isGenerating) break; 
-                const delta = chunk.choices[0].delta.content;
-                if (delta) {
-                    fullText += delta;
-                    if (!window._aiRenderTimer) {
-                        window._aiRenderTimer = setTimeout(() => {
-                            updateUI(false); 
-                            window._aiRenderTimer = null;
-                        }, 50); 
-                    }
-                }
-            }
-            
-            if (isGenerating) {
-                if (window._aiRenderTimer) clearTimeout(window._aiRenderTimer);
-                updateUI(true); 
-                
-                if (fullText.trim() !== '') {
-                    chatHistory.push({ role: "user", content: question });
-                    chatHistory.push({ role: "assistant", content: fullText });
-                }
-            }
-
-        } catch (error) {
-            answerBox.innerHTML = `<div style="color:#ef4444; border:1px solid #fecaca; padding:12px; border-radius:6px; background:#fef2f2;"><strong>执行失败:</strong> ${error.message}</div>`;
-            $('#ai-question').value = question; // 报错恢复
-            store.ai_last_question = question;
-            aiEngine = null; 
-            lastLoadedSysPrompt = null;
-        } finally {
-            isGenerating = false;
-            askBtn.style.display = 'block';
-            stopBtn.style.display = 'none';
-            
-            // ✨ 最后一帧执行完毕后，全局保存当前的对话树和 UI 镜像
-            store.ai_chat_history = chatHistory;
-            store.ai_chat_html = answerBox.innerHTML;
-        }
-    };
-}
-
-const UnifiedWorkspace = {
-    init: function() {
-        if ($('#unified-workspace')) return;
-        
-        const html = `
-        <div id="unified-workspace" style="display:none; position:fixed; top:8vh; left:50vw; transform:translateX(-50%); width:900px; height:80vh; min-height:650px; background:#fff; box-shadow:0 10px 40px rgba(0,0,0,0.25); z-index:99999; flex-direction:column; border-radius:8px; border:1px solid #cbd5e1; overflow:hidden;">
-            <!-- 统一拖拽顶栏与 Tab 栏 -->
-            <div id="unified-header" style="height:46px; background:linear-gradient(45deg, black, transparent); border-bottom:1px solid #cbd5e1; cursor:move; display:flex; justify-content:space-between; align-items:flex-end; padding:0 10px 0 0; flex-shrink: 0;">
-                <div id="unified-tabs" style="display:flex; height: 100%; align-items: flex-end; gap: 4px; padding-left: 12px;">
-                    <div class="uni-tab active" data-target="tab-ai">最后一页</div>
-                    <div class="uni-tab" data-target="tab-excerpts">摘抄薄</div>
-                    <div class="uni-tab" data-target="tab-changelog">What's new?</div>
-                </div>
-                <button id="close-unified" style="background:none; border:none; font-size:22px; cursor:pointer; color:#64748b; transition:color 0.2s; margin-bottom: 8px; padding:0 10px;">&times;</button>
-            </div>
-            
-            <!-- 统一内容挂载区 -->
-            <div id="unified-body" style="display:flex; flex:1; overflow:hidden; position:relative; background:#e4e8ee;">
-                <div id="tab-ai" class="uni-panel" style="display:flex; flex:1; width:100%; height:100%;"></div>
-                <div id="tab-excerpts" class="uni-panel" style="display:none; flex:1; width:100%; height:100%; flex-direction:column;"></div>
-                <div id="tab-changelog" class="uni-panel" style="display:none; flex:1; width:100%; height:100%; flex-direction:column; background:#fff;"></div>
-            </div>
-        </div>`;
-        
-        document.body.insertAdjacentHTML('beforeend', html);
-        
-        // 绑定拖拽与关闭
-        makeDraggable('#unified-workspace', '#unified-header');
-        $('#close-unified').onclick = () => $('#unified-workspace').style.display = 'none';
-        
-        // 绑定 Tab 切换逻辑
-        $$('.uni-tab').forEach(tab => {
-            tab.onclick = () => {
-                $$('.uni-tab').forEach(t => t.classList.remove('active'));
-                tab.classList.add('active');
-                
-                $$('.uni-panel').forEach(p => p.style.display = 'none');
-                const targetId = tab.dataset.target;
-                $('#' + targetId).style.display = 'flex';
-
-                if (targetId === 'tab-ai') {
-                    if (typeof initAITab === 'function') initAITab();
-                } else if (targetId === 'tab-excerpts') {
-                    if (typeof ExcerptsUIManager !== 'undefined' && ExcerptsUIManager.openAndRefresh) {
-                        ExcerptsUIManager.openAndRefresh();
-                    }
-                } else if (targetId === 'tab-changelog') {
-                    if (typeof renderChangelogTab === 'function') renderChangelogTab();
-                }
-            };
-        });
-    },
-    open: function(tabName) {
-        this.init();
-        $('#unified-workspace').style.display = 'flex';
-        const targetTab = document.querySelector(`.uni-tab[data-target="tab-${tabName}"]`);
-        if (targetTab) targetTab.click();
-    }
-};

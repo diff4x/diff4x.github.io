@@ -595,27 +595,6 @@ async function menu() {
             menuB.appendChild(excerptsBtn);
         }
 
-        const aiBtn = document.createElement('a');
-        aiBtn.textContent = "最后一页";
-        const isOffline = store.online_flag === "0";
-        aiBtn.className = isOffline ? 'admin' : 'admin hidden'; 
-        aiBtn.id = 'a4';
-        aiBtn.style.cursor = 'pointer';
-        aiBtn.onclick = () => {
-            sendToParent('open_ai_assistant', null);
-            menuB.style.display = 'none';
-            setTimeout(() => menuB.style.display = '', 100);
-        };
-        
-        const a3Node = menuB.querySelector('#a3');
-        if (a3Node && a3Node.nextSibling) {
-            menuB.insertBefore(aiBtn, a3Node.nextSibling);
-        } else if (a3Node) {
-            menuB.appendChild(aiBtn);
-        } else {
-            menuB.appendChild(aiBtn);
-        }
-
         const historyWrapper = document.createElement('div');
         historyWrapper.className = 'history-wrapper';
         historyWrapper.id = 'historyWrapper';
