@@ -428,7 +428,34 @@ function createStore(defaults = {}) {
                 return {
                     get: async (kw) => {
                         try { 
-                            return await dbProxy.get('search_cache', kw); 
+                            const normKw = normalizeKeyword(kw);
+                            if (!normKw) return null;
+
+                            // 1. 尝试精确归一化命中
+                            let res = await dbProxy.get('search_cache', normKw);
+                            if (res) return res;
+
+                            // 2. 前缀模糊降级 (Prefix Fallback)
+                            // 逻辑：如果用户输入的词更长，去缓存里找有没有“它是其前缀的较短缓存”（即更宽泛的超集缓存）
+                            // 例如用户输入 "javascript"，缓存里有 "java"
+                            const keys = await dbProxy.getAllKeys('search_cache');
+                            // 筛选出所有是 normKw 前缀的缓存 key (要求 key 长度大于 2，避免单个字母误伤)
+                            const matchingKeys = keys.filter(k => typeof k === 'string' && normKw.startsWith(k) && k.length > 2);
+                            
+                            if (matchingKeys.length > 0) {
+                                // 按 key 长度降序排序，优先取最长的那个前缀（最接近当前输入）
+                                matchingKeys.sort((a, b) => b.length - a.length);
+                                const bestKey = matchingKeys[0];
+                                const broaderResults = await dbProxy.get('search_cache', bestKey);
+                                
+                                if (broaderResults && broaderResults.length > 0) {
+                                    // 命中前缀降级：直接返回更宽泛的缓存作为“秒开预热”
+                                    // (注：由于是超集，它包含所有匹配项，可直接呈现，后台 Worker 会随后计算出精确结果并自然覆盖)
+                                    return broaderResults;
+                                }
+                            }
+
+                            return null; 
                         } catch (e) { 
                             return null; 
                         }
@@ -436,7 +463,10 @@ function createStore(defaults = {}) {
 
                     set: async (kw, results) => {
                         try {
-                            await dbProxy.put('search_cache', kw, results);
+                            const normKw = normalizeKeyword(kw);
+                            if (!normKw) return;
+
+                            await dbProxy.put('search_cache', normKw, results);
                             const keys = await dbProxy.getAllKeys('search_cache');
                             if (keys.length > 500) {
                                 const keysToDelete = keys.slice(0, keys.length - 500);
@@ -451,16 +481,15 @@ function createStore(defaults = {}) {
 
                     remove: async (kw) => {
                         try { 
-                            await dbProxy.delete('search_cache', kw); 
-                        } catch (e) {
-
-                         }
+                            const normKw = normalizeKeyword(kw);
+                            if (normKw) {
+                                await dbProxy.delete('search_cache', normKw); 
+                            }
+                        } catch (e) {}
                     },
 
                     clear: async () => {
-                        try { await dbProxy.clear('search_cache'); } catch (e) {
-
-                        }
+                        try { await dbProxy.clear('search_cache'); } catch (e) {}
                     }
                 };
             }
@@ -1064,6 +1093,7 @@ function search_box() {
 
     // 搜索历史排序
     function showSearchHistoryByTime() {
+        const elSearchHistory = $("#searchHistory");
         elSearchHistory.innerHTML = "";
         elSearchHistory.style.display = "block";
         const history = [...(store.searchHistory || [])];
@@ -1129,7 +1159,7 @@ function search_box() {
     }
 
     // 搜索框监听
-    elSearchInput.addEventListener("input", function () {
+    elSearchInput.addEventListener("input", async function () {
         // 判空与核弹
         const val = this.value;
         if (val.trim() === "") {
@@ -1154,17 +1184,7 @@ function search_box() {
             item.keyword.startsWith(val) || item.keyword.includes(val)
         );
         initHistoryBox(1);
-        if (matchingHistory.length === 0) {
-            showSearchHistoryByTime();
-        } else {
-            matchingHistory.forEach(item => {
-                const option = document.createElement("option");
-                option.text = item.keyword;
-                elSearchHistory.appendChild(option);
-            });
-        }
-        const historyLen = elSearchHistory.options.length;
-        elSearchHistory.setAttribute("size", Math.max(2, Math.min(10, historyLen)));
+        await updateAutocompleteSuggestions(val);
     });
 
     // 焦点
@@ -1210,6 +1230,8 @@ function search_box() {
     });
 
     function refreshHistoryList() {
+        const elSearchHistory = $("#searchHistory");
+        const elSearchInput = $("#searchInput");
         const val = elSearchInput.value.trim();
         elSearchHistory.innerHTML = "";
         const history = store.searchHistory || [];
@@ -1234,19 +1256,34 @@ function search_box() {
     }
 
     // 右击删除记录
-    elSearchHistory.addEventListener("contextmenu", function (e) {
+    elSearchHistory.addEventListener("contextmenu", async function (e) {
         if (e.target.tagName === 'OPTION') {
             e.preventDefault();
             e.stopPropagation();
             const keywordToDelete = e.target.text;
+            
+            // 1. 如果它存在于搜索历史中，从历史中剔除
             let history = [...(store.searchHistory || [])];
-            history = history.filter(item => item.keyword !== keywordToDelete);
-            store.searchHistory = history;
-            store.SearchCache.remove(keywordToDelete);
-            refreshHistoryList();
+            const newHistory = history.filter(item => item.keyword !== keywordToDelete);
+            if (newHistory.length !== history.length) {
+                store.searchHistory = newHistory;
+            }
+            
+            // 2. 无论它是历史还是孤儿缓存，从 IndexedDB 缓存池中彻底抹除
+            await store.SearchCache.remove(keywordToDelete);
+            
+            // 3. 刷新下拉框视图
+            const currentVal = $("#searchInput").value.trim();
+            if (currentVal !== "") {
+                // 如果用户正在输入联想，局部重新计算联想列表（使刚删除的词瞬间消失，不重置视图）
+                await updateAutocompleteSuggestions(currentVal);
+            } else {
+                // 如果输入框为空，刷新历史列表
+                refreshHistoryList();
+            }
         }
     });
-    elSearchHistory.title = "右键点击可删除该条历史记录";
+    elSearchHistory.title = "右击删除该记录";
 
     // 列表动作
     clickOrChange(elSearchHistory, function (index) {
@@ -1516,6 +1553,88 @@ async function search(rawKeyword) {
     } catch (err) {
         console.error("web worker 通信失败", err);
     }
+}
+
+// 提示补全
+async function updateAutocompleteSuggestions(val) {
+    const elSearchHistory = $("#searchHistory");
+    elSearchHistory.innerHTML = "";
+    
+    if (!val || val.trim() === "") {
+        showSearchHistoryByTime();
+        return;
+    }
+
+    const query = val.trim().toLowerCase();
+    const suggestionMap = new Map(); // keyword -> isHistory (boolean)
+
+    // 第一级：用户搜索历史 (正式条目)
+    const history = store.searchHistory || [];
+    history.forEach(item => {
+        if (item.keyword.toLowerCase().includes(query)) {
+            suggestionMap.set(item.keyword, true); // true 代表正式历史
+        }
+    });
+
+    // 第二级：IndexedDB 缓存池的 Key (联想词/孤儿缓存)
+    try {
+        const cacheKeys = await dbProxy.getAllKeys('search_cache');
+        cacheKeys.forEach(key => {
+            if (typeof key === 'string' && key.toLowerCase().includes(query)) {
+                // 如果该词不在历史中，则标记为纯联想词
+                if (!suggestionMap.has(key)) {
+                    suggestionMap.set(key, false); // false 代表联想词
+                }
+            }
+        });
+    } catch (e) {
+        console.warn("读取缓存 Key 失败", e);
+    }
+
+    const rawList = Array.from(suggestionMap.entries()).map(([keyword, isHistory]) => ({ keyword, isHistory }));
+    
+    // 最长的、最完整的词条排前
+    rawList.sort((a, b) => b.keyword.length - a.keyword.length);
+
+    // 冗余前缀剪枝
+    const filteredSuggestions = [];
+    for (const item of rawList) {
+        const itemLower = item.keyword.toLowerCase();
+        if (itemLower === query) {
+            filteredSuggestions.push(item);
+            continue;
+        }
+        const isRedundant = filteredSuggestions.some(existing => existing.keyword.toLowerCase().startsWith(itemLower));
+        if (!isRedundant) {
+            filteredSuggestions.push(item);
+        }
+    }
+
+    if (filteredSuggestions.length === 0) {
+        elSearchHistory.style.display = "none";
+        return;
+    }
+
+    elSearchHistory.style.display = "block";
+    filteredSuggestions.forEach(item => {
+        const option = document.createElement("option");
+        option.text = item.keyword;
+        
+        if (!item.isHistory) {
+            option.style.color = "#64748b"; 
+            option.style.fontStyle = "italic";
+        }
+
+        elSearchHistory.appendChild(option);
+    });
+    
+    elSearchHistory.setAttribute("size", Math.max(2, Math.min(10, elSearchHistory.options.length)));
+}
+
+// 键名归一
+function normalizeKeyword(kw) {
+    if (!kw || typeof kw !== 'string') return '';
+    return kw.trim().toLowerCase().replace(/\s+/g, '');
 }
 
 // 搜索结果填充
