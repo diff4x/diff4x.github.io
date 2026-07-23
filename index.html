@@ -6,13 +6,25 @@
     <title>diff4x's digital garden</title>
     <script>
         (function () {
-            if (sessionStorage.getItem("adult_verified") !== "true") {
+            function getCookie(name) {
+                const value = `; ${document.cookie}`;
+                const parts = value.split(`; ${name}=`);
+                if (parts.length === 2) return parts.pop().split(';').shift();
+                return null;
+            }
+            function setCookie(name, value, days) {
+                const date = new Date();
+                date.setTime(date.getTime() + (days * 24 * 60 * 60 * 1000));
+                const expires = "expires=" + date.toUTCString();
+                document.cookie = `${name}=${value}; ${expires}; path=/; secure; SameSite=Lax`;
+            }
+            if (getCookie("adult_verified") !== "true") {
                 const ok = confirm(
                     "⚠️ 本站包含成人内容\n" +
                     "点击【确定】表示您已满18周岁并继续访问，点击【取消】离开本站"
                 );
                 if (ok) {
-                    sessionStorage.setItem("adult_verified", "true");
+                    setCookie("adult_verified", "true", 365);
                 } else {
                     location.href = "https://www.google.com/ncr";
                     return;

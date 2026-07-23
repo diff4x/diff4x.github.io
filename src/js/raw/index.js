@@ -80,7 +80,7 @@ window.addEventListener('message', async (e) => {
     const { type, payload, from } = e.data || {};
     if (!type || !from) return;
     switch (type) {
-                case "LOCAL_SEARCH_RESULT":
+        case "LOCAL_SEARCH_RESULT":
             let hist = store.last_li_a;
             if (!Array.isArray(hist)) hist = hist ? [hist] : [];
             let globalResults = (await store.SearchCache.get(payload.keyword || store.keyword)) || [];
@@ -93,6 +93,10 @@ window.addEventListener('message', async (e) => {
                 if (existingIndex !== -1) {
                     const item = globalResults.splice(existingIndex, 1)[0];
                     item.count = payload.count;
+                    if (payload.snippets) {
+                        item.snippets = payload.snippets;
+                        item.isTolerantMatch = payload.isTolerantMatch;
+                    }
                     globalResults.unshift(item);
                 } else if (payload.count > 0) {
                     let isActuallyPrivate = false;
@@ -114,10 +118,18 @@ window.addEventListener('message', async (e) => {
                         path: currentPath,
                         type: "html",
                         count: payload.count,
-                        localOnly: isActuallyPrivate
+                        localOnly: isActuallyPrivate,
+                        snippets: payload.snippets,
+                        isTolerantMatch: payload.isTolerantMatch
                     });
                 }
             }
+
+            const activeKw = payload.keyword || store.keyword;
+            if (activeKw && !activeKw.startsWith('@')) {
+                store.SearchCache.set(activeKw, globalResults);
+            }
+
             updateSearchResults(globalResults);
             break;
 
@@ -426,8 +438,8 @@ function createStore(defaults = {}) {
                         try {
                             await dbProxy.put('search_cache', kw, results);
                             const keys = await dbProxy.getAllKeys('search_cache');
-                            if (keys.length > 200) {
-                                const keysToDelete = keys.slice(0, keys.length - 200);
+                            if (keys.length > 500) {
+                                const keysToDelete = keys.slice(0, keys.length - 500);
                                 for (let k of keysToDelete) { 
                                     await dbProxy.delete('search_cache', k); 
                                 }
@@ -733,7 +745,7 @@ async function loadDataInBatches(files, now, concurrency) {
     window._lastSavedKw = "";
     if (!searchWorker) {
         searchWorker = new Worker('src/js/worker.js');
-        searchWorker.onmessage = (e) => {
+        searchWorker.onmessage = async (e) => {
             const { type, results, keyword, token } = e.data;
             if (type === 'SEARCH_RESULTS') {
                 
@@ -745,7 +757,43 @@ async function loadDataInBatches(files, now, concurrency) {
 
                 const activeKw = keyword || store.keyword;
 
+                if (activeKw) {
+                    // 1. 尝试获取当前词的缓存
+                    let sourceCache = await store.SearchCache.get(activeKw);
+                    
+                    // 2. 如果当前词没有缓存，触发了贪吃蛇剪枝逻辑，则尝试继承上一个短词的富集缓存（防止打字时局部探查数据丢失）
+                    if ((!sourceCache || sourceCache.length === 0) && window._lastSavedKw && activeKw.startsWith(window._lastSavedKw)) {
+                        sourceCache = await store.SearchCache.get(window._lastSavedKw);
+                    }
+                    
+                    // 3. 异步等待后，再次核对 Token，防止被新输入插队
+                    if (token !== window._searchToken) return;
+
+                    if (sourceCache && sourceCache.length > 0) {
+                        results.forEach(newItem => {
+                            const oldItem = sourceCache.find(o => o.path === newItem.path);
+                            if (oldItem && oldItem.snippets) {
+                                newItem.snippets = oldItem.snippets;
+                                newItem.isTolerantMatch = oldItem.isTolerantMatch;
+                                if (oldItem.count > newItem.count) {
+                                    newItem.count = oldItem.count;
+                                }
+                            }
+                        });
+                        
+                        // 兜底：如果有巨型页面是 Worker 根本搜不到的，强行将它们续命保留在列表中
+                        sourceCache.forEach(oldItem => {
+                            if (oldItem.snippets && !results.some(r => r.path === oldItem.path)) {
+                                results.push(JSON.parse(JSON.stringify(oldItem))); // 深拷贝断开引用
+                            }
+                        });
+                    }
+                }
+
                 // 缓存入库
+                // 搜索缓存和搜索历史不需要强行绑定成 1:1 的关系，因为它们的职责不同
+                // 搜索历史记录的是“有意识的显式行为”（回车或点击条目）。它的目的是让用户能找回自己曾经明确查找过、关注过的内容，属于“用户资产”。
+                // 搜索缓存记录的是“无意识的瞬时计算结果”（只要输入框在变，哪怕只打了一个字）。它的目的是作为瞬时性能垫脚石, 提供极致的输入响应速度，属于“系统缓存”。
                 if (activeKw && !activeKw.startsWith('@')) {
                     clearTimeout(window._idbWriteTimer);
                     // 输入防抖
@@ -1194,7 +1242,7 @@ function search_box() {
             let history = [...(store.searchHistory || [])];
             history = history.filter(item => item.keyword !== keywordToDelete);
             store.searchHistory = history;
-            
+            store.SearchCache.remove(keywordToDelete);
             refreshHistoryList();
         }
     });

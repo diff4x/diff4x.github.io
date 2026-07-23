@@ -73,8 +73,14 @@ window.addEventListener('message', (e) => {
             break;
             
         case "LOCAL_SEARCH_COUNT":
-            const count = countMatches(payload);
-            sendToParent("LOCAL_SEARCH_RESULT", { keyword: payload, count: count, title: document.title });
+            const resultObj = countMatchesEnhanced(payload);
+            sendToParent("LOCAL_SEARCH_RESULT", { 
+                keyword: payload, 
+                count: resultObj.count, 
+                title: document.title,
+                snippets: resultObj.snippets,
+                isTolerantMatch: resultObj.isTolerantMatch 
+            });
             break;
             
         case "DESTROY_HIGHLIGHT": 
@@ -541,8 +547,9 @@ function search() {
 }
 
 // 局部探测
-function countMatches(kw) {
-    if (!kw || kw.trim() === "") return 0;
+function countMatchesEnhanced(kw) {
+    if (!kw || kw.trim() === "") return { count: 0 };
+    
     const element = document.body;
     const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT, null, false);
     let globalText = "";
@@ -551,26 +558,49 @@ function countMatches(kw) {
     }
 
     const escapeRegExp = (string) => string.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    let regex;
-    if (/[\\":\-]/.test(kw)) {
-        regex = new RegExp(escapeRegExp(kw), "gi");
-    } else {
-        const cleanKw = kw.replace(/\s+/g, "");
-        const pattern = cleanKw.split("").map(c => escapeRegExp(c)).join("\\s*");
-        regex = new RegExp(pattern, "gi");
+    const buildRegex = (keyword, isTolerant) => {
+        if (/[\\":\-]/.test(keyword)) return new RegExp(escapeRegExp(keyword), "gi");
+        const tokens = keyword.replace(/\s+/g, "").split("").map(c => escapeRegExp(c));
+        const gap = isTolerant ? "\\s*(?:[\\s\\S]{0,3}?)\\s*" : "\\s*";
+        return new RegExp(`(${tokens.join(gap)})`, "gi");
+    };
+
+    let regex = buildRegex(kw, false);
+    let isTolerantMatch = false;
+    let rawMatches = [];
+
+    let m;
+    while ((m = regex.exec(globalText)) !== null) {
+        if (m[0].length === 0) { regex.lastIndex++; continue; }
+        rawMatches.push({ start: m.index, end: m.index + m[0].length });
     }
 
-    let count = 0;
-    let m;
-    regex.lastIndex = 0;
-    while ((m = regex.exec(globalText)) !== null) {
-        if (m.index === regex.lastIndex && m[0].length === 0) {
-            regex.lastIndex++;
-            continue;
+    if (rawMatches.length === 0) {
+        regex = buildRegex(kw, true);
+        isTolerantMatch = true;
+        regex.lastIndex = 0;
+        while ((m = regex.exec(globalText)) !== null) {
+            if (m[0].length === 0) { regex.lastIndex++; continue; }
+            rawMatches.push({ start: m.index, end: m.index + m[0].length });
         }
-        count++;
     }
-    return count;
+
+    if (rawMatches.length === 0) return { count: 0 };
+
+    const PUNCT = /[，。！？；：,.!?;:\n]/;
+    const snippets = rawMatches.map(match => {
+        let s = Math.max(0, match.start - 20);
+        let e = Math.min(globalText.length, match.end + 20);
+        
+        while (s > Math.max(0, match.start - 40) && !PUNCT.test(globalText[s - 1])) s--;
+        while (e < Math.min(globalText.length, match.end + 40) && !PUNCT.test(globalText[e])) e++;
+        
+        if (e - s > 150) e = s + 150; 
+        
+        return (s > 0 ? "..." : "") + globalText.substring(s, e) + (e < globalText.length ? "..." : "");
+    });
+
+    return { count: rawMatches.length, snippets, isTolerantMatch };
 }
 
 // 内文目录
