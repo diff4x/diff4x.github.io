@@ -789,10 +789,12 @@ async function loadDataInBatches(files, now, concurrency) {
                 if (activeKw) {
                     // 1. 尝试获取当前词的缓存
                     let sourceCache = await store.SearchCache.get(activeKw);
+                    let isExactMatch = true; // 新增：标记是否为当前词的精确缓存
                     
-                    // 2. 如果当前词没有缓存，触发了贪吃蛇剪枝逻辑，则尝试继承上一个短词的富集缓存（防止打字时局部探查数据丢失）
+                    // 2. 如果当前词没有缓存，触发了贪吃蛇剪枝逻辑，则尝试继承上一个短词的富集缓存
                     if ((!sourceCache || sourceCache.length === 0) && window._lastSavedKw && activeKw.startsWith(window._lastSavedKw)) {
                         sourceCache = await store.SearchCache.get(window._lastSavedKw);
+                        isExactMatch = false; // 借用旧词缓存，标记为 false
                     }
                     
                     // 3. 异步等待后，再次核对 Token，防止被新输入插队
@@ -801,21 +803,27 @@ async function loadDataInBatches(files, now, concurrency) {
                     if (sourceCache && sourceCache.length > 0) {
                         results.forEach(newItem => {
                             const oldItem = sourceCache.find(o => o.path === newItem.path);
-                            if (oldItem && oldItem.snippets) {
-                                newItem.snippets = oldItem.snippets;
-                                newItem.isTolerantMatch = oldItem.isTolerantMatch;
+                            if (oldItem) {
+                                // 无论如何都允许继承更准确的 count
                                 if (oldItem.count > newItem.count) {
                                     newItem.count = oldItem.count;
+                                }
+                                // 核心修复 1：只有精确命中同一个词时，才继承富文本 snippet（防止宽容高亮被旧词覆盖）
+                                if (isExactMatch && oldItem.snippets) {
+                                    newItem.snippets = oldItem.snippets;
+                                    newItem.isTolerantMatch = oldItem.isTolerantMatch;
                                 }
                             }
                         });
                         
-                        // 兜底：如果有巨型页面是 Worker 根本搜不到的，强行将它们续命保留在列表中
-                        sourceCache.forEach(oldItem => {
-                            if (oldItem.snippets && !results.some(r => r.path === oldItem.path)) {
-                                results.push(JSON.parse(JSON.stringify(oldItem))); // 深拷贝断开引用
-                            }
-                        });
+                        // 核心修复 2：只有精确命中同一个词时，才把 Worker 漏掉的巨型页面补回来（防止不同词的结果混入列表）
+                        if (isExactMatch) {
+                            sourceCache.forEach(oldItem => {
+                                if (oldItem.snippets && !results.some(r => r.path === oldItem.path)) {
+                                    results.push(JSON.parse(JSON.stringify(oldItem))); 
+                                }
+                            });
+                        }
                     }
                 }
 

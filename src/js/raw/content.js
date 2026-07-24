@@ -459,7 +459,26 @@ function search() {
         node.parentNode.replaceChild(fragment, node);
     });
     
-    sendToParent("LOCAL_SEARCH_RESULT", { keyword: rawKeyword, count: matches.length, title: document.title });
+    const PUNCT = /[，。！？；：,.!?;:\n]/;
+    const snippets = matches.map(match => {
+        let s = Math.max(0, match.start - 20);
+        let e = Math.min(globalText.length, match.end + 20);
+        
+        while (s > Math.max(0, match.start - 40) && !PUNCT.test(globalText[s - 1])) s--;
+        while (e < Math.min(globalText.length, match.end + 40) && !PUNCT.test(globalText[e])) e++;
+        
+        if (e - s > 150) e = s + 150; 
+        
+        return (s > 0 ? "..." : "") + globalText.substring(s, e) + (e < globalText.length ? "..." : "");
+    });
+
+    sendToParent("LOCAL_SEARCH_RESULT", { 
+        keyword: rawKeyword, 
+        count: matches.length, 
+        title: document.title,
+        snippets: snippets,
+        isTolerantMatch: matches.length > 0 ? matches[0].isTolerant : false
+    });
 
     // 6. UI 导航
     const totalMatches = matches.length;

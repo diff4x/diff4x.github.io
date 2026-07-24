@@ -12,9 +12,9 @@
   - 公私文件并存
   - 状态快照
 - 工具链
-  - HTTP Server、Custom URL Protocol、Batch、Java、Git
-- 前端 & API
-  - Vanilla JS、iframe、postMessage、Proxy、localStorage、Service Worker、Web Worker、IndexedDB
+  - HTTP Server、Custom URL Protocol、Batch、Java、Rust、Git
+- Web 平台
+  - Vanilla JS、iframe、postMessage、Proxy、localStorage、Service Worker、IndexedDB、Web Worker、 WebAssembly
 > Workflow designed by diff4x | Optimized by Gemini & ChatGPT
 ---
 
