@@ -1,4 +1,3 @@
-
 const childId = 'content';
 const store = createStore();
 store.resource_type = "bookmark";
@@ -24,6 +23,15 @@ window.addEventListener('DOMContentLoaded', () => {
                 setupDragAndDrop();
             }
         }, 100);
+    }
+
+    loadFaviconsWhenIdle();
+
+    const btnGuestbook = document.getElementById('btn-guestbook');
+    if (btnGuestbook) {
+        btnGuestbook.addEventListener('click', () => {
+            sendToParent('show_guestbook', null);
+        });
     }
 });
 document.addEventListener('keydown', (e) => {
@@ -122,6 +130,84 @@ function setupDragAndDrop() {
   });
 }
 
+let faviconStyleEl = null;
+function getFaviconStyleEl() {
+    if (!faviconStyleEl) {
+        faviconStyleEl = document.createElement('style');
+        faviconStyleEl.id = 'favicon-style';
+        document.head.appendChild(faviconStyleEl);
+    }
+    return faviconStyleEl;
+}
+
+// 记录原有 a 标签在其父级 div 中的序号（对应 CSS :nth-of-type），不写回 DOM，只用于生成选择器
+function collectFaviconTargets() {
+    const targets = [];
+    Array.from(document.querySelectorAll('div'))
+        .filter(div => div.id && div.id !== 'del' && div.id !== 'a')
+        .forEach(div => {
+            const anchors = Array.from(div.children).filter(el => el.tagName === 'A');
+            anchors.forEach((a, idx) => {
+                targets.push({ divId: div.id, nth: idx + 1, href: a.href });
+            });
+        });
+    return targets;
+}
+
+// 在浏览器/网络空闲时逐个抓取图标，成功的才写入动态样式表
+function loadFaviconsWhenIdle() {
+    const runIdle = window.requestIdleCallback
+        ? (cb) => window.requestIdleCallback(cb, { timeout: 2000 })
+        : (cb) => setTimeout(() => cb({ timeRemaining: () => 0, didTimeout: true }), 300);
+
+    const targets = collectFaviconTargets();
+
+    let i = 0;
+    function processChunk(deadline) {
+        while (i < targets.length && (deadline.timeRemaining() > 0 || deadline.didTimeout)) {
+            probeAndRenderFavicon(targets[i]);
+            i++;
+        }
+        if (i < targets.length) {
+            runIdle(processChunk);
+        }
+    }
+    runIdle(processChunk);
+}
+
+function probeAndRenderFavicon({ divId, nth, href }) {
+    let hostname;
+    try {
+        hostname = new URL(href).hostname;
+    } catch {
+        return; // 非法链接跳过
+    }
+    const faviconUrl = `https://www.google.com/s2/favicons?sz=32&domain=${encodeURIComponent(hostname)}`;
+
+    // 先用一张探测用的 Image 静默验证图标是否可加载成功，失败(如 404)则捕获并忽略，不写入样式
+    const probe = new Image();
+    probe.dataset.faviconProbe = '1';
+    probe.onload = () => {
+        appendFaviconRule(divId, nth, faviconUrl);
+    };
+    probe.onerror = (err) => {
+        // 静默忽略加载失败，不抛出、不写入样式
+        try { probe.onerror = null; probe.onload = null; probe.src = ''; } catch (_) {}
+    };
+    probe.src = faviconUrl;
+}
+
+// 只在动态创建的 <style> 块中通过 "#divId > a:nth-of-type(n)::before" 的方式渲染图标
+function appendFaviconRule(divId, nth, faviconUrl) {
+    const styleEl = getFaviconStyleEl();
+    const selector = `#${CSS.escape(divId)} > a:nth-of-type(${nth})`;
+    styleEl.appendChild(document.createTextNode(
+        `${selector}::before{content:"";display:inline-block;width:14px;height:14px;margin-right:4px;` +
+        `background-image:url("${faviconUrl}");background-size:contain;background-repeat:no-repeat;` +
+        `background-position:center;vertical-align:-2px;}\n`
+    ));
+}
+
 // 字符串哈希
 function getALinksHash() {
   const aTags = document.getElementsByTagName("a");
@@ -136,6 +222,3 @@ function getALinksHash() {
   }
   return hash.toString(16);
 }
-
-
-

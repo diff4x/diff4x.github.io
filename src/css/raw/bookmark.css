@@ -47,8 +47,12 @@ div>a {
     color: darkgray;
 }
 
+div#a a {
+    color: #b06cef;
+}
+
 div>a:hover {
-    color: #98fda5;
+    color: #98fda5!important;
 }
 
 div:not(#del).dragover {

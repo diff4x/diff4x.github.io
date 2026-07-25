@@ -65,31 +65,40 @@ option:hover {
 
 #giscus-popup {
     position: fixed;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
+    top: 15vh;
+    left: calc(50vw - 300px);
     width: 600px;
     height: 400px;
     background: #fff;
-    box-shadow: 0 5px 15px rgba(0, 0, 0, 0.3);
-    z-index: 9999;
+    border: 1px solid #333;
+    box-shadow: 0 5px 20px rgba(0, 0, 0, 0.3);
+    z-index: 10001;
+    display: none;
     flex-direction: column;
+    border-radius: 4px;
+    overflow: hidden;
 }
 
 #popup-header {
-    height: 30px;
-    background: #eaeef2;
+    height: 35px;
+    background: #eee;
     cursor: move;
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 0 5px;
+    padding: 0 15px;
+    user-select: none;
     flex-shrink: 0;
+    border-bottom: 1px solid #ccc;
+    font-size: 14px;
+    color: #333;
 }
 
 #close-popup {
-    right: 3px;
-    position: absolute;
+    margin-left: 10px;
+    cursor: pointer;
+    padding: 1px 6px;
+    position: static;
 }
 
 #giscus-container {
@@ -270,14 +279,13 @@ audio {
     padding: 1px 6px;
 }
 
-#exc-btn-save-and-copy,
-#exc-btn-save {
+#exc-btn-save-and-copy, #exc-btn-save {
     border: 1px solid gray;
-    background-color: #ebfbf3;
+    background-color: #f6ead4;
     cursor: pointer;
     padding: 5px;
-    margin-right: 1rem;
-    border-radius: 2px;
+    margin: .5rem;
+    border-radius: 5px;
 }
 
 @keyframes fadeIn {

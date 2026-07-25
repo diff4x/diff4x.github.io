@@ -297,6 +297,10 @@ window.addEventListener('message', async (e) => {
             showChangelog();
             break;
 
+        case "show_guestbook":
+            showGuestbook();
+            break;
+
         case "play_fav_list":
             const existingPlayer = $("#audio");
             const existingHeader = existingPlayer ? existingPlayer.querySelector('.header') : null;
@@ -1323,11 +1327,70 @@ function search_box() {
 
     const escapeRegExp = (string) => string.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
+    // ---------------- [新增] 集中处理销毁预览与媒体的辅助函数 ----------------
+    function destroyMediaPreview() {
+        if (previewBox) previewBox.style.display = 'none';
+        lastHoveredPath = null;
+        isPaused = true;
+        if (previewTimeoutId) clearTimeout(previewTimeoutId);
+        if (previewScrollFrame) cancelAnimationFrame(previewScrollFrame);
+        const scrollContent = document.getElementById('preview-scroll-content');
+        if (scrollContent) scrollContent.innerHTML = ''; // 清空内容即销毁 audio/video，停止播放
+    }
+
+    // ---------------- [新增] 全局失焦 (Alt-Tab 切后台) 时销毁 ----------------
+    window.addEventListener('blur', destroyMediaPreview);
+
+    // ---------------- [修改/新增] 统一的中击清除逻辑 ----------------
+    const handleMiddleClick = (e) => {
+        // 使用 mousedown 判断 button === 1，在 select/option 等表单控件中兼容性更强
+        if (e.button === 1) { 
+            e.preventDefault();
+            const clearBtn = document.getElementById('clear');
+            if (clearBtn) clearBtn.click();
+            destroyMediaPreview();
+        }
+    };
+
+    // 搜索结果列表中击
+    elSearchResults.addEventListener('mousedown', handleMiddleClick);
+    
+    // 历史记录列表中击
+    const elSearchHistoryNode = document.getElementById('searchHistory');
+    if (elSearchHistoryNode) elSearchHistoryNode.addEventListener('mousedown', handleMiddleClick);
+
+    // [新增] 搜索框本身中击
+    const elSearchInputNode = document.getElementById('searchInput');
+    if (elSearchInputNode) elSearchInputNode.addEventListener('mousedown', handleMiddleClick);
+
+    // ---------------- 核心悬浮逻辑 (mousemove) ----------------
     elSearchResults.addEventListener('mousemove', (e) => {
         if (e.target.tagName.toUpperCase() === 'OPTION') {
             const path = e.target.dataset.path;
+            const type = e.target.dataset.type;
+            const isMedia = type === 'video' || type === 'audio' || /\.(mp4|webm|ogg|mp3|wav|flac|m4a)$/i.test(path);
+            const isImage = type === 'image' || /\.(png|jpg|jpeg|gif|webp|bmp|svg|ico)$/i.test(path);
+
+            // 1. 设置 Title 提示
+            if (type === 'html') {
+                e.target.title = "右击滚动或停止";
+            } else if (isMedia) {
+                e.target.title = "右击播放或停止";
+            } else {
+                e.target.title = "";
+            }
+
+            // 2. 避免同一条目重复触发渲染
             if (path === lastHoveredPath) return; 
+            
+            // 如果切换了 Hover 的条目，先销毁上一个预览和媒体
+            destroyMediaPreview();
             lastHoveredPath = path;
+
+            // 如果是媒体，只更新提示，**不弹出窗口**，等待右击
+            if (isMedia) {
+                return;
+            }
 
             isPaused = true;
             previewBox.style.borderColor = '#61afef';
@@ -1336,22 +1399,19 @@ function search_box() {
             const scrollWrapper = document.getElementById('preview-scroll-wrapper');
             const scrollContent = document.getElementById('preview-scroll-content');
 
-            const isImage = /\.(png|jpg|jpeg|gif|webp|bmp|svg|ico)$/i.test(path);
-
             previewBox.classList.toggle('image-preview-mode', isImage);
 
             if (isImage) {
-                if (previewTimeoutId) clearTimeout(previewTimeoutId);
-                if (previewScrollFrame) cancelAnimationFrame(previewScrollFrame);
-
                 previewBox.style.display = 'flex';
                 scrollContent.innerHTML = `<img src="${path}" style="max-width: 450px; max-height: 350px; object-fit: contain;" alt="Preview">`;
                 return;
             }
 
+            // --- Html 渲染代码保持原有逻辑不变 ---
             const resultData = (window._currentRenderedResults || []).find(r => r.path === path);
             const keyword = elSearchInput.value.trim();
             
+            const escapeRegExp = (string) => string.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
             const buildSnippetRegex = (kw, isTolerant) => {
                 if (/[\\":\-]/.test(kw)) {
                     return new RegExp(`(${escapeRegExp(kw)})`, 'gi');
@@ -1359,7 +1419,6 @@ function search_box() {
                     const cleanKw = kw.replace(/\s+/g, "");
                     const tokens = cleanKw.split("").map(c => escapeRegExp(c));
                     const gap = isTolerant ? "\\s*(?:[\\s\\S]{0,3}?)\\s*" : "\\s*";
-                    // 记得最外层加括号 $1 捕获组，用来给 replace 做高亮包裹
                     return new RegExp(`(${tokens.join(gap)})`, 'gi');
                 }
             };
@@ -1395,9 +1454,6 @@ function search_box() {
                 
                 currentScrollY = 0;
                 scrollContent.style.transform = `translateY(0px)`;
-                
-                if (previewTimeoutId) clearTimeout(previewTimeoutId);
-                if (previewScrollFrame) cancelAnimationFrame(previewScrollFrame);
 
                 previewTimeoutId = setTimeout(() => {
                     const loopBlock = scrollContent.querySelector('.loop-block');
@@ -1422,34 +1478,87 @@ function search_box() {
                         scrollContent.innerHTML = `<div class="loop-block">${singleHtml}</div>`;
                     }
                 }, 10);
-            } else {
-                previewBox.style.display = 'none';
             }
         }
     });
 
+    // ---------------- 核心右击逻辑 (contextmenu) ----------------
     elSearchResults.addEventListener('contextmenu', (e) => {
-        if (previewBox.style.display === 'flex') {
+        if (e.target.tagName.toUpperCase() === 'OPTION') {
             e.preventDefault(); 
-            isPaused = !isPaused; 
-            
-            previewBox.style.borderColor = !isPaused ? '#e5c07b' : '#61afef';
-            const header = document.getElementById('preview-header');
-            if (header) header.style.color = !isPaused ? '#e5c07b' : '#abb2bf';
+            const path = e.target.dataset.path;
+            const type = e.target.dataset.type;
+            const isMedia = type === 'video' || type === 'audio' || /\.(mp4|webm|ogg|mp3|wav|flac|m4a)$/i.test(path);
+
+            if (isMedia) {
+                const scrollContent = document.getElementById('preview-scroll-content');
+                let mediaEl = scrollContent.querySelector('video, audio');
+
+                if (mediaEl && mediaEl.dataset.path === path) {
+                    // 状态：如果在播放同一个媒体，切换播放/暂停
+                    if (mediaEl.paused) {
+                        mediaEl.play();
+                        // 恢复波浪线动画
+                        scrollContent.querySelectorAll('.wave-bar').forEach(b => b.classList.remove('paused'));
+                    } else {
+                        mediaEl.pause();
+                        // 暂停波浪线动画
+                        scrollContent.querySelectorAll('.wave-bar').forEach(b => b.classList.add('paused'));
+                    }
+                } else {
+                    // 状态：首次右击，生成弹窗，注入内容并自动播放
+                    previewBox.style.display = 'flex';
+                    previewBox.classList.add('image-preview-mode'); // 复用无 Header 背景
+                    
+                    const isVideo = type === 'video' || /\.(mp4|webm|ogg)$/i.test(path);
+                    if (isVideo) {
+                        scrollContent.innerHTML = `<video src="${path}" data-path="${path}" loop style="max-width: 450px; max-height: 350px; width: 100%; outline: none; object-fit: contain;"></video>`;
+                    } else {
+                        const filename = path.split('/').pop();
+                        // 音频：加入 CSS 动态波浪线和标题
+                        scrollContent.innerHTML = `
+                        <style>
+                          .wave-bars { display: flex; align-items: flex-end; gap: 4px; height: 40px; justify-content: center; }
+                          .wave-bar { width: 5px; background: #61afef; border-radius: 2px; animation: waveAnim 0.8s ease-in-out infinite alternate; }
+                          .wave-bar.paused { animation-play-state: paused !important; }
+                          @keyframes waveAnim { 0% { height: 10px; } 100% { height: 100%; } }
+                          .wb-1 { animation-delay: 0s; } .wb-2 { animation-delay: 0.2s; } .wb-3 { animation-delay: 0.4s; } .wb-4 { animation-delay: 0.6s; } .wb-5 { animation-delay: 0.8s; }
+                        </style>
+                        <div style="display:flex; flex-direction:column; align-items:center; justify-content:center; height:100%; width:100%;">
+                           <div style="margin-bottom:20px; color:#abb2bf; font-size:14px; text-align:center; word-break:break-all; padding: 0 15px;">${filename}</div>
+                           <div class="wave-bars">
+                              <div class="wave-bar wb-1"></div><div class="wave-bar wb-2"></div><div class="wave-bar wb-3"></div><div class="wave-bar wb-4"></div><div class="wave-bar wb-5"></div>
+                           </div>
+                        </div>
+                        <audio src="${path}" data-path="${path}" loop style="display:none;"></audio>`;
+                    }
+                    
+                    // 初始化 10% 音量与播放
+                    mediaEl = scrollContent.querySelector('video, audio');
+                    mediaEl.volume = 0.1;
+                    mediaEl.play().catch(err => console.warn("Auto-play prevented", err));
+                }
+                return; // 处理完毕，结束执行
+            }
+
+            // 对于 HTML 条目，原有逻辑：切换是否暂停滚动
+            if (type === 'html' && previewBox.style.display === 'flex' && !previewBox.classList.contains('image-preview-mode')) {
+                isPaused = !isPaused; 
+                previewBox.style.borderColor = !isPaused ? '#e5c07b' : '#61afef';
+                const header = document.getElementById('preview-header');
+                if (header) header.style.color = !isPaused ? '#e5c07b' : '#abb2bf';
+            }
         }
     });
 
+    // ---------------- 鼠标离开 ----------------
     elSearchResults.addEventListener('mouseleave', () => {
-        previewBox.style.display = 'none';
-        lastHoveredPath = null;
-        isPaused = true; 
-        
-        if (previewTimeoutId) clearTimeout(previewTimeoutId);
-        if (previewScrollFrame) cancelAnimationFrame(previewScrollFrame);
+        destroyMediaPreview();
     });
     
+    // ---------------- 左键点击打开 ----------------
     elSearchResults.addEventListener('click', () => {
-        previewBox.style.display = 'none';
+        destroyMediaPreview();
     });
 }
 function processAndShowResults(results, keyword) {
@@ -2661,11 +2770,23 @@ function updatePopupHeaderWithStamp(stampText) {
     if (!titleEl) {
         titleEl = document.createElement("span");
         titleEl.id = "popup-header-title";
-        titleEl.style.cssText = "font-weight: bold; font-size: 13px; color: #4b5563; margin-right: auto; padding-left: 5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 75%; user-select: none;";
+        titleEl.className = "cl-title";
+        titleEl.style.cssText = "overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 75%;";
         header.insertBefore(titleEl, header.firstChild);
     }
     
-    titleEl.textContent = stampText ? `💬 评论区 | ${stampText}` : `💬 评论区`;
+    titleEl.textContent = stampText ? `💬 Comment | ${stampText}` : `💬 Comment`;
+
+    const closeBtn = document.getElementById("close-popup");
+    if (closeBtn) {
+        closeBtn.className = "cl-btn";
+        closeBtn.textContent = "Close";
+        if (closeBtn.parentElement === header) {
+            const btnWrap = document.createElement('div');
+            header.insertBefore(btnWrap, closeBtn);
+            btnWrap.appendChild(closeBtn);
+        }
+    }
 }
 
 // giscus 挂载
@@ -2933,6 +3054,36 @@ async function showChangelog() {
     } catch (e) {
         content.innerHTML = '<div style="color: red;">读取日志失败</div>';
     }
+}
+
+// 留言薄弹出层
+function showGuestbook() {
+    let popup = $('#guestbook-popup');
+
+    if (!popup) {
+        popup = document.createElement('div');
+        popup.id = 'guestbook-popup';
+        popup.style.cssText = 'position: fixed; top: 10vh; left: calc(50vw - 320px); width: 640px; height: 80vh; background: #fff; z-index: 10001; display: none; flex-direction: column; border: 1px solid #333; box-shadow: 0 5px 20px rgba(0, 0, 0, 0.3); border-radius: 4px; overflow: hidden;';
+
+        const header = document.createElement('div');
+        header.id = 'guestbook-header';
+        header.style.cssText = 'height: 35px; background: #eee; cursor: move; display: flex; justify-content: space-between; align-items: center; padding: 0 15px; user-select: none; flex-shrink: 0; border-bottom: 1px solid #ccc; font-size: 14px; color: #333;';
+        header.innerHTML = `<span class="cl-title">Guestbook</span><div><button id="close-guestbook" class="cl-btn" style="cursor: pointer; padding: 1px 6px;">Close</button></div>`;
+
+        const content = document.createElement('div');
+        content.id = 'guestbook-content';
+        content.style.cssText = 'flex: 1; overflow: hidden; background: #fafafa; display: flex;';
+        
+        content.innerHTML = `<iframe src="https://docs.google.com/forms/d/e/1FAIpQLScR2uk18TnJyaKM05n9Y1CJooXqxRHniHB5qsIS3tQ0lFNBew/viewform?embedded=true" width="100%" height="100%" frameborder="0" marginheight="0" marginwidth="0">Loading…</iframe>`;
+
+        popup.append(header, content);
+        document.body.appendChild(popup);
+
+        $('#close-guestbook').onclick = () => popup.style.display = 'none';
+        makeDraggable('#guestbook-popup', '#guestbook-header');
+    }
+
+    popup.style.display = 'flex';
 }
 
 // 标签页时钟
@@ -3504,14 +3655,15 @@ const ExcerptsUIManager = {
         if (document.getElementById('excerpts-popup')) return;
 
         const html = `
-        <div id="excerpts-popup" style="display:none; position:fixed; top:10vh; left:20vw; width:60vw; max-width:900px; min-width:700px; height:80vh; background:#fff; box-shadow:0 20px 50px rgba(0,0,0,0.35); z-index:99999; flex-direction:column; border-radius:4px; overflow:hidden; border:1px solid #cbd5e1;">
-            <div id="excerpts-header" style="height:40px; background:#eee; cursor:move; display:flex; justify-content:space-between; align-items:center; padding:0 16px; flex-shrink:0; border-bottom:1px solid #e2e8f0; user-select:none;">
-                <span style="letter-spacing: .1rem;">摘抄薄</span>
-                <button id="close-excerpts" style="background:transparent; border:none; font-size:20px; cursor:pointer; color:#94a3b8; transition:color 0.2s; padding:0; line-height:1;">✕</button>
+        <div id="excerpts-popup" style="display:none; position:fixed; top:10vh; left:calc(50vw - 400px); width:800px; height:80vh; background:#fff; border:1px solid #333; box-shadow:0 5px 20px rgba(0,0,0,0.3); z-index:10001; flex-direction:column; border-radius:4px; overflow:hidden;">
+            <div id="excerpts-header" style="height:35px; background:#eee; cursor:move; display:flex; justify-content:space-between; align-items:center; padding:0 15px; flex-shrink:0; border-bottom:1px solid #ccc; user-select:none; font-size:14px; color:#333;">
+                <span class="cl-title" style="color: red;">Excerpts</span>
+                <div><button id="close-excerpts" class="cl-btn" style="margin-left: 10px; cursor: pointer; padding: 1px 6px;">Close</button></div>
             </div>
             
             <div style="flex:1; display:flex; overflow:hidden; background:#f8fafc;">
-                <div style="width:240px; border-right:1px solid #e2e8f0; display:flex; flex-direction:column; padding:5px; gap:10px; flex-shrink:0; background:#516194;">
+                <!-- （内部布局与原代码保持一致，省略未改动部分）... -->
+                <div style="width:240px; border-right:1px solid #e2e8f0; display:flex; flex-direction:column; padding:5px; gap:10px; flex-shrink:0; background:antiquewhite;">
                     <input type="text" id="exc-search" placeholder="搜索过滤键名..." style="width:100%; padding:6px 10px; border:1px solid #cbd5e1; box-sizing:border-box; outline:none; font-size:12px; background:#fff;">
                     <div style="display:flex; gap:6px;">
                         <button id="sort-create" style="flex:1; padding:5px; font-size:11px; background:#fff; border:1px solid #cbd5e1; border-radius:4px; cursor:pointer; color:#64748b;">创建时间</button>
