@@ -1,6 +1,6 @@
 // 触发 SW 更新检查
-self.SW_VERSION = '1784972224878';
-importScripts('/src/js/core-list.js?v=1784972224878');
+self.SW_VERSION = '1784980052243';
+importScripts('/src/js/core-list.js?v=1784980052243');
 
 // 缓存池隔离命名
 const CACHE_NAME_CORE = 'core-cache-' + BUILD_VERSION;
@@ -153,7 +153,7 @@ self.addEventListener('install', event => {
             } else {
                 // 🚨 核心计算引擎(胶水/Wasm)，走规则 3.5 按需穿透缓存，不阻塞 SW 安装
                 if (
-                    !url.endsWith('worker.js') && 
+                    !url.endsWith('/src/js/worker.js') && 
                     !url.endsWith('compute_intensive_task_processor.min.js') && 
                     !url.endsWith('compute_intensive_task_processor.wasm')) {
                     standaloneUpdates.push(url);
@@ -322,7 +322,7 @@ self.addEventListener('fetch', event => {
     // 列入核心清单 => 参与文件 hash 计算进行自更新
     // sw 安装时跳过 => 极速完成 SW 激活
     // fetchWithLock => 防止主线程与 iframe 的高并发踩踏击穿
-    if (url.pathname.endsWith('worker.js') || 
+    if (url.pathname.endsWith('/src/js/worker.js') || 
         url.pathname.endsWith('compute_intensive_task_processor.min.js') ||
         url.pathname.endsWith('compute_intensive_task_processor.wasm')) { 
         

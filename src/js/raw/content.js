@@ -62,7 +62,7 @@ const wasmInitPromise = import('../wasm/compute_intensive_task_processor.min.js'
     format_markdown = wasmModule.format_markdown;
     await init();
     wasmEngineReady = true;
-    console.log("[Content] Rust 渲染与探测引擎加载完毕 (动态引入)");
+    // console.log("[Content] Rust 渲染与探测引擎加载完毕 (动态引入)");
 }).catch(err => {
     console.error("[Content] Wasm 模块动态加载失败:", err);
 });

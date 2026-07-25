@@ -432,16 +432,33 @@ audio {
     font-family: 'Noto Serif SC', serif; font-size: 13px; line-height: 1.6;
     transition: border-color 0.3s;
     flex-direction: column;
+    padding: 5px;
 }
 
 #preview-header {
-    padding: 8px 15px; background: #21252b;
+    background: #21252b;
     border-bottom: 1px solid #4b5263; color: #abb2bf;
     font-weight: bold; flex-shrink: 0;
     display: flex; justify-content: space-between; align-items: center;
     transition: color 0.3s;
+    width: 100%;
 }
 
 #preview-scroll-wrapper{
     flex: 1; padding: 15px; overflow: hidden; position: relative;
+}
+
+#center-snippet-preview.image-preview-mode {
+    background: rgba(30, 30, 30, 0.9);
+}
+
+#center-snippet-preview.image-preview-mode #preview-header {
+    display: none;
+}
+
+#center-snippet-preview.image-preview-mode #preview-scroll-wrapper {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    padding: 0;
 }

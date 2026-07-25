@@ -1332,11 +1332,25 @@ function search_box() {
             isPaused = true;
             previewBox.style.borderColor = '#61afef';
 
-            const resultData = (window._currentRenderedResults || []).find(r => r.path === path);
-            const keyword = elSearchInput.value.trim();
             const header = document.getElementById('preview-header');
             const scrollWrapper = document.getElementById('preview-scroll-wrapper');
             const scrollContent = document.getElementById('preview-scroll-content');
+
+            const isImage = /\.(png|jpg|jpeg|gif|webp|bmp|svg|ico)$/i.test(path);
+
+            previewBox.classList.toggle('image-preview-mode', isImage);
+
+            if (isImage) {
+                if (previewTimeoutId) clearTimeout(previewTimeoutId);
+                if (previewScrollFrame) cancelAnimationFrame(previewScrollFrame);
+
+                previewBox.style.display = 'flex';
+                scrollContent.innerHTML = `<img src="${path}" style="max-width: 450px; max-height: 350px; object-fit: contain;" alt="Preview">`;
+                return;
+            }
+
+            const resultData = (window._currentRenderedResults || []).find(r => r.path === path);
+            const keyword = elSearchInput.value.trim();
             
             const buildSnippetRegex = (kw, isTolerant) => {
                 if (/[\\":\-]/.test(kw)) {
@@ -1358,8 +1372,10 @@ function search_box() {
                 let countStr = displayCount == 1 ? `1 snippet` : `${displayCount} snippets`;
                 
                 header.innerHTML = `
-                    <span style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 75%;">${resultData.title}</span>
-                    <span style="color: #61afef; font-size: 11px;">${countStr}</span>
+                    <div style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
+                        <span style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 75%;">${resultData.title}</span>
+                        <span style="color: #61afef; font-size: 11px; white-space: nowrap;">${countStr}</span>
+                    </div>
                 `;
 
                 const isTolerant = resultData.isTolerantMatch;
@@ -1371,9 +1387,7 @@ function search_box() {
 
                 let singleHtml = resultData.snippets.map((snip, index) => {
                     let safeSnip = snip.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-                    
                     let highlighted = safeSnip.replace(hlRegex, `<span style="${hlStyle}">$1</span>`);
-                    
                     return `<div style="margin-bottom: 12px; border-bottom: 1px dashed #4b5263; padding-bottom: 8px;"><span style="color: #61afef; font-size: 11px;">[${index + 1}]</span> ${highlighted}</div>`;
                 }).join('');
                 

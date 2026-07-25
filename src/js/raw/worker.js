@@ -6,7 +6,7 @@ let pendingData = null;
 // 初始化 WebAssembly 实例
 init().then(() => {
     wasmReady = true;
-    console.log("[Worker] Rust Wasm 搜索引擎初始化完毕");
+    // console.log("[Worker] Rust Wasm 搜索引擎初始化完毕");
     
     // 如果在加载 Wasm 期间 JS 已经发来了数据，立即注入
     if (pendingData) {
