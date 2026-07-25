@@ -53,6 +53,18 @@ const $$ = (selector) => document.querySelectorAll(selector);
 let toc_flag = false;
 let isAutoScrolling = false;
 
+let wasmEngineReady = false;
+let find_content_matches = null;
+import('../wasm/search.js').then(async (wasmModule) => {
+    const init = wasmModule.default;
+    find_content_matches = wasmModule.find_content_matches;
+    await init();
+    wasmEngineReady = true;
+    console.log("[Content] Rust 渲染与探测引擎加载完毕 (动态引入)");
+}).catch(err => {
+    console.error("[Content] Wasm 模块动态加载失败:", err);
+});
+
 // 事件网关
 if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", start);
@@ -332,101 +344,299 @@ async function format() {
 }
 
 // 搜索
+// function search() {
+//     if (store.jump_from_search_ex !== "1") return;
+//     store.jump_from_search_ex = "0";
+
+//     const rawKeyword = (store.keyword || "").trim();
+//     if (!rawKeyword) return;
+
+//     // 子树遍历
+//     const element = document.body;
+//     const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT, null, false);
+//     const textNodes = [];
+//     while (walker.nextNode()) textNodes.push(walker.currentNode);
+
+//     // 全局偏移映射表
+//     let globalText = "";
+//     const nodeMap = [];
+//     let currentPos = 0;
+//     textNodes.forEach(node => {
+//         const val = node.nodeValue;
+//         globalText += val;
+//         nodeMap.push({ node, start: currentPos, end: currentPos + val.length });
+//         currentPos += val.length;
+//     });
+
+//     const buildRegex = (kw, isTolerant = false) => {
+//         const escapeRegExp = (string) => string.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+//         if (/[\\":\-]/.test(kw)) {
+//             return new RegExp(escapeRegExp(kw), "gi");
+//         } else {
+//             const cleanKw = kw.replace(/\s+/g, "");
+//             const tokens = cleanKw.split("").map(c => escapeRegExp(c));
+            
+//             // 与 worker 保持一致的 gap
+//             const gap = isTolerant ? "\\s*(?:[\\s\\S]{0,3}?)\\s*" : "\\s*";
+//             const pattern = tokens.join(gap);
+//             return new RegExp(pattern, "gi");
+//         }
+//     };
+
+//     let rawMatches = [];
+//     const collect = (kw, isTolerant = false) => {
+//         if (!kw || kw.trim() === "") return;
+//         const regex = buildRegex(kw, isTolerant);
+//         let m;
+//         regex.lastIndex = 0; 
+//         while ((m = regex.exec(globalText)) !== null) {
+//             if (m.index === regex.lastIndex && m[0].length === 0) {
+//                 regex.lastIndex++;
+//                 continue;
+//             }
+//             // 核心改动：把 isTolerant 状态存进去
+//             rawMatches.push({ start: m.index, end: m.index + m[0].length, isTolerant });
+//         }
+//     };
+
+//     // 触发二次探查
+//     collect(rawKeyword, false);
+//     if (rawMatches.length === 0) {
+//         collect(rawKeyword, true);
+//     }
+
+//     if (!rawMatches.length) {
+//         sendToParent("LOCAL_SEARCH_RESULT", { keyword: rawKeyword, count: 0, title: document.title });
+//         return;
+//     }
+
+//     // 排序去重
+//     rawMatches.sort((a, b) => a.start - b.start || b.end - a.end);
+//     const matches = [];
+//     let last = null;
+//     rawMatches.forEach(m => {
+//         if (!last || m.start >= last.end) { matches.push(m); last = m; }
+//     });
+
+//     // 按物理节点进行局部切割，并打上 data-match-index 组标记
+//     nodeMap.forEach(item => {
+//         const node = item.node;
+//         const nodeText = node.nodeValue;
+//         // 找出所有落在这个节点范围内的匹配项碎片
+//         const nodeMatches = matches
+//             .map((m, index) => ({ ...m, index })) // 保留原始匹配项的索引作为组 ID
+//             .filter(m => m.start < item.end && m.end > item.start);
+        
+//         if (nodeMatches.length === 0) return;
+
+//         const fragment = document.createDocumentFragment();
+//         let cursor = 0;
+
+//         // 对该节点内的所有匹配分片进行排序，确保按文本顺序处理
+//         nodeMatches.sort((a, b) => a.start - b.start).forEach(m => {
+//             const localStart = Math.max(m.start - item.start, 0);
+//             const localEnd = Math.min(m.end - item.start, nodeText.length);
+
+//             // 插入匹配前的文本
+//             if (localStart > cursor) {
+//                 fragment.appendChild(document.createTextNode(nodeText.substring(cursor, localStart)));
+//             }
+
+//             // 插入高亮碎片
+//             if (localEnd > localStart) {
+//                 const span = document.createElement("span");
+//                 span.className = "match-highlight";
+//                 span.setAttribute("data-match-index", m.index);
+                
+//                 // 核心改动：根据是否是宽容模式，赋予不同的背景色，并打上 data-tolerant 标记
+//                 if (m.isTolerant) {
+//                     span.setAttribute("data-tolerant", "true");
+//                     span.style.cssText = "background-color: #fcd34d !important; color: black !important; border-bottom: 2px dashed #f59e0b; z-index: 10; position: relative;"; // 柔和的琥珀色，带虚线下划线
+//                 } else {
+//                     span.style.cssText = "background-color: yellow !important; color: black !important; z-index: 10; position: relative;";
+//                 }
+                
+//                 span.appendChild(document.createTextNode(nodeText.substring(localStart, localEnd)));
+//                 fragment.appendChild(span);
+//             }
+//             cursor = localEnd;
+//         });
+
+//         // 插入剩余文本
+//         if (cursor < nodeText.length) {
+//             fragment.appendChild(document.createTextNode(nodeText.substring(cursor)));
+//         }
+        
+//         node.parentNode.replaceChild(fragment, node);
+//     });
+    
+//     const PUNCT = /[，。！？；：,.!?;:\n]/;
+//     const snippets = matches.map(match => {
+//         let s = Math.max(0, match.start - 20);
+//         let e = Math.min(globalText.length, match.end + 20);
+        
+//         while (s > Math.max(0, match.start - 40) && !PUNCT.test(globalText[s - 1])) s--;
+//         while (e < Math.min(globalText.length, match.end + 40) && !PUNCT.test(globalText[e])) e++;
+        
+//         if (e - s > 150) e = s + 150; 
+        
+//         return (s > 0 ? "..." : "") + globalText.substring(s, e) + (e < globalText.length ? "..." : "");
+//     });
+
+//     sendToParent("LOCAL_SEARCH_RESULT", { 
+//         keyword: rawKeyword, 
+//         count: matches.length, 
+//         title: document.title,
+//         snippets: snippets,
+//         isTolerantMatch: matches.length > 0 ? matches[0].isTolerant : false
+//     });
+
+//     // 6. UI 导航
+//     const totalMatches = matches.length;
+//     let currentIndex = 0;
+
+//     function updateIndexDisplay() {
+//         let indexDisplay = $("#indexDisplay");
+//         if (!indexDisplay) {
+//             indexDisplay = document.createElement("button");
+//             indexDisplay.id = "indexDisplay";
+            
+//             const destroyButton = document.createElement("button");
+//             destroyButton.id = "destroy";
+//             destroyButton.innerText = "destroy";
+//             destroyButton.onclick = function () {
+//                 document.querySelectorAll(".match-highlight").forEach(h => {
+//                     h.parentNode.replaceChild(document.createTextNode(h.textContent), h);
+//                 });
+//                 $("#s_nav").innerHTML = "";
+//                 store.jump_from_search = "0";
+//                 store.jump_from_search_ex = "0";
+//             };
+
+//             setTimeout(() => {
+//                 const nav = $("#s_nav");
+//                 if (nav) {
+//                     nav.appendChild(indexDisplay);
+//                     nav.appendChild(destroyButton);
+//                 }
+//             }, 100);
+//         }
+
+//         indexDisplay.innerText = " " + (currentIndex + 1) + " / " + totalMatches;
+
+//         // 清除所有旧状态
+//         document.querySelectorAll("span.match-highlight").forEach(s => {
+//             // 根据 data-tolerant 标记恢复对应的颜色
+//             if (s.dataset.tolerant === "true") {
+//                 s.style.cssText = "background-color: #fcd34d !important; color: black !important; border-bottom: 2px dashed #f59e0b; z-index: 10; position: relative;";
+//             } else {
+//                 s.style.cssText = "background-color: yellow !important; color: black !important; z-index: 10; position: relative;";
+//             }
+//         });
+
+//         // 激活当前组的所有碎片
+//         const currentGroup = document.querySelectorAll(`span.match-highlight[data-match-index="${currentIndex}"]`);
+//         if (currentGroup.length > 0) {
+//             currentGroup.forEach(s => {
+//                 s.style.cssText = "background-color: red !important; color: white !important; font-weight: bold; z-index: 20; position: relative;";
+//             });
+
+//             // 防止跳转产生的 scroll 事件被误记录
+//             isAutoScrolling = true;
+//             currentGroup[0].scrollIntoView({ block: "center", behavior: "smooth" });
+//             setTimeout(() => { isAutoScrolling = false; }, 600);
+//         }
+//     }
+
+//     function createNavigationButtons() {
+//         const prevButton = document.createElement("button");
+//         prevButton.innerText = "prev";
+//         prevButton.onclick = () => {
+//             currentIndex = (currentIndex - 1 + totalMatches) % totalMatches;
+//             updateIndexDisplay();
+//         };
+
+//         const nextButton = document.createElement("button");
+//         nextButton.innerText = "next";
+//         nextButton.onclick = () => {
+//             currentIndex = (currentIndex + 1) % totalMatches;
+//             updateIndexDisplay();
+//         };
+
+//         setTimeout(() => {
+//             const nav = $("#s_nav");
+//             if (nav) {
+//                 nav.appendChild(prevButton);
+//                 nav.appendChild(nextButton);
+//             }
+//         }, 100);
+//     }
+
+//     createNavigationButtons();
+//     updateIndexDisplay();
+// }
+
 function search() {
+    // 拦截非搜索跳转
     if (store.jump_from_search_ex !== "1") return;
     store.jump_from_search_ex = "0";
 
     const rawKeyword = (store.keyword || "").trim();
-    if (!rawKeyword) return;
+    if (!rawKeyword || !wasmEngineReady) return; // 确保 Wasm 引擎已初始化
 
-    // 子树遍历
+    // 1. 遍历 DOM 提取纯文本，建立物理节点与全局文本的偏移量映射表
+    // Wasm 无法直接读取 DOM，这部分“采矿”工作必须由 JS 完成
     const element = document.body;
     const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT, null, false);
     const textNodes = [];
-    while (walker.nextNode()) textNodes.push(walker.currentNode);
-
-    // 全局偏移映射表
     let globalText = "";
     const nodeMap = [];
     let currentPos = 0;
-    textNodes.forEach(node => {
+    
+    while (walker.nextNode()) {
+        const node = walker.currentNode;
         const val = node.nodeValue;
+        textNodes.push(node);
         globalText += val;
         nodeMap.push({ node, start: currentPos, end: currentPos + val.length });
         currentPos += val.length;
-    });
-
-    const buildRegex = (kw, isTolerant = false) => {
-        const escapeRegExp = (string) => string.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-
-        if (/[\\":\-]/.test(kw)) {
-            return new RegExp(escapeRegExp(kw), "gi");
-        } else {
-            const cleanKw = kw.replace(/\s+/g, "");
-            const tokens = cleanKw.split("").map(c => escapeRegExp(c));
-            
-            // 与 worker 保持一致的 gap
-            const gap = isTolerant ? "\\s*(?:[\\s\\S]{0,3}?)\\s*" : "\\s*";
-            const pattern = tokens.join(gap);
-            return new RegExp(pattern, "gi");
-        }
-    };
-
-    let rawMatches = [];
-    const collect = (kw, isTolerant = false) => {
-        if (!kw || kw.trim() === "") return;
-        const regex = buildRegex(kw, isTolerant);
-        let m;
-        regex.lastIndex = 0; 
-        while ((m = regex.exec(globalText)) !== null) {
-            if (m.index === regex.lastIndex && m[0].length === 0) {
-                regex.lastIndex++;
-                continue;
-            }
-            // 核心改动：把 isTolerant 状态存进去
-            rawMatches.push({ start: m.index, end: m.index + m[0].length, isTolerant });
-        }
-    };
-
-    // 触发二次探查
-    collect(rawKeyword, false);
-    if (rawMatches.length === 0) {
-        collect(rawKeyword, true);
     }
 
-    if (!rawMatches.length) {
+    // 2. 跨语言调用：将整片文章作为 globalText 发送给 Rust (Wasm)
+    // 由底层执行多轨正则匹配、宽容降级、位置合并、摘要提取
+    // 返回包含: { count, matches: [{start, end, index}], snippets, isTolerantMatch }
+    const resultObj = find_content_matches(globalText, rawKeyword);
+    
+    const matches = resultObj.matches || [];
+    const snippets = resultObj.snippets || [];
+    const isTolerantMatch = resultObj.isTolerantMatch || false;
+
+    // 搜索无结果处理
+    if (matches.length === 0) {
         sendToParent("LOCAL_SEARCH_RESULT", { keyword: rawKeyword, count: 0, title: document.title });
         return;
     }
 
-    // 排序去重
-    rawMatches.sort((a, b) => a.start - b.start || b.end - a.end);
-    const matches = [];
-    let last = null;
-    rawMatches.forEach(m => {
-        if (!last || m.start >= last.end) { matches.push(m); last = m; }
-    });
-
-    // 按物理节点进行局部切割，并打上 data-match-index 组标记
+    // 3. 渲染高亮：按物理节点进行局部切割
     nodeMap.forEach(item => {
         const node = item.node;
         const nodeText = node.nodeValue;
-        // 找出所有落在这个节点范围内的匹配项碎片
-        const nodeMatches = matches
-            .map((m, index) => ({ ...m, index })) // 保留原始匹配项的索引作为组 ID
-            .filter(m => m.start < item.end && m.end > item.start);
+        
+        // 找出所有落在这个节点范围内的匹配项碎片 (Wasm 已经排除了重叠)
+        const nodeMatches = matches.filter(m => m.start < item.end && m.end > item.start);
         
         if (nodeMatches.length === 0) return;
 
         const fragment = document.createDocumentFragment();
         let cursor = 0;
 
-        // 对该节点内的所有匹配分片进行排序，确保按文本顺序处理
+        // 确保局部匹配片段按顺序渲染
         nodeMatches.sort((a, b) => a.start - b.start).forEach(m => {
             const localStart = Math.max(m.start - item.start, 0);
             const localEnd = Math.min(m.end - item.start, nodeText.length);
 
-            // 插入匹配前的文本
+            // 插入匹配前的未高亮文本
             if (localStart > cursor) {
                 fragment.appendChild(document.createTextNode(nodeText.substring(cursor, localStart)));
             }
@@ -435,10 +645,10 @@ function search() {
             if (localEnd > localStart) {
                 const span = document.createElement("span");
                 span.className = "match-highlight";
-                span.setAttribute("data-match-index", m.index);
+                span.setAttribute("data-match-index", m.index); // m.index 是 Wasm 给出的独立分组 ID，用于控制中心化高亮
                 
-                // 核心改动：根据是否是宽容模式，赋予不同的背景色，并打上 data-tolerant 标记
-                if (m.isTolerant) {
+                // 核心 UI 改动：根据 Wasm 返回的降级模式 (Tolerant) 赋予不同警告色
+                if (isTolerantMatch) {
                     span.setAttribute("data-tolerant", "true");
                     span.style.cssText = "background-color: #fcd34d !important; color: black !important; border-bottom: 2px dashed #f59e0b; z-index: 10; position: relative;"; // 柔和的琥珀色，带虚线下划线
                 } else {
@@ -451,37 +661,26 @@ function search() {
             cursor = localEnd;
         });
 
-        // 插入剩余文本
+        // 插入尾部剩余文本
         if (cursor < nodeText.length) {
             fragment.appendChild(document.createTextNode(nodeText.substring(cursor)));
         }
         
+        // 用包含 span 标签的虚拟节点替换原有的纯文本节点
         node.parentNode.replaceChild(fragment, node);
     });
-    
-    const PUNCT = /[，。！？；：,.!?;:\n]/;
-    const snippets = matches.map(match => {
-        let s = Math.max(0, match.start - 20);
-        let e = Math.min(globalText.length, match.end + 20);
-        
-        while (s > Math.max(0, match.start - 40) && !PUNCT.test(globalText[s - 1])) s--;
-        while (e < Math.min(globalText.length, match.end + 40) && !PUNCT.test(globalText[e])) e++;
-        
-        if (e - s > 150) e = s + 150; 
-        
-        return (s > 0 ? "..." : "") + globalText.substring(s, e) + (e < globalText.length ? "..." : "");
-    });
 
+    // 4. 将高亮摘要统计结果反馈给顶级系统 (index.js)
     sendToParent("LOCAL_SEARCH_RESULT", { 
         keyword: rawKeyword, 
-        count: matches.length, 
+        count: resultObj.count, 
         title: document.title,
         snippets: snippets,
-        isTolerantMatch: matches.length > 0 ? matches[0].isTolerant : false
+        isTolerantMatch: isTolerantMatch
     });
 
-    // 6. UI 导航
-    const totalMatches = matches.length;
+    // 5. 组装导航面板 (Next / Prev)
+    const totalMatches = resultObj.count;
     let currentIndex = 0;
 
     function updateIndexDisplay() {
@@ -497,7 +696,8 @@ function search() {
                 document.querySelectorAll(".match-highlight").forEach(h => {
                     h.parentNode.replaceChild(document.createTextNode(h.textContent), h);
                 });
-                $("#s_nav").innerHTML = "";
+                const nav = $("#s_nav");
+                if (nav) nav.innerHTML = "";
                 store.jump_from_search = "0";
                 store.jump_from_search_ex = "0";
             };
@@ -513,9 +713,8 @@ function search() {
 
         indexDisplay.innerText = " " + (currentIndex + 1) + " / " + totalMatches;
 
-        // 清除所有旧状态
+        // 恢复全部背景色 (清除旧的焦点)
         document.querySelectorAll("span.match-highlight").forEach(s => {
-            // 根据 data-tolerant 标记恢复对应的颜色
             if (s.dataset.tolerant === "true") {
                 s.style.cssText = "background-color: #fcd34d !important; color: black !important; border-bottom: 2px dashed #f59e0b; z-index: 10; position: relative;";
             } else {
@@ -523,14 +722,14 @@ function search() {
             }
         });
 
-        // 激活当前组的所有碎片
+        // 定位当前组所有碎片，涂成红色激活态
         const currentGroup = document.querySelectorAll(`span.match-highlight[data-match-index="${currentIndex}"]`);
         if (currentGroup.length > 0) {
             currentGroup.forEach(s => {
                 s.style.cssText = "background-color: red !important; color: white !important; font-weight: bold; z-index: 20; position: relative;";
             });
 
-            // 防止跳转产生的 scroll 事件被误记录
+            // 抑制滚动冲突锁
             isAutoScrolling = true;
             currentGroup[0].scrollIntoView({ block: "center", behavior: "smooth" });
             setTimeout(() => { isAutoScrolling = false; }, 600);
@@ -561,13 +760,71 @@ function search() {
         }, 100);
     }
 
-    createNavigationButtons();
-    updateIndexDisplay();
+    if (totalMatches > 0) {
+        createNavigationButtons();
+        updateIndexDisplay();
+    }
 }
 
 // 局部探测
+// function countMatchesEnhanced(kw) {
+//     if (!kw || kw.trim() === "") return { count: 0 };
+    
+//     const element = document.body;
+//     const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT, null, false);
+//     let globalText = "";
+//     while (walker.nextNode()) {
+//         globalText += walker.currentNode.nodeValue;
+//     }
+
+//     const escapeRegExp = (string) => string.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+//     const buildRegex = (keyword, isTolerant) => {
+//         if (/[\\":\-]/.test(keyword)) return new RegExp(escapeRegExp(keyword), "gi");
+//         const tokens = keyword.replace(/\s+/g, "").split("").map(c => escapeRegExp(c));
+//         const gap = isTolerant ? "\\s*(?:[\\s\\S]{0,3}?)\\s*" : "\\s*";
+//         return new RegExp(`(${tokens.join(gap)})`, "gi");
+//     };
+
+//     let regex = buildRegex(kw, false);
+//     let isTolerantMatch = false;
+//     let rawMatches = [];
+
+//     let m;
+//     while ((m = regex.exec(globalText)) !== null) {
+//         if (m[0].length === 0) { regex.lastIndex++; continue; }
+//         rawMatches.push({ start: m.index, end: m.index + m[0].length });
+//     }
+
+//     if (rawMatches.length === 0) {
+//         regex = buildRegex(kw, true);
+//         isTolerantMatch = true;
+//         regex.lastIndex = 0;
+//         while ((m = regex.exec(globalText)) !== null) {
+//             if (m[0].length === 0) { regex.lastIndex++; continue; }
+//             rawMatches.push({ start: m.index, end: m.index + m[0].length });
+//         }
+//     }
+
+//     if (rawMatches.length === 0) return { count: 0 };
+
+//     const PUNCT = /[，。！？；：,.!?;:\n]/;
+//     const snippets = rawMatches.map(match => {
+//         let s = Math.max(0, match.start - 20);
+//         let e = Math.min(globalText.length, match.end + 20);
+        
+//         while (s > Math.max(0, match.start - 40) && !PUNCT.test(globalText[s - 1])) s--;
+//         while (e < Math.min(globalText.length, match.end + 40) && !PUNCT.test(globalText[e])) e++;
+        
+//         if (e - s > 200) e = s + 200; 
+        
+//         return (s > 0 ? "..." : "") + globalText.substring(s, e) + (e < globalText.length ? "..." : "");
+//     });
+
+//     return { count: rawMatches.length, snippets, isTolerantMatch };
+// }
+
 function countMatchesEnhanced(kw) {
-    if (!kw || kw.trim() === "") return { count: 0 };
+    if (!kw || kw.trim() === "" || !wasmEngineReady) return { count: 0 };
     
     const element = document.body;
     const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT, null, false);
@@ -576,50 +833,14 @@ function countMatchesEnhanced(kw) {
         globalText += walker.currentNode.nodeValue;
     }
 
-    const escapeRegExp = (string) => string.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const buildRegex = (keyword, isTolerant) => {
-        if (/[\\":\-]/.test(keyword)) return new RegExp(escapeRegExp(keyword), "gi");
-        const tokens = keyword.replace(/\s+/g, "").split("").map(c => escapeRegExp(c));
-        const gap = isTolerant ? "\\s*(?:[\\s\\S]{0,3}?)\\s*" : "\\s*";
-        return new RegExp(`(${tokens.join(gap)})`, "gi");
+    // 以前这里要写一堆重复正则，现在一行代码搞定！
+    const resultObj = find_content_matches(globalText, kw);
+
+    return { 
+        count: resultObj.count, 
+        snippets: resultObj.snippets, 
+        isTolerantMatch: resultObj.isTolerantMatch 
     };
-
-    let regex = buildRegex(kw, false);
-    let isTolerantMatch = false;
-    let rawMatches = [];
-
-    let m;
-    while ((m = regex.exec(globalText)) !== null) {
-        if (m[0].length === 0) { regex.lastIndex++; continue; }
-        rawMatches.push({ start: m.index, end: m.index + m[0].length });
-    }
-
-    if (rawMatches.length === 0) {
-        regex = buildRegex(kw, true);
-        isTolerantMatch = true;
-        regex.lastIndex = 0;
-        while ((m = regex.exec(globalText)) !== null) {
-            if (m[0].length === 0) { regex.lastIndex++; continue; }
-            rawMatches.push({ start: m.index, end: m.index + m[0].length });
-        }
-    }
-
-    if (rawMatches.length === 0) return { count: 0 };
-
-    const PUNCT = /[，。！？；：,.!?;:\n]/;
-    const snippets = rawMatches.map(match => {
-        let s = Math.max(0, match.start - 20);
-        let e = Math.min(globalText.length, match.end + 20);
-        
-        while (s > Math.max(0, match.start - 40) && !PUNCT.test(globalText[s - 1])) s--;
-        while (e < Math.min(globalText.length, match.end + 40) && !PUNCT.test(globalText[e])) e++;
-        
-        if (e - s > 150) e = s + 150; 
-        
-        return (s > 0 ? "..." : "") + globalText.substring(s, e) + (e < globalText.length ? "..." : "");
-    });
-
-    return { count: rawMatches.length, snippets, isTolerantMatch };
 }
 
 // 内文目录

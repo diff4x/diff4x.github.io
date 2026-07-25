@@ -12,12 +12,21 @@
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 rustc --version
 cargo install wasm-pack
+
+cargo new --lib rs
+cd rs
 </code>
 
-<code sh>
-cargo new --lib wasm_search_engine
-cd wasm_search_engine
+<code batch>
+wasm-pack build \
+  --target web D:\_temp
+  --out-dir ../src/wasm
+
+rm -f ../src/wasm/*.d.ts
+rm -f ../src/wasm/*.json
+rm -f ../src/wasm/.gitignore
 </code>
+
 </pre>
  </body>
 </html>

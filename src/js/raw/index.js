@@ -773,7 +773,7 @@ async function loadDataInBatches(files, now, concurrency) {
     // worker 注册
     window._lastSavedKw = "";
     if (!searchWorker) {
-        searchWorker = new Worker('src/js/worker.js');
+        searchWorker = new Worker('src/js/worker.js', { type: 'module' });
         searchWorker.onmessage = async (e) => {
             const { type, results, keyword, token } = e.data;
             if (type === 'SEARCH_RESULTS') {
@@ -841,7 +841,7 @@ async function loadDataInBatches(files, now, concurrency) {
                             await store.SearchCache.remove(window._lastSavedKw);
                         }
                         // 存入完整的新词，更新追踪游标
-                        store.SearchCache.set(activeKw, results);
+                        // store.SearchCache.set(activeKw, results);
                         window._lastSavedKw = activeKw;
                     }, 600);
                 }

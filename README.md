@@ -14,7 +14,7 @@
 - 工具链
   - HTTP Server、Custom URL Protocol、Batch、Java、Rust、Git
 - Web 平台
-  - Vanilla JS、iframe、postMessage、Proxy、localStorage、Service Worker、IndexedDB、Web Worker、 WebAssembly
+  - Vanilla JS、iframe、postMessage、Proxy、localStorage、Service Worker、IndexedDB、Web Worker、WebAssembly
 > Workflow designed by diff4x | Optimized by Gemini & ChatGPT
 ---
 
@@ -88,6 +88,7 @@
  ┣ 📂 esbuild | libwebp                # 压缩
  ┣ 📂 server                           # 本地服务器
  ┣ 📂 jar                              # 数据清洗
+ ┣ 📂 rs                               # wasm 编译
  ┣ 📂 woff2_split                      # 字体切片
  ┣ 📜 CLI.bat                          # 构建入口
  ┗ 📜 config.properties                # 配置
