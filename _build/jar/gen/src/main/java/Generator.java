@@ -204,6 +204,10 @@ public class Generator {
                             String summary = summaryText.length() > 200
                                     ? summaryText.substring(0, 200) + "..."
                                     : summaryText;
+                            summary = summary
+                                    .replaceAll("(?m)^#{1,6}\\s*", "")
+                                    .replaceAll("\\s+", " ")
+                                    .trim();
                             seoList.add(new SeoArticle(title, timeStamp, summary));
                         } else if (isGitIgnored) {
                             fatDataMap.put(currentRecordId, "localOnly");
@@ -561,18 +565,30 @@ public class Generator {
     }
 
     private static void injectSeoToIndexHtml(List<SeoArticle> seoList) throws IOException {
-        Path indexPath = Config.indexHtml;
-        if (!Files.exists(indexPath)) {
+        if (seoList == null || seoList.isEmpty()) {
             return;
         }
 
-        String html = new String(Files.readAllBytes(indexPath),StandardCharsets.UTF_8);
+        Path indexPath = Config.indexHtml;
+        if (indexPath == null || !Files.exists(indexPath)) {
+            return;
+        }
+
+        String html = new String(Files.readAllBytes(indexPath), StandardCharsets.UTF_8);
         Document indexDoc = Jsoup.parse(html);
         String siteTitle = indexDoc.title();
+        if (siteTitle == null || siteTitle.isEmpty()) {
+            siteTitle = "Digital Garden";
+        }
 
-        seoList.sort((a, b) -> b.stamp.compareTo(a.stamp));
+        // 排序时对可能为 null 的 stamp 进行安全兜底
+        seoList.sort((a, b) -> {
+            String stampA = (a != null && a.stamp != null) ? a.stamp : "";
+            String stampB = (b != null && b.stamp != null) ? b.stamp : "";
+            return stampB.compareTo(stampA);
+        });
 
-        String domain = Config.props.getProperty("github_page");
+        String domain = (Config.props != null) ? Config.props.getProperty("github_page", "diff4x.github.io") : "diff4x.github.io";
         String baseUrl = "https://" + domain + "/";
 
         StringBuilder sb = new StringBuilder();
@@ -596,27 +612,38 @@ public class Generator {
                 Pattern.CASE_INSENSITIVE);
 
         int limit = Math.min(50, seoList.size());
+        int validCount = 0; // 用于安全控制 JSON-LD 数组项之间的逗号
 
         for (int i = 0; i < limit; i++) {
             SeoArticle a = seoList.get(i);
+            if (a == null) {
+                continue;
+            }
+
             String formattedDate = a.stamp;
             if (formattedDate != null && formattedDate.length() >= 8) {
                 formattedDate = formattedDate.substring(0, 4) + "-"
                         + formattedDate.substring(4, 6) + "-"
                         + formattedDate.substring(6, 8);
+            } else {
+                formattedDate = "";
             }
 
-            String safeTitle = a.title
+            String title = a.title != null ? a.title : "";
+            String safeTitle = title
                     .replace("\"", "\\\"")
                     .replace("\n", " ");
 
-            Matcher matcher = imgPattern.matcher(a.summary);
+            String summary = a.summary != null ? a.summary : "";
+            Matcher matcher = imgPattern.matcher(summary);
             List<String> imageUrls = new ArrayList<>();
             StringBuffer textBuffer = new StringBuffer();
 
             while (matcher.find()) {
                 String file = matcher.group(1);
-                imageUrls.add(baseUrl + "gallery/img/" + file);
+                if (file != null) {
+                    imageUrls.add(baseUrl + "gallery/img/" + file);
+                }
                 matcher.appendReplacement(textBuffer, "");
             }
             matcher.appendTail(textBuffer);
@@ -627,7 +654,7 @@ public class Generator {
 
             // ---------- HTML ----------
             sb.append("<article>\n");
-            sb.append("<h3>").append(a.title).append("</h3>\n");
+            sb.append("<h3>").append(title).append("</h3>\n");
             if (!pureText.isEmpty()) {
                 sb.append("<p>")
                         .append(pureText)
@@ -639,30 +666,43 @@ public class Generator {
                 for (int j = 0; j < imageUrls.size(); j++) {
                     sb.append("<img src=\"")
                             .append(imageUrls.get(j))
-                            .append("\" alt=\"")
-                            .append(a.title)
+                            .append("\" loading=\"lazy\" decoding=\"async\" alt=\"")
+                            .append(title)
                             .append(" 截图")
                             .append(j + 1)
                             .append("\">\n");
                 }
                 sb.append("</div>\n");
             }
-            sb.append("<time datetime=\"")
-                    .append(formattedDate)
-                    .append("\">")
-                    .append(formattedDate)
-                    .append("</time>\n");
+
+            if (!formattedDate.isEmpty()) {
+                sb.append("<time datetime=\"")
+                        .append(formattedDate)
+                        .append("\">")
+                        .append(formattedDate)
+                        .append("</time>\n");
+            }
             sb.append("</article>\n");
 
             // ---------- JSON-LD ----------
+            if (validCount > 0) {
+                jsonLd.append(",\n");
+            }
+
             jsonLd.append("    {\n");
             jsonLd.append("      \"@type\": \"BlogPosting\",\n");
             jsonLd.append("      \"headline\": \"")
                     .append(safeTitle)
-                    .append("\",\n");
+                    .append("\"");
+
+            if (!pureText.isEmpty()) {
+                jsonLd.append(",\n      \"description\": \"")
+                        .append(pureText.replace("\"", "\\\""))
+                        .append("\"");
+            }
 
             if (!imageUrls.isEmpty()) {
-                jsonLd.append("      \"image\": [\n");
+                jsonLd.append(",\n      \"image\": [\n");
                 for (int j = 0; j < imageUrls.size(); j++) {
                     jsonLd.append("        \"")
                             .append(imageUrls.get(j))
@@ -672,20 +712,23 @@ public class Generator {
                     }
                     jsonLd.append("\n");
                 }
-                jsonLd.append("      ],\n");
+                jsonLd.append("      ]");
             }
-            jsonLd.append("      \"datePublished\": \"")
-                    .append(formattedDate)
-                    .append("\"\n");
+
+            if (!formattedDate.isEmpty()) {
+                jsonLd.append(",\n      \"datePublished\": \"")
+                        .append(formattedDate)
+                        .append("\"\n");
+            } else {
+                jsonLd.append("\n");
+            }
             jsonLd.append("    }");
-            if (i != limit - 1) {
-                jsonLd.append(",");
-            }
-            jsonLd.append("\n");
+
+            validCount++;
         }
 
         sb.append("</div>\n");
-        jsonLd.append("  ]\n}\n</script>\n");
+        jsonLd.append("\n  ]\n}\n</script>\n");
         sb.append(jsonLd);
         sb.append("<!-- SEO-END -->");
 
