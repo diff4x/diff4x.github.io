@@ -1,6 +1,6 @@
 // 触发 SW 更新检查
-self.SW_VERSION = '1784947666015';
-importScripts('/src/js/core-list.js?v=1784947666015');
+self.SW_VERSION = '1784972224878';
+importScripts('/src/js/core-list.js?v=1784972224878');
 
 // 缓存池隔离命名
 const CACHE_NAME_CORE = 'core-cache-' + BUILD_VERSION;
@@ -30,6 +30,33 @@ const writeLog = async (msg) => {
         tx.objectStore('update_logs').add({ msg, ts: Date.now() });
     } catch(e) {}
 };
+
+// ===================================================================
+// 全局网络调度器 (防止多线程踩踏与缓存击穿)
+// ===================================================================
+const inFlightRequests = new Map();
+
+async function fetchWithLock(request, options = {}) {
+    const urlStr = typeof request === 'string' ? request : request.url;
+    
+    // 如果这个 URL 正在被下载（无论是主线程还是 SW 安装线程发起的），直接白嫖它的 Promise
+    if (inFlightRequests.has(urlStr)) {
+        const sharedResponse = await inFlightRequests.get(urlStr);
+        return sharedResponse.clone(); // 必须 clone，满足多路并发的分发
+    }
+
+    const fetchPromise = fetch(request, options).then(res => {
+        inFlightRequests.delete(urlStr);
+        return res;
+    }).catch(err => {
+        inFlightRequests.delete(urlStr);
+        throw err;
+    });
+
+    inFlightRequests.set(urlStr, fetchPromise);
+    const finalResponse = await fetchPromise;
+    return finalResponse.clone();
+}
 
 // 链路探测
 const getConnectionType = () => {
@@ -72,10 +99,11 @@ self.addEventListener('install', event => {
             const executing = new Set();
 
             for (const url of urls) {
-                const task = (async () => {
-                    try {
-                        const response = await fetch(new Request(url, { cache: 'no-cache' }));
-                        if (response.ok) {
+            const task = (async () => {
+                try {
+                    // 💥 接入全局锁：如果此时主线程也在请求这个文件，它们会自动合并为 1 个真实网络请求
+                    const response = await fetchWithLock(new Request(url, { cache: 'no-cache' }));
+                    if (response.ok) {
                             if (url !== '/') {
                                 const logMsg = oldManifest[url] ? `🔄 [SW] 更新文件: ${url}` : `✅ [SW] 新增文件: ${url}`;
                                 await writeLog(logMsg);
@@ -123,7 +151,13 @@ self.addEventListener('install', event => {
             if (meta.source === 'core-bundle.json') {
                 bundleUpdates.push(url);
             } else {
-                standaloneUpdates.push(url);
+                // 🚨 核心计算引擎(胶水/Wasm)，走规则 3.5 按需穿透缓存，不阻塞 SW 安装
+                if (
+                    !url.endsWith('worker.js') && 
+                    !url.endsWith('compute_intensive_task_processor.min.js') && 
+                    !url.endsWith('compute_intensive_task_processor.wasm')) {
+                    standaloneUpdates.push(url);
+                }
             }
         }
 
@@ -277,6 +311,38 @@ self.addEventListener('fetch', event => {
         return; 
     }
 
+    // [规则 3.5] 核心引擎按需穿透 + 全局锁 + SW 安装豁免
+    // 胶水/Wasm 属于动态异步引入：它们是在 JS 运行到 import(...) 时才由浏览器临时动态发起的，时机具有不确定性, Wasm体积大、首屏非绝对同步强依赖, 所以不能让它首屏无脑抢带宽
+
+    // index.js 这些常规首屏声明必须走 SW, 不能走 3.5 的由主线程按需加载 
+    // SW 在后台下载和主线程直接发起下载，它们走的是同一条物理网络通道，吞吐量一样。区别在于一个是立即并发, 一个是串行阻塞
+    // 主线程实时下载：浏览器必须先下载解析 HTML, 遇到 <script src="index.js"> 发现需要这个文件, 这时才开始发起网络请求, 由此耽误了宝贵的时间
+    // SW 后台预加载：当 SW 注册成功后，它在后台是独立于主线程运行的。不需要等 HTML 解析到哪一步，只要 SW 激活，后台就已经在全速并发抓取了。当主线程渲染到需要它的时候，可能文件在后台已经错峰下载大半甚至完成了
+
+    // 列入核心清单 => 参与文件 hash 计算进行自更新
+    // sw 安装时跳过 => 极速完成 SW 激活
+    // fetchWithLock => 防止主线程与 iframe 的高并发踩踏击穿
+    if (url.pathname.endsWith('worker.js') || 
+        url.pathname.endsWith('compute_intensive_task_processor.min.js') ||
+        url.pathname.endsWith('compute_intensive_task_processor.wasm')) { 
+        
+        event.respondWith(
+            caches.open(CACHE_NAME_CORE).then(async (cache) => {
+                const cachedResponse = await cache.match(event.request, { ignoreSearch: true });
+                if (cachedResponse) return cachedResponse;
+                
+                // 直接使用全局锁发起网络请求
+                const networkResponse = await fetchWithLock(event.request, { cache: 'no-cache' });
+                
+                if (networkResponse && networkResponse.status === 200) {
+                    cache.put(event.request, networkResponse.clone());
+                }
+                return networkResponse;
+            })
+        );
+        return;
+    }
+
     // [规则 4] Lazy Caching：请求命中后永久化为离线资产
     if (
         url.pathname.startsWith('/audio/') || 
@@ -299,11 +365,12 @@ self.addEventListener('fetch', event => {
         );
     } 
     // [规则 5] Cache-First：核心强缓存静默策略
+    // 对于常规文件 (index.js, index.css 等)：虽然它们还在 install 队列中，但由于接入了 fetchWithLock，如果主线程和 SW 安装线程在第 1 毫秒同时索要这些文件，浏览器底层只会被发出 1个 HTTP 请求
     else {
         event.respondWith(
             // ignoreSearch: 忽略URL的时间戳或哈希参数，保证离线状态下能够稳定命中
             caches.match(event.request, { ignoreSearch: true }).then(cached => {
-                return cached || fetch(event.request);
+                return cached || fetchWithLock(event.request);
             })
         );
     }

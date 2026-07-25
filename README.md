@@ -88,7 +88,7 @@
  ┣ 📂 esbuild | libwebp                # 压缩
  ┣ 📂 server                           # 本地服务器
  ┣ 📂 jar                              # 数据清洗
- ┣ 📂 rs                               # wasm 编译
+ ┣ 📂 rs                               # 冷排
  ┣ 📂 woff2_split                      # 字体切片
  ┣ 📜 CLI.bat                          # 构建入口
  ┗ 📜 config.properties                # 配置
@@ -101,6 +101,7 @@
  ┣  ┣ 📂 pdfjs
  ┣  ┣ 📂 photo-sphere-viewer
  ┣  ┗ 📂 prism
+ ┣ 📂 wasm
  ┣ 📂 tpl                              # 样板
  ┗ 📜 cmt_mapper.json                  # 评论映射
 📜 .gitignore                          # 私有节点清单

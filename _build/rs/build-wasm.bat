@@ -1,12 +1,6 @@
 @echo off
 setlocal
 
-::==============================================================================
-:: Build WASM module using wasm-pack (for Rust + Web projects)
-::==============================================================================
-
-title Building WASM for Project
-
 set WASM_OUT_DIR=..\..\src\wasm
 set TARGET_DIR=D:\_temp\rs_target
 set BUILD_ARGS=--target web --out-dir "%WASM_OUT_DIR%" --target-dir "%TARGET_DIR%"
@@ -27,6 +21,7 @@ if errorlevel 1 (
 echo.
 echo Cleaning generated files...
 
+"..\esbuild\esbuild.exe" "%WASM_OUT_DIR%\compute_intensive_task_processor.js" --outfile="%WASM_OUT_DIR%\compute_intensive_task_processor.min.js" --minify --target=es2020 --charset=utf8
 del /Q "%WASM_OUT_DIR%\*.d.ts" 2>nul
 del /Q "%WASM_OUT_DIR%\*.json" 2>nul
 del /Q "%WASM_OUT_DIR%\.gitignore" 2>nul

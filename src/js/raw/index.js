@@ -851,113 +851,63 @@ async function loadDataInBatches(files, now, concurrency) {
         };
     }
 
-    // 核心拼装
     const buildAndPushData = async () => {
-        // 合并胖数据
+        // 合并胖数据和影子数据
         let fat_data_merged = {};
         files.forEach(src => {
             const chunkData = chunkDataMap.get(src);
-            if (chunkData) 
-                Object.assign(fat_data_merged, chunkData);
+            if (chunkData) Object.assign(fat_data_merged, chunkData);
         });
 
-        // 合并影子数据
         let shadow_data_merged = {};
         const shadowDataChunks = new Map();
         if (store.online_flag === "0" && window.shadowIndex.length > 0) {
             await Promise.allSettled(window.shadowIndex.map(async (src) => {
                 try {
                     const res = await fetch(`src/js/data/${src}?t=${now}`, { cache: 'no-store' });
-                    if (res.ok) {
-                        shadowDataChunks.set(src, await res.json());
-                    }
-                } catch (e) { 
-                    console.warn(`影子数据 ${src} 拉取失败`, e); 
-                }
+                    if (res.ok) shadowDataChunks.set(src, await res.json());
+                } catch (e) { console.warn(`影子数据拉取失败`, e); }
             }));
         }
         shadowDataChunks.forEach(chunk => Object.assign(shadow_data_merged, chunk));
 
-        // 搅拌器
-        function flattenTree(node, prefix, bucketType) {
-            let results = [];
-            if (!node || typeof node !== 'object') return results;
-
-            if (Array.isArray(node._f)) {
-                node._f.forEach(([fileName, id, type, info]) => {
-                    const path = prefix + fileName;
-                    let title = fileName;
-                    if (type === 'html') title = title.replace(/\.html$/, '');
-                    results.push({ id, title, path, type, info });
-                });
-            }
-
-            for (let key in node) {
-                if (key === '_f') continue;
-                if (Object.prototype.hasOwnProperty.call(node, key)) {
-                    const nextPrefix = (key === '_uncategorized') ? prefix : prefix + key + '/';
-                    results.push(...flattenTree(node[key], nextPrefix, bucketType));
-                }
-            }
-            return results;
-        }
-
-        // 装盘
-        window.data = [];
-        if (window.lite_data && typeof window.lite_data === 'object') {
-            ['html', 'image', 'ebook', 'video', 'audio'].forEach(bucket => {
-                const root = window.lite_data[bucket];
-                if (!root) return;
-
-                let prefix = '';
-                if (bucket === 'html') prefix = 'html/';
-                else if (bucket === 'image') prefix = 'gallery/';
-                else if (bucket === 'video') prefix = 'video/';
-                else if (bucket === 'audio') prefix = 'audio/';
-                else if (bucket === 'ebook') prefix = 'ebook/';
-
-                const flatItems = flattenTree(root, prefix, bucket);
-                flatItems.forEach(item => {
-                    let val1 = item.info;
-                    let val2 = item.path;
-                    if (item.type === 'html') {
-                        val1 = fat_data_merged[item.id] || "";
-
-                        if (store.online_flag === "0" && val1 === "localOnly" && shadow_data_merged[item.id]) {
-                            val1 = "localOnly" + shadow_data_merged[item.id];
-                        }
-
-                        const fileName = item.path.split('/').pop();
-                        val2 = `html/${fileName}`;
-                    }
-                    window.data.push(item.title, val1, val2, item.type);
-                });
-            });
+        // 💥 Wasm 接管：通过序列化 JSON，把递归合并的任务直接推给底层的 Rust
+        try {
+            // 动态加载 Wasm 模块供主线程组装数据
+            const wasm = await import('../wasm/compute_intensive_task_processor.min.js');
+            await wasm.default(); // 初始化
+            
+            const isOffline = store.online_flag === "0";
+            
+            window.data = wasm.build_flat_data(
+                JSON.stringify(window.lite_data || {}),
+                JSON.stringify(fat_data_merged),
+                JSON.stringify(shadow_data_merged),
+                isOffline
+            );
+        } catch (e) {
+            console.error("Wasm 数据组装引擎崩溃，请检查依赖:", e);
+            window.data = []; // 异常兜底
         }
 
         // 全量喂给 worker 
         searchWorker.postMessage({ type: 'SET_DATA', payload: window.data });
 
-        // 洗盘子
+        // 洗盘子释放内存
         fat_data_merged = null;
         chunkDataMap.clear();
 
-        // 结束
+        // 结束与撒花逻辑...
         if (store.force_refresh_cache === "1") {
             store.force_refresh_cache = "0";
-
             const triggerConfetti = () => {
                 if (window.restoreSnapPromise) {
                     window.restoreSnapPromise.then(() => { 
                         idleRun(playConfetti); 
                         window.restoreSnapPromise = null; 
                     });
-                } else {
-                    idleRun(playConfetti);
-                }
+                } else { idleRun(playConfetti); }
             };
-
-            // 撒花
             triggerConfetti();
         }
     };

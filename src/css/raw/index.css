@@ -94,7 +94,7 @@ option:hover {
 
 #close-popup {
     right: 3px;
-    position: fixed;
+    position: absolute;
 }
 
 #giscus-container {

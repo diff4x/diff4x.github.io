@@ -1,29 +1,36 @@
 use regex::Regex;
-use serde::{Serialize};
+use serde::Serialize;
 use std::cell::RefCell;
 use wasm_bindgen::prelude::*;
+use wasm_bindgen::JsValue;
+use lru::LruCache;
+use std::num::NonZeroUsize;
+use aho_corasick::AhoCorasick;
 
 // ==========================================
-// 1. 全局内存驻留区 (杜绝 Worker 的大数组重复拷贝)
+// 1. 全局内存驻留区 & LRU 编译缓存
 // ==========================================
 thread_local! {
-    // 静态持有全局数据，格式保持 JS 传过来的平铺数组: [title, info, path, type, ...]
     static GLOBAL_DATA: RefCell<Vec<String>> = RefCell::new(Vec::new());
+    
+    // 缓存精确匹配的 DFA 状态机
+    static EXACT_CACHE: RefCell<LruCache<String, AhoCorasick>> = RefCell::new(LruCache::new(NonZeroUsize::new(32).unwrap()));
+    // 缓存宽容匹配的正则对象
+    static TOLERANT_CACHE: RefCell<LruCache<String, Regex>> = RefCell::new(LruCache::new(NonZeroUsize::new(32).unwrap()));
 }
 
 // ==========================================
-// 2. 数据结构定义
+// 2. 数据结构定义 (引入 <'a> 生命周期，实现真正的 Zero-Copy)
 // ==========================================
 
-/// 返回给 worker.js 的搜索结果
-#[derive(Serialize, Clone)]
-pub struct SearchResult {
-    pub title: String,
+#[derive(Serialize)]
+pub struct SearchResult<'a> {
+    pub title: &'a str,  // 直接借用内存池地址，彻底消灭 clone!
     pub count: usize,
     pub score: usize,
     #[serde(rename = "type")]
-    pub res_type: String,
-    pub path: String,
+    pub res_type: &'a str,
+    pub path: &'a str,
     #[serde(rename = "localOnly")]
     pub local_only: bool,
     pub snippets: Vec<String>,
@@ -76,34 +83,52 @@ pub fn search(keyword: &str) -> JsValue {
         return serde_wasm_bindgen::to_value(&Vec::<SearchResult>::new()).unwrap();
     }
 
-    let exact_regex = build_regex(keyword, false);
-    let tolerant_regex = build_regex(keyword, true);
+    let kw = keyword.trim().to_string();
 
-    let results = GLOBAL_DATA.with(|data| {
+    // 从 LRU 缓存极速提取编译好的状态机和正则
+    let ac = EXACT_CACHE.with(|c| {
+        let mut cache = c.borrow_mut();
+        if let Some(cached) = cache.get(&kw) {
+            return cached.clone(); // AhoCorasick 内部采用 Arc，clone 极快
+        }
+        let built = AhoCorasick::builder().ascii_case_insensitive(true).build(&[&kw]).unwrap();
+        cache.put(kw.clone(), built.clone());
+        built
+    });
+
+    let tolerant_regex = TOLERANT_CACHE.with(|c| {
+        let mut cache = c.borrow_mut();
+        if let Some(cached) = cache.get(&kw) {
+            return cached.clone();
+        }
+        let built = build_regex(&kw, true);
+        cache.put(kw.clone(), built.clone());
+        built
+    });
+
+    // 关键优化：在借用作用域内直接生成 JSValue，实现极限零拷贝传递
+    GLOBAL_DATA.with(|data| {
         let pool = data.borrow();
         if pool.is_empty() {
-            return Vec::new();
+            return serde_wasm_bindgen::to_value(&Vec::<SearchResult>::new()).unwrap();
         }
 
-        // 第一遍：精准匹配
-        let mut hits = execute_scan(&pool, &exact_regex, false);
+        // 第一遍：状态机精准狂飙
+        let mut hits = execute_scan_exact(&pool, &ac, &kw);
 
-        // 融合扫描：精确匹配为空，直接无缝跑宽容匹配
+        // 融合扫描：精确匹配为空，无缝跑宽容匹配
         if hits.is_empty() {
-            hits = execute_scan(&pool, &tolerant_regex, true);
+            hits = execute_scan_tolerant(&pool, &tolerant_regex, true);
         }
 
-        // Rust 原生极速多条件排序
         hits.sort_by(|a, b| {
             b.score.cmp(&a.score)
                 .then(b.count.cmp(&a.count))
-                .then(a.title.cmp(&b.title)) // 字典序兜底
+                .then(a.title.cmp(&b.title)) 
         });
 
-        hits
-    });
-
-    serde_wasm_bindgen::to_value(&results).unwrap()
+        serde_wasm_bindgen::to_value(&hits).unwrap()
+    })
 }
 
 // ==========================================
@@ -185,8 +210,58 @@ fn build_regex(kw: &str, is_tolerant: bool) -> Regex {
     Regex::new(&format!("(?i){}", pattern)).unwrap_or_else(|_| Regex::new("^$").unwrap())
 }
 
-/// 针对 worker.js 的全局扫描逻辑
-fn execute_scan(pool: &[String], re: &Regex, is_tolerant: bool) -> Vec<SearchResult> {
+/// 精准模式扫描：使用 Aho-Corasick 状态机
+fn execute_scan_exact<'a>(pool: &'a [String], ac: &AhoCorasick, kw: &str) -> Vec<SearchResult<'a>> {
+    let mut results = Vec::new();
+    let weight_title = 50;
+    let weight_content = 1;
+    // 构建用于切片的伪正则 (AhoCorasick 本身也能切，但为了复用之前的 extract_snippets 逻辑，这里临时生成一个简单的 literal 正则，开销极小)
+    let slice_re = Regex::new(&format!("(?i){}", regex::escape(kw))).unwrap();
+
+    for i in (0..pool.len()).step_by(4) {
+        if i + 3 >= pool.len() { break; }
+
+        let raw_content = &pool[i + 1];
+        let path = &pool[i + 2];
+        let res_type = &pool[i + 3];
+        
+        let title_start = path.rfind('/').map(|i| i + 1).unwrap_or(0);
+        let title = &path[title_start..]; // Zero-copy slicing!
+        
+        let mut is_local_only = false;
+        let searchable_content = if raw_content.starts_with("localOnly") {
+            is_local_only = true;
+            &raw_content[9..] 
+        } else {
+            raw_content
+        };
+
+        let title_hits = ac.find_iter(&title).count();
+        let content_hits = ac.find_iter(searchable_content).count();
+        let mut count = title_hits + content_hits;
+        
+        if count == 0 && res_type != &"html" && res_type != &"image" {
+            count = ac.find_iter(path).count();
+        }
+
+        if count == 0 { continue; }
+
+        let snippets = if content_hits > 0 {
+            extract_snippets(searchable_content, &slice_re)
+        } else {
+            Vec::new()
+        };
+
+        results.push(SearchResult {
+            title, count, score: (title_hits * weight_title) + (content_hits * weight_content),
+            res_type, path, local_only: is_local_only, snippets, is_tolerant_match: false,
+        });
+    }
+    results
+}
+
+/// 宽容模式扫描：使用原生 Regex
+fn execute_scan_tolerant<'a>(pool: &'a [String], re: &Regex, is_tolerant: bool) -> Vec<SearchResult<'a>> {
     let mut results = Vec::new();
     let weight_title = 50;
     let weight_content = 1;
@@ -197,7 +272,9 @@ fn execute_scan(pool: &[String], re: &Regex, is_tolerant: bool) -> Vec<SearchRes
         let raw_content = &pool[i + 1];
         let path = &pool[i + 2];
         let res_type = &pool[i + 3];
-        let title = path.split('/').last().unwrap_or("").to_string();
+        
+        let title_start = path.rfind('/').map(|i| i + 1).unwrap_or(0);
+        let title = &path[title_start..]; // Zero-copy slicing!
         
         let mut is_local_only = false;
         let searchable_content = if raw_content.starts_with("localOnly") {
@@ -211,15 +288,11 @@ fn execute_scan(pool: &[String], re: &Regex, is_tolerant: bool) -> Vec<SearchRes
         let content_hits = re.find_iter(searchable_content).count();
         let mut count = title_hits + content_hits;
         
-        if count == 0 && res_type != "html" && res_type != "image" {
+        if count == 0 && res_type != &"html" && res_type != &"image" {
             count = re.find_iter(path).count();
         }
 
-        if count == 0 {
-            continue;
-        }
-
-        let score = (title_hits * weight_title) + (content_hits * weight_content);
+        if count == 0 { continue; }
 
         let snippets = if content_hits > 0 {
             extract_snippets(searchable_content, re)
@@ -228,17 +301,10 @@ fn execute_scan(pool: &[String], re: &Regex, is_tolerant: bool) -> Vec<SearchRes
         };
 
         results.push(SearchResult {
-            title,
-            count,
-            score,
-            res_type: res_type.clone(),
-            path: path.clone(),
-            local_only: is_local_only,
-            snippets,
-            is_tolerant_match: is_tolerant,
+            title, count, score: (title_hits * weight_title) + (content_hits * weight_content),
+            res_type, path, local_only: is_local_only, snippets, is_tolerant_match: is_tolerant,
         });
     }
-
     results
 }
 
@@ -311,12 +377,177 @@ fn extract_snippets(text: &str, re: &Regex) -> Vec<String> {
     snippets
 }
 
+
+use lazy_static::lazy_static;
+use serde_json::Value;
+
 // ==========================================
-// 6. 可选扩展：Markdown 格式化
+// 目标 1：Markdown 极速格式化引擎 (外包 content.js 的 format)
+// 利用 lazy_static 全局缓存正则，避免在遍历大文本时重复编译 (优化点 3.b)
+// ==========================================
+lazy_static! {
+    static ref MEDIA_RE: Regex = Regex::new(r#"(?i)([^\s"'<>]+\.(?:jpg|png|webp|gif))|(https?://[^\s"'<>]+)"#).unwrap();
+    static ref HEADER_RE: Regex = Regex::new(r"^(#{1,6})\s+(.*)$").unwrap();
+}
+
+#[wasm_bindgen]
+pub fn format_markdown(text: &str) -> String {
+    let lines: Vec<&str> = text.split('\n').collect();
+    let mut out_lines = Vec::with_capacity(lines.len());
+
+    for line in lines {
+        if line.is_empty() {
+            out_lines.push(String::from("\n\u{00A0}"));
+            continue;
+        }
+
+        // 1. 媒体与链接替换
+        let processed = MEDIA_RE.replace_all(line, |caps: &regex::Captures| {
+            if let Some(img) = caps.get(1) {
+                let img_str = img.as_str();
+                let src = if !img_str.starts_with("http") && !img_str.contains('/') {
+                    format!("../gallery/img/{}", img_str)
+                } else {
+                    img_str.to_string()
+                };
+                format!("<img src=\"{}\" style=\"max-height:400px;width:auto;\" title=\"{}\">", src, img_str)
+            } else if let Some(url) = caps.get(2) {
+                let url_str = url.as_str();
+                format!("<a href=\"{}\" target=\"_blank\">{}</a>", url_str, url_str)
+            } else {
+                String::new()
+            }
+        });
+
+        // 2. 标题 H1-H6 替换
+        if let Some(caps) = HEADER_RE.captures(&processed) {
+            let level = caps.get(1).unwrap().as_str().len();
+            let content = caps.get(2).unwrap().as_str();
+            out_lines.push(format!("<h{}>{}</h{}>", level, content, level));
+            continue;
+        }
+
+        // 3. 缩进层级解析 (直接算空格，完全消灭 JS 的正则开销)
+        let space_len = processed.chars().take_while(|c| *c == ' ').count();
+        let content = &processed[space_len..];
+
+        if content.trim().is_empty() {
+            out_lines.push(String::from("<span class='lv0 empty-line-fix'></span>"));
+            continue;
+        }
+        if content.starts_with("<img") {
+            out_lines.push(processed.to_string());
+            continue;
+        }
+
+        let lv = if space_len >= 16 { 16 }
+                 else if space_len >= 12 { 12 }
+                 else if space_len >= 8 { 8 }
+                 else if space_len >= 4 { 4 }
+                 else { 0 };
+
+        if lv > 0 {
+            out_lines.push(format!("<span class='lv0 lv{}'>{}</span>", lv, content));
+        } else {
+            out_lines.push(format!("<span class='lv0'>{}</span>", content));
+        }
+    }
+
+    out_lines.join("\n")
+}
+
+// ==========================================
+// 目标 2：数据增量 Diff 与树结构扁平化 (外包 index.js 的 flattenTree)
 // ==========================================
 #[wasm_bindgen]
-pub fn format_markdown_line(line: &str) -> String {
-    // 在这里用 Rust 高速执行正则替换
-    // 返回 `<span class='lv0'>...</span>` 字符串
-    String::from(line)
+pub fn build_flat_data(lite_json: &str, fat_json: &str, shadow_json: &str, is_offline: bool) -> js_sys::Array {
+    // 采用跨界传 JSON String，再在 Rust 侧安全反序列化的策略，比深拷贝巨大 JsValue 快得多
+    let lite: Value = serde_json::from_str(lite_json).unwrap_or(Value::Null);
+    let fat: Value = serde_json::from_str(fat_json).unwrap_or(Value::Null);
+    let shadow: Value = serde_json::from_str(shadow_json).unwrap_or(Value::Null);
+
+    let mut results = Vec::new();
+    let buckets = [
+        ("html", "html/"), ("image", "gallery/"), 
+        ("video", "video/"), ("audio", "audio/"), ("ebook", "ebook/")
+    ];
+
+    for (bucket, prefix) in buckets.iter() {
+        if let Some(root) = lite.get(bucket) {
+            flatten_tree_recursive(root, prefix, bucket, &fat, &shadow, is_offline, &mut results);
+        }
+    }
+    
+    // 生成标准的平铺数组返回给 JS，供 worker 初始化或直接使用
+    let js_array = js_sys::Array::new_with_length(results.len() as u32);
+    for (i, s) in results.into_iter().enumerate() {
+        js_array.set(i as u32, JsValue::from_str(&s));
+    }
+    js_array
+}
+
+fn flatten_tree_recursive(node: &Value, prefix: &str, bucket: &str, fat: &Value, shadow: &Value, is_offline: bool, results: &mut Vec<String>) {
+    if let Value::Object(map) = node {
+        // 提取并压平 _f 文件节点
+        if let Some(Value::Array(f_arr)) = map.get("_f") {
+            for f_item in f_arr {
+                if let Value::Array(item) = f_item {
+                    // ✅ 修复 1：放宽到长度 >= 3，包容没有 info 的节点
+                    if item.len() >= 3 {
+                        let file_name = item.get(0).and_then(|v| v.as_str()).unwrap_or("");
+                        
+                        // ✅ 修复 2：兼容 ID 是 Number 的情况，一律转为 String
+                        let id = match item.get(1) {
+                            Some(Value::String(s)) => s.clone(),
+                            Some(Value::Number(n)) => n.to_string(),
+                            _ => String::new(),
+                        };
+                        
+                        let f_type = item.get(2).and_then(|v| v.as_str()).unwrap_or("");
+                        // 第 4 个元素作为 info，拿不到就默认为空
+                        let info = item.get(3).and_then(|v| v.as_str()).unwrap_or("");
+                        
+                        let mut title = file_name.to_string();
+                        let path = format!("{}{}", prefix, file_name);
+                        let mut val1 = info.to_string();
+                        let mut val2 = path.clone();
+
+                        if f_type == "html" {
+                            if title.ends_with(".html") {
+                                title = title[..title.len()-5].to_string();
+                            }
+                            // 用解析好的准确 id 查阅 fat 字典
+                            if let Some(fat_info) = fat.get(&id).and_then(|v| v.as_str()) {
+                                val1 = fat_info.to_string();
+                            }
+                            // Shadow 降级覆盖逻辑
+                            if is_offline && val1.starts_with("localOnly") {
+                                if let Some(shadow_info) = shadow.get(&id).and_then(|v| v.as_str()) {
+                                    val1 = format!("localOnly{}", shadow_info);
+                                }
+                            }
+                            val2 = format!("html/{}", file_name);
+                        }
+                        
+                        results.push(title);
+                        results.push(val1);
+                        results.push(val2);
+                        results.push(f_type.to_string());
+                    }
+                }
+            }
+        }
+        
+        // 递归遍历子目录 (保持不变)
+        for (k, v) in map {
+            if k != "_f" {
+                let next_prefix = if k == "_uncategorized" {
+                    prefix.to_string()
+                } else {
+                    format!("{}{}/", prefix, k)
+                };
+                flatten_tree_recursive(v, &next_prefix, bucket, fat, shadow, is_offline, results);
+            }
+        }
+    }
 }

@@ -18,13 +18,37 @@ cd rs
 </code>
 
 <code batch>
-wasm-pack build \
-  --target web D:\_temp
-  --out-dir ../src/wasm
+@echo off
+setlocal
 
-rm -f ../src/wasm/*.d.ts
-rm -f ../src/wasm/*.json
-rm -f ../src/wasm/.gitignore
+set WASM_OUT_DIR=..\..\src\wasm
+set TARGET_DIR=D:\_temp\rs_target
+set BUILD_ARGS=--target web --out-dir "%WASM_OUT_DIR%" --target-dir "%TARGET_DIR%"
+
+cd /d "%~dp0"
+
+echo.
+echo [INFO] Building WASM...
+call wasm-pack build %BUILD_ARGS%
+
+if errorlevel 1 (
+    echo.
+    echo [ERROR] WASM build failed!
+    pause
+    exit /b 1
+)
+
+echo.
+echo Cleaning generated files...
+
+"..\esbuild\esbuild.exe" "%WASM_OUT_DIR%\compute_intensive_task_processor.js" --outfile="%WASM_OUT_DIR%\compute_intensive_task_processor.min.js" --minify --target=es2020 --charset=utf8
+del /Q "%WASM_OUT_DIR%\*.d.ts" 2>nul
+del /Q "%WASM_OUT_DIR%\*.json" 2>nul
+del /Q "%WASM_OUT_DIR%\.gitignore" 2>nul
+
+echo.
+echo [SUCCESS] WASM build completed successfully!
+pause
 </code>
 
 </pre>
