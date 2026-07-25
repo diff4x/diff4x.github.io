@@ -1,9 +1,14 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
-
+<html lang="zh-CN" style="background-color: #003b14">
 <head>
     <meta charset="utf-8">
     <title>diff4x's digital garden</title>
+    <meta name="description" content="本人觉得有趣的、有启发性的、阴暗的东西，以及各类总结、备忘、导航。">
+    <link rel="canonical" href="https://diff4x.github.io/">
+    <meta property="og:title" content="diff4x's digital garden">
+    <meta property="og:description" content="本人觉得有趣的、有启发性的、阴暗的东西，以及各类总结、备忘、导航。">
+    <meta property="og:type" content="website">
+    <meta property="og:url" content="https://diff4x.github.io/">
     <script>
         (function () {
             function getCookie(name) {
@@ -33,18 +38,30 @@
         })();
     </script>
     <link rel="stylesheet" type="text/css" id="css">
+    <style>
+        .sr-only {
+            position: absolute;
+            width: 1px;
+            height: 1px;
+            padding: 0;
+            margin: -1px;
+            overflow: hidden;
+            clip: rect(0, 0, 0, 0);
+            white-space: nowrap;
+            border-width: 0;
+        }
+    </style>
 </head>
-<body style="opacity:0">
-
-    <div id="search" class="hide">
+<body>
+    <div id="search" style="display: none">
         <select id="searchResults"></select>
         <input id="searchInput" placeholder="search..">
         <input id="clear" type="button" value="clear">
         <select id="searchHistory"></select>
     </div>
 
-    <iframe id="content" name="content"></iframe>
-    <iframe id="side" name="side" allow="clipboard-write"></iframe>
+    <iframe style="border: none" id="content" name="content"></iframe>
+    <iframe style="border: none" id="side" name="side" allow="clipboard-write"></iframe>
 
     <div id="giscus-popup" style="display: none;">
         <div id="popup-header">
@@ -52,7 +69,7 @@
         </div>
         <div id="giscus-container" style="width:100%; height: calc(100% - 30px);"></div>
     </div>
-<!-- PROTOCOL-BEGIN -->
+<!-- PARAM-BEGIN -->
 <script>
   const github_page = "diff4x.github.io";
   const data_repo = "diff4x/comments";
@@ -61,13 +78,652 @@
   const update_interval = 10000;
   const update_interval_local = 2000;
 </script>
-<!-- PROTOCOL-END -->
+<!-- PARAM-END -->
     <script id="js" type="text/javascript" charset="UTF-8"></script>
     <script>
         document.getElementById("js").src = "src/js/index.js";
         document.getElementById("css").href = "src/css/index.css";
     </script>
 
+<!-- SEO-BEGIN -->
+<div id="seo-content" class="sr-only">
+<h1>diff4x's digital garden</h1>
+<p>本人觉得有趣的、有启发性的、阴暗的东西，以及各类总结、备忘、导航</p>
+<h2>最新内容</h2>
+<article>
+<h3>rust</h3>
+<p>curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh rustc --version cargo install wasm-pack cargo new --lib rs cd rs @echo off setlocal set WASM_OUT_DIR=..\..\src\wasm set TARGET_DIR=D:\_te...</p>
+<time datetime="2026-07-24">2026-07-24</time>
+</article>
+<article>
+<h3>权重模型</h3>
+<p># 权重转化为知识 本质上是不断根据前面的 Token，预测下一个 Token Token（词元）：AI 处理文字时使用的“最小语言单位”之一，可以看成 AI 自己的字典 预测 → 计算误差 → 反向传播 → 调整权重 → 如此循环，每生成一个 Token，都在利用数十亿甚至更多的权重进行一次巨大的数学计算 现代大模型通过“预测下一个 Token”这种简单机制，规模足够大以后，涌现出推理、总结、翻...</p>
+<time datetime="2026-07-22">2026-07-22</time>
+</article>
+<article>
+<h3>碎片09</h3>
+<p>1 粗暴剪枝 俊和後 “Fire运动” Financial Independence and Retiring Early 幸存者偏差 少数人有枪, 那叫恐惧, 只有大家都有枪, 才叫平等 步子太大容易扯到蛋 “尘归尘，土归土”原指‌人死后身体回归自然‌，引申为‌万物终有归宿‌或‌看淡名利、回归本真‌。‌‌‌ ‌出处背景‌：源自《圣经·创世记》3:19，原文为“你本是尘土，仍要归于尘土”，后成为常...</p>
+<time datetime="2026-07-22">2026-07-22</time>
+</article>
+<article>
+<h3>操作系统</h3>
+<p># pixel在中国地区的IMS注册 2G,3G时代,手机里有两套网络 打电话,电路交换（CS） 上网,数据网络 4G LTE 被设计成纯数据网络（All-IP Network）,LTE 没有语音通道 刚进入 4G 时，运营商用了一个临时办法, 打电话时信号从 4G 切回 3G VoLTE Voice over LTE 本质是把电话变成一种“特殊的数据业务”, 即实时数据通信 VoLTE 依赖 I...</p>
+<time datetime="2026-07-18">2026-07-18</time>
+</article>
+<article>
+<h3>亚当斯一家</h3>
+<div class="seo-images">
+<img src="https://diff4x.github.io/gallery/img/20260716234423.webp" alt="亚当斯一家 截图1">
+<img src="https://diff4x.github.io/gallery/img/20260716234416.webp" alt="亚当斯一家 截图2">
+<img src="https://diff4x.github.io/gallery/img/20260716234419.webp" alt="亚当斯一家 截图3">
+<img src="https://diff4x.github.io/gallery/img/20260716234418.webp" alt="亚当斯一家 截图4">
+<img src="https://diff4x.github.io/gallery/img/20260716234417.webp" alt="亚当斯一家 截图5">
+<img src="https://diff4x.github.io/gallery/img/20260716234422.webp" alt="亚当斯一家 截图6">
+<img src="https://diff4x.github.io/gallery/img/20260716234421.webp" alt="亚当斯一家 截图7">
+<img src="https://diff4x.github.io/gallery/img/20260716234424.webp" alt="亚当斯一家 截图8">
+<img src="https://diff4x.github.io/gallery/img/20260716234420.webp" alt="亚当斯一家 截图9">
+</div>
+<time datetime="2026-07-16">2026-07-16</time>
+</article>
+<article>
+<h3>电影</h3>
+<p>1 亚当斯一家 1991 亚当斯一家的价值观 1993 幸运查克 2007 92黑玫瑰对黑玫瑰 1992 水浒笑传 1993 空前绝后满天飞 1980 哪啊哪啊神去村 2014 布莱恩的一生 1979 好家伙 1990 大话王 1997 冒牌天神 2003 乾隆皇君臣斗智 乾隆皇与三姑娘 乾隆下扬州 乾隆下江南 乾隆皇奇遇记 食神 1996 没事偷着乐 1998 惊世狂花 1996 红辣椒 200...</p>
+<time datetime="2026-07-16">2026-07-16</time>
+</article>
+<article>
+<h3>亚当斯一家的价值观</h3>
+<div class="seo-images">
+<img src="https://diff4x.github.io/gallery/img/20260716203653.webp" alt="亚当斯一家的价值观 截图1">
+<img src="https://diff4x.github.io/gallery/img/20260716203648.webp" alt="亚当斯一家的价值观 截图2">
+<img src="https://diff4x.github.io/gallery/img/20260716203654.webp" alt="亚当斯一家的价值观 截图3">
+<img src="https://diff4x.github.io/gallery/img/20260716203649.webp" alt="亚当斯一家的价值观 截图4">
+<img src="https://diff4x.github.io/gallery/img/20260716203651.webp" alt="亚当斯一家的价值观 截图5">
+<img src="https://diff4x.github.io/gallery/img/20260716203650.webp" alt="亚当斯一家的价值观 截图6">
+<img src="https://diff4x.github.io/gallery/img/20260716203647.webp" alt="亚当斯一家的价值观 截图7">
+<img src="https://diff4x.github.io/gallery/img/20260716203655.webp" alt="亚当斯一家的价值观 截图8">
+<img src="https://diff4x.github.io/gallery/img/20260716203652.webp" alt="亚当斯一家的价值观 截图9">
+<img src="https://diff4x.github.io/gallery/img/20260716203656.webp" alt="亚当斯一家的价值观 截图10">
+</div>
+<time datetime="2026-07-16">2026-07-16</time>
+</article>
+<article>
+<h3>官场现形记</h3>
+<p>1 今日我们何不脱略形迹, 请龙珠姑娘多弹几首尽尽兴, 也不负此江此船, 此情此景啊 还请大人一定指教 自家兄弟, 说哪里话 递个话儿 大人, 我们只要把寄往京都请示处斩的文, 装到寄往云南的信袋里就可以了, 这么一站一站送到云南, 等到云南方知送错, 再这么一站一站转送回来, 一年不就绰绰有余了吗, 再等这文转送到京都, 再从京都批准下来, 我估计儿子大约都能走路了 有一句老话, 年兄别忘了, ...</p>
+<time datetime="2026-07-15">2026-07-15</time>
+</article>
+<article>
+<h3>幸运查克</h3>
+<p>哥特</p>
+<div class="seo-images">
+<img src="https://diff4x.github.io/gallery/img/20260712083126.webp" alt="幸运查克 截图1">
+<img src="https://diff4x.github.io/gallery/img/20260712083125.webp" alt="幸运查克 截图2">
+</div>
+<time datetime="2026-07-12">2026-07-12</time>
+</article>
+<article>
+<h3>KataGo</h3>
+<p># 组合 Go client katrain-1.18.1 config gtp_rtx5070ti_laptop.cfg opencl.cfg reportAnalysisWinratesAs = BLACK conservativePass = true maxVisits = 2000 numAnalysisThreads = 6 numSearchThreads = 12 nnMaxBat...</p>
+<time datetime="2026-07-05">2026-07-05</time>
+</article>
+<article>
+<h3>92黑玫瑰对黑玫瑰</h3>
+<p>毛舜筠真係好鬼正 扑蝶 我懂, 我明白, 防人之心不可无, 这些是社会的错, 我不会怪你的, 黄小姐, 总有一天你会明白我吕奇是一个出污泥而不染的好人, (捡钥匙, 幸好没有人看到)</p>
+<div class="seo-images">
+<img src="https://diff4x.github.io/gallery/img/20260629001516.webp" alt="92黑玫瑰对黑玫瑰 截图1">
+</div>
+<time datetime="2026-06-29">2026-06-29</time>
+</article>
+<article>
+<h3>python基础</h3>
+<p>没有 {}, 靠缩进表示代码块 #普通注释 不需要分号(可以使用分号,如果想把多条语句写在同一行) 变量类型由解释器自动决定 # 字符串 ## title,upper,lower name = "ada lovelace" print(name.title()) print(name.upper()) print(name.lower()) ## 格式输出 f,{} first_name = "a...</p>
+<time datetime="2026-06-16">2026-06-16</time>
+</article>
+<article>
+<h3>水浒笑传</h3>
+<p>事到如今, 只有万恶的金钱才能解决得了</p>
+<div class="seo-images">
+<img src="https://diff4x.github.io/gallery/img/20260607140912.webp" alt="水浒笑传 截图1">
+</div>
+<time datetime="2026-06-07">2026-06-07</time>
+</article>
+<article>
+<h3>三言两拍</h3>
+<p>重会珍珠衫 罗衫恩仇记 卖油郎独占花魁 义结生死交 包公断奇冤 客舫奇缘 寂寞宫花红 郑月娥从良 白玉娘 转运汉奇遇 牧童奇梦记 李方哥卖酒 一箭姻缘 丹客奇谈 一着饶天下 船尸疑案 人情恩怨 一文钱 醉草吓蛮书 错配鸳鸯 莫大姐私奔 聚财如蚁堆山, 散财似水推沙 树未刨根, 水未溯源, 尚不能武断 走脱 大碗酒, 大块的肉, 论秤分金银, 落得逍遥自在 心...</p>
+<div class="seo-images">
+<img src="https://diff4x.github.io/gallery/img/20260705132403.webp" alt="三言两拍 截图1">
+</div>
+<time datetime="2026-06-07">2026-06-07</time>
+</article>
+<article>
+<h3>电视剧</h3>
+<p>1 三言二拍 1993 聊斋 1988 徐文长外传 2001 寻秦记 2001 百集聊斋之人鬼情缘 2000 侠客行 2002 混世游侠 2001 马鸣风萧萧 2006 无忧公主 2004 饮马流花河 1996 少年天子 2003 长河东流 2008 南宋传奇之蟋蟀宰相 2003 新女驸马 2002 正德演义 2005 把酒问青天 2005 七种武器之孔雀翎 2011 绝代双骄 1988 苏樱 绝...</p>
+<time datetime="2026-06-06">2026-06-06</time>
+</article>
+<article>
+<h3>聊斋</h3>
+<p>阿宝 阿绣 八大王 地府娘娘 窦女情仇 蛾眉一笑 封三娘 公孙九娘 鬼宅 荷花三娘子 狐仙驯悍记 花姑子 狐侠 花仙情缘 孤山狐女 贾奉雉 娇娜 连琐 莲香 金钏奇情 鲁公女 陆判 骂鸭 良琴知己 梅女 冥间酒友 翩翩 乔女 瑞云 杀阴曹 生死情 书痴 田七郞 司文郞 无头案 佟客 雨钱 西湖主 水莽草 香玉 细候 仙媒 辛十四娘 鹦鹉奇缘 婴宁 云翠仙 袖中奇缘 鸦头 远山芙蓉 别讲, 随你去什...</p>
+<time datetime="2026-06-06">2026-06-06</time>
+</article>
+<article>
+<h3>260530</h3>
+<time datetime="2026-06-02">2026-06-02</time>
+</article>
+<article>
+<h3>260214</h3>
+<time datetime="2026-06-02">2026-06-02</time>
+</article>
+<article>
+<h3>260201</h3>
+<time datetime="2026-06-02">2026-06-02</time>
+</article>
+<article>
+<h3>251220</h3>
+<time datetime="2026-06-02">2026-06-02</time>
+</article>
+<article>
+<h3>251122</h3>
+<time datetime="2026-06-02">2026-06-02</time>
+</article>
+<article>
+<h3>251116</h3>
+<time datetime="2026-06-02">2026-06-02</time>
+</article>
+<article>
+<h3>250518</h3>
+<time datetime="2026-06-02">2026-06-02</time>
+</article>
+<article>
+<h3>250504</h3>
+<time datetime="2026-06-02">2026-06-02</time>
+</article>
+<article>
+<h3>250502</h3>
+<time datetime="2026-06-02">2026-06-02</time>
+</article>
+<article>
+<h3>250322</h3>
+<time datetime="2026-06-02">2026-06-02</time>
+</article>
+<article>
+<h3>250316</h3>
+<time datetime="2026-06-01">2026-06-01</time>
+</article>
+<article>
+<h3>海绵宝宝</h3>
+<p>1 S14E03.Bassward 搞怪的旅馆大堂经理又出场了 手摇轨道车 20...</p>
+<div class="seo-images">
+<img src="https://diff4x.github.io/gallery/img/20260707212824.webp" alt="海绵宝宝 截图1">
+<img src="https://diff4x.github.io/gallery/img/20260707212823.webp" alt="海绵宝宝 截图2">
+<img src="https://diff4x.github.io/gallery/img/20260707212822.webp" alt="海绵宝宝 截图3">
+<img src="https://diff4x.github.io/gallery/img/20260707212819.webp" alt="海绵宝宝 截图4">
+<img src="https://diff4x.github.io/gallery/img/20260707212820.webp" alt="海绵宝宝 截图5">
+<img src="https://diff4x.github.io/gallery/img/20260707212818.webp" alt="海绵宝宝 截图6">
+<img src="https://diff4x.github.io/gallery/img/20260707212821.webp" alt="海绵宝宝 截图7">
+<img src="https://diff4x.github.io/gallery/img/20260707212825.webp" alt="海绵宝宝 截图8">
+</div>
+<time datetime="2026-05-31">2026-05-31</time>
+</article>
+<article>
+<h3>百集聊斋之人鬼情缘</h3>
+<p>1 这些日子以来有些事情我是瞒着你和宦儿, 可为了什么呢, 他燕赤霞是来替他师傅报仇的, 我不能伸着脖子任他宰割吧, 我也不能眼看着这十几年的幸福生活就让他给毁了, 为了这个我宁可再做恶人, 夫人, 难道我这不是迫不得已吗 -- 可是, 除了杀人难道就没有别的办法了吗 夫人, 他燕赤霞是来报仇的, 你跟他说, 那你除了杀王化成, 就没有别的办法吗, 他难道就会不杀我吗, 他迟早是要来杀我的, 我王...</p>
+<time datetime="2026-05-26">2026-05-26</time>
+</article>
+<article>
+<h3>红楼梦</h3>
+<p>其晨夕风露，阶柳庭花 今之人，贫者日为衣食所累，富者又开不足之心，纵一时稍闲，又有贪淫恋色、好货寻愁之事，那里有工夫去看那理治之书？ 今风尘碌碌，一事无成 或情或痴，或小才微善 满纸潘安，子建，西子，文君 满纸才人淑女，子建文君红娘小玉 时逢三五便团圆，满把晴光护玉栏． 天上一轮才捧出，人间万姓仰头看 世人都晓神仙好，惟有功名忘不了！ 古今将相在何方？荒冢一堆草没了． 世人都晓神仙好，只有金银忘不...</p>
+<time datetime="2026-05-25">2026-05-25</time>
+</article>
+<article>
+<h3>宋飞正传</h3>
+<p>我过去认为宇宙只是无聊事件的任意无序排列 散尽家财, 成为最低限度主义者 英国的麦田怪圈是我干的 you know, i'm the one responsible for those crop circles in England. 她是我这辈子见过的最卑劣的女人 she is the most despicable woman i have ever met in my life 我从没有像这...</p>
+<time datetime="2026-05-25">2026-05-25</time>
+</article>
+<article>
+<h3>SQLite</h3>
+<p># SQLite SQLite 是嵌入式数据库（Embedded RDBMS）, 单文件, 零配置, 无服务器(区别于服务器数据库MySQL / PostgreSQL) 2000 → SQLite 发布并普及 2005+ → 移动端爆发（SQLite成为标准） 2008+ → SQLCipher出现（解决隐私安全问题） 它的 SQL 是标准 SQL 的简化兼容版, 基本是“标准 SQL 的子集 +...</p>
+<time datetime="2026-05-12">2026-05-12</time>
+</article>
+<article>
+<h3>海贼王真人版</h3>
+<p>Pirate King, where is your treasure? Tell us where you hid it! Hahaha… You want to know where my treasure is? I'll tell you. Wealth. Fame. Power. I found everything this world has to offer. Free yours...</p>
+<time datetime="2026-04-13">2026-04-13</time>
+</article>
+<article>
+<h3>C概述</h3>
+<p># 开发环境 ## VS Code + MinGW https://github.com/brechtsanders/winlibs_mingw/releases/download/15.2.0posix-14.0.0-msvcrt-r7/winlibs-x86_64-posix-seh-gcc-15.2.0-mingw-w64msvcrt-14.0.0-r7.zip ## Visual Stud...</p>
+<time datetime="2026-04-12">2026-04-12</time>
+</article>
+<article>
+<h3>论工业社会及其未来</h3>
+<p>卢德分子 卡辛斯基自称，在20岁那年，完成了自我对世界观的塑造。当时他正在哈佛大学数学系读大四，他意识到“人类对机器的依赖，使人类失去了自治的能力，剥夺了人类的自由。”于是渐渐生出了对科技—工业体制的幻灭感。 1972年，他在蒙大拿州林肯镇买下一块地，自己动手搭建了一个木头房子。屋子里没有电灯、电话、自来水。平日里他吃自己种的菜、猎的食，晚上点蜡烛看书，砍柴做饭取暖。“我放弃工业文明社会的原因是我...</p>
+<time datetime="2026-04-10">2026-04-10</time>
+</article>
+<article>
+<h3>空前绝后满天飞</h3>
+<div class="seo-images">
+<img src="https://diff4x.github.io/gallery/img/20260311205553.webp" alt="空前绝后满天飞 截图1">
+<img src="https://diff4x.github.io/gallery/img/20260311205316.webp" alt="空前绝后满天飞 截图2">
+<img src="https://diff4x.github.io/gallery/img/20260311205317.webp" alt="空前绝后满天飞 截图3">
+<img src="https://diff4x.github.io/gallery/img/20260311205318.webp" alt="空前绝后满天飞 截图4">
+</div>
+<time datetime="2026-03-11">2026-03-11</time>
+</article>
+<article>
+<h3>萨达姆·侯赛因的24年</h3>
+<p>萨达姆·侯赛因的24年（1，2） https://blog.creaders.net/u/5661/201905/347294.html 萨达姆·侯赛因的24年（3，4） https://blog.creaders.net/u/5661/201905/347296.html 萨达姆·侯赛因的24年（5，6） https://blog.creaders.net/u/5661/201905/34729...</p>
+<time datetime="2026-03-07">2026-03-07</time>
+</article>
+<article>
+<h3>fusion</h3>
+<p># 概念 CAD Computer-Aided Design 计算机辅助设计 负责设计零件 所有能做3D模型的软件都可以看成CAD软件 CAM Computer-Aided Manufacturing, 计算机辅助制造 负责把设计好的模型转换成生产的指令, 直接控制数控机床这些设备 切片软件是负责将模型翻译给打印机, 不是用是直接创建模型的 Direct Modeling 直接建模 无底层蓝图, ...</p>
+<time datetime="2026-03-07">2026-03-07</time>
+</article>
+<article>
+<h3>哪啊哪啊神去村</h3>
+<p>Happiest Fool https://www.youtube.com/watch?v=dF1vzOj1Jnk</p>
+<div class="seo-images">
+<img src="https://diff4x.github.io/gallery/img/20260307221911.webp" alt="哪啊哪啊神去村 截图1">
+<img src="https://diff4x.github.io/gallery/img/20260307221912.webp" alt="哪啊哪啊神去村 截图2">
+<img src="https://diff4x.github.io/gallery/img/20260307221910.webp" alt="哪啊哪啊神去村 截图3">
+</div>
+<time datetime="2026-03-07">2026-03-07</time>
+</article>
+<article>
+<h3>徐文长外传</h3>
+<p>世界上谁没有绝学, 木匠能将一堆木头变成一个桌子就是绝学, 渔夫能将河里的鱼给钓上来就是绝学, 那千金小姐只要一团丝线, 就能绣出花鸟鱼虫, 那更是绝学 我看美人如浮云, 随风飞扬不可寻, 美人看我如草芥, 踏破三秋不留情 住北城, 出南阁, 姑娘换了东西 着冬衣, 摇夏扇, 秀才不识春秋 咱们不是一个锅里的菜 远看象只狗, 近看还是狗, 喊它它不动, 踢它它不走 死狗, 土得都掉渣儿了 一道篱笆...</p>
+<time datetime="2026-03-04">2026-03-04</time>
+</article>
+<article>
+<h3>布莱恩的一生</h3>
+<p>三贤人收回礼物 一堆妇女化妆成男人去扔石头, 军官被大石头压扁 外星人造型 罚抄标语一百遍 广场上发表各自预言的先知们 朱迪思打罗马队长 替人扛十字架</p>
+<time datetime="2026-03-03">2026-03-03</time>
+</article>
+<article>
+<h3>好家伙</h3>
+<p>请把我太太带走, 不论我把我太太丢在什么地方, 她总会回家, 我问她要去哪里庆祝结婚纪念, 她说要到一个她从来没去过的地方, 我说, 那就厨房好了 法官判我和吉米每人十年, 好像在发糖果一样.. 不要跟我来天真无邪那一套</p>
+<div class="seo-images">
+<img src="https://diff4x.github.io/gallery/img/20260303182400.webp" alt="好家伙 截图1">
+<img src="https://diff4x.github.io/gallery/img/20260303182711.webp" alt="好家伙 截图2">
+</div>
+<time datetime="2026-03-03">2026-03-03</time>
+</article>
+<article>
+<h3>大话王</h3>
+<div class="seo-images">
+<img src="https://diff4x.github.io/gallery/img/20260303182338.webp" alt="大话王 截图1">
+</div>
+<time datetime="2026-03-03">2026-03-03</time>
+</article>
+<article>
+<h3>冒牌天神</h3>
+<div class="seo-images">
+<img src="https://diff4x.github.io/gallery/img/20260301171629.webp" alt="冒牌天神 截图1">
+<img src="https://diff4x.github.io/gallery/img/20260301171627.webp" alt="冒牌天神 截图2">
+<img src="https://diff4x.github.io/gallery/img/20260301171628.webp" alt="冒牌天神 截图3">
+</div>
+<time datetime="2026-03-01">2026-03-01</time>
+</article>
+<article>
+<h3>碎片07</h3>
+<p>“我们的生命被细节给浪费了。”他的意思是不要为小事费劲流汗。要关注大事，把你的生活变得容易。 数据的掌握使大型平台相较于缺乏资料与技术、无法采取相关策略的较小型竞争者，拥有显著优势。具影响力的公司还可能进一步利用演算法，在特定市场实行精准的降价行动，以迫使竞争对手离场。” “当女性在X网站上发布的每一张照片都会立即引来大量被扒光到只剩比基尼的回复时，这说明情况已经非常糟糕。” 阳光洒肩头, 仿佛自...</p>
+<time datetime="2026-02-02">2026-02-02</time>
+</article>
+<article>
+<h3>寻秦记</h3>
+<p>1 可是我已非完璧之身 今日吾躯归故土, 他朝君体也相同 你再如此等下去, 我怕你早晚会变成望夫石啊 然则 一个是襄王有意, 一个是神女有心 事情在你控制之外, 多想无益, 倒不如关心一下你可以左右的事情 两鬓斑白, 步入桑榆之年 项兄弟, 感情最怕的是隐晦不明, 男子汉大丈夫, 理应敢爱敢恨 此乃后话 项兄弟, 你以为然否 跩得跟二五八万似的 假如每件事都能够预知结果的话, 人生在世, 就无所谓...</p>
+<time datetime="2026-01-09">2026-01-09</time>
+</article>
+<article>
+<h3>02</h3>
+<p>Primer Plus # 逗号运算符 逗号运算符把两个表达式连接成一个表达式，并保证最左边的表达式最先求值。 逗号运算符通常在for循环头的表达式中用于包含更多的信息。 整个逗号表达式的值是逗号右侧表达式的值 x = (y = 3, (z = ++y + 2) + 5) 先把3赋给y，递增y为4，然后把 4加2之和（6）赋给z，接着加上5，最后把结果11赋给 x 假设在写数字时不小心输入了 逗号...</p>
+<time datetime="2025-11-30">2025-11-30</time>
+</article>
+<article>
+<h3>动植物识记</h3>
+<p>1 紫珠 龙胆 黄金间碧竹 相思树 榆树 朴树 女贞 构树 翠芦莉也称芦莉草、狭叶芦莉草、蓝花草、人字草、日日新 小叶买麻藤 果肉味道像柿子有針刺的感覺, 經煮過的種子，皮肉會爛開，除去殘餘皮肉，留下一粒粒帶著硬殼的果(種)仁。脫去硬殼，果仁可食用，味道像花生、栗子和白果似的。怪不得「買麻藤」有「山花生」和「山白果」之稱 鸭嘴兽 https://www.bbc.com/zhongwen/artic...</p>
+<time datetime="2025-11-26">2025-11-26</time>
+</article>
+<article>
+<h3>碎片06</h3>
+<p>占领机场、火车站、电报电话局、电台、马可尼大楼的过程中，政变部队几乎没有遇到抵抗。7月23日凌晨，自由军官完全控制开罗。上午7点，自由军官组织创建委员会发表声明，阐述政变动因：“埃及经历了现代历史的贿赂、腐化和政局不稳的艰难时期。这一现象深深地影响着军队……为此，我们采取了纯洁自己队伍的行动。”。7月24日，发表第二份声明，鼓励群众支持军队的革命行动。开罗的局势逐渐平静和明朗。 “禁脔”最初指专供...</p>
+<time datetime="2025-11-26">2025-11-26</time>
+</article>
+<article>
+<h3>外国幽默3</h3>
+<p># 女人的天性 上帝用亚当的一条肋骨制造了夏娃，俩人生活 在一起。一段时间后，亚当晚归了几天，夏娃开始 生气了。 “你一定是在追其他的女人。”她指责说。 “请讲一点道理吧，”亚当反驳道“你是地球 上唯一的女人。” 争吵持续到大家都因疲倦而睡着为止。突然， 亚当被胸前的一阵戳动给弄醒了，睁开眼一看，是 夏娃。 “咳，你到底想要干什么？”亚当问。 “检查你的肋骨。”夏娃说。 # 最佳推销员 一个上门推...</p>
+<time datetime="2025-11-24">2025-11-24</time>
+</article>
+</div>
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "Blog",
+  "name": "diff4x's digital garden",
+  "url": "https://diff4x.github.io/",
+  "description": "本人觉得有趣的、有启发性的、阴暗的东西，以及各类总结、备忘、导航",
+  "blogPost": [
+    {
+      "@type": "BlogPosting",
+      "headline": "rust",
+      "datePublished": "2026-07-24"
+    },
+    {
+      "@type": "BlogPosting",
+      "headline": "权重模型",
+      "datePublished": "2026-07-22"
+    },
+    {
+      "@type": "BlogPosting",
+      "headline": "碎片09",
+      "datePublished": "2026-07-22"
+    },
+    {
+      "@type": "BlogPosting",
+      "headline": "操作系统",
+      "datePublished": "2026-07-18"
+    },
+    {
+      "@type": "BlogPosting",
+      "headline": "亚当斯一家",
+      "image": [
+        "https://diff4x.github.io/gallery/img/20260716234423.webp",
+        "https://diff4x.github.io/gallery/img/20260716234416.webp",
+        "https://diff4x.github.io/gallery/img/20260716234419.webp",
+        "https://diff4x.github.io/gallery/img/20260716234418.webp",
+        "https://diff4x.github.io/gallery/img/20260716234417.webp",
+        "https://diff4x.github.io/gallery/img/20260716234422.webp",
+        "https://diff4x.github.io/gallery/img/20260716234421.webp",
+        "https://diff4x.github.io/gallery/img/20260716234424.webp",
+        "https://diff4x.github.io/gallery/img/20260716234420.webp"
+      ],
+      "datePublished": "2026-07-16"
+    },
+    {
+      "@type": "BlogPosting",
+      "headline": "电影",
+      "datePublished": "2026-07-16"
+    },
+    {
+      "@type": "BlogPosting",
+      "headline": "亚当斯一家的价值观",
+      "image": [
+        "https://diff4x.github.io/gallery/img/20260716203653.webp",
+        "https://diff4x.github.io/gallery/img/20260716203648.webp",
+        "https://diff4x.github.io/gallery/img/20260716203654.webp",
+        "https://diff4x.github.io/gallery/img/20260716203649.webp",
+        "https://diff4x.github.io/gallery/img/20260716203651.webp",
+        "https://diff4x.github.io/gallery/img/20260716203650.webp",
+        "https://diff4x.github.io/gallery/img/20260716203647.webp",
+        "https://diff4x.github.io/gallery/img/20260716203655.webp",
+        "https://diff4x.github.io/gallery/img/20260716203652.webp",
+        "https://diff4x.github.io/gallery/img/20260716203656.webp"
+      ],
+      "datePublished": "2026-07-16"
+    },
+    {
+      "@type": "BlogPosting",
+      "headline": "官场现形记",
+      "datePublished": "2026-07-15"
+    },
+    {
+      "@type": "BlogPosting",
+      "headline": "幸运查克",
+      "image": [
+        "https://diff4x.github.io/gallery/img/20260712083126.webp",
+        "https://diff4x.github.io/gallery/img/20260712083125.webp"
+      ],
+      "datePublished": "2026-07-12"
+    },
+    {
+      "@type": "BlogPosting",
+      "headline": "KataGo",
+      "datePublished": "2026-07-05"
+    },
+    {
+      "@type": "BlogPosting",
+      "headline": "92黑玫瑰对黑玫瑰",
+      "image": [
+        "https://diff4x.github.io/gallery/img/20260629001516.webp"
+      ],
+      "datePublished": "2026-06-29"
+    },
+    {
+      "@type": "BlogPosting",
+      "headline": "python基础",
+      "datePublished": "2026-06-16"
+    },
+    {
+      "@type": "BlogPosting",
+      "headline": "水浒笑传",
+      "image": [
+        "https://diff4x.github.io/gallery/img/20260607140912.webp"
+      ],
+      "datePublished": "2026-06-07"
+    },
+    {
+      "@type": "BlogPosting",
+      "headline": "三言两拍",
+      "image": [
+        "https://diff4x.github.io/gallery/img/20260705132403.webp"
+      ],
+      "datePublished": "2026-06-07"
+    },
+    {
+      "@type": "BlogPosting",
+      "headline": "电视剧",
+      "datePublished": "2026-06-06"
+    },
+    {
+      "@type": "BlogPosting",
+      "headline": "聊斋",
+      "datePublished": "2026-06-06"
+    },
+    {
+      "@type": "BlogPosting",
+      "headline": "260530",
+      "datePublished": "2026-06-02"
+    },
+    {
+      "@type": "BlogPosting",
+      "headline": "260214",
+      "datePublished": "2026-06-02"
+    },
+    {
+      "@type": "BlogPosting",
+      "headline": "260201",
+      "datePublished": "2026-06-02"
+    },
+    {
+      "@type": "BlogPosting",
+      "headline": "251220",
+      "datePublished": "2026-06-02"
+    },
+    {
+      "@type": "BlogPosting",
+      "headline": "251122",
+      "datePublished": "2026-06-02"
+    },
+    {
+      "@type": "BlogPosting",
+      "headline": "251116",
+      "datePublished": "2026-06-02"
+    },
+    {
+      "@type": "BlogPosting",
+      "headline": "250518",
+      "datePublished": "2026-06-02"
+    },
+    {
+      "@type": "BlogPosting",
+      "headline": "250504",
+      "datePublished": "2026-06-02"
+    },
+    {
+      "@type": "BlogPosting",
+      "headline": "250502",
+      "datePublished": "2026-06-02"
+    },
+    {
+      "@type": "BlogPosting",
+      "headline": "250322",
+      "datePublished": "2026-06-02"
+    },
+    {
+      "@type": "BlogPosting",
+      "headline": "250316",
+      "datePublished": "2026-06-01"
+    },
+    {
+      "@type": "BlogPosting",
+      "headline": "海绵宝宝",
+      "image": [
+        "https://diff4x.github.io/gallery/img/20260707212824.webp",
+        "https://diff4x.github.io/gallery/img/20260707212823.webp",
+        "https://diff4x.github.io/gallery/img/20260707212822.webp",
+        "https://diff4x.github.io/gallery/img/20260707212819.webp",
+        "https://diff4x.github.io/gallery/img/20260707212820.webp",
+        "https://diff4x.github.io/gallery/img/20260707212818.webp",
+        "https://diff4x.github.io/gallery/img/20260707212821.webp",
+        "https://diff4x.github.io/gallery/img/20260707212825.webp"
+      ],
+      "datePublished": "2026-05-31"
+    },
+    {
+      "@type": "BlogPosting",
+      "headline": "百集聊斋之人鬼情缘",
+      "datePublished": "2026-05-26"
+    },
+    {
+      "@type": "BlogPosting",
+      "headline": "红楼梦",
+      "datePublished": "2026-05-25"
+    },
+    {
+      "@type": "BlogPosting",
+      "headline": "宋飞正传",
+      "datePublished": "2026-05-25"
+    },
+    {
+      "@type": "BlogPosting",
+      "headline": "SQLite",
+      "datePublished": "2026-05-12"
+    },
+    {
+      "@type": "BlogPosting",
+      "headline": "海贼王真人版",
+      "datePublished": "2026-04-13"
+    },
+    {
+      "@type": "BlogPosting",
+      "headline": "C概述",
+      "datePublished": "2026-04-12"
+    },
+    {
+      "@type": "BlogPosting",
+      "headline": "论工业社会及其未来",
+      "datePublished": "2026-04-10"
+    },
+    {
+      "@type": "BlogPosting",
+      "headline": "空前绝后满天飞",
+      "image": [
+        "https://diff4x.github.io/gallery/img/20260311205553.webp",
+        "https://diff4x.github.io/gallery/img/20260311205316.webp",
+        "https://diff4x.github.io/gallery/img/20260311205317.webp",
+        "https://diff4x.github.io/gallery/img/20260311205318.webp"
+      ],
+      "datePublished": "2026-03-11"
+    },
+    {
+      "@type": "BlogPosting",
+      "headline": "萨达姆·侯赛因的24年",
+      "datePublished": "2026-03-07"
+    },
+    {
+      "@type": "BlogPosting",
+      "headline": "fusion",
+      "datePublished": "2026-03-07"
+    },
+    {
+      "@type": "BlogPosting",
+      "headline": "哪啊哪啊神去村",
+      "image": [
+        "https://diff4x.github.io/gallery/img/20260307221911.webp",
+        "https://diff4x.github.io/gallery/img/20260307221912.webp",
+        "https://diff4x.github.io/gallery/img/20260307221910.webp"
+      ],
+      "datePublished": "2026-03-07"
+    },
+    {
+      "@type": "BlogPosting",
+      "headline": "徐文长外传",
+      "datePublished": "2026-03-04"
+    },
+    {
+      "@type": "BlogPosting",
+      "headline": "布莱恩的一生",
+      "datePublished": "2026-03-03"
+    },
+    {
+      "@type": "BlogPosting",
+      "headline": "好家伙",
+      "image": [
+        "https://diff4x.github.io/gallery/img/20260303182400.webp",
+        "https://diff4x.github.io/gallery/img/20260303182711.webp"
+      ],
+      "datePublished": "2026-03-03"
+    },
+    {
+      "@type": "BlogPosting",
+      "headline": "大话王",
+      "image": [
+        "https://diff4x.github.io/gallery/img/20260303182338.webp"
+      ],
+      "datePublished": "2026-03-03"
+    },
+    {
+      "@type": "BlogPosting",
+      "headline": "冒牌天神",
+      "image": [
+        "https://diff4x.github.io/gallery/img/20260301171629.webp",
+        "https://diff4x.github.io/gallery/img/20260301171627.webp",
+        "https://diff4x.github.io/gallery/img/20260301171628.webp"
+      ],
+      "datePublished": "2026-03-01"
+    },
+    {
+      "@type": "BlogPosting",
+      "headline": "碎片07",
+      "datePublished": "2026-02-02"
+    },
+    {
+      "@type": "BlogPosting",
+      "headline": "寻秦记",
+      "datePublished": "2026-01-09"
+    },
+    {
+      "@type": "BlogPosting",
+      "headline": "02",
+      "datePublished": "2025-11-30"
+    },
+    {
+      "@type": "BlogPosting",
+      "headline": "动植物识记",
+      "datePublished": "2025-11-26"
+    },
+    {
+      "@type": "BlogPosting",
+      "headline": "碎片06",
+      "datePublished": "2025-11-26"
+    },
+    {
+      "@type": "BlogPosting",
+      "headline": "外国幽默3",
+      "datePublished": "2025-11-24"
+    }
+  ]
+}
+</script>
+<!-- SEO-END -->
 </body>
-
 </html>

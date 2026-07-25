@@ -378,7 +378,6 @@ window.onload = () => {
         });
     }
 
-    document.body.style.opacity = 1;
     search_box();
 
     iframes.side.src = "src/tpl/side.html";
@@ -721,7 +720,8 @@ async function loadScripts(concurrency) {
                 console.warn("⚠️ 快照恢复中止或超时:", err);
             })
             .finally(() => {
-                document.querySelector("#search")?.classList.remove("hide");
+                $("#search").style.display = "block";
+                // document.documentElement.style.setProperty("background-color", "#cae4ff", "important");
             });
         
         // 静默下载胖数据
@@ -3003,50 +3003,79 @@ function stopFaviconBlink() {
 
 // 撒花特效
 function playConfetti() {
-    const startAnimation = () => {
-        var count = 200;
-        var defaults = {
-            origin: { y: 0.7 }
-        };
-        function fire(particleRatio, opts) {
+    const startAnimation1 = () => {
+        const end = Date.now() + 5 * 1000;
+        const colors = ['#bb0000', '#ffffff'];
+        (function frame() {
             confetti({
-                ...defaults,
-                ...opts,
-                particleCount: Math.floor(count * particleRatio)
+                particleCount: 2,
+                angle: 60,
+                spread: 55,
+                origin: { x: 0 },
+                colors
             });
-        }
-        fire(0.25, {
-            spread: 26,
-            startVelocity: 55,
-        });
-        fire(0.2, {
-            spread: 60,
-        });
-        fire(0.35, {
-            spread: 100,
-            decay: 0.91,
-            scalar: 0.8
-        });
-        fire(0.1, {
-            spread: 120,
-            startVelocity: 25,
-            decay: 0.92,
-            scalar: 1.2
-        });
-        fire(0.1, {
-            spread: 120,
-            startVelocity: 45,
-        });
+
+            confetti({
+                particleCount: 2,
+                angle: 120,
+                spread: 55,
+                origin: { x: 1 },
+                colors
+            });
+
+            if (Date.now() < end) {
+                requestAnimationFrame(frame);
+            }
+        })();
     };
+
+    const startAnimation2 = () => {
+        var defaults = {
+        spread: 360,
+        ticks: 50,
+        gravity: 0,
+        decay: 0.94,
+        startVelocity: 30,
+        colors: ['FFE400', 'FFBD00', 'E89400', 'FFCA6C', 'FDFFB8']
+        };
+
+        function shoot() {
+        confetti({
+            ...defaults,
+            particleCount: 40,
+            scalar: 1.2,
+            shapes: ['star']
+        });
+
+        confetti({
+            ...defaults,
+            particleCount: 10,
+            scalar: 0.75,
+            shapes: ['circle']
+        });
+        }
+
+        setTimeout(shoot, 0);
+        setTimeout(shoot, 100);
+        setTimeout(shoot, 200);
+    };
+
+    const startAnimation = () => {
+        const animations = [startAnimation1, startAnimation2];
+        const randomAnimation = animations[Math.floor(Math.random() * animations.length)];
+        randomAnimation();
+    };
+
     if (window.confetti) {
-        setTimeout(startAnimation, 1000);
+        startAnimation();
         return;
     }
+
     const script = document.createElement('script');
     script.src = "src/js/confetti.browser.min.js";
     script.onload = () => {
         script.remove();
-        setTimeout(startAnimation, 1000);
+        startAnimation();
     };
     script.onerror = () => console.warn("confetti.browser.min.js 加载失败");
     document.body.appendChild(script);

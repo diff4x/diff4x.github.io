@@ -8,10 +8,6 @@ textarea {
     font-family: 'Noto Serif SC';
 }
 
-html {
-    background-color: #cae4ff;
-}
-
 body {
     margin: 0;
     padding: 0;
@@ -25,7 +21,6 @@ body {
     border: none;
     height: 100%;
     flex: 75;
-    background-color: #003b14;
 }
 
 #side {

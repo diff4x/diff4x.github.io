@@ -24,6 +24,7 @@ public class Generator {
     private static final Map<String, Object> liteDataTree = new HashMap<>();
     private static final List<Pattern> gitIgnorePatterns = new ArrayList<>();
     private static final Set<String> localOnlySet = new HashSet<>();
+    private static final Pattern SEO_PREFIX_PATTERN = Pattern.compile("^\\d{14}-[^\\s]+\\s*");
 
     public static void run() throws Exception {
         gitIgnorePatterns.clear(); localOnlySet.clear();
@@ -43,8 +44,9 @@ public class Generator {
         ObjectNode coreBundle = Utils.JSON_MAPPER.createObjectNode();
         Map<Integer, String> fatDataMap = new TreeMap<>();
         Map<Integer, String> shadowDataMap = new TreeMap<>();
+        List<SeoArticle> seoList = new ArrayList<>();
 
-        processHtmlFilesAndImages(coreBundle, records, currentTitles, maxId, fatDataMap, shadowDataMap);
+        processHtmlFilesAndImages(coreBundle, records, currentTitles, maxId, fatDataMap, shadowDataMap, seoList);
 
         orphanIds.removeAll();
         for (JsonNode r : records) if (!currentTitles.contains(r.get("title").asText())) orphanIds.add(r.get("id").asInt());
@@ -56,7 +58,15 @@ public class Generator {
         if (!shadowDataMap.isEmpty()) { generateShadowData(shadowDataMap, String.valueOf(Config.dataDir), Config.sliceSize); }
 
         String newBuildVersion = generateManifest(Config.htmlDir, Config.dataDir, projectRootPath(), coreBundle, generatedDataFiles);
-        if (newBuildVersion != null) { updateSwVersion(newBuildVersion); }
+        if (newBuildVersion != null) {
+            updateSwVersion(newBuildVersion);
+        }
+
+        if (seoList != null && !seoList.isEmpty()) {
+            injectSeoToIndexHtml(seoList);
+            generateSitemap(seoList);
+            generateRobotsTxt();
+        }
     }
 
     private static void initLiteDataTree() {
@@ -77,8 +87,8 @@ public class Generator {
                 "  const update_interval_local = " + Config.props.getProperty("update_interval_local") + ";\n</script>";
 
         String html = new String(Files.readAllBytes(Config.indexHtml), StandardCharsets.UTF_8);
-        String beginTag = "<" + "!-- PROTOCOL-BEGIN --" + ">";
-        String endTag   = "<" + "!-- PROTOCOL-END --" + ">";
+        String beginTag = "<" + "!-- PARAM-BEGIN --" + ">";
+        String endTag   = "<" + "!-- PARAM-END --" + ">";
 
         int begin = html.indexOf(beginTag);
         int end   = html.indexOf(endTag);
@@ -115,7 +125,7 @@ public class Generator {
         } catch (IOException e) { logger.warn("无法读取 .gitignore", e); }
     }
 
-    private static void processHtmlFilesAndImages(ObjectNode coreBundle, ArrayNode records, Set<String> currentTitles, int[] maxId, Map<Integer, String> fatDataMap, Map<Integer, String> shadowDataMap) {
+    private static void processHtmlFilesAndImages(ObjectNode coreBundle, ArrayNode records, Set<String> currentTitles, int[] maxId, Map<Integer, String> fatDataMap, Map<Integer, String> shadowDataMap, List<SeoArticle> seoList) {
         Set<String> imageSet = buildGalleryImageSet();
         Set<String> usedImagesSet = new HashSet<>();
         Pattern fullImgPattern = Pattern.compile("^\\s*(\\.\\./gallery/[^\\s\"'<>]+\\.(?:jpg|jpeg|png|gif|webp))\\s*$", Pattern.CASE_INSENSITIVE);
@@ -185,11 +195,22 @@ public class Generator {
 
                         String cleanText = doc.body().text().replaceAll("\r\n|\r|\n", " ").replaceAll(" +", " ").replaceAll("\\$\\{", "&#36;{").replaceAll("`", "&#715;");
 
-                        if (!isGitIgnored && !isExcludedData) fatDataMap.put(currentRecordId, cleanText);
-                        else if (isGitIgnored) {
+                        if (!isGitIgnored && !isExcludedData) {
+                            fatDataMap.put(currentRecordId, cleanText);
+                            // 提取 SEO 摘要, 截取前 200 个字符作为摘要
+                            String summaryText = SEO_PREFIX_PATTERN.matcher(cleanText)
+                                    .replaceFirst("")
+                                    .trim();
+                            String summary = summaryText.length() > 200
+                                    ? summaryText.substring(0, 200) + "..."
+                                    : summaryText;
+                            seoList.add(new SeoArticle(title, timeStamp, summary));
+                        } else if (isGitIgnored) {
                             fatDataMap.put(currentRecordId, "localOnly");
                             shadowDataMap.put(currentRecordId, cleanText);
-                        } else fatDataMap.put(currentRecordId, "");
+                        } else {
+                            fatDataMap.put(currentRecordId, "");
+                        }
                     }
 
                     String virtualPath = Config.PATH_UNCATEGORIZED + fileName + ".html";
@@ -539,8 +560,208 @@ public class Generator {
         } catch (IOException ignored) {}
     }
 
+    private static void injectSeoToIndexHtml(List<SeoArticle> seoList) throws IOException {
+        Path indexPath = Config.indexHtml;
+        if (!Files.exists(indexPath)) {
+            return;
+        }
+
+        String html = new String(Files.readAllBytes(indexPath),StandardCharsets.UTF_8);
+        Document indexDoc = Jsoup.parse(html);
+        String siteTitle = indexDoc.title();
+
+        seoList.sort((a, b) -> b.stamp.compareTo(a.stamp));
+
+        String domain = Config.props.getProperty("github_page");
+        String baseUrl = "https://" + domain + "/";
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("<!-- SEO-BEGIN -->\n<div id=\"seo-content\" class=\"sr-only\">\n");
+        sb.append("<h1>").append(siteTitle).append("</h1>\n");
+        sb.append("<p>本人觉得有趣的、有启发性的、阴暗的东西，以及各类总结、备忘、导航</p>\n");
+        sb.append("<h2>最新内容</h2>\n");
+
+        StringBuilder jsonLd = new StringBuilder();
+        jsonLd.append("<script type=\"application/ld+json\">\n{\n");
+        jsonLd.append("  \"@context\": \"https://schema.org\",\n");
+        jsonLd.append("  \"@type\": \"Blog\",\n");
+        String safeSiteTitle = siteTitle.replace("\"", "\\\"");
+        jsonLd.append("  \"name\": \"").append(safeSiteTitle).append("\",\n");
+        jsonLd.append("  \"url\": \"").append(baseUrl).append("\",\n");
+        jsonLd.append("  \"description\": \"本人觉得有趣的、有启发性的、阴暗的东西，以及各类总结、备忘、导航\",\n");
+        jsonLd.append("  \"blogPost\": [\n");
+
+        Pattern imgPattern = Pattern.compile(
+                "([a-zA-Z0-9_\\-]+\\.(?:jpg|jpeg|png|gif|webp))",
+                Pattern.CASE_INSENSITIVE);
+
+        int limit = Math.min(50, seoList.size());
+
+        for (int i = 0; i < limit; i++) {
+            SeoArticle a = seoList.get(i);
+            String formattedDate = a.stamp;
+            if (formattedDate != null && formattedDate.length() >= 8) {
+                formattedDate = formattedDate.substring(0, 4) + "-"
+                        + formattedDate.substring(4, 6) + "-"
+                        + formattedDate.substring(6, 8);
+            }
+
+            String safeTitle = a.title
+                    .replace("\"", "\\\"")
+                    .replace("\n", " ");
+
+            Matcher matcher = imgPattern.matcher(a.summary);
+            List<String> imageUrls = new ArrayList<>();
+            StringBuffer textBuffer = new StringBuffer();
+
+            while (matcher.find()) {
+                String file = matcher.group(1);
+                imageUrls.add(baseUrl + "gallery/img/" + file);
+                matcher.appendReplacement(textBuffer, "");
+            }
+            matcher.appendTail(textBuffer);
+
+            String pureText = textBuffer.toString()
+                    .replaceAll("\\s+", " ")
+                    .trim();
+
+            // ---------- HTML ----------
+            sb.append("<article>\n");
+            sb.append("<h3>").append(a.title).append("</h3>\n");
+            if (!pureText.isEmpty()) {
+                sb.append("<p>")
+                        .append(pureText)
+                        .append("</p>\n");
+            }
+
+            if (!imageUrls.isEmpty()) {
+                sb.append("<div class=\"seo-images\">\n");
+                for (int j = 0; j < imageUrls.size(); j++) {
+                    sb.append("<img src=\"")
+                            .append(imageUrls.get(j))
+                            .append("\" alt=\"")
+                            .append(a.title)
+                            .append(" 截图")
+                            .append(j + 1)
+                            .append("\">\n");
+                }
+                sb.append("</div>\n");
+            }
+            sb.append("<time datetime=\"")
+                    .append(formattedDate)
+                    .append("\">")
+                    .append(formattedDate)
+                    .append("</time>\n");
+            sb.append("</article>\n");
+
+            // ---------- JSON-LD ----------
+            jsonLd.append("    {\n");
+            jsonLd.append("      \"@type\": \"BlogPosting\",\n");
+            jsonLd.append("      \"headline\": \"")
+                    .append(safeTitle)
+                    .append("\",\n");
+
+            if (!imageUrls.isEmpty()) {
+                jsonLd.append("      \"image\": [\n");
+                for (int j = 0; j < imageUrls.size(); j++) {
+                    jsonLd.append("        \"")
+                            .append(imageUrls.get(j))
+                            .append("\"");
+                    if (j != imageUrls.size() - 1) {
+                        jsonLd.append(",");
+                    }
+                    jsonLd.append("\n");
+                }
+                jsonLd.append("      ],\n");
+            }
+            jsonLd.append("      \"datePublished\": \"")
+                    .append(formattedDate)
+                    .append("\"\n");
+            jsonLd.append("    }");
+            if (i != limit - 1) {
+                jsonLd.append(",");
+            }
+            jsonLd.append("\n");
+        }
+
+        sb.append("</div>\n");
+        jsonLd.append("  ]\n}\n</script>\n");
+        sb.append(jsonLd);
+        sb.append("<!-- SEO-END -->");
+
+        String beginTag = "<!-- SEO-BEGIN -->";
+        String endTag = "<!-- SEO-END -->";
+
+        int begin = html.indexOf(beginTag);
+        int end = html.indexOf(endTag);
+
+        if (begin != -1 && end != -1 && end > begin) {
+            String before = html.substring(0, begin);
+            String after = html.substring(end + endTag.length());
+
+            Files.write(
+                    indexPath,
+                    (before + sb + after).getBytes(StandardCharsets.UTF_8));
+        } else {
+            logger.warn("未在 index.html 中找到 <!-- SEO-BEGIN --> 或 <!-- SEO-END --> 标记，跳过注入。");
+        }
+    }
+
+    private static void generateSitemap(List<SeoArticle> seoList) throws IOException {
+        if (seoList.isEmpty()) return;
+
+        // 取最新一篇文章的时间作为整个站点的更新时间
+        String latestStamp = seoList.get(0).stamp;
+        String latestDate = latestStamp;
+        if (latestStamp != null && latestStamp.length() >= 8) {
+            latestDate = latestStamp.substring(0, 4) + "-" + latestStamp.substring(4, 6) + "-" + latestStamp.substring(6, 8);
+        }
+
+        String domain = Config.props.getProperty("github_page");
+
+        String xml = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n" +
+                "<urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">\n" +
+                "  <url>\n" +
+                "    <loc>https://" + domain + "/</loc>\n" +
+                "    <lastmod>" + latestDate + "</lastmod>\n" +
+                "    <changefreq>daily</changefreq>\n" +
+                "    <priority>1.0</priority>\n" +
+                "  </url>\n" +
+                "</urlset>";
+
+        Path sitemapPath = Config.indexHtml.getParent().resolve("sitemap.xml");
+        Files.write(sitemapPath, xml.getBytes(StandardCharsets.UTF_8));
+    }
+
+    private static void generateRobotsTxt() throws IOException {
+        String domain = Config.props.getProperty("github_page");
+
+        String content = "User-agent: *\n" +
+                "Allow: /\n" +
+                "Disallow: /_build/\n" +
+                "Disallow: /src/\n" +
+                "Disallow: /html/\n" +
+                "Disallow: /gallery/\n" +
+                "Disallow: /video/\n" +
+                "Disallow: /audio/\n" +
+                "Disallow: /ebook/\n\n" +
+                "Sitemap: https://" + domain + "/sitemap.xml\n";
+
+        Path robotsPath = Config.indexHtml.getParent().resolve("robots.txt");
+        Files.write(robotsPath, content.getBytes(StandardCharsets.UTF_8));
+    }
+
     static class FileMeta {
         String hash; String source;
         FileMeta(String h, String s) { hash = h; source = s; }
+    }
+
+    static class SeoArticle {
+        String title, stamp, summary;
+        SeoArticle(String title, String stamp, String summary) {
+            this.title = title;
+            this.stamp = stamp;
+            this.summary = summary;
+        }
     }
 }
