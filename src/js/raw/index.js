@@ -92,7 +92,7 @@ window.addEventListener('message', async (e) => {
                 
                 if (existingIndex !== -1) {
                     const item = globalResults.splice(existingIndex, 1)[0];
-                    item.count = payload.count;
+                    // item.count = payload.count;
                     if (payload.snippets) {
                         item.snippets = payload.snippets;
                         item.isTolerantMatch = payload.isTolerantMatch;
@@ -808,14 +808,16 @@ async function loadDataInBatches(files, now, concurrency) {
                         results.forEach(newItem => {
                             const oldItem = sourceCache.find(o => o.path === newItem.path);
                             if (oldItem) {
-                                // 无论如何都允许继承更准确的 count
-                                if (oldItem.count > newItem.count) {
-                                    newItem.count = oldItem.count;
-                                }
-                                // 核心修复 1：只有精确命中同一个词时，才继承富文本 snippet（防止宽容高亮被旧词覆盖）
-                                if (isExactMatch && oldItem.snippets) {
-                                    newItem.snippets = oldItem.snippets;
-                                    newItem.isTolerantMatch = oldItem.isTolerantMatch;
+                                // 🚀 修复：必须限制只有在“精确命中同一个词”时，才能继承旧数据！
+                                // 绝不能将短词（前缀）的庞大命中数，强行覆盖长词的真实命中数
+                                if (isExactMatch) {
+                                    if (oldItem.count > newItem.count) {
+                                        newItem.count = oldItem.count;
+                                    }
+                                    if (oldItem.snippets) {
+                                        newItem.snippets = oldItem.snippets;
+                                        newItem.isTolerantMatch = oldItem.isTolerantMatch;
+                                    }
                                 }
                             }
                         });
@@ -1234,6 +1236,11 @@ function search_box() {
             // 2. 无论它是历史还是孤儿缓存，从 IndexedDB 缓存池中彻底抹除
             await store.SearchCache.remove(keywordToDelete);
             
+            // 🚀 修复点：如果被删除的词刚好是当前的贪吃蛇游标，必须将其销毁，防止成为幽灵游标
+            if (window._lastSavedKw === keywordToDelete) {
+                window._lastSavedKw = "";
+            }
+
             // 3. 刷新下拉框视图
             const currentVal = $("#searchInput").value.trim();
             if (currentVal !== "") {
@@ -1412,14 +1419,17 @@ function search_box() {
             const keyword = elSearchInput.value.trim();
             
             const escapeRegExp = (string) => string.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+            // 🚀 重新定义高亮正则：严格模式允许任意空白符，宽容模式允许至多3个杂字
             const buildSnippetRegex = (kw, isTolerant) => {
-                if (/[\\":\-]/.test(kw)) {
-                    return new RegExp(`(${escapeRegExp(kw)})`, 'gi');
+                const cleanKw = kw.replace(/\s+/g, "");
+                const tokens = cleanKw.split("").map(c => escapeRegExp(c));
+                
+                if (!isTolerant) {
+                    // 严格模式：字与字之间，仅允许存在空白符（空格、换行、Tab等）
+                    return new RegExp(`(${tokens.join("\\s*")})`, 'gi');
                 } else {
-                    const cleanKw = kw.replace(/\s+/g, "");
-                    const tokens = cleanKw.split("").map(c => escapeRegExp(c));
-                    const gap = isTolerant ? "\\s*(?:[\\s\\S]{0,3}?)\\s*" : "\\s*";
-                    return new RegExp(`(${tokens.join(gap)})`, 'gi');
+                    // 宽容模式：字与字之间，允许存在至多 3 个任意杂字
+                    return new RegExp(`(${tokens.join("\\s*(?:[\\s\\S]{0,3}?)\\s*")})`, 'gi');
                 }
             };
 
@@ -1580,23 +1590,25 @@ function processAndShowResults(results, keyword) {
         const strippedPath = currentPath.startsWith('../') ? currentPath.substring(3) : currentPath;
 
         currentIndex = finalResults.findIndex(r => r.path === currentPath || r.path === strippedPath);
-        
-        if (currentIndex !== -1) {
-            const currentItem = finalResults.splice(currentIndex, 1)[0];
-            finalResults.unshift(currentItem);
-            updateSearchResults(finalResults);
-            return;
-        }
     }
 
-    // 局部探查 (当前页面由于未编入全局数据，没被搜到)
-    if (activeKw !== "") {
-        // 无论如何，先把最新的结果写入缓存
-        store.SearchCache.set(activeKw, finalResults);
-        
-        if (currentIndex === -1) {
-            sendToIframe('content', 'LOCAL_SEARCH_COUNT', activeKw);
-        }
+    // [修复点 1] 无论如何，先把最新的结果写入缓存。解决原版因 early return 导致完全没有缓存的问题。
+    // 🚀 修复点：严格阻断 @ 开头的控制符指令污染持久化缓存数据库
+    if (activeKw !== "" && !activeKw.startsWith('@')) {
+        // [修复点 2] 连贯异步链：保证写入 IDB 完成后再发送指令，彻底终结与 LOCAL_SEARCH_RESULT 的竞态错位
+        store.SearchCache.set(activeKw, finalResults).then(() => {
+            if (currentIndex === -1) {
+                sendToIframe('content', 'LOCAL_SEARCH_COUNT', activeKw);
+            }
+        });
+    }
+
+    // [修复点 3] 将针对当前页面的置顶处理和 UI 渲染移到缓存动作下方
+    if (currentIndex !== -1) {
+        const currentItem = finalResults.splice(currentIndex, 1)[0];
+        finalResults.unshift(currentItem);
+        updateSearchResults(finalResults);
+        return;
     }
 
     // 不满足特殊条件时，正常显示
@@ -1685,7 +1697,10 @@ async function updateAutocompleteSuggestions(val) {
             filteredSuggestions.push(item);
             continue;
         }
-        const isRedundant = filteredSuggestions.some(existing => existing.keyword.toLowerCase().startsWith(itemLower));
+        // 🚀 修复点：严禁剪枝用户真实的历史记录（isHistory 为 true 时免疫剪枝）
+        const isRedundant = filteredSuggestions.some(existing => 
+            !item.isHistory && existing.keyword.toLowerCase().startsWith(itemLower)
+        );
         if (!isRedundant) {
             filteredSuggestions.push(item);
         }

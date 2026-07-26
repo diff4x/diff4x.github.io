@@ -5,7 +5,6 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsValue;
 use lru::LruCache;
 use std::num::NonZeroUsize;
-use aho_corasick::AhoCorasick;
 
 // ==========================================
 // 1. 全局内存驻留区 & LRU 编译缓存
@@ -13,9 +12,8 @@ use aho_corasick::AhoCorasick;
 thread_local! {
     static GLOBAL_DATA: RefCell<Vec<String>> = RefCell::new(Vec::new());
     
-    // 缓存精确匹配的 DFA 状态机
-    static EXACT_CACHE: RefCell<LruCache<String, AhoCorasick>> = RefCell::new(LruCache::new(NonZeroUsize::new(32).unwrap()));
-    // 缓存宽容匹配的正则对象
+    // 🚀 均改为缓存 Regex 对象
+    static EXACT_CACHE: RefCell<LruCache<String, Regex>> = RefCell::new(LruCache::new(NonZeroUsize::new(32).unwrap()));
     static TOLERANT_CACHE: RefCell<LruCache<String, Regex>> = RefCell::new(LruCache::new(NonZeroUsize::new(32).unwrap()));
 }
 
@@ -79,51 +77,50 @@ pub fn set_data(js_array: js_sys::Array) {
 
 #[wasm_bindgen]
 pub fn search(keyword: &str) -> JsValue {
-    if keyword.trim().is_empty() {
+    if keyword.is_empty() {
         return serde_wasm_bindgen::to_value(&Vec::<SearchResult>::new()).unwrap();
     }
 
-    let kw = keyword.trim().to_string();
-
-    // 从 LRU 缓存极速提取编译好的状态机和正则
-    let ac = EXACT_CACHE.with(|c| {
-        let mut cache = c.borrow_mut();
-        if let Some(cached) = cache.get(&kw) {
-            return cached.clone(); // AhoCorasick 内部采用 Arc，clone 极快
+    // 1. 获取严格匹配的 Regex（利用缓存，支持字间空白符）
+    let exact_regex = EXACT_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if let Some(re) = cache.get(keyword) {
+            return re.clone();
         }
-        let built = AhoCorasick::builder().ascii_case_insensitive(true).build(&[&kw]).unwrap();
-        cache.put(kw.clone(), built.clone());
-        built
+        let re = build_regex(keyword, false);
+        cache.put(keyword.to_string(), re.clone());
+        re
     });
 
-    let tolerant_regex = TOLERANT_CACHE.with(|c| {
-        let mut cache = c.borrow_mut();
-        if let Some(cached) = cache.get(&kw) {
-            return cached.clone();
+    // 2. 获取宽容匹配的 Regex（利用缓存，支持最多 3 个杂字）
+    let tolerant_regex = TOLERANT_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if let Some(re) = cache.get(keyword) {
+            return re.clone();
         }
-        let built = build_regex(&kw, true);
-        cache.put(kw.clone(), built.clone());
-        built
+        let re = build_regex(keyword, true);
+        cache.put(keyword.to_string(), re.clone());
+        re
     });
 
-    // 关键优化：在借用作用域内直接生成 JSValue，实现极限零拷贝传递
+    // 3. 执行全局扫描与合并排序
     GLOBAL_DATA.with(|data| {
         let pool = data.borrow();
         if pool.is_empty() {
             return serde_wasm_bindgen::to_value(&Vec::<SearchResult>::new()).unwrap();
         }
 
-        // 第一遍：状态机精准狂飙
-        let mut hits = execute_scan_exact(&pool, &ac, &kw);
+        // 第一遍：严格模式（现已完美支持“姓 名”这类中间夹杂空格的排版）
+        let mut hits = execute_scan(&pool, &exact_regex, false);
 
-        // 融合扫描：精确匹配为空，无缝跑宽容匹配
+        // 融合扫描：严格模式若无果，自动降级跑宽容模式
         if hits.is_empty() {
-            hits = execute_scan_tolerant(&pool, &tolerant_regex, true);
+            hits = execute_scan(&pool, &tolerant_regex, true);
         }
 
         hits.sort_by(|a, b| {
             b.score.cmp(&a.score)
-                .then(b.count.cmp(&a.count))
+                .then(b.count.cmp(&b.count))
                 .then(a.title.cmp(&b.title)) 
         });
 
@@ -190,78 +187,27 @@ pub fn find_content_matches(global_text: &str, keyword: &str) -> JsValue {
 
 /// 构建正规或宽容正则表达式
 fn build_regex(kw: &str, is_tolerant: bool) -> Regex {
-    let escaped = regex::escape(kw.trim());
+    let chars: Vec<char> = kw.chars().filter(|c| !c.is_whitespace()).collect();
+    let mut regex_str = String::new();
     
-    let pattern = if is_tolerant {
-        let chars: Vec<char> = kw.chars().filter(|c| !c.is_whitespace()).collect();
-        let mut regex_str = String::new();
-        for (i, c) in chars.iter().enumerate() {
-            regex_str.push_str(&regex::escape(&c.to_string()));
-            if i < chars.len() - 1 {
-                // 宽容模式：允许汉字/字母之间穿插 0-3 个任意字符
+    for (i, c) in chars.iter().enumerate() {
+        regex_str.push_str(&regex::escape(&c.to_string()));
+        if i < chars.len() - 1 {
+            if is_tolerant {
+                // 宽容：字间允许 0-3 个任意字符（包括换行）及两端空格
                 regex_str.push_str(r"\s*(?:.|\n){0,3}?\s*");
+            } else {
+                // 严格：字间仅允许任意数量的空白符（空格、换行等）
+                regex_str.push_str(r"\s*");
             }
         }
-        regex_str
-    } else {
-        escaped
-    };
-
-    Regex::new(&format!("(?i){}", pattern)).unwrap_or_else(|_| Regex::new("^$").unwrap())
-}
-
-/// 精准模式扫描：使用 Aho-Corasick 状态机
-fn execute_scan_exact<'a>(pool: &'a [String], ac: &AhoCorasick, kw: &str) -> Vec<SearchResult<'a>> {
-    let mut results = Vec::new();
-    let weight_title = 50;
-    let weight_content = 1;
-    // 构建用于切片的伪正则 (AhoCorasick 本身也能切，但为了复用之前的 extract_snippets 逻辑，这里临时生成一个简单的 literal 正则，开销极小)
-    let slice_re = Regex::new(&format!("(?i){}", regex::escape(kw))).unwrap();
-
-    for i in (0..pool.len()).step_by(4) {
-        if i + 3 >= pool.len() { break; }
-
-        let raw_content = &pool[i + 1];
-        let path = &pool[i + 2];
-        let res_type = &pool[i + 3];
-        
-        let title_start = path.rfind('/').map(|i| i + 1).unwrap_or(0);
-        let title = &path[title_start..]; // Zero-copy slicing!
-        
-        let mut is_local_only = false;
-        let searchable_content = if raw_content.starts_with("localOnly") {
-            is_local_only = true;
-            &raw_content[9..] 
-        } else {
-            raw_content
-        };
-
-        let title_hits = ac.find_iter(&title).count();
-        let content_hits = ac.find_iter(searchable_content).count();
-        let mut count = title_hits + content_hits;
-        
-        if count == 0 && res_type != &"html" && res_type != &"image" {
-            count = ac.find_iter(path).count();
-        }
-
-        if count == 0 { continue; }
-
-        let snippets = if content_hits > 0 {
-            extract_snippets(searchable_content, &slice_re)
-        } else {
-            Vec::new()
-        };
-
-        results.push(SearchResult {
-            title, count, score: (title_hits * weight_title) + (content_hits * weight_content),
-            res_type, path, local_only: is_local_only, snippets, is_tolerant_match: false,
-        });
     }
-    results
+
+    Regex::new(&format!("(?i){}", regex_str)).unwrap_or_else(|_| Regex::new("^$").unwrap())
 }
 
-/// 宽容模式扫描：使用原生 Regex
-fn execute_scan_tolerant<'a>(pool: &'a [String], re: &Regex, is_tolerant: bool) -> Vec<SearchResult<'a>> {
+/// 统一执行扫描（严格/宽容复用同一套逻辑，仅正则引擎不同）
+fn execute_scan<'a>(pool: &'a [String], re: &Regex, is_tolerant: bool) -> Vec<SearchResult<'a>> {
     let mut results = Vec::new();
     let weight_title = 50;
     let weight_content = 1;
@@ -274,7 +220,7 @@ fn execute_scan_tolerant<'a>(pool: &'a [String], re: &Regex, is_tolerant: bool) 
         let res_type = &pool[i + 3];
         
         let title_start = path.rfind('/').map(|i| i + 1).unwrap_or(0);
-        let title = &path[title_start..]; // Zero-copy slicing!
+        let title = &path[title_start..]; 
         
         let mut is_local_only = false;
         let searchable_content = if raw_content.starts_with("localOnly") {

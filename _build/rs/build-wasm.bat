@@ -22,6 +22,8 @@ echo.
 echo Cleaning generated files...
 
 "..\esbuild\esbuild.exe" "%WASM_OUT_DIR%\compute_intensive_task_processor.js" --outfile="%WASM_OUT_DIR%\compute_intensive_task_processor.min.js" --minify --target=es2020 --charset=utf8
+
+timeout /t 2 /nobreak >nul
 del /Q "%WASM_OUT_DIR%\*.d.ts" 2>nul
 del /Q "%WASM_OUT_DIR%\*.json" 2>nul
 del /Q "%WASM_OUT_DIR%\.gitignore" 2>nul
