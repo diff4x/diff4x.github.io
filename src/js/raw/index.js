@@ -1375,6 +1375,17 @@ function search_box() {
         if (e.target.tagName.toUpperCase() === 'OPTION') {
             const path = e.target.dataset.path;
             const type = e.target.dataset.type;
+            const isLocalOnly = e.target.dataset.localOnly === "true";
+
+            if (e.target.dataset.localOnly === "true" && store.online_flag === "1") {
+                e.target.title = "";
+                if (lastHoveredPath !== path) {
+                    destroyMediaPreview();
+                    lastHoveredPath = path;
+                }
+                return;
+            }
+
             const isMedia = type === 'video' || type === 'audio' || /\.(mp4|webm|ogg|mp3|wav|flac|m4a)$/i.test(path);
             const isImage = type === 'image' || /\.(png|jpg|jpeg|gif|webp|bmp|svg|ico)$/i.test(path);
 
@@ -1498,6 +1509,11 @@ function search_box() {
             e.preventDefault(); 
             const path = e.target.dataset.path;
             const type = e.target.dataset.type;
+
+             if (e.target.dataset.localOnly === "true" && store.online_flag === "1") {
+                return;
+            }
+
             const isMedia = type === 'video' || type === 'audio' || /\.(mp4|webm|ogg|mp3|wav|flac|m4a)$/i.test(path);
 
             if (isMedia) {
@@ -3109,7 +3125,7 @@ function updateTitle() {
     const hh = String(h).padStart(2, "0");
     const time = `${hh}:${mm}`;
     const isRestTime = (h >= 23 || h < 6);
-    document.title = isRestTime ? `该睡觉了 - ${time}` : `${doc_title} - ${time}`;
+    document.title = isRestTime ? `${time} - 该睡觉了` : `${time} - ${doc_title}`;
     if (isRestTime) {
         startFaviconBlink();
     } else {

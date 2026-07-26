@@ -124,7 +124,8 @@ option:hover {
 }
 
 #audio {
-    width: 350px
+    width: 350px;
+    background-color: #cae4ff;
 }
 
 #audio .active {
