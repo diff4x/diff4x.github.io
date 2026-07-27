@@ -1,6 +1,25 @@
 @charset "UTF-8";
 @import url("font.css");
 
+@keyframes elasticBounce {
+    0% {
+        transform: scale(0.94);
+        opacity: 0;
+    }
+    70% {
+        transform: scale(1.01);
+        opacity: 1;
+    }
+    100% {
+        transform: scale(1);
+        opacity: 1;
+    }
+}
+
+.elastic-anim {
+    animation: elasticBounce 0.25s ease-out forwards;
+}
+
 html,
 body,
 pre,

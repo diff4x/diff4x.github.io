@@ -1,6 +1,10 @@
 // 触发 SW 更新检查
-self.SW_VERSION = '1785075920675';
-importScripts('/src/js/core-list.js?v=1785075920675');
+self.SW_VERSION = '1785179716541';
+
+// 远程修复指令, id递增
+self.EMERGENCY = 'repair_command_id=1';
+
+importScripts('/src/js/core-list.js?v=1785179716541');
 
 // 缓存池隔离命名
 const CACHE_NAME_CORE = 'core-cache-' + BUILD_VERSION;
@@ -20,6 +24,7 @@ const writeLog = async (msg) => {
                 if (!db.objectStoreNames.contains('chunks')) db.createObjectStore('chunks');
                 if (!db.objectStoreNames.contains('update_logs')) db.createObjectStore('update_logs', { autoIncrement: true });
                 if (!db.objectStoreNames.contains('search_cache')) db.createObjectStore('search_cache');
+                if (!db.objectStoreNames.contains('sys_state')) db.createObjectStore('sys_state');
             };
             req.onsuccess = () => resolve(req.result);
             req.onerror = () => reject();
@@ -99,14 +104,17 @@ self.addEventListener('install', event => {
             const executing = new Set();
 
             for (const url of urls) {
-            const task = (async () => {
-                try {
-                    // 💥 接入全局锁：如果此时主线程也在请求这个文件，它们会自动合并为 1 个真实网络请求
-                    const response = await fetchWithLock(new Request(url, { cache: 'no-cache' }));
-                    if (response.ok) {
+                const task = (async () => {
+                    try {
+                        // 💥 接入全局锁：如果此时主线程也在请求这个文件，它们会自动合并为 1 个真实网络请求
+                        const response = await fetchWithLock(new Request(url, { cache: 'no-cache' }));
+                        if (response.ok) {
                             if (url !== '/') {
-                                const logMsg = oldManifest[url] ? `🔄 [SW] 更新文件: ${url}` : `✅ [SW] 新增文件: ${url}`;
-                                await writeLog(logMsg);
+                                if (oldManifest[url]) {
+                                    await writeLog(`🔄 [SW] 更新文件: ${url}`);
+                                } else if (isUpdate) {
+                                    await writeLog(`✅ [SW] 新增文件: ${url}`);
+                                }
                             }
                             await newCache.put(url, response);
                         }
@@ -117,7 +125,7 @@ self.addEventListener('install', event => {
 
                 results.push(task);
                 executing.add(task);
-                
+
                 const clean = () => executing.delete(task);
                 task.then(clean).catch(clean);
 
@@ -126,8 +134,17 @@ self.addEventListener('install', event => {
             return Promise.all(results);
         };
 
+        const isUpdate = Object.keys(oldManifest).length > 0;
+        self.clients.matchAll({ includeUncontrolled: true, type: 'window' }).then(clients => {
+            clients.forEach(client => {
+                client.postMessage({
+                    type: 'SW_UPDATE_STATUS',
+                    isUpdate: isUpdate
+                });
+            });
+        });
+
         // --- 阶段 B: 任务分拣与调度 ---
-        
         const CORE_BUNDLE_THRESHOLD = 15; // 大包请求触发阈值
         let bundleUpdates = [];    
         let standaloneUpdates = []; 
@@ -191,7 +208,9 @@ self.addEventListener('install', event => {
                     }
                 }
                 await Promise.all(putPromises);
-                await writeLog(`✅ [SW] 从大包解压并缓存了 ${putPromises.length} 个文件`);
+                if (isUpdate) {
+                    await writeLog(`✅ [SW] 从大包解压并缓存了 ${putPromises.length} 个文件`);
+                }
             } catch (err) {
                 console.error("❌ [SW] Core bundle parsing failed", err);
                 throw new Error("Core bundle installation failed."); // 异常时中断 Install，强制保留旧版 SW 兜底

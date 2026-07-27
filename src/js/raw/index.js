@@ -49,6 +49,52 @@ let params = {
     dragging: false
 };
 
+if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.addEventListener('message', (event) => {
+        if (event.data && event.data.type === 'SW_UPDATE_STATUS') {
+            const isUpdate = event.data.isUpdate;
+            sessionStorage.setItem("isUpdate", isUpdate ? "1" : "0");
+            console.log(`📡 [Main] 收到 SW 同步状态: 是否为热更新 -> ${isUpdate}`);
+        }
+    });
+}
+
+// 站点自愈
+const executeSelfHealing = async (reason, commandId = null) => {
+    console.warn(`🚧  触发站点自愈程序: ${reason}`);
+    try {
+        if ('serviceWorker' in navigator) {
+            const regs = await navigator.serviceWorker.getRegistrations();
+            for (const r of regs) await r.unregister();
+        }
+        if ('caches' in window) {
+            const keys = await caches.keys();
+            for (const k of keys) await caches.delete(k);
+        }
+        if (window.indexedDB) {
+            indexedDB.deleteDatabase('MainDB'); 
+        }
+        sessionStorage.removeItem("sw_reload_guard");
+        sessionStorage.removeItem("ss_restore_strict");
+        if (commandId !== null && commandId !== undefined) {
+            store.repair_command_id = commandId.toString();
+        }
+    } catch(e) {
+        console.error("自愈过程发生异常", e);
+    }
+    alert(`🚧 需要进行站点修复。\n[${reason}]`);
+    window.location.href = window.location.origin;
+};
+
+// 看门狗
+if (window._globalWatchdog) {
+    clearTimeout(window._globalWatchdog);
+    window._globalWatchdog = null;
+}
+window._globalWatchdog = setTimeout(() => {
+    executeSelfHealing("核心数据组装严重超时 (疑似 IDB/Wasm 崩溃)");
+}, 60000);
+
 // 事件网关
 window.addEventListener('message', async (e) => {
     if (e.origin === "https://giscus.app" && e.data?.giscus) {
@@ -374,6 +420,37 @@ document.addEventListener('keydown', (e) => {
     }
 });
 window.onload = () => {
+    // URL 附带 ?repair=1 手动修复
+    if (window.location.search.includes('repair=1')) {
+        executeSelfHealing("URL手动指令");
+        return; 
+    }
+
+    // 远端修复指令
+    setTimeout(() => {
+        if (navigator.onLine) {
+            fetch('/sw.js?_bypass=' + Date.now(), { cache: 'no-store' })
+                .then(res => res.text())
+                .then(text => {
+                    const match = text.match(/repair_command_id\s*=\s*(\d+)/);
+                    if (match) {
+                        const remoteId = parseInt(match[1], 10);
+                        const localId = parseInt(store.repair_command_id || '0', 10);
+                        const isUpdate = sessionStorage.getItem("isUpdate") === "1";
+
+                        if (localId === 0 || !isUpdate) {
+                            store.repair_command_id = remoteId.toString();
+                            return;
+                        }
+
+                        if (remoteId > localId) {
+                            executeSelfHealing(`接收到远端修复指令: ${remoteId}`, remoteId);
+                        }
+                    }
+                }).catch(() => {});
+        }
+    }, 2000);
+
     if (store.layout_content_flex && store.layout_side_flex) {
         $("#content").style.flex = store.layout_content_flex;
         $("#side").style.flex = store.layout_side_flex;
@@ -540,6 +617,8 @@ function createDBProxy(dbName, storeName) {
                     db.createObjectStore('update_logs', { autoIncrement: true });
                 if (!db.objectStoreNames.contains('search_cache')) 
                     db.createObjectStore('search_cache');
+                if (!db.objectStoreNames.contains('sys_state')) 
+                    db.createObjectStore('sys_state');
             };
             request.onsuccess = (e) => resolve(e.target.result);
             request.onerror = (e) => reject(e.target.error);
@@ -659,9 +738,9 @@ function createDBProxy(dbName, storeName) {
 
 // 核心引擎
 async function loadScripts(concurrency) {
+console.time("⏱️ loadScripts 总耗时");
     // 挂锁
     window.isDataSyncing = true;
-
     const injectScript = (src) => new Promise((resolve, reject) => {
         const script = document.createElement("script");
         script.src = src; script.type = "text/javascript"; script.charset = "UTF-8";
@@ -682,7 +761,6 @@ async function loadScripts(concurrency) {
             window.dataIndex = [];
             window._isOfflineDataFallback = true;
         }
-
         // 线下探测并注入影子索引
         window.shadowIndex = [];
         if (store.online_flag === "0") {
@@ -729,16 +807,24 @@ async function loadScripts(concurrency) {
             });
         
         // 静默下载胖数据
+console.time("👉 loadDataInBatches 数据拼装");
         const fatFiles = window.dataIndex.filter(f => f.startsWith('fat_data_'));
 
         // 数据拼装
         await loadDataInBatches(fatFiles, now, concurrency);
+console.timeEnd("👉 loadDataInBatches 数据拼装");
     } catch (err) {
         console.error("❌ 核心流程中断，降级处理:", err);
     } finally {
-        // 解锁
         window.isDataSyncing = false;
+        // 核心流程全部走通，解除看门狗
+    if (window._globalWatchdog) {
+            clearTimeout(window._globalWatchdog);
+            window._globalWatchdog = null;
+console.log("🟢 核心加载顺利完成，看门狗已安全解除。");
+        }
     }
+console.timeEnd("⏱️ loadScripts 总耗时");
 }
 
 // 数据拼装
@@ -899,6 +985,49 @@ async function loadDataInBatches(files, now, concurrency) {
         // 全量喂给 worker 
         searchWorker.postMessage({ type: 'SET_DATA', payload: window.data });
 
+        // 侦测媒体资源的变动
+        try {
+            const currentMediaPaths = new Set();
+            for (let i = 0; i < window.data.length; i += 4) {
+                const type = window.data[i + 3];
+                if (['image', 'video', 'audio', 'ebook'].includes(type)) {
+                    currentMediaPaths.add(window.data[i + 2]);
+                }
+            }
+
+            const oldMediaListRaw = await dbProxy.get('sys_state', 'media_paths_snapshot');
+            
+            // 【新增2】冷启动侦测：如果本地没有任何旧快照记录，直接静默落盘初始状态，不写日志
+            if (!oldMediaListRaw) {
+                await dbProxy.put('sys_state', 'media_paths_snapshot', Array.from(currentMediaPaths));
+            } else {
+                const oldMediaPaths = new Set(oldMediaListRaw);
+                let hasMediaUpdates = false;
+
+                // Diff 1: 找新增
+                for (const path of currentMediaPaths) {
+                    if (!oldMediaPaths.has(path)) {
+                        await dbProxy.addLog(`✅ 新增媒体: /${path}`);
+                        hasMediaUpdates = true;
+                    }
+                }
+
+                // Diff 2: 找删除
+                for (const path of oldMediaPaths) {
+                    if (!currentMediaPaths.has(path)) {
+                        await dbProxy.addLog(`⛔ 删除媒体: /${path}`);
+                        hasMediaUpdates = true;
+                    }
+                }
+
+                if (hasMediaUpdates) {
+                    await dbProxy.put('sys_state', 'media_paths_snapshot', Array.from(currentMediaPaths));
+                }
+            }
+        } catch (err) {
+            console.warn("媒体资源 Diff 侦测失败", err);
+        }
+
         // 洗盘子释放内存
         fat_data_merged = null;
         chunkDataMap.clear();
@@ -910,9 +1039,19 @@ async function loadDataInBatches(files, now, concurrency) {
                 if (window.restoreSnapPromise) {
                     window.restoreSnapPromise.then(() => { 
                         idleRun(playConfetti); 
+                        // 【修改点】快照恢复完毕后，判断是否允许自动弹出日志（错峰 800ms 避免阻塞页面重绘）
+                        if (store.auto_show_changelog !== "0") {
+                            setTimeout(showChangelog, 800);
+                        }
                         window.restoreSnapPromise = null; 
                     });
-                } else { idleRun(playConfetti); }
+                } else { 
+                    idleRun(playConfetti); 
+                    // 【修改点】非快照环境的后备触发
+                    if (store.auto_show_changelog !== "0") {
+                        setTimeout(showChangelog, 800);
+                    }
+                }
             };
             triggerConfetti();
         }
@@ -947,7 +1086,10 @@ async function loadDataInBatches(files, now, concurrency) {
                     
                     chunkDataMap.set(src, chunkData);
                     await dbProxy.save(src, { id: src, fingerprint: newHash, data: chunkData });
-                    await dbProxy.addLog(cachedMap.has(src) ? `🔄 更新: ${src}` : `✅ 新增: ${src}`);
+
+                    if (store.isUpdate === "1") {
+                        await dbProxy.addLog(cachedMap.has(src) ? `🔄 更新: ${src}` : `✅ 新增: ${src}`);
+                    }
                 } finally {
                     clearTimeout(timeoutTimer);
                 }
@@ -3028,15 +3170,35 @@ async function showChangelog() {
     if (!popup) {
         popup = document.createElement('div');
         popup.id = 'changelog-popup';
+        popup.classList.add('elastic-anim');
 
         const header = document.createElement('div');
         header.id = 'changelog-header';
-        header.innerHTML = `<span class="cl-title">What's new?</span><div><button id="clear-changelog" class="cl-btn">Clear log</button><button id="close-changelog" class="cl-btn">Close</button></div>`;
+        
+        header.innerHTML = `
+            <span class="cl-title">What's new?</span>
+            <div style="display:flex; align-items:center;">
+                <label style="margin-right: 15px; font-size: 12px; color: #555; cursor: pointer; display: flex; align-items: center; white-space: nowrap;">
+                    <input type="checkbox" id="auto-show-changelog-cb" style="margin-right: 4px;">更新后自动弹窗
+                </label>
+                <button id="clear-changelog" class="cl-btn">Clear log</button>
+                <button id="close-changelog" class="cl-btn">Close</button>
+            </div>
+        `;
 
         const content = document.createElement('div');
         content.id = 'changelog-content';
         popup.append(header, content);
         document.body.appendChild(popup);
+
+        const autoShowCb = $('#auto-show-changelog-cb');
+        if (store.auto_show_changelog === null || store.auto_show_changelog === undefined) {
+            store.auto_show_changelog = "1";
+        }
+        autoShowCb.checked = store.auto_show_changelog === "1";
+        autoShowCb.onchange = (e) => {
+            store.auto_show_changelog = e.target.checked ? "1" : "0";
+        };
 
         $('#close-changelog').onclick = () => popup.style.display = 'none';
         $('#clear-changelog').onclick = async () => {
@@ -3046,11 +3208,32 @@ async function showChangelog() {
             }
         };
         makeDraggable('#changelog-popup', '#changelog-header');
+        
+        content.addEventListener('click', (e) => {
+            const link = e.target.closest('.log-link');
+            if (link) {
+                const path = link.dataset.path;
+                const bucket = link.dataset.bucket;
+                let typeSelector = '';
+                
+                if (bucket === 'html') typeSelector = '#html a';
+                else if (bucket === 'gallery') typeSelector = '#gallery a';
+                else if (bucket === 'video') typeSelector = '#video a';
+                else if (bucket === 'audio') typeSelector = '#audio a';
+                else if (bucket === 'ebook') typeSelector = '#ebook a';
+
+                if (typeSelector) {
+                    sendToIframe('side', typeSelector, path);
+                    sendToIframe('side', 'show_current', null);
+                }
+            }
+        });
     }
 
     popup.style.display = 'flex';
     const content = $('#changelog-content');
     content.innerHTML = '<div style="color: gray;">加载中...</div>';
+    
     try {
         const logs = await dbProxy.getLogs();
         if (logs.length === 0) {
@@ -3061,9 +3244,24 @@ async function showChangelog() {
 
         let html = '';
         let lastTs = null;
+        let seenPaths = new Set(); 
+
+        // 提前扫描 window.data 提取出所有 private 路径
+        const privatePaths = new Set();
+        if (window.data && window.data.length > 0) {
+            // data 结构循环: [title, info, path, type]
+            for (let i = 0; i < window.data.length; i += 4) {
+                const info = window.data[i + 1];
+                const path = window.data[i + 2];
+                if (typeof info === 'string' && info.includes('localOnly')) {
+                    privatePaths.add(path);
+                }
+            }
+        }
+
         logs.forEach(log => {
             if (lastTs !== null && (lastTs - log.ts > 60000)) {
-                html += `<div style="color: #000; margin: 4px 0; overflow: hidden; white-space: nowrap; font-weight: bold; opacity: 0.5;">------------------------------------------------------------------------------------------------------------------------</div>`;
+                html += `<div style="margin: 4px 0; color: lightgray;overflow: hidden;">------------------------------------------------------------------------------------------------------------------------</div>`;
             }
             lastTs = log.ts;
 
@@ -3071,15 +3269,56 @@ async function showChangelog() {
             const dateStr = `[${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:${String(d.getSeconds()).padStart(2, '0')}]`;
 
             let textColor = '#333333';
+            let isAddOrUpdate = false;
+            
             if (/删除/.test(log.msg)) {
                 textColor = '#cc0000';
             } else if (/新增/.test(log.msg)) {
                 textColor = '#008000';
+                isAddOrUpdate = true;
             } else if (/更新/.test(log.msg)) {
                 textColor = '#0033cc';
+                isAddOrUpdate = true;
             }
 
-            html += `<div style="color: ${textColor}; margin-bottom: 2px;">${dateStr} ${log.msg}</div>`;
+            let msgHtml = log.msg;
+            
+            // 匹配可选的前导斜杠、存储桶以及剩余的所有字符(直到行尾，包容空格)
+            const match = log.msg.match(/(\/)?(html|gallery|video|audio|ebook)\/(.+)$/);
+
+            if (match) {
+                const fullMatch = match[0];
+                const bucket = match[2];
+                // 取出纯文件名部分，剔除可能存在的版本号参数
+                const rawPath = match[3].split('?')[0].trim();
+                const cleanPath = `${bucket}/${rawPath}`;
+                
+                // 判别私有状态并赋予对应的锁图标
+                const isPrivate = privatePaths.has(cleanPath);
+                const lockIcon = isPrivate ? (store.online_flag === "1" ? "🔒 " : "🔓 ") : "";
+
+                // 首次遇到的最新动态记录
+                if (!seenPaths.has(cleanPath)) {
+                    seenPaths.add(cleanPath);
+
+                    if (isAddOrUpdate) {
+                        const displayHtml = lockIcon + fullMatch;
+                        const linkHtml = `<span class="log-link" data-path="${cleanPath}" data-bucket="${bucket}" style="cursor: pointer; text-decoration: underline; font-weight: bold;" title="在侧栏中定位并打开">${displayHtml}</span>`;
+                        msgHtml = log.msg.replace(fullMatch, linkHtml);
+                    } else {
+                        // 如果最新状态是“删除”，保持纯文本，仅补充锁图标
+                        if (lockIcon) {
+                            msgHtml = log.msg.replace(fullMatch, lockIcon + fullMatch);
+                        }
+                    }
+                } else {
+                    // 旧历史中的重复记录，不加下划线伪装链，仅补充锁图标
+                    if (lockIcon) {
+                        msgHtml = log.msg.replace(fullMatch, lockIcon + fullMatch);
+                    }
+                }
+            }
+            html += `<div style="color: ${textColor}; margin-bottom: 2px;">${dateStr} ${msgHtml}</div>`;
         });
         content.innerHTML = html;
     } catch (e) {
@@ -3094,6 +3333,7 @@ function showGuestbook() {
     if (!popup) {
         popup = document.createElement('div');
         popup.id = 'guestbook-popup';
+        popup.className = 'elastic-anim';
         popup.style.cssText = 'position: fixed; top: 10vh; left: calc(50vw - 320px); width: 640px; height: 80vh; background: #fff; z-index: 10001; display: none; flex-direction: column; border: 1px solid #333; box-shadow: 0 5px 20px rgba(0, 0, 0, 0.3); border-radius: 4px; overflow: hidden;';
 
         const header = document.createElement('div');
@@ -3686,7 +3926,7 @@ const ExcerptsUIManager = {
         if (document.getElementById('excerpts-popup')) return;
 
         const html = `
-        <div id="excerpts-popup" style="display:none; position:fixed; top:10vh; left:calc(50vw - 400px); width:800px; height:80vh; background:#fff; border:1px solid #333; box-shadow:0 5px 20px rgba(0,0,0,0.3); z-index:10001; flex-direction:column; border-radius:4px; overflow:hidden;">
+        <div id="excerpts-popup" class="elastic-anim" style="display:none; position:fixed; top:10vh; left:calc(50vw - 400px); width:800px; height:80vh; background:#fff; border:1px solid #333; box-shadow:0 5px 20px rgba(0,0,0,0.3); z-index:10001; flex-direction:column; border-radius:4px; overflow:hidden;">
             <div id="excerpts-header" style="height:35px; background:#eee; cursor:move; display:flex; justify-content:space-between; align-items:center; padding:0 15px; flex-shrink:0; border-bottom:1px solid #ccc; user-select:none; font-size:14px; color:#333;">
                 <span class="cl-title" style="color: red;">Excerpts</span>
                 <div><button id="close-excerpts" class="cl-btn" style="margin-left: 10px; cursor: pointer; padding: 1px 6px;">Close</button></div>
