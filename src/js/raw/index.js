@@ -41,13 +41,6 @@ let audioInitialized = false;
 let comments_first_flag = false;
 let records = [];
 let totalCount = 0;
-let params = {
-    left: 0,
-    top: 0,
-    currentX: 0,
-    currentY: 0,
-    dragging: false
-};
 
 if ('serviceWorker' in navigator) {
     navigator.serviceWorker.addEventListener('message', (event) => {
@@ -386,7 +379,6 @@ window.addEventListener('message', async (e) => {
             else if (store.resource_type === 'epub' && store.epub_path) bookName = store.epub_path.split('/').pop();
 
             ExcerptsSys.save(bookName, payload).then(() => {
-                // 如果当前控制面板正好打开着，实时刷新右侧或左侧技术数
                 if (document.getElementById('excerpts-popup') && document.getElementById('excerpts-popup').style.display !== 'none') {
                     ExcerptsUIManager.openAndRefresh();
                 }
@@ -734,7 +726,7 @@ function createDBProxy(dbName, storeName) {
 
 // 核心引擎
 async function loadScripts(concurrency) {
-console.time("⏱️ loadScripts 总耗时");
+// console.time("⏱️ loadScripts 总耗时");
     // 挂锁
     window.isDataSyncing = true;
     const injectScript = (src) => new Promise((resolve, reject) => {
@@ -750,6 +742,7 @@ console.time("⏱️ loadScripts 总耗时");
         // 注入哈希账本与公开索引
         // 主线程 index.js 和 Service Worker 线程 sw.js, 两者是完全不同的平行宇宙
         try {
+            await injectScript(`src/third/msgpack.min.js`);
             await injectScript(`src/js/core-list.js?t=${now}`);
         } catch (e) {
             // 离线或冷启动异常时的统一保底方案
@@ -799,16 +792,13 @@ console.time("⏱️ loadScripts 总耗时");
             })
             .finally(() => {
                 $("#search").style.display = "block";
-                // document.documentElement.style.setProperty("background-color", "#cae4ff", "important");
             });
         
         // 静默下载胖数据
-console.time("👉 loadDataInBatches 数据拼装");
         const fatFiles = window.dataIndex.filter(f => f.startsWith('fat_data_'));
 
         // 数据拼装
         await loadDataInBatches(fatFiles, now, concurrency);
-console.timeEnd("👉 loadDataInBatches 数据拼装");
     } catch (err) {
         console.error("❌ 核心流程中断，降级处理:", err);
     } finally {
@@ -817,10 +807,9 @@ console.timeEnd("👉 loadDataInBatches 数据拼装");
     if (window._globalWatchdog) {
             clearTimeout(window._globalWatchdog);
             window._globalWatchdog = null;
-console.log("🟢 核心加载顺利完成，看门狗已安全解除。");
         }
     }
-console.timeEnd("⏱️ loadScripts 总耗时");
+// console.timeEnd("⏱️ loadScripts 总耗时");
 }
 
 // 数据拼装
@@ -959,18 +948,22 @@ async function loadDataInBatches(files, now, concurrency) {
         }
         shadowDataChunks.forEach(chunk => Object.assign(shadow_data_merged, chunk));
 
-        // 💥 Wasm 接管：通过序列化 JSON，把递归合并的任务直接推给底层的 Rust
+        // 💥 Wasm 接管：通过 MessagePack 的 Uint8Array 将任务推给底层的 Rust
         try {
-            // 动态加载 Wasm 模块供主线程组装数据
             const wasm = await import('../wasm/compute_intensive_task_processor.min.js');
             await wasm.default(); // 初始化
             
             const isOffline = store.online_flag === "0";
             
+            // 👇 使用全局对象 MessagePack 进行二进制序列化
+            const liteBytes = MessagePack.encode(window.lite_data || {});
+            const fatBytes = MessagePack.encode(fat_data_merged);
+            const shadowBytes = MessagePack.encode(shadow_data_merged);
+            
             window.data = wasm.build_flat_data(
-                JSON.stringify(window.lite_data || {}),
-                JSON.stringify(fat_data_merged),
-                JSON.stringify(shadow_data_merged),
+                liteBytes,
+                fatBytes,
+                shadowBytes,
                 isOffline
             );
         } catch (e) {
@@ -3459,7 +3452,7 @@ function playConfetti() {
     }
 
     const script = document.createElement('script');
-    script.src = "src/js/confetti.browser.min.js";
+    script.src = "src/third/confetti.browser.min.js";
     script.onload = () => {
         script.remove();
         startAnimation();
@@ -4154,7 +4147,7 @@ const ExcerptsUIManager = {
     }
 };
 
-// 全局右键书签列表
+// 右键书签列表
 function showGlobalBookmarkMenu(x, y, source) {
     let absoluteX = x;
     let absoluteY = y;

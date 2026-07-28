@@ -1,18 +1,18 @@
 /* @ts-self-types="./compute_intensive_task_processor.d.ts" */
 
 /**
- * @param {string} lite_json
- * @param {string} fat_json
- * @param {string} shadow_json
+ * @param {Uint8Array} lite_bytes
+ * @param {Uint8Array} fat_bytes
+ * @param {Uint8Array} shadow_bytes
  * @param {boolean} is_offline
  * @returns {Array<any>}
  */
-export function build_flat_data(lite_json, fat_json, shadow_json, is_offline) {
-    const ptr0 = passStringToWasm0(lite_json, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+export function build_flat_data(lite_bytes, fat_bytes, shadow_bytes, is_offline) {
+    const ptr0 = passArray8ToWasm0(lite_bytes, wasm.__wbindgen_export);
     const len0 = WASM_VECTOR_LEN;
-    const ptr1 = passStringToWasm0(fat_json, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+    const ptr1 = passArray8ToWasm0(fat_bytes, wasm.__wbindgen_export);
     const len1 = WASM_VECTOR_LEN;
-    const ptr2 = passStringToWasm0(shadow_json, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+    const ptr2 = passArray8ToWasm0(shadow_bytes, wasm.__wbindgen_export);
     const len2 = WASM_VECTOR_LEN;
     const ret = wasm.build_flat_data(ptr0, len0, ptr1, len1, ptr2, len2, is_offline);
     return takeObject(ret);
@@ -257,6 +257,13 @@ let heap_next = heap.length;
 
 function isLikeNone(x) {
     return x === undefined || x === null;
+}
+
+function passArray8ToWasm0(arg, malloc) {
+    const ptr = malloc(arg.length * 1, 1) >>> 0;
+    getUint8ArrayMemory0().set(arg, ptr / 1);
+    WASM_VECTOR_LEN = arg.length;
+    return ptr;
 }
 
 function passStringToWasm0(arg, malloc, realloc) {

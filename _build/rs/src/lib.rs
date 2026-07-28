@@ -5,6 +5,9 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsValue;
 use lru::LruCache;
 use std::num::NonZeroUsize;
+use rmp_serde::from_slice;
+use lazy_static::lazy_static;
+use serde_json::Value;
 
 // ==========================================
 // 1. 全局内存驻留区 & LRU 编译缓存
@@ -324,9 +327,6 @@ fn extract_snippets(text: &str, re: &Regex) -> Vec<String> {
 }
 
 
-use lazy_static::lazy_static;
-use serde_json::Value;
-
 // ==========================================
 // 目标 1：Markdown 极速格式化引擎 (外包 content.js 的 format)
 // 利用 lazy_static 全局缓存正则，避免在遍历大文本时重复编译 (优化点 3.b)
@@ -403,14 +403,21 @@ pub fn format_markdown(text: &str) -> String {
 }
 
 // ==========================================
-// 目标 2：数据增量 Diff 与树结构扁平化 (外包 index.js 的 flattenTree)
+// 改造后的二进制数据接收口
+// 签名由 &str 变更为 &[u8]，wasm-bindgen 会自动将其映射为 JS 的 Uint8Array
 // ==========================================
 #[wasm_bindgen]
-pub fn build_flat_data(lite_json: &str, fat_json: &str, shadow_json: &str, is_offline: bool) -> js_sys::Array {
-    // 采用跨界传 JSON String，再在 Rust 侧安全反序列化的策略，比深拷贝巨大 JsValue 快得多
-    let lite: Value = serde_json::from_str(lite_json).unwrap_or(Value::Null);
-    let fat: Value = serde_json::from_str(fat_json).unwrap_or(Value::Null);
-    let shadow: Value = serde_json::from_str(shadow_json).unwrap_or(Value::Null);
+pub fn build_flat_data(
+    lite_bytes: &[u8], 
+    fat_bytes: &[u8], 
+    shadow_bytes: &[u8], 
+    is_offline: bool
+) -> js_sys::Array {
+    
+    // 从 Uint8Array 切片直接反序列化为 Value 对象，跳过了昂贵的 UTF-8 校验和字符串解析
+    let lite: Value = from_slice(lite_bytes).unwrap_or(Value::Null);
+    let fat: Value = from_slice(fat_bytes).unwrap_or(Value::Null);
+    let shadow: Value = from_slice(shadow_bytes).unwrap_or(Value::Null);
 
     let mut results = Vec::new();
     let buckets = [
