@@ -26,13 +26,6 @@ window.addEventListener('DOMContentLoaded', () => {
     }
 
     loadFaviconsWhenIdle();
-
-    const btnGuestbook = document.getElementById('btn-guestbook');
-    if (btnGuestbook) {
-        btnGuestbook.addEventListener('click', () => {
-            sendToParent('show_guestbook', null);
-        });
-    }
 });
 document.addEventListener('keydown', (e) => {
   if (e.key === '\\') {

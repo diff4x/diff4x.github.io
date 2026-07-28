@@ -1,10 +1,10 @@
 // 触发 SW 更新检查
-self.SW_VERSION = '1785179716541';
+self.SW_VERSION = '1785214679427';
 
 // 远程修复指令, id递增
 self.EMERGENCY = 'repair_command_id=1';
 
-importScripts('/src/js/core-list.js?v=1785179716541');
+importScripts('/src/js/core-list.js?v=1785214679427');
 
 // 缓存池隔离命名
 const CACHE_NAME_CORE = 'core-cache-' + BUILD_VERSION;

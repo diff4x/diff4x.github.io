@@ -343,10 +343,6 @@ window.addEventListener('message', async (e) => {
             showChangelog();
             break;
 
-        case "show_guestbook":
-            showGuestbook();
-            break;
-
         case "play_fav_list":
             const existingPlayer = $("#audio");
             const existingHeader = existingPlayer ? existingPlayer.querySelector('.header') : null;
@@ -3326,37 +3322,6 @@ async function showChangelog() {
     }
 }
 
-// 留言薄弹出层
-function showGuestbook() {
-    let popup = $('#guestbook-popup');
-
-    if (!popup) {
-        popup = document.createElement('div');
-        popup.id = 'guestbook-popup';
-        popup.className = 'elastic-anim';
-        popup.style.cssText = 'position: fixed; top: 10vh; left: calc(50vw - 320px); width: 640px; height: 80vh; background: #fff; z-index: 10001; display: none; flex-direction: column; border: 1px solid #333; box-shadow: 0 5px 20px rgba(0, 0, 0, 0.3); border-radius: 4px; overflow: hidden;';
-
-        const header = document.createElement('div');
-        header.id = 'guestbook-header';
-        header.style.cssText = 'height: 35px; background: #eee; cursor: move; display: flex; justify-content: space-between; align-items: center; padding: 0 15px; user-select: none; flex-shrink: 0; border-bottom: 1px solid #ccc; font-size: 14px; color: #333;';
-        header.innerHTML = `<span class="cl-title">Guestbook</span><div><button id="close-guestbook" class="cl-btn" style="cursor: pointer; padding: 1px 6px;">Close</button></div>`;
-
-        const content = document.createElement('div');
-        content.id = 'guestbook-content';
-        content.style.cssText = 'flex: 1; overflow: hidden; background: #fafafa; display: flex;';
-        
-        content.innerHTML = `<iframe src="https://docs.google.com/forms/d/e/1FAIpQLScR2uk18TnJyaKM05n9Y1CJooXqxRHniHB5qsIS3tQ0lFNBew/viewform?embedded=true" width="100%" height="100%" frameborder="0" marginheight="0" marginwidth="0">Loading…</iframe>`;
-
-        popup.append(header, content);
-        document.body.appendChild(popup);
-
-        $('#close-guestbook').onclick = () => popup.style.display = 'none';
-        makeDraggable('#guestbook-popup', '#guestbook-header');
-    }
-
-    popup.style.display = 'flex';
-}
-
 // 标签页时钟
 function updateTitle() {
     const now = new Date();
@@ -3933,7 +3898,6 @@ const ExcerptsUIManager = {
             </div>
             
             <div style="flex:1; display:flex; overflow:hidden; background:#f8fafc;">
-                <!-- （内部布局与原代码保持一致，省略未改动部分）... -->
                 <div style="width:240px; border-right:1px solid #e2e8f0; display:flex; flex-direction:column; padding:5px; gap:10px; flex-shrink:0; background:antiquewhite;">
                     <input type="text" id="exc-search" placeholder="搜索过滤键名..." style="width:100%; padding:6px 10px; border:1px solid #cbd5e1; box-sizing:border-box; outline:none; font-size:12px; background:#fff;">
                     <div style="display:flex; gap:6px;">
