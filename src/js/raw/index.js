@@ -2211,6 +2211,31 @@ const imageLogic = function () {
         let lastTap = 0;
         im.ontouchend = (e) => { const now = Date.now(); if (now - lastTap < 300) { pop(); e.preventDefault(); } lastTap = now; };
     });
+
+    $("#addbg").addEventListener('click', (e) => {
+        e.stopPropagation();
+        try {
+            let config = store.wallpaper_config || {
+                list: [],
+                currentIndex: 0,
+                mode: 'fixed',
+                interval: 3600000,
+                layout: 'cover'
+            };
+
+            // 去重添加
+            if (!config.list.includes(path)) {
+                config.list.push(path);
+                store.wallpaper_config = config;
+                btn.textContent = '✅ 已添加壁纸';
+                setTimeout(() => { btn.textContent = '🖼️ 添加到壁纸'; }, 1500);
+            } else {
+                alert('该图片已经在壁纸列表中了！');
+            }
+        } catch (err) {
+            console.error("添加壁纸失败", err);
+        }
+    });
 };
 
 // doc-video 专属逻辑
@@ -2323,7 +2348,7 @@ function generateDoc(type, payload) {
         htmlStr = `<!DOCTYPE html><html><head><meta charset="utf-8"/>${baseTag}${viewportMeta}<style>${commonStyles} img{z-index:1;max-height:100vh;max-width:100vw;visibility:hidden}#loader{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:9999}.bar-spinner{width:40px;height:40px;position:relative;animation:spin 1s linear infinite}.bar{width:4px;height:20px;background:pink;border-radius:2px;position:absolute;top:10px;left:18px;transform-origin:center bottom}@keyframes spin{0%{transform:rotate(0deg)}100%{transform:rotate(360deg)}}</style></head><body>
         <div id="loader"><div class="bar-spinner"><div class="bar"></div></div></div>
         <img id="img">
-        <div class="span-container"><span id="fs" title="全屏(或按鼠标中键)">[F]</span><span id="c"></span><span id="p">prev</span><span id="i"></span><span id="n">next</span><span id="f"></span></div>
+        <div class="span-container"><span id="addbg">As Wallpaper</span><span id="fs" title="全屏(或按鼠标中键)">[F]</span><span id="c"></span><span id="p">prev</span><span id="i"></span><span id="n">next</span><span id="f"></span></div>
         <script>
             (function() {
                 var _img = document.getElementById('img');

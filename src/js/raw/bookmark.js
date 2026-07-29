@@ -26,6 +26,7 @@ window.addEventListener('DOMContentLoaded', () => {
     }
 
     loadFaviconsWhenIdle();
+    initWallpaperModule();
 });
 document.addEventListener('keydown', (e) => {
   if (e.key === '\\') {
@@ -137,7 +138,7 @@ function getFaviconStyleEl() {
 function collectFaviconTargets() {
     const targets = [];
     Array.from(document.querySelectorAll('div'))
-        .filter(div => div.id && div.id !== 'del' && div.id !== 'a')
+        .filter(div => div.id && div.id !== 'wallpaper-bg' && div.id !== 'wallpaper-panel' && div.id !== 'b1' && div.id !== 'del' && div.id !== 'a')
         .forEach(div => {
             const anchors = Array.from(div.children).filter(el => el.tagName === 'A');
             anchors.forEach((a, idx) => {
@@ -214,4 +215,273 @@ function getALinksHash() {
     hash *= 16777619n;
   }
   return hash.toString(16);
+}
+
+// ==========================================
+// 壁纸管理与轮播引擎模块
+// ==========================================
+let wallpaperTimer = null;
+
+function initWallpaperModule() {
+    let config = null;
+    try {
+        config = JSON.parse(localStorage.getItem('wallpaper_config'));
+    } catch (e) {
+        config = null;
+    }
+
+    if (!config || !Array.isArray(config.list) || config.list.length === 0) {
+        return; 
+    }
+    document.body.style.background = "transparent";
+
+    applyWallpaper(config);
+
+    startWallpaperTimer(config);
+
+    createWallpaperPanel(config);
+
+    window.addEventListener('storage', (e) => {
+        if (e.key === 'wallpaper_config') {
+            let newConfig = null;
+            try { newConfig = JSON.parse(e.newValue); } catch(_){}
+            if (newConfig) {
+                applyWallpaper(newConfig);
+                startWallpaperTimer(newConfig);
+                updateWallpaperPanelUI(newConfig);
+            }
+        }
+    });
+}
+
+function applyWallpaper(config) {
+    const bgLayer = document.getElementById('wallpaper-bg');
+    if (!bgLayer) return;
+
+    if (config.list.length === 0) {
+        bgLayer.style.backgroundImage = 'none';
+        return;
+    }
+
+    // 越界保护
+    if (config.currentIndex >= config.list.length) {
+        config.currentIndex = 0;
+    }
+
+    const currentUrl = config.list[config.currentIndex];
+    bgLayer.style.backgroundImage = `url("../../${currentUrl}")`;
+    bgLayer.style.backgroundSize = config.layout || 'cover';
+}
+
+function startWallpaperTimer(config) {
+    if (wallpaperTimer) {
+        clearInterval(wallpaperTimer);
+        wallpaperTimer = null;
+    }
+
+    if (config.mode === 'fixed' || config.list.length <= 1) {
+        return;
+    }
+
+    const interval = Number(config.interval) || 3600000; // 默认1小时
+
+    wallpaperTimer = setInterval(() => {
+        let curConfig = JSON.parse(localStorage.getItem('wallpaper_config'));
+        if (!curConfig || curConfig.list.length === 0) return;
+
+        if (curConfig.mode === 'sequential') {
+            curConfig.currentIndex = (curConfig.currentIndex + 1) % curConfig.list.length;
+        } else if (curConfig.mode === 'random') {
+            let nextIdx;
+            do {
+                nextIdx = Math.floor(Math.random() * curConfig.list.length);
+            } while (nextIdx === curConfig.currentIndex && curConfig.list.length > 1);
+            curConfig.currentIndex = nextIdx;
+        }
+
+        localStorage.setItem('wallpaper_config', JSON.stringify(curConfig));
+        applyWallpaper(curConfig);
+        updateWallpaperPanelUI(curConfig);
+    }, interval);
+}
+
+let panelDomRef = null;
+function createWallpaperPanel(config) {
+    if (document.getElementById('wallpaper-trigger-btn')) return;
+
+    const triggerBtn = document.createElement('button');
+    triggerBtn.id = 'wallpaper-trigger-btn';
+    triggerBtn.innerHTML = '🖼️';
+    triggerBtn.title = '壁纸设置面板';
+    document.body.appendChild(triggerBtn);
+
+    const tooltip = document.createElement('span');
+    tooltip.className = 'wp-preview-tooltip';
+    document.body.appendChild(tooltip);
+
+    const panel = document.createElement('div');
+    panel.id = 'wallpaper-panel';
+    panelDomRef = panel;
+    document.body.appendChild(panel);
+
+    renderPanelInnerContent(panel, config, tooltip);
+
+    triggerBtn.onclick = () => {
+        panel.classList.toggle('active');
+    };
+}
+
+function renderPanelInnerContent(panel, config, tooltip) {
+    panel.innerHTML = `
+        <span style="font-weight:bold; border-bottom:1px solid #444; padding-bottom:4px; display:flex; justify-content:space-between;">
+            <span>🖼️ 壁纸管理器</span>
+            <span style="cursor:pointer; color:#aaa;" onclick="document.getElementById('wallpaper-panel').classList.remove('active')">✕</span>
+        </span>
+        <span style="font-size:11px; color:#aaa;">已添加壁纸 (${config.list.length}张)</span>
+        <span class="wp-list" id="wp-list-container"></span>
+        
+        <div id="b1" style="display:flex; flex-direction:column; gap:4px; margin-top:4px; font-size:12px;">
+            <label>切换模式: 
+                <select id="wp-mode-select" style="background:#2a2a2a; color:#eee; border:1px solid #555;">
+                    <option value="fixed">固定单张</option>
+                    <option value="sequential">顺序轮播</option>
+                    <option value="random">随机切换</option>
+                </select>
+            </label>
+            <label>切换频率: 
+                <select id="wp-interval-select" style="background:#2a2a2a; color:#eee; border:1px solid #555;">
+                    <option value="5000">5秒 (测试)</option>
+                    <option value="600000">10分钟</option>
+                    <option value="3600000">1小时</option>
+                    <option value="21600000">6小时</option>
+                </select>
+            </label>
+            <label>显示布局: 
+                <select id="wp-layout-select" style="background:#2a2a2a; color:#eee; border:1px solid #555;">
+                    <option value="cover">Cover</option>
+                    <option value="contain">Contain</option>
+                    <option value="repeat">Repeat</option>
+                    <option value="auto">Auto</option>
+                </select>
+            </label>
+        </div>
+    `;
+
+    fillWallpaperListItems(config, tooltip);
+    bindPanelEvents(config);
+}
+
+function fillWallpaperListItems(config, tooltip) {
+    const listContainer = document.getElementById('wp-list-container');
+    if (!listContainer) return;
+    listContainer.innerHTML = '';
+
+    config.list.forEach((url, idx) => {
+        const item = document.createElement('span');
+        item.className = 'wp-item';
+        
+        const isCurrent = idx === config.currentIndex;
+        item.innerHTML = `
+            <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:180px; ${isCurrent ? 'color:#60a5fa; font-weight:bold;' : ''}" title="${url}">
+                ${isCurrent ? '📌 ' : ''}${idx + 1}. ${url.split('/').pop() || url}
+            </span>
+            <span>
+                <button class="wp-set-btn" data-idx="${idx}" style="font-size:10px; cursor:pointer;" title="设为当前">设为当前</button>
+                <button class="wp-del-btn" data-idx="${idx}" style="font-size:10px; cursor:pointer; color:#ef4444;" title="删除">🗑️</button>
+            </span>
+        `;
+
+        item.onmouseenter = (e) => {
+            tooltip.style.backgroundImage = `url("../../${url}")`;
+            tooltip.style.display = 'block';
+            moveTooltip(e, tooltip);
+        };
+        item.onmousemove = (e) => {
+            moveTooltip(e, tooltip);
+        };
+        item.onmouseleave = () => {
+            tooltip.style.display = 'none';
+        };
+
+        listContainer.appendChild(item);
+    });
+
+    listContainer.querySelectorAll('.wp-set-btn').forEach(btn => {
+        btn.onclick = (e) => {
+            e.stopPropagation();
+            const idx = Number(btn.getAttribute('data-idx'));
+            let cur = JSON.parse(localStorage.getItem('wallpaper_config'));
+            cur.currentIndex = idx;
+            localStorage.setItem('wallpaper_config', JSON.stringify(cur));
+            applyWallpaper(cur);
+            updateWallpaperPanelUI(cur);
+        };
+    });
+
+    listContainer.querySelectorAll('.wp-del-btn').forEach(btn => {
+        btn.onclick = (e) => {
+            e.stopPropagation();
+            const idx = Number(btn.getAttribute('data-idx'));
+            let cur = JSON.parse(localStorage.getItem('wallpaper_config'));
+            cur.list.splice(idx, 1);
+            if (cur.currentIndex >= cur.list.length) {
+                cur.currentIndex = Math.max(0, cur.list.length - 1);
+            }
+            localStorage.setItem('wallpaper_config', JSON.stringify(cur));
+            
+            if (cur.list.length === 0) {
+                localStorage.removeItem('wallpaper_config');
+                location.reload();
+                return;
+            }
+
+            applyWallpaper(cur);
+            startWallpaperTimer(cur);
+            updateWallpaperPanelUI(cur);
+        };
+    });
+}
+
+function moveTooltip(e, tooltip) {
+    const x = e.clientX + 15;
+    const y = e.clientY - 110;
+    tooltip.style.left = Math.min(x, window.innerWidth - 180) + 'px';
+    tooltip.style.top = Math.max(y, 10) + 'px';
+}
+
+function bindPanelEvents(config) {
+    const modeSelect = document.getElementById('wp-mode-select');
+    const intervalSelect = document.getElementById('wp-interval-select');
+    const layoutSelect = document.getElementById('wp-layout-select');
+
+    if(modeSelect) modeSelect.value = config.mode || 'fixed';
+    if(intervalSelect) intervalSelect.value = config.interval || 3600000;
+    if(layoutSelect) layoutSelect.value = config.layout || 'cover';
+
+    const saveChanges = () => {
+        let cur = JSON.parse(localStorage.getItem('wallpaper_config')) || {};
+        cur.mode = modeSelect.value;
+        cur.interval = Number(intervalSelect.value);
+        cur.layout = layoutSelect.value;
+        localStorage.setItem('wallpaper_config', JSON.stringify(cur));
+        applyWallpaper(cur);
+        startWallpaperTimer(cur);
+    };
+
+    if(modeSelect) modeSelect.onchange = saveChanges;
+    if(intervalSelect) intervalSelect.onchange = saveChanges;
+    if(layoutSelect) layoutSelect.onchange = saveChanges;
+}
+
+function updateWallpaperPanelUI(config) {
+    if (!panelDomRef) return;
+    const tooltip = document.querySelector('.wp-preview-tooltip');
+    fillWallpaperListItems(config, tooltip);
+    
+    const modeSelect = document.getElementById('wp-mode-select');
+    const intervalSelect = document.getElementById('wp-interval-select');
+    const layoutSelect = document.getElementById('wp-layout-select');
+    if(modeSelect) modeSelect.value = config.mode || 'fixed';
+    if(intervalSelect) intervalSelect.value = config.interval || 3600000;
+    if(layoutSelect) layoutSelect.value = config.layout || 'cover';
 }
