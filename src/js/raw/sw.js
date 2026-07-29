@@ -1,14 +1,21 @@
 // 触发 SW 更新检查
-self.SW_VERSION = '1785255486747';
+self.SW_VERSION = '1785346963808';
 
 // 远程修复指令, id递增
 self.EMERGENCY = 'repair_command_id=1';
 
-importScripts('/src/js/core-list.js?v=1785255486747');
+importScripts('/src/js/core-list.js?v=1785346963808');
+
+// sw.js 顶部新增原生压缩辅助函数
+async function compressText(text) {
+    const stream = new Blob([text]).stream().pipeThrough(new CompressionStream('deflate-raw'));
+    return new Uint8Array(await new Response(stream).arrayBuffer());
+}
 
 // 缓存池隔离命名
 const CACHE_NAME_CORE = 'core-cache-' + BUILD_VERSION;
 const CACHE_NAME_MEDIA = 'media-cache';
+const MAX_HTML_SNAPSHOT_HISTORY = 10;
 
 const IS_LOCAL_MODE = (self.location.hostname === 'localhost' || self.location.hostname === '127.0.0.1' || self.location.protocol === 'file:') && self.location.port !== '9000';
 
@@ -18,13 +25,14 @@ const writeLog = async (msg) => {
     try {
         // 冗余建表, 防止sw线程与主线程陷入初始化竞争
         const db = await new Promise((resolve, reject) => {
-            const req = indexedDB.open(dbName, 1); 
+            const req = indexedDB.open(dbName, 2);
             req.onupgradeneeded = (e) => {
                 const db = e.target.result;
                 if (!db.objectStoreNames.contains('chunks')) db.createObjectStore('chunks');
                 if (!db.objectStoreNames.contains('update_logs')) db.createObjectStore('update_logs', { autoIncrement: true });
                 if (!db.objectStoreNames.contains('search_cache')) db.createObjectStore('search_cache');
                 if (!db.objectStoreNames.contains('sys_state')) db.createObjectStore('sys_state');
+                if (!db.objectStoreNames.contains('html_snapshots')) db.createObjectStore('html_snapshots');
             };
             req.onsuccess = () => resolve(req.result);
             req.onerror = () => reject();
@@ -153,6 +161,53 @@ self.addEventListener('install', event => {
             const meta = FILE_MANIFEST[url]; 
             const oldMeta = oldManifest[url];
 
+            if (oldMeta && oldMeta.hash !== meta.hash && url.startsWith('/html/')) {
+                (async () => {
+                    try {
+                        const lastCache = await caches.open(lastCacheName);
+                        const oldRes = await lastCache.match(url);
+                        if (oldRes) {
+                            const oldText = await oldRes.text();
+                            // 💡 修改点：压缩原始文本，大幅降低 IndexedDB 膨胀
+                            const compressedData = await compressText(oldText); 
+                            
+                            const db = await new Promise((res, rej) => {
+                                const req = indexedDB.open('MainDB', 2);
+                                req.onsuccess = e => res(e.target.result);
+                            });
+
+                            const tx = db.transaction('html_snapshots', 'readwrite');
+                            const store = tx.objectStore('html_snapshots');
+
+                            const existing = await new Promise(resolve => {
+                                const r = store.get(url);
+                                r.onsuccess = () => resolve(r.result || null);
+                                r.onerror = () => resolve(null);
+                            });
+
+                            let history = [];
+                            if (existing) {
+                                if (Array.isArray(existing.history)) {
+                                    history = existing.history.slice();
+                                } else if (typeof existing.text === 'string') {
+                                    history = [{ text: existing.text, ts: existing.ts || Date.now() }];
+                                }
+                            }
+
+                            // 💡 修改点：打上 compressed 标记，供读取时识别
+                            history.push({ text: compressedData, ts: Date.now(), compressed: true });
+                            if (history.length > MAX_HTML_SNAPSHOT_HISTORY) {
+                                history = history.slice(history.length - MAX_HTML_SNAPSHOT_HISTORY);
+                            }
+
+                            store.put({ history }, url);
+                        }
+                    } catch (e) {
+                        console.warn(`[SW] 快照生成失败: ${url}`);
+                    }
+                })();
+            }
+            
             // 1. 缓存继承：Hash 无变化直接从旧缓存池硬链接复制
             if (oldMeta && oldMeta.hash === meta.hash) {
                 if (lastCacheName === CACHE_NAME_CORE) continue; 

@@ -97,17 +97,10 @@ pre.consumed span.lv0[data-index]::after {
     margin-left: .5em;
 }
 
-table.p2tbl {
-    color: #4f4f4f;
-}
-
-.p2tbl td {
-    padding: 5px;
-    background-color: #debbbb;
-}
-
-.p2tbl td:first-child {
-    background-color: #97bae9;
+table, td {
+    padding: 0 20px;
+    border-collapse: collapse;
+    border: 1px solid;
 }
 
 code {

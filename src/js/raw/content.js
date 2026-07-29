@@ -193,15 +193,17 @@ async function format() {
                 return;
             }
 
-            // 提取纯文本节点，跳过现有的 HTML 标签
             const textNodes = Array.from(preTag.childNodes).filter(n => n.nodeType === Node.TEXT_NODE);
-            
+
+            window._rawHtmlForDiff = preTag.innerHTML;
+
+            let outHtmlArr = [];
+
             textNodes.forEach(node => {
-                // 💥 跨语言调用：把原始长文本打给 Rust，返回一次性拼装好的巨型 HTML 字符串
-                const outHtml = format_markdown(node.nodeValue);
-                
-                // 将字符串转换回 DOM 树并替换
-                const fragment = document.createRange().createContextualFragment(outHtml);
+                outHtmlArr.push(format_markdown(node.nodeValue));
+            });
+            textNodes.forEach((node, i) => {
+                const fragment = document.createRange().createContextualFragment(outHtmlArr[i]);
                 node.replaceWith(fragment);
             });
 
@@ -242,21 +244,7 @@ async function format() {
         // p2tbl
         const paragraphs = Array.from(document.querySelectorAll('p'));
         paragraphs.forEach(paragraph => {
-            const lines = paragraph.textContent.trim().split('\n');
-            const table = document.createElement('table');
-            table.className = 'p2tbl';
-            const tbody = document.createElement('tbody');
-            table.appendChild(tbody);
-            lines.forEach(line => {
-                const tr = document.createElement('tr');
-                line.split("|").map(c => c.trim()).forEach(cell => {
-                    const td = document.createElement('td');
-                    td.textContent = cell;
-                    tr.appendChild(td);
-                });
-                tbody.appendChild(tr);
-            });
-            paragraph.replaceWith(table);
+            paragraph.replaceWith(renderP2TableEl(paragraph.textContent));
         });
 
         // 标题栏
@@ -265,8 +253,10 @@ async function format() {
         if (parts.length < 2) parts.push("");
         const bar = document.createElement("div");
         bar.id = "bar";
+        
         bar.innerHTML = `
             <span id='s_nav'></span>
+            <span id='diff-btn'></span>
             <span id='cm' title='0 comment' style="display:none" onclick='sendToParent("sh_comments", document.getElementById("stamp")?.innerText || "")'>💬</span>
             <span id='stamp' title='${format_date(parts[0])}'>${parts[1]} > ${document.title}</span>
             <div style='top:0;left:0'>
@@ -274,6 +264,8 @@ async function format() {
             </div>
         `;
         document.body.appendChild(bar);
+
+        initDiffUI();
 
         // 进度条
         let ticking = false;
@@ -290,14 +282,13 @@ async function format() {
             }
         });
 
-        // 重载
-        document.getElementById("stamp").ondblclick = () => {
-            store.jump_from_search = "0";
-            location.reload();
-        };
-
-        // 编辑
+        // 编辑重载
         if (store.online_flag == "0") {
+            document.getElementById("stamp").ondblclick = () => {
+                store.jump_from_search = "0";
+                location.reload();
+            };
+            
             document.getElementById("s_nav").insertAdjacentHTML("afterend",
                 `<span style='float: left' id='edit' onclick="location.href='`+store.protocol_name+`://1{' + encodeURIComponent(document.title)">edit</span>`
             );
@@ -861,6 +852,28 @@ function lightbox() {
     });
 }
 
+// 双击编辑
+function bindCodeEditHandlers(root) {
+    root.querySelectorAll('code').forEach((e) => {
+        e.ondblclick = (event) => {
+            event.stopPropagation();
+            e.contentEditable = "true";
+            e.style.outline = "none";
+            e.classList.add("is-editing");
+            e.focus();
+        };
+
+        e.oninput = () => {
+            updateLineNumbers(e);
+        };
+
+        e.onblur = () => {
+            e.contentEditable = "false";
+            e.classList.remove("is-editing");
+        };
+    });
+}
+
 // 着色
 async function code() {
     const codeElements = $$('code');
@@ -874,35 +887,12 @@ async function code() {
                 const lang = e.attributes.length > 1 ? e.attributes[0].name : "java";
                 
                 const rawContent = e.textContent.trim();
-                e.innerHTML = Prism.highlight(rawContent, Prism.languages[lang] || Prism.languages.java, lang);
+                e.innerHTML = highlightCode(rawContent, lang);
                 updateLineNumbers(e);
-
-                e.ondblclick = (event) => {
-                    event.stopPropagation();
-                    e.contentEditable = "true";
-                    e.style.outline = "none";
-                    e.classList.add("is-editing"); 
-                    e.focus();
-                };
-
-                e.oninput = () => {
-                    updateLineNumbers(e);
-                };
-
-                e.onblur = () => {
-                    e.contentEditable = "false";
-                    e.classList.remove("is-editing");
-                };
             });
+            bindCodeEditHandlers(document);
             resolve();
         };
-
-        function updateLineNumbers(el) {
-            const lineHeight = parseFloat(window.getComputedStyle(el).lineHeight);
-            const lineCount = el.innerText.split('\n').length;
-            const lines = Array.from({length: lineCount}, (_, i) => (i + 1).toString().padStart(2, '0'));
-            el.style.setProperty('--line-numbers', '"' + lines.join('.\\A ') + '.\\A"');
-        }
 
         if (!window.Prism) {
             const script = document.createElement('script');
@@ -1195,4 +1185,483 @@ async function start() {
     requestAnimationFrame(() => {
         document.body.style.opacity = 1;
     });
+}
+
+// 表格渲染, 从 postProcess 中抽出来，供 Diff 复用
+function renderP2TableEl(rawText) {
+    const lines = rawText.trim().split('\n');
+    const table = document.createElement('table');
+    table.className = 'p2tbl';
+    const tbody = document.createElement('tbody');
+    table.appendChild(tbody);
+    lines.forEach(line => {
+        const tr = document.createElement('tr');
+        line.split("|").map(c => c.trim()).forEach(cell => {
+            const td = document.createElement('td');
+            td.textContent = cell;
+            tr.appendChild(td);
+        });
+        tbody.appendChild(tr);
+    });
+    return table;
+}
+
+// 代码高亮, 从 code() 中抽出来，供 Diff 复用
+function highlightCode(rawText, lang) {
+    const effectiveLang = lang || "java";
+    if (!window.Prism) {
+        // Prism 尚未加载完成时的降级：至少做基础转义，避免破坏 DOM 结构
+        return rawText.replace(/&/g, '&amp;').replace(/</g, '&lt;');
+    }
+    return Prism.highlight(rawText, Prism.languages[effectiveLang] || Prism.languages.java, effectiveLang);
+}
+
+// 行号计算，供 code() 和 Diff 渲染完成后统一调用
+function updateLineNumbers(el) {
+    const lineHeight = parseFloat(window.getComputedStyle(el).lineHeight);
+    const lineCount = el.innerText.split('\n').length;
+    const lines = Array.from({length: lineCount}, (_, i) => (i + 1).toString().padStart(2, '0'));
+    el.style.setProperty('--line-numbers', '"' + lines.join('.\\A ') + '.\\A"');
+}
+
+// Diff UI
+async function initDiffUI() {
+    const originalBtn = document.getElementById('diff-btn');
+    if (!originalBtn) return;
+
+    function formatSnapshotTime(ts) {
+        if (!ts) return '未知时间';
+        const d = new Date(ts);
+        const pad = n => String(n).padStart(2, '0');
+        return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    }
+
+    function normalizeSnapshotHistory(rec) {
+        if (!rec) return [];
+        let list = [];
+        if (Array.isArray(rec.history)) {
+            list = rec.history.filter(item => 
+                item && (typeof item.text === 'string' || item.text instanceof Uint8Array)
+            );
+        } else if (typeof rec.text === 'string' || rec.text instanceof Uint8Array) {
+            list = [{ text: rec.text, ts: rec.ts || 0, compressed: rec.compressed }];
+        }
+        return list.slice().sort((a, b) => (b.ts || 0) - (a.ts || 0));
+    }
+
+    let historyList = [];
+    try {
+        const rawPath = location.pathname;
+        const decodedPath = decodeURI(rawPath);
+        const fileName = decodedPath.split('/').pop();
+
+        const tryKeys = [
+            decodedPath, rawPath,
+            decodedPath.startsWith('/') ? decodedPath.substring(1) : '/' + decodedPath,
+            '/html/' + fileName, 'html/' + fileName
+        ];
+
+        const idb = await new Promise((resolve, reject) => {
+            const req = indexedDB.open('MainDB', 2);
+            req.onupgradeneeded = (e) => {
+                const db = e.target.result;
+                if (!db.objectStoreNames.contains('html_snapshots')) db.createObjectStore('html_snapshots');
+            };
+            req.onsuccess = (e) => resolve(e.target.result);
+            req.onerror = (e) => reject(e.target.error);
+        });
+
+        if (idb.objectStoreNames.contains('html_snapshots')) {
+            const tx = idb.transaction('html_snapshots', 'readonly');
+            const store = tx.objectStore('html_snapshots');
+            
+            let record = null;
+            for (const k of tryKeys) {
+                const res = await new Promise(resolve => {
+                    const r = store.get(k);
+                    r.onsuccess = () => resolve(r.result);
+                    r.onerror = () => resolve(null);
+                });
+                if (res) { record = res; break; }
+            }
+            historyList = normalizeSnapshotHistory(record);
+        }
+        idb.close();
+    } catch (e) {
+        console.warn("[Diff] 历史记录读取失败", e);
+    }
+
+    if (historyList.length === 0) {
+        originalBtn.remove();
+        return;
+    }
+
+    const totalVersions = historyList.length + 1;
+    const options = [];
+    options.push({ val: 'current', label: `v${totalVersions}`, title: '最新版' });
+    for (let i = 0; i < historyList.length; i++) {
+        const vNum = totalVersions - 1 - i; 
+        options.push({ val: String(i), label: `v${vNum}`, title: formatSnapshotTime(historyList[i].ts) });
+    }
+
+    const wrapper = document.createElement('span');
+    wrapper.id = 'diff-controls-wrapper';
+    wrapper.style.cssText = 'position:fixed; left:80px; display:flex; align-items:center; gap:6px; z-index: 100;';
+    
+    const selectStyle = '';
+    const fromSelect = document.createElement('select');
+    fromSelect.style.cssText = selectStyle;
+    const toSelect = document.createElement('select');
+    toSelect.style.cssText = selectStyle;
+
+    options.forEach(opt => {
+        const o1 = document.createElement('option');
+        o1.value = opt.val; o1.textContent = opt.label; o1.title = opt.title;
+        fromSelect.appendChild(o1);
+
+        const o2 = document.createElement('option');
+        o2.value = opt.val; o2.textContent = opt.label; o2.title = opt.title;
+        toSelect.appendChild(o2);
+    });
+
+    toSelect.value = options[0].val; // current (最新版)
+    fromSelect.value = options[1] ? options[1].val : options[0].val; // history[0] (上一版)
+
+    const label1 = document.createElement('span');
+    label1.textContent = '在';
+    const label2 = document.createElement('span');
+    label2.textContent = '基础上的改动';
+
+    const btnStart = document.createElement('button');
+    btnStart.textContent = 'diff';
+    btnStart.style.cssText = 'margin-left:4px;';
+
+    const btnCancel = document.createElement('button');
+    btnCancel.textContent = 'cancel diff';
+    btnCancel.style.cssText = 'margin-left:4px;display:none;';
+
+    originalBtn.parentNode.insertBefore(wrapper, originalBtn);
+    originalBtn.remove(); 
+
+    wrapper.appendChild(toSelect);
+    wrapper.appendChild(label1);
+    wrapper.appendChild(fromSelect);
+    wrapper.appendChild(label2);
+    wrapper.appendChild(btnStart);
+    wrapper.appendChild(btnCancel);
+
+    btnStart.onclick = () => {
+        if (window._diffBusy) return;
+
+        const fromVal = fromSelect.value;
+        const toVal = toSelect.value;
+        if (fromVal === toVal) {
+            alert('⚠️ 对比起点和终点不能是同一个版本');
+            return;
+        }
+
+        window._diffBusy = true;
+        btnStart.textContent = ' ⏳ 计算中... ';
+
+        requestAnimationFrame(async () => {
+            try {
+                const oldTokens = await getTokensForSource(fromVal, historyList);
+                const newTokens = await getTokensForSource(toVal, historyList);
+                
+                const originalPre = document.querySelector('pre:not(#diff-pre)');
+                const compStyle = window.getComputedStyle(originalPre);
+                const originMarginTop = compStyle.marginTop;
+                const originMarginBottom = compStyle.marginBottom;
+                
+                originalPre.style.display = 'none'; 
+                
+                let diffPre = document.getElementById('diff-pre');
+                if (!diffPre) {
+                    diffPre = document.createElement('pre');
+                    diffPre.id = 'diff-pre';
+                    diffPre.className = originalPre.className; 
+                    originalPre.parentNode.insertBefore(diffPre, originalPre.nextSibling);
+                }
+                diffPre.style.marginTop = originMarginTop;
+                diffPre.style.marginBottom = originMarginBottom;
+                
+                renderDiffView(oldTokens, newTokens, diffPre);
+
+                window._isDiffMode = true;
+                btnStart.textContent = 're-diff';
+                btnCancel.style.display = 'inline';
+            } finally {
+                window._diffBusy = false;
+            }
+        });
+    };
+
+    btnCancel.onclick = () => {
+        if (window._diffBusy) return;
+
+        const originalPre = document.querySelector('pre:not(#diff-pre)');
+        const diffPre = document.getElementById('diff-pre');
+        
+        if (diffPre) diffPre.remove();
+        if (originalPre) originalPre.style.display = 'block';
+        
+        window._isDiffMode = false;
+        btnStart.textContent = 'diff';
+        btnCancel.style.display = 'none';
+    };
+}
+
+// Diff 渲染器
+function renderDiffView(oldTokens, newTokens, preTag) {
+    const oldKeys = oldTokens.map(t => t.content);
+    const newKeys = newTokens.map(t => t.content);
+
+    const diffOps = computeLCSDiff(oldKeys, newKeys);
+    let mergedHtml = "";
+
+    const isBlank = (t) => {
+        return t.content
+            .replace(/<[^>]*>/g, '')
+            .replace(/&nbsp;|\u00A0/g, '')
+            .trim() === '';
+    };
+
+    diffOps.forEach(op => {
+        const isInsert = op.type === 'insert';
+        const isDelete = op.type === 'delete';
+        const isEqual = op.type === 'equal';
+
+        const token = isEqual || isInsert ? newTokens[op.newIdx] : oldTokens[op.oldIdx];
+        const tType = token.type;
+        const content = token.content;
+
+        if (isEqual) {
+            mergedHtml += `${content}\n`;
+            return;
+        }
+
+        if (tType === 'table_start' || tType === 'table_end' || tType === 'code_start' || tType === 'code_end') {
+            mergedHtml += `${content}\n`;
+            return;
+        }
+
+        if (isBlank(token)) {
+            mergedHtml += `${content}\n`;
+            return;
+        }
+
+        const bg = isInsert ? "rgba(52, 211, 153, 0.25)" : "rgba(248, 113, 113, 0.25)";
+        const border = isInsert ? "#10b981" : "#ef4444";
+        const opacity = isDelete ? "0.75" : "1";
+
+        if (tType === 'table_row') {
+            // 🎯 表格粒度放大到 tr 级：直接将背景与透明度注入到 <tr> 标签上
+            const styledTr = content.replace(/^<tr(\s|>)/i, (match, p1) => {
+                return `<tr style="background-color: ${bg}; opacity: ${opacity}; border-left: 5px solid ${border};"${p1}`;
+            });
+            mergedHtml += `${styledTr}\n`;
+
+        } else if (tType === 'code_line') {
+            // 代码行保持块级行定位
+            mergedHtml += `<span style="background-color: ${bg}; display: inline-block; width: 100%; box-sizing: border-box; border-left: 5px solid ${border}; margin-left: -5px; opacity: ${opacity};">${content}</span>\n`;
+
+        } else {
+            // 普通文本行
+            mergedHtml += `<span style="background-color: ${bg}; display: inline-block; width: 100%; box-sizing: border-box; border-left: 5px solid ${border}; margin-left: -5px; opacity: ${opacity};">${content}</span>\n`;
+        }
+    });
+
+    preTag.innerHTML = mergedHtml;
+    preTag.querySelectorAll('code').forEach(updateLineNumbers);
+}
+
+// 分词序列化
+function buildRenderedTokens(rawHtml) {
+    const container = document.createElement('pre');
+    container.innerHTML = rawHtml;
+
+    function renderCodeBlockEl(rawText, lang) {
+        const codeEl = document.createElement('code');
+        if (lang) codeEl.setAttribute(lang, '');
+        codeEl.innerHTML = highlightCode(rawText, lang);
+        return codeEl;
+    }
+
+    // 1. 执行 Wasm 渲染
+    const textNodes = Array.from(container.childNodes).filter(n => n.nodeType === Node.TEXT_NODE);
+    const outHtmlArr = textNodes.map(node => format_markdown(node.nodeValue));
+    textNodes.forEach((node, i) => {
+        const fragment = document.createRange().createContextualFragment(outHtmlArr[i]);
+        node.replaceWith(fragment);
+    });
+
+    // 2. 执行表格转换
+    container.querySelectorAll('p').forEach(p => {
+        p.replaceWith(renderP2TableEl(p.textContent));
+    });
+
+    // 3. 执行代码高亮
+    container.querySelectorAll('code').forEach(c => {
+        const lang = c.attributes.length > 0 ? c.attributes[0].name : "java";
+        const newCode = renderCodeBlockEl(c.textContent.trim(), lang);
+        c.replaceWith(newCode);
+    });
+
+    // 4. 精细化切割
+    const tokens = [];
+    let currentLineHtml = "";
+
+    function flushText() {
+        if (!currentLineHtml) return;
+        const lines = currentLineHtml.split('\n');
+        for (let i = 0; i < lines.length; i++) {
+            if (i === lines.length - 1 && lines[i] === "") continue;
+            tokens.push({ type: 'html_line', content: lines[i] });
+        }
+        currentLineHtml = "";
+    }
+
+    container.childNodes.forEach(node => {
+        if (node.nodeType === Node.ELEMENT_NODE && node.tagName === 'TABLE' && node.classList.contains('p2tbl')) {
+            flushText();
+            tokens.push({ type: 'table_start', content: '<table class="p2tbl"><tbody>' });
+            node.querySelectorAll('tr').forEach(tr => {
+                tokens.push({ type: 'table_row', content: tr.outerHTML });
+            });
+            tokens.push({ type: 'table_end', content: '</tbody></table>' });
+
+        } else if (node.nodeType === Node.ELEMENT_NODE && node.tagName === 'CODE') {
+            flushText();
+            const attrs = Array.from(node.attributes).map(a => `${a.name}="${a.value}"`).join(' ');
+            tokens.push({ type: 'code_start', content: `<code ${attrs}>` });
+            
+            const codeLines = node.innerHTML.split('\n');
+            codeLines.forEach((line, idx) => {
+                if (idx === codeLines.length - 1 && line === "") return;
+                tokens.push({ type: 'code_line', content: line });
+            });
+            tokens.push({ type: 'code_end', content: '</code>' });
+
+        } else {
+            currentLineHtml += node.nodeType === Node.ELEMENT_NODE ? node.outerHTML : (node.nodeValue || '');
+        }
+    });
+    flushText();
+
+    const isGhostEmpty = (t) => {
+        if (t.type !== 'html_line') return false;
+        const pureText = t.content.replace(/<[^>]*>/g, '').replace(/&nbsp;/g, '').trim();
+        return pureText === '';
+    };
+
+    while (tokens.length > 0 && isGhostEmpty(tokens[0])) {
+        tokens.shift();
+    }
+    while (tokens.length > 0 && isGhostEmpty(tokens[tokens.length - 1])) {
+        tokens.pop();
+    }
+
+    return tokens;
+}
+async function decompressText(buffer) {
+    const stream = new Blob([buffer]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
+    return await new Response(stream).text();
+}
+async function getTokensForSource(value, historyList) {
+    if (value === 'current') {
+        const preTag = document.querySelector('pre:not(#diff-pre)');
+        return buildRenderedTokens(window._rawHtmlForDiff || (preTag ? preTag.innerHTML : ""));
+    }
+
+    const item = historyList[Number(value)];
+    if (!item) return [];
+
+    let rawText = "";
+    if (item.compressed && item.text instanceof Uint8Array) {
+        rawText = await decompressText(item.text);
+    } else {
+        rawText = item.text;
+    }
+
+    const match = rawText.match(/<pre[^>]*>([\s\S]*?)<\/pre>/i);
+    const rawHtml = match ? match[1] : rawText;
+
+    return buildRenderedTokens(rawHtml);
+}
+
+// LCS 逐行对比算法
+function computeLCSDiff(oldLines, newLines) {
+    let start = 0;
+    const N = oldLines.length;
+    const M = newLines.length;
+    
+    // 前缀剪枝
+    while (start < N && start < M && oldLines[start] === newLines[start]) {
+        start++;
+    }
+    
+    // 后缀剪枝
+    let oldEnd = N - 1;
+    let newEnd = M - 1;
+    while (oldEnd >= start && newEnd >= start && oldLines[oldEnd] === newLines[newEnd]) {
+        oldEnd--;
+        newEnd--;
+    }
+    
+    const result = [];
+    
+    // 将公共前缀直接作为 equal 压入
+    for (let i = 0; i < start; i++) {
+        result.push({ type: 'equal', oldIdx: i, newIdx: i });
+    }
+    
+    const trimmedOld = oldLines.slice(start, oldEnd + 1);
+    const trimmedNew = newLines.slice(start, newEnd + 1);
+    const trimN = trimmedOld.length;
+    const trimM = trimmedNew.length;
+    
+    // 经过剪枝，只有真正在发生变动的极小区间才会进入核心 DP 矩阵
+    if (trimN > 0 || trimM > 0) {
+        if (trimN * trimM > 25000000) {
+            alert("⚠️ 差异区间过大，降级显示。");
+            result.push(...trimmedOld.map((_, i) => ({ type: 'delete', oldIdx: start + i })));
+            result.push(...trimmedNew.map((_, j) => ({ type: 'insert', newIdx: start + j })));
+        } else {
+            const dp = new Int32Array((trimN + 1) * (trimM + 1));
+            const idx = (i, j) => i * (trimM + 1) + j;
+            
+            for (let i = 1; i <= trimN; i++) {
+                for (let j = 1; j <= trimM; j++) {
+                    if (trimmedOld[i - 1] === trimmedNew[j - 1]) {
+                        dp[idx(i, j)] = dp[idx(i - 1, j - 1)] + 1;
+                    } else {
+                        dp[idx(i, j)] = Math.max(dp[idx(i - 1, j)], dp[idx(i, j - 1)]);
+                    }
+                }
+            }
+            
+            let i = trimN, j = trimM;
+            const diffs = [];
+            while (i > 0 || j > 0) {
+                if (i > 0 && j > 0 && trimmedOld[i - 1] === trimmedNew[j - 1]) {
+                    diffs.push({ type: 'equal', oldIdx: start + i - 1, newIdx: start + j - 1 });
+                    i--; j--;
+                } else if (j > 0 && (i === 0 || dp[idx(i, j - 1)] >= dp[idx(i - 1, j)])) {
+                    diffs.push({ type: 'insert', newIdx: start + j - 1 });
+                    j--;
+                } else if (i > 0 && (j === 0 || dp[idx(i, j - 1)] < dp[idx(i - 1, j)])) {
+                    diffs.push({ type: 'delete', oldIdx: start + i - 1 });
+                    i--;
+                }
+            }
+            result.push(...diffs.reverse());
+        }
+    }
+    
+    // 将公共后缀直接作为 equal 压入
+    for (let i = oldEnd + 1, j = newEnd + 1; i < N && j < M; i++, j++) {
+        result.push({ type: 'equal', oldIdx: i, newIdx: j });
+    }
+    
+    return result;
 }

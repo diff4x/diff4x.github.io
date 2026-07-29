@@ -343,7 +343,17 @@ pub fn format_markdown(text: &str) -> String {
 
     for line in lines {
         if line.is_empty() {
-            out_lines.push(String::from("\n\u{00A0}"));
+            // 修复：此前写成 "\n\u{00A0}"，字符串内嵌了一个 '\n'。
+            // out_lines 最终会被 join("\n") 拼接成一整段字符串，再由 JS 侧
+            // .split('\n') 还原成"每行一个元素"的数组，供 Diff 引擎按下标对齐。
+            // 只要某一行是空行，这里就会多产出一个 '\n'，导致 join 后的字符串
+            // 比"每个逻辑行一个元素"多出一行——JS 侧 split('\n') 得到的数组长度
+            // 就会比原始 Markdown 的行数多 1（此后每再遇到一个空行,继续 +1，
+            // 偏移量会不断累积）。这样 oldHtmlLines[op.oldIdx] / newHtmlLines[op.newIdx]
+            // 取到的其实是被这个偏移"错位"后的内容，Diff 高亮显示的行经常是错的、
+            // 空的，或者干脆整段错位，看起来就像"增删部分没有正确显示/着色"。
+            // 修复方式：确保空行也只产出"单独一行"的输出，不再内嵌换行符。
+            out_lines.push(String::from("<span class='lv0 empty-line-fix'>\u{00A0}</span>"));
             continue;
         }
 

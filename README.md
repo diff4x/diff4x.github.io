@@ -15,7 +15,7 @@
   - HTTP Server、Custom URL Protocol、Batch、Java、Rust、Git
 - Web 平台
   - Vanilla JS、iframe、postMessage、Proxy、localStorage、Service Worker、IndexedDB、Web Worker、WebAssembly
-> Workflow designed by diff4x | Optimized by Gemini & ChatGPT
+> Workflow designed by diff4x | Optimized by Gemini & ChatGPT & Claude
 ---
 
 ## 使用
@@ -33,6 +33,7 @@
   - 搜索框内置命令 `@bomb`, `@rebirth` 分别进行可选式重置与恢复个人数据
 - 页面
   - 本地按页面左上角 `edit` 即以本地编辑器打开对应实体页同时覆写时间戳, 编辑完回到页面, 双击顶部菜单中 `CLI` 即时构建呈现
+  - 页面左上角 `diff` 查看新版差异
   - `html`, `pdf`, `epub`, `txt` 页面选中单字提示拼音, 多字提示摘抄
   - `pdf`, `epub`, `txt` 横向对开
   - `gallery`, `video`, `pdf`, `txt` 中击全屏

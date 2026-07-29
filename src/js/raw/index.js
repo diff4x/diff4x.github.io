@@ -596,7 +596,7 @@ function createStore(defaults = {}) {
 function createDBProxy(dbName, storeName) {
     const init = async () => {
         return new Promise((resolve, reject) => {
-            const request = indexedDB.open(dbName, 1);
+            const request = indexedDB.open(dbName, 2);
             request.onupgradeneeded = (e) => {
                 const db = e.target.result;
                 if (!db.objectStoreNames.contains(storeName)) 
@@ -607,6 +607,8 @@ function createDBProxy(dbName, storeName) {
                     db.createObjectStore('search_cache');
                 if (!db.objectStoreNames.contains('sys_state')) 
                     db.createObjectStore('sys_state');
+                if (!db.objectStoreNames.contains('html_snapshots')) 
+                    db.createObjectStore('html_snapshots');
             };
             request.onsuccess = (e) => resolve(e.target.result);
             request.onerror = (e) => reject(e.target.error);
@@ -3384,7 +3386,7 @@ function stopFaviconBlink() {
 // 撒花特效
 function playConfetti() {
     const startAnimation1 = () => {
-        const end = Date.now() + 5 * 1000;
+        const end = Date.now() + 3 * 1000;
         const colors = ['#bb0000', '#ffffff'];
         (function frame() {
             confetti({
