@@ -1,0 +1,3644 @@
+<!doctype html>
+<html>
+ <head>
+  <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+  <script src="../src/js/content.js"></script>
+  <title>03</title>
+ </head>
+ <body>
+  <span id="anchor">20251130033113-21.技巧|嵌入式开发|C|C Primer Plus</span>
+<pre>
+递归
+#include <stdio.h>
+
+void up_and_down(int);
+
+int main(void)
+{
+    up_and_down(1);
+    return 0;
+}
+
+void up_and_down(int n)
+{
+    printf("Level %d: n location %p\n", n, &n);
+    if (n < 4)
+        up_and_down(n + 1);
+    printf("LEVEL %d: n location %p\n", n, &n);
+}
+
+Level 1: n location 0x7ffbaa9d5c
+Level 2: n location 0x7ffbaa9d3c
+Level 3: n location 0x7ffbaa9d1c
+Level 4: n location 0x7ffbaa9cfc
+LEVEL 4: n location 0x7ffbaa9cfc
+LEVEL 3: n location 0x7ffbaa9d1c
+LEVEL 2: n location 0x7ffbaa9d3c
+LEVEL 1: n location 0x7ffbaa9d5c
+
+每级调用结束，控制被传回它的主调函数
+可以假设有一条函数调用链, fun1()调用 fun2()、fun2()调用 fun3()、fun3()调用fun4()。当 fun4()结束时，控制传回 fun3()；当fun3()结束时，控制传回 fun2()；当fun2()结束时，控制传回 fun1()。递归的情况与此类似，只不过fun1()、fun2()、fun3()和fun4()都是相同的函数。
+每级递归的变量 n 都属于本级递归私有
+
+long fact(int n) // 阶乘
+{
+    long ans;
+    for (ans = 1; n > 1; n--)
+        ans *= n;
+    return ans;
+}
+
+long rfact(int n)
+{
+    if (n < 0)
+        return -1;
+    if (n == 0)
+        return 1;
+    return n * rfact(n - 1);
+}
+
+rfact(4)
+= 4 * rfact(3)
+= 4 * (3 * rfact(2))
+= 4 * 3 * (2 * rfact(1))
+= 4 * 3 * 2 * (1 * rfact(0))
+= 4 * 3 * 2 * 1 * 1
+
+十进制数 234 实际上是 2×10²+3×10¹+4×1⁰
+所以二进制数101实际上是 1×2²+0×2¹+1×2⁰
+
+递归算法会快速消耗计算机的内存资源
+
+ /* usehotel.c -- 房间费率程序 */
+#include <stdio.h>
+#include "hotel.h"
+int main(void)
+{
+    int nights;
+    double hotel_rate;
+    int code;
+    while ((code = menu()) != QUIT)
+    {
+        switch (code)
+        {
+        case 1:
+            hotel_rate = HOTEL1;
+            break;
+        case 2:
+            hotel_rate = HOTEL2;
+            break;
+        case 3:
+            hotel_rate = HOTEL3;
+            break;
+        case 4:
+            hotel_rate = HOTEL4;
+            break;
+        default:
+            hotel_rate = 0.0;
+            printf("Oops!\n");
+            break;
+        }
+        nights = getnights();
+        showprice(hotel_rate, nights);
+    }
+    printf("Thank you and goodbye.\n");
+    return 0;
+} 
+
+ /* hotel.c -- 酒店管理函数 */
+#include <stdio.h>
+#include "hotel.h"
+int menu(void)
+{
+    int code, status;
+    printf("\n%s%s\n", STARS, STARS);
+    printf("Enter the number of the desired hotel:\n");
+    printf("1) Fairfield Arms        2) Hotel Olympic\n");
+    printf("3) Chertworthy Plaza     4) The Stockton\n");
+    printf("5) quit\n");
+    printf("%s%s\n", STARS, STARS);
+    while ((status = scanf("%d", &code)) != 1 || (code < 1 || code > 5))
+    {
+        if (status != 1)
+            // scanf 里 * 的含义是：抑制赋值（读取输入，但不把结果存到任何变量中)
+            scanf("%*s"); // 处理非整数输入
+        printf("Enter an integer from 1 to 5, please.\n");
+    }
+    return code;
+}
+int getnights(void)
+{
+    int nights;
+    printf("How many nights are needed? ");
+    while (scanf("%d", &nights) != 1)
+    {
+        scanf("%*s"); // 处理非整数输入
+        printf("Please enter an integer, such as 2.\n");
+    }
+    return nights;
+}
+void showprice(double rate, int nights)
+{
+    int n;
+    double total = 0.0;
+    double factor = 1.0;
+    for (n = 1; n <= nights; n++, factor *= DISCOUNT)
+        total += rate * factor;
+    printf("The total cost will be $%0.2f.\n", total);
+}
+
+/* hotel.h -- 符号常量和 hotel.c 中所有函数的原型 */
+#define QUIT 5
+#define HOTEL1 180.00
+#define HOTEL2 225.00
+#define HOTEL3 255.00
+#define HOTEL4 355.00
+#define DISCOUNT 0.95
+#define STARS "***********************"
+// 显示选择列表
+int menu(void);
+// 返回预订天数
+int getnights(void);
+// 根据费率、入住天数计算费用并显示结果
+void showprice(double rate, int nights);
+
+
+地址运算符 & 后跟一个变量名时，&给出该变量的地址。 
+地址运算符 * 后跟一个指针名或地址时，*给出储存在指针指向地址上的值
+
+
+当确实需要在函数中访问另一个函数的数据时(在被调函数中修改主调函数的变量)， 可以把指针作为函数的参数。
+
+
+const int powers[8] = {1,2,4,6,8,16,32,64};
+有时需要把数组设置为只读(用const声明和初始化数组)。这样，程序只能从数组中检索值，不能把新值写入数组
+
+
+#define SIZE 4 
+int some_data[SIZE] = { 1492, 1066 };
+当初始化列表中的值少于数组元素个数时，编译器会把剩余的元素都初始化为0。
+也就是说，如果不初始化数组， 数组元素和未初始化的普通变量一样，其中储存的都是垃圾值；但是，如果部分初始化数组，剩余的元素就会被初始化为0。
+
+
+#include <stdio.h>
+int main(void)
+{
+    const int days[] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31};
+    int index;
+    for (index = 0; index < sizeof days / sizeof days[0]; index++)
+        printf("Month %2d has %d days.\n", index + 1, days[index]);
+    return 0;
+}
+如果在定义数组时提供了初始化列表，就可以省略方括号中的元素个数，编译器会根据初始化器自动推断数组长度。
+sizeof days之所以合法，是因为 days 的类型已经是 int[10], sizeof int[10] 是编译期常量, 编译器直接算出 sizeof days = 10 * sizeof(int)
+
+
+可以在初始化列表中使用带方括号的下标指明待初始化 元素：
+ int arr[6] = {[5] = 212}; // 把arr[5]初始化为212 
+对于一般的初始化，在初始化一个元素后，未初始化的元素都会被设置为0。
+
+
+#include <stdio.h>
+#define MONTHS 12
+int main(void)
+{
+    int days[MONTHS] = {31, 28, [4] = 31, 30, 31, [1] 29, 50, 51};
+    int i;
+    for (i = 0; i < MONTHS; i++)
+        printf("%2d  %d\n", i + 1, days[i]);
+    return 0;
+}
+/*
+1  31
+ 2  29
+ 3  50
+ 4  51
+ 5  31
+ 6  30
+ 7  31
+ 8  0
+ 9  0
+10  0
+11  0
+12  0
+*/
+
+[4] = 31,30,31，在days[4]被初始化为31后，days[5]和days[6]将分别被初始化为30和31。如果再次初始化指定的元素 [1] 29 (等价于[1] = 29)，那么最后的初始化将会取代之前的初始化, days[1]重新初始化为29, 
+days[2]初始化为50
+指定初始化器 [n] 会把“当前初始化位置”移动到 n，
+后续没有指定下标的初始化，都会从 n+1 继续。而且后面的初始化可以覆盖前面的
+
+int stuff[] = {1, [6] = 23}; // 7个元素0～6
+int staff[] = {1, [6] = 4, 9, 10};  // 9个元素0～8
+编译器会把数组的大小设置为足够装得下初始化的值
+
+C 不允许把数组作为 一个单元赋给另一个数组，除初始化以外也不允许使用花括号列表的形式赋值。
+错误例一
+int a[3] = {1, 2, 3};
+int b[3] = {4, 5, 6};
+a = b;   // ❌ 错误：array type is not assignable
+错误例二
+int a[3];
+a = {1, 2, 3};   // ❌ 语法错误
+a = (int[3]){1,2,3};   // ❌ 在 C 中不允许（注意：这是 C++ 才允许）
+
+float rain[5][12]; // 内含5个数组元素的数组，每个数组元素内含12个 float类型的元素
+
+
+#include <stdio.h>
+#define MONTHS 12
+#define YEARS 5
+int main(void)
+{
+    const float rain[YEARS][MONTHS] = {
+        {4.3, 4.3, 4.3, 3.0, 2.0, 1.2, 0.2, 0.2, 0.4, 2.4, 3.5, 6.6},
+        {8.5, 8.2, 1.2, 1.6, 2.4, 0.0, 5.2, 0.9, 0.3, 0.9, 1.4, 7.3},
+        {9.1, 8.5, 6.7, 4.3, 2.1, 0.8, 0.2, 0.2, 1.1, 2.3, 6.1, 8.4},
+        {7.2, 9.9, 8.4, 3.3, 1.2, 0.8, 0.4, 0.0, 0.6, 1.7, 4.3, 6.2},
+        {7.6, 5.6, 3.8, 2.8, 3.8, 0.2, 0.0, 0.0, 0.0, 1.3, 2.6, 5.2}};
+    int year, month;
+    float subtot, total;
+    printf(" YEAR   RAINFALL  (inches)\n");
+    for (year = 0, total = 0; year < YEARS; year++)
+    {
+        for (month = 0, subtot = 0; month < MONTHS; month++)
+            subtot += rain[year][month];
+        printf("%5d %15.1f\n", 2010 + year, subtot);
+        total += subtot;
+    }
+    printf("\nThe yearly average is %.1f inches.\n\n", total / YEARS);
+    printf("MONTHL Y A VERAGES:\n\n");
+    printf(" Jan  Feb  Mar  Apr  May  Jun  Jul  Aug  SepOct ");
+    printf(" Nov  Dec\n");
+    for (month = 0; month < MONTHS; month++)
+    {
+        for (year = 0, subtot = 0; year < YEARS; year++)
+            subtot += rain[year][month];
+        printf("%4.1f ", subtot / YEARS);
+    }
+    printf("\n");
+    return 0;
+}
+
+
+二维数组的初始化
+5个数组元素, 每个数组内12个元素
+如果第1个列表中只有10个数，则只会初始化 数组第1行的前10个元素，而最后两个元素将被默认初始化为0。
+如果某列表 中的数值个数超出了数组每行的元素个数，则会出错，但是这并不会影响其 他行的初始化。
+初始化时也可省略内部的花括号，只保留最外面的一对花括号。只要保证初始化的数值个数正确，初始化的效果与上面相同。但是如果初始化的数值不够，则按照先后顺序逐行初始化，直到用完所有的值。后面没有值初始化的元素被统一初始化为0。
+
+
+三维数组
+int box[10][20][30];
+可以把一维数组想象成一行数据，把二维数组想象成数据表，把三维数组想象成一叠数据表。10个二维数组每个二维数组都是20行30列）堆叠起来。
+10个二维数组，每个二维数组包含20个数组，每个数组包含30个元素
+
+
+如果flizny是一个数组，下面的语句成立： 
+flizny == &flizny[0]; // 数组名是该数组首元素的地址
+
+
+short类型16位, 16 位能表示出65536个地址, 在绝大多数计算机体系结构中 1 个地址 = 1 个字节（Byte）
+也就是所谓的 按字节寻址。计算机中常用的换算关系1 KB = 1024 B, 65536 / 1024 = 64, 只能访问 64 KB 内存
+地址位数 = n ⇒ 可寻址空间 = 2^n字节 
+
+
+假设要编写一个处理数组的函数，该函数返回数组中所有元素之和
+数组名是该数组首元素的地址，应把它赋给一个指针形式参数, int sum(int * ar);
+它获得了该数组首元素的地址，但并未包含数组元素个数的信息
+下面4种原型都是等价的
+int sum(int *ar, int n);
+int sum(int *, int);
+int sum(int ar[], int n);
+int sum(int [], int);
+下面两种形式的函数定义是等价的
+int sum(int *ar, int n){ } 
+int sum(int ar[], int n){ }
+
+
+int 类型占 4 字节,
+int *（int 类型的指针）占多少字节，和 int 无关，而只和“平台位数”有关
+32 位系统时占4 字节, 64 位系统时占8 字节
+指针本质上是内存地址
+内存地址的大小由 CPU 寻址能力决定
+与它指向的数据类型（int、char、struct）无关
+
+
+#include <stdio.h>
+#define SIZE 10
+int sump(int *start, int *end);
+int main(void)
+{
+    int marbles[SIZE] = {20, 10, 5, 39, 4, 16, 19, 26, 31, 20};
+    long answer;
+    answer = sump(marbles, marbles + SIZE);
+    printf("The total number of marbles is %ld.\n", answer);
+    return 0;
+} 
+/* 使用指针算法 */
+int sump(int *start, int *end)
+{
+    int total = 0;
+    while (start < end)
+    {
+        total += *start;
+        start++;
+        // total += *(start++);
+    }
+    return total;
+}
+
+total += *(start++);
+total += *start++;
+两者等价, 解引用旧指针, 然后指针自增
+后缀自增 ++ 的优先级 高于 解引用 *
+*start++ 会被解析为*(start++)
+
+#include <stdio.h>
+int data[2] = {100, 200};
+int moredata[2] = {300, 400};
+int main(void)
+{
+    int *p1, *p2, *p3;
+    p1 = p2 = data;
+    p3 = moredata;
+    printf(" *p1 = %d,  *p2 = %d,  *p3 = %d\n", *p1, *p2, *p3);//100,100,300
+    printf("*p1++ = %d, *++p2 = %d, (*p3)++ = %d\n", *p1++, *++p2, (*p3)++);//100,200,300
+    printf(" *p1 = %d,  *p2 = %d,  *p3 = %d\n", *p1, *p2, *p3);//200,200,301
+    return 0;
+}
+
+
+指针求差
+通常求差的两个指针分别指向同一个数组的不同元素，计算两元素之间的距离。差值的单位与数组类型的单位相同。
+例如ptr2 - ptr1得2，意思是 这两个指针所指向的两个元素相隔两个int，而不是2字节。只要两个指针都 指向相同的数组（或者其中一个指针指向数组后面的第 1 个地址），C 都能 保证相减运算有效。如果指向两个不同数组的指针进行求差运算可能会得出 一个值，或者导致运行时错误。
+
+比较
+两个指针都指向相同类型的对象, 可以使用关系运算符比较两个指针的值
+
+解引用未初始化的指针
+int * pt; // 仅声明而未初始化, 随机地址值, 野指针
+*pt = 5;  // 往野指针里写入数据, 程序可能崩溃或意外擦写数据
+double x;
+double *pd = &x;
+*pd = 2.4;   // 给 x 赋值 2.4
+
+void add_to(double ar[], int n, double val) { 
+    int i;
+    for (i = 0; i < n; i++) 
+        ar[i] += val;
+}
+ar 指向 x[0], 等于&x[0]
+ar[i]  语法糖等价于  *(ar + i)
+*(ar + i) = *(ar + i) + val;
+ar + 1 指向第二个元素, 取出该位置的值加上val后再修改该元素本身
+
+int sum(const int ar[], int n); 
+const告诉编译器，该函数不能修改ar指向的数组中的内容。如果在函数中不小心使用类似ar[i]++的表达式，编译器会捕获这个错误，并生成一条错误信息。 const并不是要求原数组是常量，而是该函数在处理数组时将其视为常量不可更改
+
+如果函数没有修改原始数组的意图，应在声明函数的形式参数时使用关键字const。在被 调函数中可以使用数组表示法或指针表示法，无论用哪种表示法，实际上使 用的都是指针变量。
+
+
+const int days[MONTHS] = {31,28,31,30,31,30,31,31,30,31,30,31};
+days[9] = 44;   //编译错误
+
+double rates[5] = {88.99, 100.12, 59.45, 183.11, 340.5};
+const double * pd = rates;   
+*pd = 29.89;   //不允许使用pd修改它所指向数据的值
+pd[2] = 222.22;  //不允许
+pd++;  //让pd指向rates[1] 没问题
+
+
+double rates[5] = {88.99, 100.12, 59.45, 183.11, 340.5};
+const double locked[4] = {0.08, 0.075, 0.0725, 0.07};
+double *pnc = rates;
+pnc = locked;   // ❌ 
+rates 在表达式中退化为 double *
+pnc 是 double *, 两者类型匹配
+locked 的类型是 const double [4], 在表达式中退化为 const double *, 与pnc类型不匹配, 不能把 const double * 赋值给 double *
+
+pnc = locked;   // 假设允许
+那么下面的代码就会发生：
+*pnc = 0.5;     // 实际上修改的是 locked[0]
+但locked[0] 是 const double, 这就破坏了C 语言const 的只读承诺, 所以严格禁止
+
+可以声明并初始化一个不能指向别处的 指针
+double rates[5] = {88.99, 100.12, 59.45, 183.11, 340.5};
+double * const pc = rates; // pc指向数组的开始 
+pc = &rates[2];       // 不允许，因为该指针不能指向别处 
+*pc = 92.99;        // 没问题 -- 更改rates[0]的值 
+可以用这种指针修改它所指向的值，但是它只能指向初始化时设置的地址。 
+
+在创建指针时还可以使用const两次，该指针既不能更改它所指向的地址，也不能修改指向地址上的值
+double rates[5] = {88.99, 100.12, 59.45, 183.11, 340.5};
+const double * const pc = rates;
+pc = &rates[2];  //不允许 
+*pc = 92.99;   //不允许
+
+
+#include <stdio.h>
+int main(void)
+{
+    int zippo[4][2] = {{2, 4}, {6, 8}, {1, 3}, {5, 7}};
+    
+    printf("  zippo = %p,   zippo + 1 = %p\n", zippo, zippo + 1);
+    printf("zippo[0] = %p, zippo[0] + 1 = %p\n", zippo[0], zippo[0] + 1);
+/*
+zippo指向第一个数组, 8字节
+zippo[0]指向第一个数组中第一个int,4字节
+*/    
+    printf(" *zippo = %p,  *zippo + 1 = %p\n", *zippo, *zippo + 1);
+/*
+*zippo等同zippo[0]
+*zippo + 1等同zippo[0] + 1
+*/    
+    printf("zippo[0][0] = %d\n", zippo[0][0]);    
+    printf(" *zippo[0] = %d\n", *zippo[0]); 
+    printf("  **zippo = %d\n", **zippo); 
+/*
+*zippo[0]等同zippo[0][0]等同**zippo
+*/  
+    printf("    zippo[2][1] = %d\n", zippo[2][1]);    
+    printf("*(*(zippo+2) + 1) = %d\n", *(*(zippo + 2) + 1));
+    return 0;
+}
+/*
+zippo[2][1]等同*(*(zippo+2) + 1)
+解第3个数组得到第三个数组中第一个元素地址,加1得到第二个元素地址, 解得第二个元素原值
+*/
+
+二维数组核心等价关系
+zippo[i][j] ≡ *(*(zippo + i) + j)
+
+
+int (* pz)[2];  
+把pz声明为指向一个数组的指针，该数组内含两个int类型值。 声明中使用圆括号是因为[]的优先级高于*
+
+int * pax[2]; 
+声明了两个指向int的指针
+由于[]优先级高，pax成为一个内含两个元素的数组
+*表示pax数组内含两个指针
+int表示pax数组中的指针都指向int类型的值
+
+#include <stdio.h>
+int main(void)
+{
+    int zippo[4][2] = {{2, 4}, {6, 8}, {1, 3}, {5, 7}};
+    int(*pz)[2];
+    pz = zippo;
+    printf("  pz = %p,   pz + 1 = %p\n", pz, pz + 1);
+/*
+pz + sizeof(int[2])
+*/
+    printf("pz[0] = %p, pz[0] + 1 = %p\n", pz[0], pz[0] + 1);
+    printf(" *pz = %p,  *pz + 1 = %p\n", *pz, *pz + 1);
+/*
+pz[0]即*(pz+0), 解为第一个一维数组首地址, 类型为int *
+pz[0] + 1即加一个sizeof(int)
+*/
+    printf("pz[0][0] = %d\n", pz[0][0]);
+    printf(" *pz[0] = %d\n", *pz[0]);
+    printf("  **pz = %d\n", **pz);
+/*
+[]（下标）优先级 高于 *（解引用）
+*pz[0]即*(pz[0]), 而非(*pz)[0]
+(*pz)[0]
+≡ *(*pz + 0)
+≡ zippo[0][0]
+*pz[0] == (*pz)[0], 值相同，但逻辑路径不同
+*/
+    printf("    pz[2][1] = %d\n", pz[2][1]);
+    printf("*(*(pz+2) + 1) = %d\n", *(*(pz + 2) + 1));
+/*
+zippo[i][j] ≡ *(*(zippo + i) + j)
+*/
+    return 0;
+}
+
+
+int x = 20;
+const int y = 23;
+int * p1 = &x;
+const int * p2 = &y;
+const int ** pp2;
+p1 = p2;
+p2 = p1;
+pp2 = &p1;
+
+p1 : int *
+p2 : const int *
+const int *  →  int *    // 不允许, 破坏了 const 的只读承诺
+p1 = p2;      // 假设允许
+*p1 = 100;    // ❌ 实际上修改的是 y
+但是const int y = 23;
+
+int *  →  const int * //把“可写 int 的地址”交给“只读指针”
+
+const int **pp2;
+pp2 指向一个指针，而那个指针只能指向 const int
+const 永远只修饰它“紧挨着”的那个类型。在 const int **pp2 中，它修饰的是 int，所以只有 **pp2 是只读的
+&p1 类型是 int **
+pp2 = &p1;等价于尝试 const int ** = int ** //不允许
+
+pp2 = &p1;   // ⚠️ 假设允许
+*pp2 = &y; //合法, *pp2 的类型是 const int *, &y 的类型是 const int *
+因为pp2 == &p1, 所以*pp2 == p1
+于是*pp2 = &y;等价于p1 = &y;
+p1 的类型是 int *, y 的类型是 const int
+*p1 = 999;   // ❌ 实际修改的是 y
+
+
+左 const 管数据，右 const 管指针
+const int *p; //可改指针不能改值
+int * const p; //可改值不能改指针
+const int * const p; //p 本身是只读的，*p 也是只读的。指针不能改，指向的数据也不能改。
+
+
+void somefunction( int (* pt)[4] );
+pt指针指向一个大小为 4 的 int 数组
+pt == int (*)[4]
+
+void somefunction( int pt[][4] );
+pt 是一个二维数组形参, 每一行有 4 个 int
+行数可以省略
+函数参数中的数组自动退化为指针
+int pt[][4]会被编译器自动调整为int (*pt)[4]
+
+void f(int a[][4]);   // 行数对类型来说不重要，可以省
+void f(int a[3][]);   // 非法, 列不能省
+void f(int a[][]);    // 非法
+函数参数中的二维数组，行数可以省略，因为它不影响类型；列数不能省略，因为编译器必须知道每一行的大小来进行地址计算。
+
+声明一个指向N维数组的指针时，只能省略最左边方括号中的值
+int sum4d(int ar[][12][20][30], int rows);
+因为第1对方括号只用于表明这是一个指针，其他的方括号则用于描述指针所指向数据对象的类型。
+等价于
+int sum4d(int (*ar)[12][20][30], int rows); 
+
+#include <stdio.h>
+#define ROWS 3
+#define COLS 4
+
+void sum_rows(int ar[][COLS], int rows);
+void sum_cols(int[][COLS], int);
+int sum2d(int (*ar)[COLS], int rows);
+
+int main(void)
+{
+    int junk[ROWS][COLS] = {{2, 4, 6, 8}, {3, 5, 7, 9}, {12, 10, 8, 6}};
+    sum_rows(junk, ROWS);
+    sum_cols(junk, ROWS);
+    printf("Sum of all elements = %d\n", sum2d(junk, ROWS));
+    return 0;
+}
+
+void sum_rows(int ar[][COLS], int rows)
+{
+    int r;
+    int c;
+    int tot;
+    for (r = 0; r < rows; r++)
+    {
+        tot = 0;
+        for (c = 0; c < COLS; c++)
+            tot += ar[r][c];
+        printf("row %d: sum = %d\n", r, tot);
+    }
+}
+
+void sum_cols(int ar[][COLS], int rows)
+{
+    int r;
+    int c;
+    int tot;
+    for (c = 0; c < COLS; c++)
+    {
+        tot = 0;
+        for (r = 0; r < rows; r++)
+            tot += ar[r][c];
+        printf("col %d: sum = %d\n", c, tot);
+    }
+}
+
+int sum2d(int ar[][COLS], int rows)
+{
+    int r;
+    int c;
+    int tot = 0;
+    for (r = 0; r < rows; r++)
+        for (c = 0; c < COLS; c++)
+            tot += ar[r][c];
+    return tot;
+}
+
+
+自定义头文件一律用双引号
+../ 硬编码是“没配工程”的补救办法, 大型项目禁止在源码里写路径
+配了 Include Directory (标准做法)，就永远写头文件名本身
+
+vs创建的项目, 编译器msvc
+hotel\  【解决方案目录
+├─ hotel.sln  【解决方案文件
+└─ hotel\  【项目目录
+   ├─ hotel.vcxproj  【项目文件, 编译选项,链接方式
+   ├─ hotel.vcxproj.filters  【不参与编译,删后自动重建
+   ├─ hotel.vcxproj.user 【不参与编译,删后自动重建
+   ├─ include\ 【自建
+   │  └─ hotel.h  【对外接口
+   ├─ src\ 【自建
+   │  └─ hotel.c  【隔离源码实现
+   ├─ app\ 【自建
+   │  └─ useHotel.c  【使用者main入口
+   └─ CMakeLists.txt
+现有的.c和.h需要分别添加
+附加目录
+    项目属性-所有配置(包括了debug和release)所有平台-c/c++常规-添加include目录-edit-$(ProjectDir)include
+
+dev-c++创建的项目, 编译器gcc
+hotel\  【自建
+├─ hotel.dev 【项目文件
+├─ include\ 【自建
+│  └─ hotel.h
+├─ src\ 【自建
+│  └─ hotel.c
+├─ app\ 【自建
+│  └─ useHotel.c
+└─ CMakeLists.txt
+.c和.h直接添加
+设置头文件搜索路径
+    项目-项目选项-目录-include目录-添加include
+
+当 .c 和 .h 在同一目录下(临时测试)时, Visual Studio和Dev-C++都可以直接编译运行, 不需要手动配置“附加包含目录”, 因为编译器查找 "xxx.h" 的第一步, 不管是 MSVC 还是 GCC, 都会先查找当前源文件所在的目录,  “同目录可见”是编译器的默认行为，而不是 IDE 的特性
+
+IDE项目, gcc命令行, CMake脚本三者映射
+    VS / Dev-C++ 的“项目属性”，在 gcc/CMake 里变成了参数/脚本
+
+库 = 头文件 + 二进制
+静态库.lib
+    二进制在链接期合并编进exe
+    不需要运行时文件
+    更新库时需重编 exe
+动态库.dll + .lib
+    二进制在运行期加载
+    只链接符号运行时加载.lib
+    必须有dll
+    可直接换dll
+
+场景和库状态
+同一解决方案内, 每次一起编译
+第三方库, 提前编译好
+系统库, 早就编译好
+
+创建库
+vs创建新项目-静态库-命名hotel_lib
+hotel_lib\
+├─ hotel_lib.vcxproj
+├─ src\
+│  └─ hotel.c
+└─ include\
+   └─ hotel.h
+配置头文件目录(库自身用), 编译后会得到静态库Debug\hotel_lib.lib
+
+新建应用项目hotel_app, 右键添加项目引用hotel_lib.lib
+hotel_app\                 ← 解决方案根目录
+├─ hotel_app.sln
+├─ hotel_lib\                  ← 库项目
+│  ├─ hotel_lib.vcxproj
+│  ├─ src\
+│  │  └─ hotel.c
+│  └─ include\
+│     └─ hotel.h
+└─ hotel_app\                  ← 应用项目
+   ├─ hotel_app.vcxproj
+   └─ src\
+      └─ useHotel.c
+解决方案是“容器”，项目是“模块”, 库和应用是并列的项目，不是父子关系
+#include "hotel.h"
+vs自动处理, 不用手动写 lib 路径, 不用管 Debug/Release
+
+库在外部时（第三方库形式）
+external\
+└─ hotel_lib\
+   ├─ include\
+   │  └─ hotel.h
+   └─ lib\
+      └─ hotel_lib.lib
+project\
+├─ hotel_app.sln
+└─ hotel_app\
+   ├─ hotel_app.vcxproj
+   └─ src\
+      └─ useHotel.c
+在 hotel_app需要手动配置：
+    附加包含目录
+        ..\external\hotel_lib\include
+    附加库目录
+        ..\external\hotel_lib\lib
+    附加依赖项
+        hotel_lib.lib
+外部库需提前编译, 需要手动管理debug/release
+
+两种完全不同的库目录结构, 反映的是“你与这个库的关系或交付形态”
+    开发者视角（我在写库）
+        同一解决方案内的 hotel_lib它的身份是一个源码模块, 你可以随时改它, 它还没“成品化”, VS负责整个构建流程不需要 lib/ 目录
+    使用者视角（我在用库）
+        外部的 external/hotel_lib它的身份是一个已经交付的库, 你不能 / 不应该改源码, 只需关心头文件和编译好的二进制
+        必须明确告诉编译器和链接器(二进制分发协议)：
+            include/   ← 编译期, 头文件在哪
+            lib/       ← 链接期, 库文件在哪
+
+创建动态库（DLL 项目）
+VS 新建项目-动态链接库 (DLL)-命名hotel_dll
+目录结构与静态库高度一致, 结构不变, 身份变了
+hotel_dll\
+├─ hotel_dll.vcxproj
+├─ src\
+│  └─ hotel.c
+└─ include\
+   └─ hotel.h
+导出函数写在头文件里
+    exe 和 DLL 是 两个独立二进制
+    DLL 必须显式声明哪些符号是对外可见的, 以便exe运行时去找
+        在 Windows 上DLL 中的函数默认是“不可见”的, 除非使用 __declspec(dllexport) 或 .def 文件
+
+#ifndef HOTEL_H
+#define HOTEL_H
+/* 1. 如果是在 Windows 平台 */
+#ifdef _WIN32
+    /* 2. 如果正在编译 DLL 本身 */
+    #ifdef HOTEL_DLL_EXPORTS
+        /* 3. 导出函数 */
+        #define HOTEL_API __declspec(dllexport)
+    #else
+        /* 4. 使用 DLL 时导入函数 */
+        #define HOTEL_API __declspec(dllimport)
+    #endif
+#else
+    /* 5. 非 Windows 平台什么都不做 */
+    #define HOTEL_API
+#endif
+/* 6. 对外提供的函数声明, 告诉编译器这个函数来自别的dll */
+HOTEL_API void rent(int nights, int type);
+#endif
+
+HOTEL_H：只写在头文件里一次
+HOTEL_API：只写在头文件里的“对外声明”上
+.c 文件里不写这两个名字, 应用项目的代码里也不写这两个名字, 它只是“防止头文件重复包含”的一次性工具
+
+源文件内不用写额外关键字
+#include "hotel.h"
+#include <stdio.h>
+void rent(int nights, int type)
+{
+    printf("rent %d nights, type %d\n", nights, type);
+}
+
+vs使用dll
+同一解决方案内
+HotelSolution\
+├─ HotelSolution.sln
+├─ hotel_dll\          ← DLL 项目
+│  ├─ src\
+│  │  └─ hotel.c
+│  └─ include\
+│     └─ hotel.h
+└─ hotel_app\          ← 应用项目
+   └─ src\
+      └─ useHotel.c
+dll项目定义导出宏之后
+hotel_app引用dll项目
+#include "hotel.h"
+VS 自动先生成 hotel_dll.dll, 再生成 hotel_app.exe, 把 hotel_dll.dll 复制到 exe 目录
+
+外部dll
+external\
+└─ hotel_dll\
+   ├─ include\
+   │  └─ hotel.h
+   ├─ lib\
+   │  └─ hotel_dll.lib
+   └─ bin\
+      └─ hotel_dll.dll
+1.配置头文件目录（编译期）
+hotel_app → 项目属性附加包含目录添加：
+$(ProjectDir)..\external\hotel_dll\include
+2.配置库目录（链接期）
+链接器→ 常规→ 附加库目录添加：
+$(ProjectDir)..\external\hotel_dll\lib
+3.指定导入库
+链接器→ 输入→ 附加依赖项添加：
+hotel_dll.lib
+4.#include "hotel.h"
+5.放 DLL（运行期）
+把：external\hotel_dll\bin\hotel_dll.dll
+复制到：hotel_app\Debug\
+
+cxxdroid
+ls
+cd Download/c_try
+ls
+clang useHotel.c hotel.c -o main
+ls
+./main
+
+
+
+
+
+变长数组中的“变”不是指可以修改已创建数组的大小而是指在创建数组时，可以使用变量指定数组的维度
+一旦创建了变长数组，它的大小则保持不变
+
+变长数组必须是自动存储类别，这意味着无论在函数中声明还是作为函数形参声明，都不能使用static或extern 存储类别说明符, 而且不能在声明中初始化它们
+
+
+int sum2d(int rows, int cols, int ar[rows][cols]);
+ar是一个变长数组, 前两个形参用作第3个形参的两个维度, 必须在声明ar之前先声明这两个形参
+可以省略原型中的形参名，但必须用星号来代替省略的维度
+int sum2d(int, int, int ar[*][*]); 
+由于用变量代表行数和列数, 可以在原始数组中处理指定行列范围内的数据, 它并未实际创建数组, 和传统的语法类似, 变长数组名实际上是一个指针
+变长数组的大小延迟到程序运行时才确定
+
+给带int类型形参的函数传递一个值，传递int类型的变量，也可以传递int类型常量
+C99 标准以前，对于带数组形参的函数，可以传递数组，但是没有等价的数组常量。于是增加了复合字面量
+int diva[2] = {10, 20}; // 普通的数组声明
+ (int [2]){10, 20}   // 复合字面量
+复合字面量创建了一个和diva数组相同的匿名数组
+int [2]是复合字面量的类型名
+(int []){50, 20, 90} // 内含3个元素的复合字面量
+复合字面量可以省略大小，编译器自动计算元素个数
+
+因为复合字面量是匿名的，必须在创建的同时使用它, 可以使用指针记下它的地址
+int * pt1;
+pt1 = (int [2]) {10, 20};
+
+还可以把复合字面量作为实际参数传递给带有匹配形式参数的函数
+int sum(const int ar[], int n);
+int total3 = sum((int []){4,4,4,5,5,5}, 6);
+sum第1个实参是内含6个int类型值的数组，和数组名类似，这同时也是该数组首元素的地址。
+这种用法的好处是，把信息传入函数前不必先创建数组，这是复合字面量的典型用法。
+复合字面量是提供只临时需要的值的一种手段。复合字面量具有块作用域（最内层的花括号中）
+
+int (*pt2)[4];
+pt2 = (int [2][4]) { {1,2,3,-9}, {4,5,6,-8} };
+首先声明pt2是一个类型为 int (*)[4] 的指针
+    指向int[4],一个有 4 个int元素的数组
+然后给指针赋值
+    在表达式中, 匿名的二维数组 int[2][4] 退化为指向其首元素的指针, int [2][4] 的首元素类型是 int [4], 退化后的指针类型为 int (*)[4]，与 pt2 的类型匹配
+
+
+
+#include <stdio.h>
+#define MSG "I am a symbolic string constant."
+#define MAXLENGTH 81
+int main(void)
+{
+    char words[MAXLENGTH] = "I am a string in an array.";
+    const char *pt1 = "Something is pointing at me.";
+    puts("Here are some strings:");
+    puts(MSG);
+    puts(words);
+    puts(pt1);
+    words[8] = 'p';
+    puts(words);
+    return 0;
+}
+
+
+如果字符串字面量之间没有间隔，或者用空白字符分隔，C会将其视为串联起来的字符串字面量。
+char greeting[50] = "Hello, and"" how are" " you" " today!";
+等价
+char greeting[50] = "Hello, and how are you today!";
+
+通常字符串都作为可执行文件的一部分储存在数据段中。当把程序载入内存时，也载入了程序中的字符串。字符串储存在静态存储区中。程序在开始运行时才会为该数组分配内存。此时才将字符串拷贝到数组中。此时字符串有两个副本。一个是在静态内存中的字符串字面量，另一个是储存在ar1数组中的字符串。
+
+
+在指定数组大小时，要确保数组的元素个数至少比字符串长度多1（为 了容纳空字符）。所有未被使用的元素都被自动初始化为char形式的空字符/0）
+
+把指针初始化为字符串字面量时使用const限定符： const char * pl = "Klingon";  // 推荐用法
+
+编译器可以使用内存中的一个副本来表示所有完全相同的字符串字面量。例如，下面的语句都引用字符串"Klingon"的一个内存位置： 
+char * p1 = "Klingon";
+p1[0] = 'F'; // ok?
+printf("Klingon");
+printf(": Beware the %ss!\n", "Klingon");
+并允许p1[0]修改'F'，那将影响所有使用该字 符串的代码。
+所以以上语句打印字符串字面量"Klingon"时实际上显示的是
+"Flingon"： Flingon: Beware the Flingons!
+
+把非const数组初始化为字符串字面量却不会导致类似的问题。 因为数组获得的是原始字符串的副本。 总之，如果不修改字符串，不要用指针指向字符串字面量。
+
+const char *mytalents[5] = {..}; 
+char yourtalents[5][40] = {..}; //实际字符不满40时全部/0
+二维数组：连续内存, 适合频繁修改字符串内容
+指针数组：指向分散存储, 适合只读字符串, 指向字符串字面量的指针内容不能修改
+字符串字面量放在 .rodata（只读段）,CPU 检测到写只读内存 → 触发异常, UB 的一种表现：程序崩溃
+
+
+#include <stdio.h>
+int main(void)
+{
+    const char *mesg = "Do!";
+    const char *copy;
+    copy = mesg;
+    printf("%s\n", copy);
+    printf("mesg = %s; &mesg = %p; value = %p\n", mesg, &mesg, mesg);
+    printf("copy = %s; &copy = %p; value = %p\n", copy, &copy, copy);
+    return 0;
+}
+/*
+Do!
+mesg = Do!; 
+&mesg = 0x7fcc6c06b0;
+value = 0x7637d81028
+copy = Do!; 
+&copy = 0x7fcc6c06a8;
+value = 0x7637d81028
+mesg 和 copy 两个不同指针指向同一块内存
+const 修饰的是“指向的对象”，不是“指针本身”。
+*/
+
+
+*name;
+scanf("%s", name);
+虽然可能会通过编译（编译器很可能给出警告），但是在读入name 时，name可能会擦写掉程序中的数据或代码，从而导致程序异常中止。因为scanf()要把信息拷贝至参数指定的地址上，而此时该参数是个未初始化的指针，name可能会指向任何地方。大多数程序员都认为出现这种情况很搞笑，但仅限于评价别人的程序时。 
+最简单的方法是，在声明时显式指明数组的大小： char name[81];
+
+gets()读取整行输入，直至遇到换行符，然后丢弃换行符，储存其余字符，并在这些字符的末尾添加一个空字符使其成为一个 C 字符串。它经常和 puts()函数配对使用，该函数用于显示字 符串，并在末尾添加换行符。
+gets在c11时已废弃
+
+#include <stdio.h>
+#define STLEN 81
+int main(void)
+{
+    char words[STLEN];
+    puts("Enter a string, please.");
+    gets(words); // 典型用法
+    printf("Your string twice:\n");
+    printf("%s\n", words);
+    puts(words);
+    puts("Done.");
+    return 0;
+}
+
+问题出在于 gets()唯一的参数是 words，它无法检查数组是否装得下输入行。
+数组名会被转换成该数组首元素的地址，因此gets()函数只知道数组的开始处，并不知道数组中有多少个元素。 
+如果输入的字符串过长，会导致缓冲区溢出，即多余的字符超出了指定的目标空间。如果这些多余的字符只是占用了尚未使用的内存，就不会立即出现问题；如果它们擦写掉程序中的其他数据，会导致程序异常中止或者还有其他情况。
+
+
+#include <stdio.h>
+#define STLEN 14
+int main(void)
+{
+    char words[STLEN];
+    
+    puts("Enter a string, please.");
+    fgets(words, STLEN, stdin); //测试小于14
+    printf("Your string twice (puts(), then fputs()):\n");
+    puts(words);
+    fputs(words, stdout);
+    
+    puts("Enter another string, please.");
+    fgets(words, STLEN, stdin); //测试大于14
+    printf("Your string twice (puts(), then fputs()):\n");
+    puts(words);
+    fputs(words, stdout);
+    
+    puts("Done.");
+    return 0;
+}
+fgets(str, n, stdin) 会在以下情况停止读取：
+读到 换行符 '\n' → 保留 '\n'
+读满 n - 1 个字符 → 不包含 '\n'
+遇到 EOF → 不包含 '\n'
+成功读取时在字符串末尾自动加 '\0'
+成功返回 str地址，失败返回 NULL
+
+fgets(s, 5, stdin);
+用户输入abcdefg↵
+最多读 n-1 个字符,读到的是 "abcd\0"
+没有读到 '\n', 剩下的 "efg\n" 还在输入缓冲区
+如果输入cat回车, 读到的是"cat\n\0"
+
+
+puts输出到屏幕 + 自动换行
+fputs输出到指定流 + 不自动换行
+
+gets_s()与fgets()的区别如下
+gets_s()只从标准输入中读取数据，所以不需要第3个参数。
+如果gets_s()读到换行符，会丢弃它而不是储存它。
+如果gets_s()读到最大字符数都没有读到换行符，会执行以下几步。
+首先把目标数组中的首字符设置为空字符，读取并丢弃随后的输入直至读到换行符或文件结尾，然后返回空指针。接着，调用依赖实现的“处理函数”（或 你选择的其他函数），可能会中止或退出程序。 
+
+gets()、fgets()和 gets_s()的适用性。
+如果目标存储区装得下输入行，3 个函数都没问题
+fgets()会保留输入末尾的换行符作为字符串的一部分，要编写额外的代码将其替换成空字符。 
+如果输入行太长, 使用gets()不安全，它会擦写现有数据，存在安全隐患。gets_s()函数很安全，但是，如果并不希望程序中止或退出，就 要知道如何编写特殊的“处理函数”。另外，如果打算让程序继续运行， gets_s()会丢弃该输入行的其余字符，无论你是否需要。由此可见，当输入太长，超过数组可容纳的字符数时，fgets()函数最容易使用，而且可以选择 不同的处理方式。如果要让程序继续使用输入行中超出的字符
+#include <stdio.h>
+#define STLEN 10
+int main(void)
+{
+    char words[STLEN];
+    puts("Enter strings (empty line to quit):");
+    while (fgets(words, STLEN, stdin) != NULL && words[0] != '\n')
+        fputs(words, stdout);
+    puts("Done.");
+    return 0;
+}
+如果想丢弃输入行的超出字符
+#include <stdio.h>
+#define STLEN 10
+int main(void)
+{
+    char words[STLEN];
+    int i;
+    puts("Enter strings (empty line to quit):");
+    while (fgets(words, STLEN, stdin) != NULL && words[0] != '\n')
+    {
+        i = 0;
+        while (words[i] != '\n' && words[i] != '\0')
+            i++;
+        if (words[i] == '\n')
+            words[i] = '\0';
+        else
+            while (getchar() != '\n')
+                continue;
+        puts(words);
+    }
+    puts("done");
+    return 0;
+}
+所以，当输入与预期不符时，gets_s()完全没有fgets()函数方便、灵活。 也许这也是gets_s()只作为C库的可选扩展的原因之一。鉴于此，fgets()通常 是处理类似情况的最佳选择。
+
+
+#include <stdio.h>
+int main(void)
+{
+    char name1[11], name2[11];
+    int count;
+    printf("Please enter 2 names.\n");
+    count = scanf("%5s %10s", name1, name2);
+    printf("I read the %d names %s and %s.\n", count,name1, name2);
+    return 0;
+}
+宽度5、10限制本次转换最多读取多少字符, Portensia的后4个字符nsia被写入name2中，因为第 2次调用scanf()时，从上一次调用结束的地方继续读取数据
+scanf 不会“帮你丢弃多余字符”
+它只负责当前转换，其余字符继续留在输入流中
+
+逻辑上不加宽度，空格就能区分name1和name2
+scanf("%s %s", name1, name2);
+但问题在于%s 不知道数组有多大
+char name1[11], name2[11];
+如果输入是ThisNameIsWayTooLong Bob
+%s 会一直读，直到遇到空白, 不管 name1 只有 11 字节, 结果缓冲区溢出, 可能覆盖 name2或count或程序崩溃
+
+gets()丢弃输入中的换行符，但是puts()在输出中添加换行符。另 一方面，fgets()保留输入中的换行符，fputs()不在输出中添加换行符
+
+假设 要编写一个循环，读取一行输入，另起一行打印出该输入。可以这样写：
+char line[81];
+while (gets(line))// 与while (gets(line) != NULL)相同 puts(line);
+如果gets()读到文件结尾会返回空指针。对空指针求值为0（即为假）， 这样便可结束循环。或者，可以这样写： 
+char line[81];
+while (fgets(line, 81, stdin)) 
+fputs(line, stdout);
+第1个循环（使用gets()和puts()的while循环），line数组中的字符串显示 在下一行，因为puts()在字符串末尾添加了一个换行符。第2个循环（使用 fgets()和fputs()的while循环），line数组中的字符串也显示在下一行，因为 fgets()把换行符储存在字符串末尾。注意，如果混合使用 fgets()输入和puts() 输出，每个待显示的字符串末尾就会有两个换行符。这里关键要注意： puts()应与gets()配对使用，fputs()应与fgets()配对使用。 我们在这里提到已被废弃的 gets()，并不是鼓励使用它，而是为了让读 者了解它的用法。如果今后遇到包含该函数的代码，不至于看不懂。
+
+
+自定义一个类似puts()但是不会自动添加换行符的函数
+#include <stdio.h> 
+void put1(const char * string)
+{ 
+while (*string != '\0') //或while (*string)
+putchar(*string++);
+}
+
+int i = 0;
+while (string[i]!= '\0') 
+putchar(string[i++]);
+
+自定义一个类似puts()的函数，同时给出待打印字符的个数。
+#include <stdio.h> 
+int put2(const char * string) 
+{ 
+int count = 0;
+while (*string)
+{ 
+putchar(*string++);
+count++;
+} 
+putchar('\n');
+return(count);
+}
+
+
+void fit(char *string, unsigned int size) { 
+if (strlen(string) > size) 
+string[size] = '\0';
+}
+
+strcat()
+用于拼接字符串, 接受两个字符串参数
+把第 2个字符串的备份附加在第1个字符串末尾并返回其地址
+
+#include <stdio.h>
+#include <string.h>
+#define SIZE 80
+char *s_gets(char *st, int n);
+int main(void)
+{
+    char flower[SIZE];
+    char addon[] = "s smell like old shoes.";
+    puts("What is your favorite flower?");
+    if (s_gets(flower, SIZE))
+    {
+        strcat(flower, addon);
+        puts(flower);
+        puts(addon);
+    }
+    else
+        puts("End of file encountered!");
+    puts("bye");
+    return 0;
+}
+char *s_gets(char *st, int n)
+{
+    char *ret_val;
+    int i = 0;
+    ret_val = fgets(st, n, stdin);
+    if (ret_val)
+    {
+        while (st[i] != '\n' && st[i] != '\0')
+            i++;
+        if (st[i] == '\n')
+            st[i] = '\0'; //把字符串末尾的换行符去掉，使字符串更干净，方便后续处理。例如fgets 产生"abc\n\0",替换后"abc\0\0",多一个 '\0' 是安全填充,不影响使用
+        else //st[i] = '\0'
+            while (getchar() != '\n') //while条件不成立的同时，getchar() 已经把\n取走消耗了
+                continue;
+    }
+    return ret_val;
+}
+
+如果不把这些多余字符（包括 '\n'）消耗掉，后续输入函数会“误读”上一行残留的数据，程序行为就会出错。
+fgets(st, 5, stdin);   // 最多读 4 个字符
+// 没有清空缓冲区
+fgets(st2, 20, stdin);
+用户输入abcdefghij回车
+读出abcd, 放入"abcd\0"
+缓冲区里还剩efghij\n
+第二次fgets不会等待用户输入, 而是直接读缓冲区里的内容"efghij\n"
+C 的输入是“连续的字符流”，你不主动清理，它永远不会替你清理。
+
+strcat()函数无法检查第1个数组是否能容纳第2个字符串。
+如果分配给第1个数组的空间不够大，多出来的字符溢出到相邻存储单元时就会出问题。 
+可以用strlen()查看第1个数组的长度。注意要给拼接后的字符串长度加1才够空间存放末尾的空字符。
+或者用 strncat()，该函数的第3 个参数指定了最大添加字符数。
+strncat(bugs, addon, 13)
+从 addon 中最多拷贝 13 个字符,追加到 bugs 末尾,再加一个 '\0', 13并非bugs总长
+即使 strncat(bugs, addon, 0);也会在 bugs 末尾写一个 '\0', 所以 bugs 依然必须为此准备空间。
+
+安全写法
+strncat(bugs, addon, sizeof(bugs) - strlen(bugs) - 1);
+这样不会写出 bugs 的边界, 始终留一个位置给 '\0'
+
+sizeof(bugs)：数组/对象“能占多少内存”
+strlen(bugs)：字符串“现在有多长”
+
+sizeof编译期计算,对数组和指针结果完全不同
+char bugs[20] = "ants";
+sizeof(bugs)   // 永远是 20，不管里面放什么
+数组名在 sizeof 中不会退化为指针, 这是语言层面的硬规则
+
+char *bugs = "ants";
+sizeof(bugs)   // 8 （64 位系统）或 4（32 位）, 得到的是指针本身大小，不是字符串长度
+
+strlen运行期计算, 逐个字符往后数, 遇到 '\0' 停止, 返回不包含 '\0' 的字符个数
+
+sizeof 管“盒子有多大”，strlen 管“里面装了多少”
+sizeof 量的是“字节”，strlen 量的是“字符”。
+sizeof(bugs) - strlen(bugs) 的结果，表示：
+从数组起始到数组末尾之间，还剩下多少个“字节位置”，其中包含当前字符串的 '\0'。 它不是“还能再放多少个字符”。
+char bugs[20] = "ants";
+索引:  0  1  2  3  4  5 ... 19
+内容:  a  n  t  s  \0  ?  ? ... ?
+sizeof(bugs)   // 20   （字节）
+strlen(bugs)   // 4    （字符）
+sizeof(bugs) - strlen(bugs) = 16 //从字符串结尾（含 '\0'）到数组末尾的字节数
+字符串用了4 个字符
+数组总共20 个字节
+从 bugs[4]（也就是 '\0'）到 bugs[19] 一共有 16 个字节位置
+\0 + 剩余空位 = 16
+“还能再安全追加多少个字符”
+那么必须再减去 '\0' 占的 1 个字节, 最多还能追加 15 个字符, char（1 字节）
+
+#include <stdio.h>
+#include <string.h>
+#define SIZE 30
+#define BUGSIZE 13
+char *s_gets(char *st, int n);
+int main(void)
+{
+    char flower[SIZE];
+    char addon[] = "s smell like old shoes.";
+    char bug[BUGSIZE];
+    int available;
+    puts("What is your favorite flower?");
+    s_gets(flower, SIZE);
+    if ((strlen(addon) + strlen(flower) + 1) <= SIZE)
+        strcat(flower, addon);
+    puts(flower);
+    puts("What is your favorite bug?");
+    s_gets(bug, BUGSIZE);
+    available = BUGSIZE - strlen(bug) - 1;
+    strncat(bug, addon, available);
+    puts(bug);
+    return 0;
+}
+char *s_gets(char *st, int n)
+{
+    char *ret_val;
+    int i = 0;
+    ret_val = fgets(st, n, stdin);
+    if (ret_val)
+    {
+        while (st[i] != '\n' && st[i] != '\0')
+            i++;
+        if (st[i] == '\n')
+            st[i] = '\0';
+        else
+            while (getchar() != '\n')
+                continue;
+    }
+    return ret_val;
+}
+
+strcat()和 gets()类似也会导致缓冲区溢出。为 什么 C11 标准不废弃strcat()，只留下strncat()？为何对gets()那么残忍？这也 许是因为gets()造成的安全隐患来自于使用该程序的人，而strcat()暴露的问题是那些粗心的程序员造成的。无法控制用户会进行什么操作，但是，可以 控制你的程序做什么。C语言相信程序员，因此程序员有责任确保strcat()的 使用安全。
+
+
+/* nogo.c -- 该程序是否能正常运行？ */
+#include <stdio.h>
+#define ANSWER "Grant"
+#define SIZE 40
+char *s_gets(char *st, int n);
+int main(void)
+{
+    char try [SIZE];
+    puts("Who is buried in Grant's tomb?");
+    s_gets(try, SIZE);
+    while (try != ANSWER)
+    {
+        puts("No, that's wrong. Try again.");
+        s_gets(try, SIZE);
+    }
+    puts("That's right!");
+    return 0;
+}
+char *s_gets(char *st, int n)
+{
+    char *ret_val;
+    int i = 0;
+    ret_val = fgets(st, n, stdin);
+    if (ret_val)
+    {
+        while (st[i] != '\n' && st[i] != '\0')
+            i++;
+        if (st[i] == '\n')
+            st[i] = '\0';
+        else
+            while (getchar() != '\n')
+                continue;
+    }
+    return ret_val;
+}
+上面比较的是两个指针地址是否相同
+ANSWER 是字符串常量, 它在程序编译期就已经确定，地址固定。
+但 try 不是常量, 而是在栈上分配的一块可写内存，把用户输入的字符，一个个拷贝进 try 这块内存, 内容可以是 "Grant"，但地址还是 try 自己的地址
+两块内存是不是同一块, 要比内容只能用strcmp
+strcmp(try, ANSWER) 
+如果两个字符串参数相同，该函数就返回0，否则返回非零值。
+从第一个字符开始, 比较对应字符的 unsigned char 值, 遇到不同就返回差值, 如果一路都相同，直到遇到 '\0'，返回 0
+
+
+#include <stdio.h>
+#include <string.h>
+
+#define SIZE 80
+#define LIM 10
+#define STOP "quit"
+
+char *s_gets(char *st, int n);
+
+int main(void)
+{
+    char input[LIM][SIZE];
+    int ct = 0;
+    printf("Enter up to %d lines (type quit to quit):\n", LIM);
+    while (ct < LIM && s_gets(input[ct], SIZE) != NULL && strcmp(input[ct], STOP) != 0)
+//读到EOF时s_gets返回NULL
+//&& input[ct][0] != '\0')输入空行结束
+    {
+        ct++;
+        printf("%d strings entered\n", ct);
+    }
+    return 0;
+}
+
+char *s_gets(char *st, int n)
+{
+    char *ret_val;
+    int i = 0;
+    ret_val = fgets(st, n, stdin);
+    if (ret_val)
+    {
+        while (st[i] != '\n' && st[i] != '\0')
+            i++;
+        if (st[i] == '\n')
+            st[i] = '\0';
+        else
+            while (getchar() != '\n')
+                continue;
+    }
+    return ret_val;
+}
+
+strncmp()只比较第3个参数指定的字符数
+#include <stdio.h>
+#include <string.h>
+
+#define LISTSIZE 6
+
+int main()
+{
+    const char *list[LISTSIZE] = {"astronomy", "astounding", "astrophysics", "ostracize", "asterism", "astrophobia"};
+    int count = 0;
+    int i;
+    for (i = 0; i < LISTSIZE; i++)
+        if (strncmp(list[i], "astro", 5) == 0)
+        {
+            printf("Found: %s\n", list[i]);
+            count++;
+        }
+    printf("The list contained %d words beginning"
+           " with astro.\n",
+           count);
+    return 0;
+}
+
+
+
+#include <stdio.h>
+#include <string.h>
+#define SIZE 40
+#define LIM 5
+char *s_gets(char *st, int n);
+int main(void)
+{
+    char qwords[LIM][SIZE];
+    char temp[SIZE];
+    int i = 0;
+    printf("Enter %d words beginning with q:\n", LIM);
+    while (i < LIM && s_gets(temp, SIZE))
+    {
+        if (temp[0] != 'q')
+        //if (strncmp(temp, "q", 1) != 0)
+            printf("%s doesn't begin with q!\n", temp);
+        else
+        {
+            strcpy(qwords[i], temp);
+            i++;
+        }
+    }
+    puts("Here are the words accepted:");
+    for (i = 0; i < LIM; i++)
+        puts(qwords[i]);
+    return 0;
+}
+char *s_gets(char *st, int n)
+{
+    char *ret_val;
+    int i = 0;
+    ret_val = fgets(st, n, stdin);
+    if (ret_val)
+    {
+        while (st[i] != '\n' && st[i] != '\0')
+            i++;
+        if (st[i] == '\n')
+            st[i] = '\0';
+        else
+            while (getchar() != '\n')
+                continue;
+    }
+    return ret_val;
+}
+
+
+
+声明数组将分配储存数据的空间，而声明指针只分配储存一个地址的空间。
+
+
+#include <stdio.h>
+#include <string.h>
+#define WORDS "beast"
+#define SIZE 40
+int main(void)
+{
+    const char *orig = WORDS;
+    char copy[SIZE] = "Be the best that you can be.";
+    char *ps;
+    puts(orig);
+    puts(copy);
+    ps = strcpy(copy + 7, orig);
+    puts(copy);
+    puts(ps);
+    return 0;
+}
+strcpy 不只是拷贝字母，还会把结尾的 '\0' 也一起拷过去
+从 copy[7] 开始覆盖
+copy 现在变成"Be the beast\0hat you can be."
+puts(copy);   -> 从 copy[0] 打印到第一个 \0
+puts(ps);     -> ps = copy+7，从 'b' 打印到 \0
+
+
+#include <stdio.h>
+#include <string.h>
+#define SIZE 40
+#define TARGSIZE 7
+#define LIM 5
+char *s_gets(char *st, int n);
+int main(void)
+{
+    char qwords[LIM][TARGSIZE];
+    char temp[SIZE];
+    int i = 0;
+    printf("Enter %d words beginning with q:\n", LIM);
+    while (i < LIM && s_gets(temp, SIZE))
+    {
+        if (temp[0] != 'q')
+            printf("%s doesn't begin with q!\n", temp);
+        else
+        {
+            strncpy(qwords[i], temp, TARGSIZE - 1);
+            qwords[i][TARGSIZE - 1] = '\0';
+            i++;
+        }
+    }
+    puts("Here are the words accepted:");
+    for (i = 0; i < LIM; i++)
+        puts(qwords[i]);
+    return 0;
+}
+char *s_gets(char *st, int n)
+{
+    char *ret_val;
+    int i = 0;
+    ret_val = fgets(st, n, stdin);
+    if (ret_val)
+    {
+        while (st[i] != '\n' && st[i] != '\0')
+            i++;
+        if (st[i] == '\n')
+            st[i] = '\0';
+        else
+            while (getchar() != '\n')
+                continue;
+    }
+    return ret_val;
+}
+
+qwords[i] 是一个长度为 7 的字符数组
+strncpy(dest, src, n);
+如果 src 长度 ≥ n，它不会自动加 '\0'
+qwords[i][TARGSIZE - 1] = '\0';
+没有 '\0'，后面是旧垃圾数据，puts(qwords[i]) 就会越界乱读。所以必须手动加终止符
+
+
+sprintf()函数声明在stdio.h而非string.h中。
+sprintf和printf区别在于它是把数据写入字符串而不是打印在显示器上。格式符用法一致
+#include <stdio.h>
+#define MAX 20
+char *s_gets(char *st, int n);
+int main(void)
+{
+    char first[MAX];
+    char last[MAX];
+    char formal[2 * MAX + 10];
+    double prize;
+    puts("Enter your first name:");
+    s_gets(first, MAX);
+    puts("Enter your last name:");
+    s_gets(last, MAX);
+    puts("Enter your prize money:");
+    scanf("%lf", &prize);
+    sprintf(formal, "%s, %-19s: $%6.2f\n", last, first, prize);
+    puts(formal);
+    return 0;
+}
+char *s_gets(char *st, int n)
+{
+    char *ret_val;
+    int i = 0;
+    ret_val = fgets(st, n, stdin);
+    if (ret_val)
+    {
+        while (st[i] != '\n' && st[i] != '\0')
+            i++;
+        if (st[i] == '\n')
+            st[i] = '\0';
+/*
+//更简洁的写法
+char * find = strchr(st, '\n');
+if (find)
+*find = '\0';
+*
+        else
+            while (getchar() != '\n')
+                continue;
+    }
+    return ret_val;
+}
+
+
+#include <stdio.h>
+#include <string.h>
+#define SIZE 20
+#define LIM 10
+void stsrt(char *strings[], int num);
+char *s_gets(char *st, int n);
+
+int main(void)
+{
+    char input[LIM][SIZE];
+    char *ptstr[LIM];
+    int ct = 0;
+    int k;
+    printf("Input up to %d lines, and I will sort them.\nTo stop, press the Enter key at a line's start.\n", LIM);
+    while (ct < LIM && s_gets(input[ct], SIZE) != NULL && input[ct][0] != '\0')
+    {
+        ptstr[ct] = input[ct];
+        ct++;
+    }
+    stsrt(ptstr, ct);
+    puts("\nHere's the sorted list:\n");
+    for (k = 0; k < ct; k++)
+        puts(ptstr[k]);
+    return 0;
+}
+
+void stsrt(char *strings[], int num)
+{
+    char *temp;
+    int top, seek;
+    for (top = 0; top < num - 1; top++)
+        for (seek = top + 1; seek < num; seek++)
+            if (strcmp(strings[top], strings[seek]) > 0)
+            {
+                temp = strings[top];
+                strings[top] = strings[seek];
+                strings[seek] = temp;
+            }
+}
+
+char *s_gets(char *st, int n)
+{
+    char *ret_val;
+    int i = 0;
+    ret_val = fgets(st, n, stdin);
+    if (ret_val)
+    {
+        while (st[i] != '\n' && st[i] != '\0')
+            i++;
+        if (st[i] == '\n')
+            st[i] = '\0';
+        else
+            while (getchar() != '\n')
+                continue;
+    }
+    return ret_val;
+}
+
+ptstr[ct] = input[ct]; 
+把“这一行字符串的地址”存进指针数组
+
+s_gets(...) != NULL
+输入流结束或出错（系统层面）
+input[ct][0] != '\0'
+用户主动输入空行（逻辑层面）
+
+按ASCII码顺序对“指针所指向的字符串内容”进行排序。
+交换的是指针, 比较的是字符串里的字符
+这样做比用strcpy()交换两个input 字符串的内容简单得多，而且还保留了input数组中的原始顺序
+
+选择排序（每一趟选最小）
+外循环第 0 位先随便排一个元素, 然后内循环从剩余元素中一个个地和第0位比, 每当找到更小的就调换一次, 内循环走完一圈之后外层第0位正式固定, 接着内层再走一圈固定出外层第1位, 这一过程持续到所有元素都已排序完毕
+
+int strcmp(const char * s1, const char * s2);
+按ascii序, s1位于s2前时<0, 反之>0, 相等时等于0
+从第一个字符开始比较, 如果相同，就继续比较下一个
+如果s1实际值是字母a, s2是字母b
+'a' 的 ASCII 值是 97
+'b' 的 ASCII 值是 98
+'a' < 'b'
+strcmp(s1, s2)返回值<0
+
+
+#include <stdio.h>
+#include <string.h>
+#include <ctype.h>
+#define LIMIT 81
+
+void ToUpper(char *);
+int PunctCount(const char *);
+
+int main(void)
+{
+    char line[LIMIT];
+    char *find;
+    puts("Please enter a line:");
+    fgets(line, LIMIT, stdin);
+    find = strchr(line, '\n');
+    if (find)
+        *find = '\0';
+/*
+fgets(s, 5, stdin);
+情况一超出, 如果输入abcdefg回车
+最多读 n-1 个字符,读到的是 "abcd\0"
+没有读到 '\n', 剩下的 "efg\n" 还在输入缓冲区
+情况二未超出, 如果输入cat回车, 读到的是"cat\n\0"
+此处是情况二, 替成"cat\0\0"
+*/
+    ToUpper(line);
+    puts(line);
+    printf("That line has %d punctuation character", PunctCount(line));
+    return 0;
+}
+
+void ToUpper(char *str)
+{
+    while (*str)
+/*
+等价于 while (*str != '\0')
+循环体只会在 str 指向有效字符时执行
+一旦 str 指向字符串结尾的 '\0'，循环结束
+*/
+    {
+        *str = toupper(*str);
+        str++;
+    }
+}
+
+int PunctCount(const char *str)
+{
+    int ct = 0;
+    while (*str)
+    {
+        if (ispunct(*str)) //判断字符是不是标点符号
+            ct++;
+        str++;
+    }
+    return ct;
+}
+
+isalnum 字母或数字
+isalpha 
+isdigit 
+isspace 
+iscntrl 控制字符
+isprint 可打印字符
+ispunct 可打印但非字母数字
+
+
+main 要么不带参数
+要么必须是 int argc, char *argv[]或等价形式int argc, char **argv, char *argv[]数组形参退化为指针char **argv
+不能只带一个，也不能随便带
+argv 是“指向 char 指针的指针”
+每个 argv[i] 又指向一个 以 '\0' 结尾的字符串
+argc的值是启动程序时自动填充的
+运行./prog hello world
+argc == 3
+argv内
++---------+
+| argv[0] | ---> "./prog\0"
++---------+
+| argv[1] | ---> "hello\0"
++---------+
+| argv[2] | ---> "world\0"
++---------+
+| argv[3] | ---> NULL
++---------+
+指针访问*(argv + 0)的语法糖下标访问argv[0]
+
+argv[0] 一定存在, 即使你什么参数都不传
+也至少有argv[0] -> "./prog", argc == 1
+
+其中argv[3] == NULL
+也即argv[argc] == NULL是标准保证的
+这让你可以这样遍历（即使不用 argc）：
+for (int i = 0; argv[i] != NULL; i++)
+    printf("%s\n", argv[i]);
+
+顺带一提，许多环境（包括UNIX和DOS）都允许用双引号把多个单词 括起来形成一个参数。
+例如： repeat "I am hungry" now
+这行命令把字符串"I am hungry"赋给argv[1]
+把"now"赋给argv[2]
+
+#include <stdio.h>
+int main(int argc, char *argv[])
+{
+    int count;
+    printf("The command line has %d arguments:\n", argc - 1);
+    for (count = 1; count < argc; count++)
+        printf("%d: %s\n", count, argv[count]);
+    printf("\n");
+    return 0;
+}
+
+假设你编写的程序需要使用数值命令形参，但是命令形参数被读取为字 符串。因此，要使用数值必须先把字符串转换为数字
+
+atoi 只能用于“你已经确定是合法整数的字符串”，它不能用来做严格的输入校验。大多教学用而生产不用
+atoi 的行为规则：
+跳过前导空白
+识别可选的 + 或 -
+连续读取数字
+遇到第一个非数字字符就停
+返回已经解析的整数
+"   -45"得到-45
+"12abc"得到12
+"abc12"得到0
+"0"得到0
+"abc"得到0
+atoi 在转换失败时返回 0，且无法报告错误
+它无法区分错误和合法输入, 错误和合法的 0返回值完全一样
+atoi("999999999999999999999");结果不可预测, 可能溢出,标准不要求报错
+atol返回long, atof返回double, 它们都有同样的问题
+
+#include <stdio.h>
+#include <stdlib.h>
+int main(int argc, char *argv[])
+{
+    int i, times;
+//运算符的求值顺序保证了如果 argc < 2，就不会对atoi(argv[1])求值
+    if (argc < 2 || (times = atoi(argv[1])) < 1)
+        printf("Usage: %s positive-number\n", argv[0]);
+    else
+        for (i = 0; i < times; i++)
+            puts("Hello, good looking!");
+    return 0;
+}
+
+
+整数解析有
+strtol, strtoul, strtoll, strtoull, 没有 strtoi，因为 strtol 就是通用整数解析器；
+浮点解析有
+strtof, strtod, strtold
+
+所有 strto* 都遵循同一套规则：
+跳过前导空白
+解析合法数值
+返回转换结果
+通过 endptr 告诉你解析停在哪
+通过 errno 报告溢出 / 下溢
+
+scanf 在工程中被嫌弃，不是因为“不能用”，
+而是因为它
+❌ 难以正确使用
+❌ 错误处理极差,失败后不消耗输入
+❌ 极易引入隐蔽 bug
+❌ 和真实输入场景不匹配。
+它只适合：
+教学
+一次性小程序
+受控输入（竞赛、OJ）
+快速原型
+不适合长期维护的工程代码。
+
+#include <stdio.h>
+#include <stdlib.h>
+#define LIM 30
+char *s_gets(char *st, int n);
+int main()
+{
+    char number[LIM];
+    char *end;
+    long value;
+    puts("Enter a number (empty line to quit):");
+    while (s_gets(number, LIM) && number[0] != '\0')
+    {
+        value = strtol(number, &end, 10);
+        printf("base 10 input, base 10 output: %ld, stopped at %s(%d)\n", value, end, *end);
+        value = strtol(number, &end, 16);
+        printf("base 16 input, base 10 output: %ld, stopped at %s(%d)\n", value, end, *end);
+        puts("Next number:");
+    }
+    puts("Bye!\n");
+    return 0;
+}
+
+char *s_gets(char *st, int n)
+{
+    char *ret_val;
+    int i = 0;
+    ret_val = fgets(st, n, stdin);
+    if (ret_val)
+    {
+        while (st[i] != '\n' && st[i] != '\0')
+            i++;
+        if (st[i] == '\n')
+            st[i] = '\0';
+        else
+            while (getchar() != '\n')
+                continue;
+    }
+    return ret_val;
+}
+%s(%d)
+从停止点开始的字符串(停止字符的 ASCII 值)
+123
+base 10 input, base 10 output: 123, stopped at (0)
+转换在读到空字符时结束，此时end指向空字符。打印end会显示一个空字符串，以%d转换说明输出*end显示的是空字符的ASCII码。
+base 16 input, base 10 output: 291, stopped at (0)
+123abc
+base 10 input, base 10 output: 123, stopped at abc(97)
+base 16 input, base 10 output: 1194684, stopped at (0)
+
+#include <errno.h>
+#include <limits.h>
+char *end;
+errno = 0;
+long v = strtol(str, &end, 10);
+if (errno == ERANGE ||
+    end == str ||
+    *end != '\0') {
+    // 错误
+}
+errno.h用于检测 运行时错误
+limits.h提供 LONG_MAX / LONG_MIN
+end 用来接收解析停止的位置
+strtol 不会清空 errno, 如果之前有错误errno 可能是脏的, 必须手动清零避免误判
+从 str 开始, 按十进制尝试解析一个 long, 返回值放入 v, 停止位置写入 end
+三道防线
+防止溢出 / 下溢,
+防止一个数字都没读到, 例如str = "abc123";没法解析数字
+防止“夹杂非法字符”, 例如str = "123abc";成功解析 123, end 指向 'a', *end != '\0', 不是纯整数
+end 永远不会是 NULL, 它只是指向字符串内部, 真正检查的是字符串是否被“完全吃掉”
+
+#include <errno.h>
+char *end;
+errno = 0;
+double v = strtod(str, &end);
+if (errno == ERANGE ||
+    end == str ||
+    *end != '\0') {
+    // 错误
+}
+strto*整数类比浮点类多一个进制参数
+因为整数有多进制表示, 而浮点统一十进制
+
+strlen()函数可以统计字符串的长度，空字符不计算在内。 
+字符串常量也叫作字符串——字面量，可用于初始化字符数组。为了容纳末尾的空字符，数组大小应该至少比容纳的数组长度多1。也可以用字符串常量初始化指向char的指针。
+
+
+
+GCC起源于GNU 项目（1987）
+是一个编译器套件，不是只编 C
+支持语言：C、C++、Fortran、Go、Ada 等
+工具链成熟, 社区庞大
+提供更稳定、广泛的平台支持
+默认平台Linux
+
+Clang（LLVM 项目的一部分）起源于LLVM 项目（Apple 主导）
+是一个前端编译器, 后端使用 LLVM
+支持语言：C、C++、Objective-C
+错误提示非常友好,更容易理解错误原因
+提供更现代的前端体验
+默认平台macOS
+
+int main() {
+    int x = "hello";
+}
+gcc错误提示, 更像“老工程师”
+warning: initialization makes integer from pointer without a cast
+clang错误提示, 更像“老师”
+error: incompatible pointer to integer conversion initializing 'int' with an expression of type 'char[6]'
+
+
+
+
+通常在源代 码（.c扩展名）中包含一个或多个头文件（.h 扩展名）。头文件会依次包含其他头文件，所以会包含多个单独的物理文件。
+C预处理实际上是用包含的头文件内容替换#include指令。所以编译器源代码文件和所有的头文件都看成是一个单独文件。这个文件被称为翻译单元
+描述一个具有文件作用域的变量时，它的实际可见范围是整个翻译单元。
+如果程序由多个源代码文件组成，那么该程序也将由多个翻译单元组成。每个翻译单元均对应一个源代码文件和它所包含的文件。
+
+链接（linkage）描述的是：同一个名字，能不能在“多个源文件”里指向同一个实体。
+
+int giants = 5; //外部链接, 普通全局变量
+告诉编译器这个名字可能会被别的 .c 文件用到
+在链接阶段, 其他文件里的 extern int giants; 都会指向同一个 giants
+int count = 0;   // a.c
+int count = 100; // b.c, 重定义错误
+
+static int dodgers = 3; //内部链接
+这个名字只在当前翻译单元（.c 文件）里有效
+编译器直接认为这个符号不导出, 即使别的文件写extern int dodgers, 链接器也不会让别的文件看到它
+static int count = 0; //a.c
+static int count = 100; //b.c, 同名不会冲突
+它们是两个不同翻译单元
+各自都有一个 “只在本文件存在的 count”
+
+外部链接变量和内部链接变量的生命周期都是在整个程序运行期间, 区别在于 “谁能看到”
+内部链接的目的是为了封装, 防止跨文件访问和命名冲突
+
+static 从来不改变作用域，它只是在“文件作用域”时改变链接属性，在“块作用域”时改变生命周期。
+
+
+
+
+C对象有4种存储期：静态存储期、线程存储期、自动 存储期、动态分配存储期。
+
+文件作用域变量(无论是内部链接还是外部链接)具有静态存储期, 如果对象具有静态存储期，那么它在程序的执行期间一直存在。
+
+_Thread_local int x = 1; 
+该声明引入一个标识符 x，
+对于程序中每一个线程：
+在该线程开始执行时，创建一个独立的整型对象，并将其初始化为 1；在该线程结束时，销毁该对象；
+程序中对 x 的任何访问，都指向“当前线程”的那一个对象实例。
+对象的实例：有存储期
+标识符：只是名字，没有存储期
+= 1 是“按线程执行的初始化”
+
+_Thread_local int counter = 5;
+void f() {
+    counter++;
+}
+线程 A 调用 f() → A 的 counter 变
+线程 B 调用 f() → B 的 counter 变
+每个线程第一次拥有它时, 都会执行一次初始化
+初始值都是 5, 中途改值不会影响初始化规则, 除非线程结束并重新创建新线程
+
+块作用域的变量通常都具有自动存储期。当程序进入定义这些变量的块 时，为这些变量分配内存；当退出这个块时，释放刚才为变量分配的内存。 这种做法相当于把自动变量占用的内存视为一个可重复使用的工作区或暂存 区。
+块作用域变量也能具有静态存储期
+void more(int number) { 
+int index;
+static int ct = 0;
+...
+return 0;
+} 
+变量ct储存在静态内存中，它从程序被载入到程序结束期间都存在。但是它的作用域定义在more()函数块中。只有在执行该函数时，程序才能使用ct访问它所指定的对象（但是该函数可以给其他函数提供该存储区的地址以便间接访问该对象）。在多次函数调用之间会记录它们的值。
+#include <stdio.h>
+void trystat(void);
+int main(void)
+{
+    int count;
+    for (count = 1; count <= 3; count++)
+    {
+        printf("Here comes iteration %d:\n", count);
+        trystat();
+    }
+    return 0;
+}
+void trystat(void)
+{
+    int fade = 1;
+    static int stay = 1;
+    printf("fade = %d and stay = %d\n", fade++, stay++);
+}
+每次调用trystat()都会初始化fade，但是stay只在编译 strstat()时被初始化一次。
+如果未显式初始化静态变量，它们会被初始化为 0。
+int fade = 1;
+static int stay = 1;
+第1条声明确实是trystat()函数的一部分，每次调用该函数时都会执行这 条声明。这是运行时行为。
+第2条声明实际上并不是trystat()函数的一部分。 如果逐步调试该程序会发现，程序似乎跳过了这条声明。这是因为静态变量 和外部变量在程序被载入内存时已执行完毕。
+把这条声明放在trystat()函数 中是为了告诉编译器只有trystat()函数才能看到该变量。这条声明并未在运 行时执行。
+
+
+extern 告诉编译器：这个变量或函数“在别的地方定义”，我这里只是引用它。用于多个 .c 文件共享同一个全局变量
+//file1.c
+#include <stdio.h>
+int g_num = 100;   //真正的定义只能有一次
+void print_num(void) {
+    printf("%d\n", g_num);
+}
+//file2.c
+#include <stdio.h>
+extern int g_num;  //声明全局变量（不分配内存）
+//extern int a = 10; //错误
+int main(void) {
+    printf("%d\n", g_num);
+    return 0;
+}
+
+函数默认为 extern
+//a.c
+void foo(void) { /* do something */ }  // 默认 extern
+//b.c
+void foo(void);  // c99起必须写
+int main() {foo();  // 调用 a.c 的函数}
+
+C99+后处理跨文件函数调用的标准做法是使用头文件声明函数接口
+//a.h
+#ifndef A_H
+#define A_H
+void foo(int x);
+#endif
+
+//a.c
+#include "a.h"
+void foo(int x) { /* do something */ }
+
+//b.c
+#include "a.h"
+int main(void) {
+    foo(1);
+}
+编译器编译 b.c 时看到 foo 的声明
+链接器链接 b.o 和 a.o
+
+a.c 里已经定义了 foo，为什么还要 #include "a.h"？
+a.c 并不“需要”这个声明才能定义 foo, 这在语义上是 合法的
+但仍然这么做目的是保证声明与定义一致（编译期自检）
+
+如果a.c（忘了 include a.h）错误定义了方法时
+void foo(double x) {..}   // ⚠️ 参数类型不一致
+
+编译 b.c 时, 编译器只知道一件事：
+extern void foo(int);
+于是它做的事情是按 int 实参传递规则, 生成一条 call foo 的指令, 不会关心 foo 在哪、怎么实现,编译通过
+
+编译 a.c 时, 编译器 完全不知道 b.c 里怎么调用 foo
+void foo(double);
+按 double 形参接收规则, 生成 foo 的函数体代码,编译通过
+两个编译过程是完全独立的
+
+在 C 里，函数调用本质是：
+调用方：按函数原型生成 参数传递代码
+被调用方：按函数定义生成 取参数的代码
+这两段代码是分别在不同编译单元生成的
+如果它们对“参数是什么、放在哪里、怎么取”理解不一致 就会产生 UB（Undefined Behavior）
+
+编译期不会报错(类型检查只发生在编译单元内部), 链接期也不会报错(链接器是不懂类型的)
+而在运行期 UB（栈/寄存器乱套）
+
+而如果自身也 include a.h, 预编译替换后, 发现同一个翻译单元里, 同一个函数名 foo有两个不同的函数类型, 违反 C 标准(同名函数必须类型兼容), 编译器立即报错, 有助于自我约束, 这是一种单一事实源（Single Source of Truth） 的设计
+
+a.c 中 include a.h 的作用是让编译器检查函数定义是否与对外声明一致，从而在编译期发现接口不匹配的问题，而不是为了链接。
+a.c 包含头文件的本质，是通过预处理把“对外接口声明”引入到实现文件所在的翻译单元，使编译器在编译该单元时能够同时看到声明与定义，从而执行类型一致性检查。
+
+
+
+extern + 头文件的标准用法
+头文件负责“声明”，源文件负责“定义”, 这样可以避免“重复定义”链接错误, 保证接口清晰、模块解耦
+
+//global.h, 头文件只写 extern 声明
+#ifndef GLOBAL_H
+#define GLOBAL_H
+extern int g_count;     // 声明全局变量
+extern void inc(void);  // 声明函数接口
+#endif
+
+//global.c, 源文件真正的定义
+#include "global.h"
+int g_count = 0;   // 唯一定义
+void inc(void) {
+    g_count++;
+}
+
+//main.c, 使用者文件只 include 头文件
+#include <stdio.h>
+#include "global.h"
+int main(void) {
+    inc();
+    printf("%d\n", g_count);
+    return 0;
+}
+
+执行gcc global.c main.c -o app
+两个 .c 文件通过“符号表 + 链接器”建立联系，
+extern 只是制造引用，真正配对的是链接阶段
+
+在编译阶段（每个 .c 单独）, main.c 通过 #include 把声明“拷贝”进来的, 看到 extern int g_count; 先记下有这个变量, global.c 看到 int g_count = 0; 为其分配内存, 编译完后产生main.o和global.o
+接着进入链接阶段,链接器把 main.o 中的 g_count 引用绑定到 global.o 中的定义, 于是成功匹配
+
+链接器做的核心事情只有一件, 为每一个“未定义符号”，找到唯一的“定义符号”,
+main.o 说：“我需要 g_count”
+global.o 说：“我定义了 g_count”
+链接器：“名字一致，类型匹配，OK，绑在一起”
+
+
+#ifndef GLOBAL_H
+#define GLOBAL_H
+...
+#endif
+include guard防止同一个 .c 里多次 #include, 防止间接 include 造成重复声明
+
+include guard 的宏名和 .h 文件名之间, 没有任何语言层面的关联关系。全大写宏 不是“映射”小写 .h 名字它只是一个人为选的唯一标识符, 让“人”一眼看懂这是哪个头文件的 guard, 而不是给编译器看的。
+谁用到了 GLOBAL_H？
+预处理器（Preprocessor）在预处理阶段判断这个头文件是不是已经被处理过
+#ifndef GLOBAL_H → “如果宏 A_H 没有定义过”
+#define GLOBAL_H → “定义宏 A_H”
+包含头文件内容
+下一次再遇到 #include "global.h"：
+#ifndef GLOBAL_H → 已经定义过 → 跳过整个文件
+
+全大写是为了明确这是宏, 避免和普通标识符冲突, 降低隐蔽 bug, 全小写编译器一点意见都没有
+遵守“宏全大写，变量全小写（或驼峰）”, 这样宏几乎不可能和变量/函数重名
+
+c语言的宏没有文件或块作用域, 一旦定义，整个翻译单元都能看到, 宏和变量 / 函数不是一个世界, 宏会在预处理阶段无脑文本替换, 它发生在编译之前
+
+c的处理顺序: 源代码, 预处理（宏展开、#include）, 编译, 链接
+
+#define count 10
+void foo(void) {
+    int count = 3;
+}
+预处理后：
+void foo(void) {
+    int 10 = 3; //语法崩溃
+}
+不管作用域, 不管你是不是在函数里, 不管你是变量、参数、结构体成员, 见一个替换一个
+
+
+保护性程序设计的黄金法则是：“按需知道”原则。尽量在函数内部解决该函数的任务，只共享那些需要共享的变量
+
+
+
+
+int r = rand();
+返回 0~RAND_MAX；序列固定，需 srand() 初始化种子才能随机
+srand
+一般只调用一次；种子相同，序列相同；不调用则默认种子固定
+srand(time(NULL)); 
+
+[min, max]
+int r = min + rand() % (max - min + 1);
+
+//生成任意整数随机数
+#include <stdio.h>
+#include <stdlib.h>
+#include <time.h>
+int main() {
+    srand(time(NULL)); // 初始化种子
+
+    int r1 = rand();       // 0 ~ RAND_MAX
+    int r2 = rand() % 100; // 0 ~ 99
+    int r3 = 50 + rand() % 51; // 50 ~ 100
+
+    printf("%d %d %d\n", r1, r2, r3);
+}
+
+//生成浮点数随机数
+int main() {
+    srand(time(NULL));
+
+    double r = (double)rand() / RAND_MAX;           // 0.0 ~ 1.0
+    double r2 = 5.0 + (double)rand() / RAND_MAX * 10.0; // 5.0 ~ 15.0
+
+    printf("%f %f\n", r, r2);
+}
+
+
+
+malloc 的返回类型是：void *
+void * 可以隐式转换为任意类型指针(在C中，不一定要使用强制类型转换，但是在C++中必须使用。所以，使用强制类型转换更容易把C程序转换为C++程序。
+int *p = malloc(sizeof(int) * 10); 
+
+
+#include <stdio.h>
+#include <stdlib.h>
+int main(void)
+{
+    double *ptd;
+    int max;
+    int number;
+    int i = 0;
+    puts("What is the maximum number of type double entries?");
+    if (scanf("%d", &max) != 1)
+    {
+        puts("Number not correctly entered -- bye.");
+        exit(EXIT_FAILURE);
+    }
+    ptd = (double *)malloc(max * sizeof(double));
+    if (ptd == NULL)
+    {
+        puts("Memory allocation failed. Goodbye.");
+        exit(EXIT_FAILURE);
+    }
+    puts("Enter the values (q to quit):");
+    while (i < max && scanf("%lf", &ptd[i]) == 1)
+        ++i;
+    printf("Here are your %d entries:\n", number = i);
+    for (i = 0; i < number; i++)
+    {
+        printf("%7.2f ", ptd[i]);
+        if (i % 7 == 6) 
+            putchar('\n');
+    }
+    if (i % 7 != 0) 
+        putchar('\n');
+    puts("Done.");
+    free(ptd);
+    return 0;
+}
+这是经典的“格式化表格输出”写法
+让每行 7 个 double
+如果只输入了 10 个数, 前 7 个已经换行了, 剩下 3 个打印完后不会自动换, 最后补一个
+ptd 就是指向第一个 double 的指针，没有任何“额外信息”, malloc 的元信息属于 allocator 的私有状态，
+不属于任何 C 对象，不在语言模型中，你只能“相信它存在”，但永远不能触碰它。
+
+
+const float * pf; 
+float const * pfc; // 与const float * pfc;
+float * const pt;  
+ const放在*左侧任意位置限定了指针指向的数据不能改变；放在*的右侧，限定了指针本身不能改变。
+
+
+const 关键字的常见用法是声明为函数形参的指针。例如有一个函数要调用 display()显示一个数组的内容。把数组名作为实际参数传递给该函数，但是数组名是一个地址。该函数可能会更改主调函数中的数据，如果形参声明const int array[](与const int * array相同)， 则表明不能更改array指向的数据。 
+
+如果一个指针仅用于给函数访问值，应将其声明为一个指向const限定类型的指针。
+如果要用指针更改主调函数中的数据，就不使用const关键字。
+
+
+int x = 1; // external linkage, 所有文件共享同一个x
+static int x = 1; // internal linkage, 当前.c文件可见
+
+// config.h
+const int A = 10;
+// a.c
+#include "config.h"
+// b.c
+#include "config.h"
+
+预处理之后
+// a.c
+const int A = 10;
+// b.c
+const int A = 10;
+
+在 C 中
+const int A = 10; // 默认是 external linkage
+等价于
+extern const int A = 10;
+
+a.o 里有一个全局符号 A
+b.o 里也有一个全局符号 A
+链接阶段链接器看到：
+A 在 a.o 里定义了一次
+A 在 b.o 里又定义了一次
+于是产生多重定义错误
+
+头文件里通常会用 static 修饰全局 const 变量，主要是为了避免“多重定义”错误
+static 把变量的“链接属性”从 external linkage 变成了 internal linkage
+作用域只在各自文件内部, 不导出符号, 对链接器来说是两个不同文件下的私有变量, 因此不会发生链接冲突
+
+
+volatile 禁止编译器对该变量做优化假设
+告诉编译器这个变量的值可能被外部世界修改，所以每次都必须真正去内存里读取，不能优化。不缓存到寄存器, 不删除“看起来无用”的读取, 不重排序对它的访问
+典型应用场景有硬件寄存器和中断轮询
+
+int flag = 0;
+while (flag == 0) {
+    // 等待
+}
+你可能希望别的线程或中断把 flag 改成 1, 循环退出
+但是编译器可能优化成
+if (flag == 0) {
+    while (1) {
+    }
+}
+因为它认为flag 在这个文件里没被改过，所以永远是 0, 结果导致死循环
+
+volatile int flag = 0;
+while (flag == 0) {
+}
+现在编译器必须每次循环都从内存读取 flag
+不能缓存到寄存器, 不能假设它不变, 于是循环可以正常退出。
+
+volatile const int loc;
+典型场景：
+只读硬件状态寄存器
+只读传感器数据寄存器
+程序不能改它, 但硬件可以改变它的值, 每次读都必须重新读取
+
+volatile const int *ploc; // 或 const volatile int *ploc;
+const在*左侧
+指向的内容不能被程序修改
+指向的内容可能被硬件改变
+指针本身可以改变指向
+用于描述“硬件只读寄存器”
+
+#define STATUS_REG (*(volatile const unsigned int*)0x40001000)
+if (STATUS_REG & 0x01)
+{
+    // 检查最低位（第0位）是否为 1
+/*
+0x01  = 00000001
+0x02  = 00000010
+0x04  = 00000100
+0x08  = 00001000
+*/
+    // 不能用if (STATUS_REG == 1) , 因为寄存器里可能类似于 00000101, bit0 是 1, 但整体并不等于 1
+}
+这是典型的嵌入式内存映射寄存器访问写法
+volatile禁用缓存值, const防止误操作烧硬件
+把16 进制地址 0x40001000 当成一个只读 + 可能被硬件改变的 32 位寄存器来访问
+0x40001000是一个固定内存地址
+(volatile const unsigned int*)0x40001000
+是类型转换, 把这个整数地址强制解释为, 指向 volatile const unsigned int 的指针
+unsigned int*   →  指针
+volatile const  →  修饰这个 unsigned int
+*( ... ), 解引用, 访问这个地址处存放的值
+
+
+十六进制一位有 16 种可能, 0 ~ F
+2⁴ = 16, 而四位二进制刚好也有 16 种组合
+这是数学上天然对应的
+所以2个十六进制位为一字节
+1字节占8位
+1个字占的字节数取决于CPU自然宽度
+“字”不是绝对单位，它是相对当前CPU而言的自然处理单位, 取决于处理器架构。
+在 32 位系统中通常是 4 字节，
+在 64 位系统中通常是 8 字节。
+不同架构“字”大小
+8 位 MCU 比如 8051, 一个字1字节
+16 位 MCU 比如 MSP430, 一个字2字节
+32 位 CPU 4 字节, 比如 ARM Cortex-M
+64 位 CPU, 8 字节, 现代 PC
+
+
+restrict 告诉编译器这个指针是“唯一”访问这块内存的方式。不会发生别名(别的指针指向同一块内存)
+restrict = 我保证这些指针不重叠
+编译器 = 好，那我按这个前提疯狂优化
+如果你说谎 = 未定义行为
+int x = 10;
+int *restrict p = &x;
+int *restrict q = &x;   // 编译器不报错但行为ub
+C 语言的核心思想是：
+你负责正确性
+编译器负责速度
+它默认你写的是“正确程序”。
+
+void add_array(int *a, int *b, int *c) { //.. }
+在读取 *b 之后，编译器不能确定写入 *a 会不会影响 *b, 写入 *a 会不会影响 *c, 因此必须非常保守, 因为不能确定指针不重叠所以不能大胆优化
+void add_array(int *restrict a,
+               int *restrict b,
+               int *restrict c,
+               int n)
+{
+    for(int i = 0; i < n; i++)
+        a[i] = b[i] + c[i];
+}
+你承诺a、b、c 三块内存绝对不重叠, 编译器可以疯狂优化
+又例如库中memcpy的函数原型, restrict 是给“函数实现”的优化权限
+void * memcpy(void * restrict s1,
+              const void * restrict s2,
+              size_t n);
+这里不是“帮你承诺”，而是“要求你承诺”, 否则可能ub
+restrict 关键字有两个读者。一个是编译器，该关键字告知编译器可以 自由假定一些优化方案。另一个读者是用户，该关键字告知用户要使用满足 restrict要求的参数。
+
+
+
+并发程序设计把程序执行分成可以同时执行的多个线程。如何管理访问相同数据的不同线程。
+C11通过包含可选的头文件stdatomic.h和threads.h，提供了一些可选的（不是必须实现的） 管理方法。通过各种宏函数来访问原子类型。当一个线程对一个原子类型的对象执行原子操作时，其他线程不能访问该对象
+int hogs; // 普通声明 
+hogs = 12; // 普通赋值
+
+_Atomic int hogs;  // hogs 是一个原子类型的变量 atomic_store(&hogs, 12);  // stdatomic.h中的宏 这里，在hogs中储存12是一个原子过程，其他线程不能访问hogs
+
+
+凡是文件作用域的变量, 凡是块中用 static 修饰的变量, 都是 静态存储期
+静态存储期意味着, 程序开始时分配, 程序结束时释放, 只初始化一次, 默认初始化为 0
+
+静态、无链接（块内 static）
+void f(void)
+{
+    static int x = 5;
+}
+
+静态、外部链接（文件作用域，不加 static）
+int g = 10;
+在当前文件可见, 在其他文件中可以通过 extern int g; 整个程序只有一个 g
+
+静态、内部链接（文件作用域 + static）
+static int h = 20;
+只能在当前源文件中使用, 其他文件无法通过 extern 访问, 每个文件有自己的副本
+
+static 不是“静态存储期”的意思, 在不同位置含义不同, 位于块内, 改变存储期（变成静态）, 文件作用域 + static, 改变链接属性（变成内部链接）
+
+块内 static → 私有 + 长寿
+文件 static → 文件私有 + 长寿
+普通全局变量 → 全局共享 + 长寿
+
+静态存储期对象在程序启动前完成初始化
+常量表达式在编译期确定
+零初始化由加载器保证
+
+
+
+文件打开与关闭
+fopen(), 打开文件，返回文件指针（FILE*）。
+fclose(), 关闭文件，释放资源。
+
+字符输入输出
+getc(), 从文件中读取一个字符。
+putc(), 向文件中写入一个字符。
+ungetc(), 将一个字符退回输入流（放回缓冲区）。
+
+格式化输入输出
+fprintf(), 向文件写入格式化数据（类似 printf）。
+fscanf(), 从文件读取格式化数据（类似 scanf）。
+
+字符串输入输出
+fgets(), 从文件读取一行字符串。
+fputs(), 向文件写入字符串。
+
+二进制读写
+fread(), 从文件读取二进制数据块。
+fwrite(), 向文件写入二进制数据块。
+
+文件定位相关
+rewind(), 将文件指针移到文件开头。
+fseek(), 移动文件指针到指定位置。
+ftell(), 获取当前文件指针位置。
+fgetpos(), 获取当前文件位置（更通用的方式）。
+fsetpos(), 设置文件位置。
+
+缓冲与刷新
+fflush(), 刷新缓冲区（将缓冲数据写入文件）。
+setvbuf(), 设置文件缓冲区方式（全缓冲、行缓冲、无缓冲）。
+
+文件状态检测
+feof(), 检测是否到达文件末尾。
+ferror(), 检测文件操作是否发生错误。
+
+
+文本模式和二进制模式
+文本模式以字符形式（ASCII 或 Unicode 编码） 存储数据，数据是可读文本。
+不同系统可能会进行换行符转换
+Windows：\r\n
+Linux：\n
+文件内容可以直接用记事本等文本编辑器查看
+读写通常使用格式化或字符串函数
+fprintf()
+fscanf()
+fgets()
+fputs()
+getc()
+putc()
+FILE *fp;
+fp = fopen("data.txt", "r");   // 读文本
+fp = fopen("data.txt", "w");   // 写文本
+fp = fopen("data.txt", "a");   // 追加
+
+二进制模式以数据在内存中的原始二进制形式存储。
+数据按内存原样存储, 不进行换行符转换, 文件内容一般不可读, 读写速度通常更快
+常用于存储结构体、数组、图像、音频等
+结构体文件一般采用二进制模式存储，因为可以按内存格式直接读写结构体，读写速度快，程序实现简单，并能减少数据转换带来的开销。
+常用函数
+fread()
+fwrite()
+FILE *fp;
+fp = fopen("data.dat", "rb");   // 二进制读
+fp = fopen("data.dat", "wb");   // 二进制写
+fp = fopen("data.dat", "ab");   // 二进制追加
+struct Student s;
+FILE *fp = fopen("stu.dat","wb");
+fwrite(&s, sizeof(s), 1, fp);
+fclose(fp);
+
+在二进制模式中，程序可以访问文件的每个字节。而在文本模式 中，程序所见的内容和文件的实际内容不同。程序以文本模式读取文件时， 把本地环境表示的行末尾或文件结尾映射为C模式, 例如C文本模式程序在MS-DOS平台读取文件 时，把\r\n转换成\n；写入文件时，把\n转换成\r\n。在其他环境中编写的文本 模式程序也会做类似的转换。
+
+
+#include <stdio.h>
+#include <stdlib.h> // 提供 exit()的原型
+int main(int argc, char *argv[])
+{
+    int ch;   // 读取文件时，储存每个字符的地方
+    FILE *fp; // “文件指针”
+    unsigned long count = 0;
+    if (argc != 2)
+    {
+        printf("Usage: %s filename\n", argv[0]);
+        exit(EXIT_FAILURE);
+    }
+    if ((fp = fopen(argv[1], "r")) == NULL)
+    {
+        printf("Can't open %s\n", argv[1]);
+        exit(EXIT_FAILURE);
+    }
+    while ((ch = getc(fp)) != EOF)
+    {
+        putc(ch, stdout); // 与 putchar(ch); 相同
+        count++;
+    }
+    fclose(fp);
+    printf("File %s has %lu characters\n", argv[1], count);
+    return 0;
+}
+
+
+Android 底层是 Linux 内核，所以exe程序执行流程是：
+C代码
+ ↓
+clang编译
+ ↓
+ELF可执行文件
+ ↓
+Linux内核运行
+这和 Linux 上完全一样。
+
+
+fopen的模式字符串
+模式
+r, w, a
+r+, w+, a+
+rb, wb, ab
+rb+, wb+, ab+, (r+b, w+b, a+b)
+wx, w+x, wbx, wb+x, wxb, w+bx, wx+b wxb+
+
+r / w / a 决定打开文件这一刻做什么处理
+它回答的是下面几个问题
+文件必须存在吗
+文件会不会被清空
+文件指针初始在哪
+写入是否强制在末尾
+
++ 决定的是程序允许做哪些操作, 只改变权限
+它只回答一个问题：
+这个 FILE* 能不能同时读和写？
+
+b 以二进制为数据格式
+
+x 是 w 的安全版本(c11), 用来解决一个经典问题：我想创建一个新文件，但如果文件已经存在就必须失败，而不能覆盖它, 创建是原子操作。x 只能和 w 或 w+ 组合
+
+如果模式只有 r / w / a（没有 +），那么文件只允许单方向操作：要么只读，要么只覆盖写，要么只追加写
+
+文件存在要求
+r+, 必须存在
+w+, 不存在创建
+a+, 不存在创建
+
+打开时是否清空
+r+, 否
+w+, 清空
+a+, 否
+
+写入位置
+r+, 当前指针
+w+, 开头
+a+, 末尾
+
+
+FILE *fp;
+fp 是一个指向 FILE 结构体的指针
+FILE 是一个由标准库实现的结构体类型
+typedef struct _IO_FILE FILE;   // glibc 的一种实现方式
+FILE * 即文件流对象的指针
+FILE * 记录了 与文件相关的一切状态信息，例如文件描述符（fd）, 当前读写位置, 缓冲区, 打开模式, EOF 标志, 错误标志, 所以 FILE * 实际上是带缓冲和状态的文件对象
+
+
+getc()和putc()函数与getchar()和putchar()函数类似。所不同的是，要告诉 getc()和putc()函数使用哪一个文件
+
+
+fclose正常关闭返回0
+if (fclose(fp) != 0) 
+printf("Error in closing file %s\n", argv[1]);
+
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#define LEN 40
+int main(int argc, char *argv[])
+{
+    FILE *in, *out;
+    int ch;
+    char name[LEN];
+    int count = 0;
+    if (argc < 2)
+    {  // fprintf()的第 1 个参数必须是一个文件指针, stdin(键盘),stdout(显示器),stderr(显示器)这些文件指针都是指向FILE的指针
+        fprintf(stderr, "Usage: %s filename\n", argv[0]);
+        exit(EXIT_FAILURE);
+    }
+    if ((in = fopen(argv[1], "r")) == NULL)
+    {
+        fprintf(stderr, "I couldn't open the file \"%s\"\n", argv[1]);
+        exit(EXIT_FAILURE);
+    }
+    // 预留出.red\0
+    strncpy(name, argv[1], LEN - 5);
+    // 长度小于35剩余空间自动填\0否则不会填\0, strcat需要\0确定name结束位置然后在此追加
+    name[LEN - 5] = '\0';
+    strcat(name, ".red");
+    if ((out = fopen(name, "w")) == NULL)
+    {
+        fprintf(stderr, "Can't create output file.\n");
+        exit(3);
+    }
+    while ((ch = getc(in)) != EOF)
+        if (count++ % 3 == 0)
+            putc(ch, out);
+    if (fclose(in) != 0 || fclose(out) != 0)
+        fprintf(stderr, "Error in closing files\n");
+    return 0;
+}
+该程序同时打开了两个文件，所以我们要声明两个 FIFL 指针。注意程序都是单独打开和关闭每个文件。同时打开的文件数量是有限的，这个限制取决于系统和实现，范围一般是10～20。相同的文件指针可以处理不同的 文件，前提是这些文件不需要同时打开。
+
+fprintf(fp,"hello")
+直接输出字符串
+fprintf(fp,"%s",str)
+输出变量
+fprintf(fp,"%d",num)
+输出数字
+fprintf(fp,"%s %d",name,age)
+多变量 
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#define MAX 41
+int main(void)
+{
+    FILE *fp;
+    char words[MAX];
+    if ((fp = fopen("wordy", "a+")) == NULL)
+    {
+        fprintf(stdout, "Can't open \"wordy\" file.\n");
+        exit(EXIT_FAILURE);
+    }
+    puts("Enter words to add to the file; press the # key at the beginning of a line to terminate.");
+    while ((fscanf(stdin, "%40s", words) == 1) && (words[0] != '#'))
+        fprintf(fp, "%s\n", words);
+    puts("File contents:");
+    rewind(fp); /* 返回到文件开始处 */
+    while (fscanf(fp, "%s", words) == 1)
+        puts(words);
+    puts("Done!");
+    if (fclose(fp) != 0)
+        fprintf(stderr, "Error closing file\n");
+    return 0;
+}
+
+
+fgets()函数读取输入直到第 1 个换行符的后面，或读到文件结尾，或者 读取STLEN-1 个字符（以上面的 fgets()为例）。然后在末尾添加一个空字符使之成为一个字符串。
+字符串的大小是其字符数加上一个空字符。 
+如果fgets()在读到字符上限之前已读完一整行，它会把表示行结尾的换行符 放在空字符前面。
+if (fgets(str, n, stdin) != NULL)
+返回str存放读取内容的字符数组
+一开始读就遇到EOF时返回NULL值
+已读取一些字符后遇到 EOF返回 str
+
+
+puts(), 只输出到屏幕, 自动换行
+fputs(), 可输出到任何流, 不自动换行
+
+rewind(), 回到文件开头
+fseek(), 移动文件指针
+ftell(), 获取当前位置
+
+逐字符复制文件
+while ((ch = fgetc(fp1)) != EOF)
+    fputc(ch, fp2);
+
+逐行复制文件
+while (fgets(str, 100, fp1) != NULL)
+    fputs(str, fp2);
+
+格式化读写
+fscanf(fp,"%d %f",&a,&b);
+fprintf(fp,"%d %f",a,b);
+
+
+fseek()的三个参数分别是FILE指针，偏移量（long类型的值，可以为正（前移）、负（后移）或0（保持不动）。 模式（三种，用于确定起始点）
+fseek(fp, 0L, SEEK_SET); // 定位至文件开始处
+fseek(fp, 10L, SEEK_SET); // 定位至文件中的第10个字节 
+fseek(fp, 2L, SEEK_CUR); // 从文件当前位置前移2个字节 
+fseek(fp, 0L, SEEK_END); // 定位至文件结尾
+fseek(fp, -10L, SEEK_END); // 从文件结尾处回退10个字节
+如果一切正常，fseek()的返回值为0；如果出现错误（如试图移动的距 离超出文件的范围），其返回值为-1。
+
+fseek(fp, 0L, SEEK_END);
+把当前位置设置为距文件末尾 0 字节偏移量。也就是说，该语句把当前位置设置在文件结尾
+last = ftell(fp);
+把从文件开始处到文件结尾的字节数赋给last
+for (count = 1L; count <= last; count++) { 
+    fseek(fp, -count, SEEK_END); //负,结尾向后
+    ch = getc(fp);
+}
+
+
+在 C 语言 I/O 中，文本模式 (text mode) 与 二进制模式 (binary mode) 的一个核心区别就是 换行符在不同系统上的表示和转换。理解这一点对写出可移植的文件读写代码很重要。
+不同操作系统对“换行”的存储方式
+Linux / Unix \n
+Windows \r\n
+旧 Mac OS (Classic) \r
+printf("Hello\n");
+Linux 文件中：Hello + 0x0A
+Windows 文件中：Hello + 0x0D 0x0A
+
+文本模式写文件, C 运行库会自动做换行转换
+fputc('\n', fp);
+Linux写入 \n, Windows自动转换为 \r\n
+读文件, 如果文件中是\r\n
+c = fgetc(fp);
+库会自动转换为\n, 程序始终看到 统一的 \n
+
+二进制模式时完全不做任何转换，字节原样读写
+fputc('\n', fp);
+写入字节0x0A
+Windows 不会变成 \r\n。
+如果读取 Windows 文本文件中的0x0D 0x0A
+读出来就是'\r' '\n'
+
+C 标准的设计原则：
+程序只使用 \n 表示换行。标准库负责转换。文本模式下程序代码无需关心系统差异。
+
+非文本数据例如图片,音频,压缩文件,结构体数据
+需要精确控制字节, 例如网络协议、文件格式
+必须用二进制模式, 否则 \n 转换会破坏数据
+FILE *fp = fopen("data.bin","wb");
+
+FILE *fp = fopen("data.bin","w");
+fwrite(buf,1,size,fp);
+如果 buf 中包含 0x0A, Windows 可能写成0x0D 0x0A, 数据将被破坏
+
+在文本模式下, 某些操作不可移植，例如
+fseek(fp,10,SEEK_SET);
+Windows 中\n 可能是 2 字节, 位置不确定。
+所以标准规定文本文件只允许：
+fseek(fp,0,SEEK_SET);
+fseek(fp,0,SEEK_END);
+或使用ftell / fseek (返回的位置)
+而其它定位可能是未定义行为
+
+#include <stdio.h>
+int main() {
+    FILE *fp = fopen("test.txt","r");
+    fpos_t pos;
+    fgetpos(fp, &pos);     // 保存当前位置
+    char buf[10];
+    fgets(buf,10,fp);      // 读一行
+    fsetpos(fp, &pos);     // 回到之前位置
+    fgets(buf,10,fp);      // 再读一遍
+    fclose(fp);
+}
+ftell / fseek的返回类型long表示文件字节偏移。在文本模式下Windows 中 \r\n ↔ \n, 字节数不一定对应逻辑字符数
+而fpos_t是一个实现相关类型, 它可以保存完整流状态
+, 例如文件位置, 转换状态（例如多字节字符状态）, 换行转换状态, 因此可移植性好
+
+
+int fflush(FILE *fp);
+将输出缓冲区中所有的未写入数据被发送到fp指定的 输出文件
+如果 fp是空指针，所有输出缓冲区都被刷新。
+在输入流中使用fflush()函数的效果是未定义的。只要最近一次操作不是输入操作，就可以用该函数来更新流（任何读写模式）。
+
+int setvbuf(FILE * restrict fp, char * restrict buf, int mode, size_t size);
+在打开文件后且未对流进行其他操作之前，调用该函数。
+指针fp识别待处理的流
+buf 指向待使用的存储区。buf值为NULL时，该函数会为自己分配一个缓冲区, 手动创建缓冲区例如声明一个内含1024个字符的数组，并传递该数组的地址。
+size文件流缓冲区大小
+mode的选择
+_IOFBF表示完全缓冲（在缓冲区满时刷新）；
+_IOLBF表示行缓冲（在 缓冲区满时或写入一个换行符时）；
+_IONBF表示无缓冲,此模式下size被忽略
+操作成功函数返回0，否则返回非零值
+假设一个程序要储存一种数据对象，每个数据对象的大小是3000字节。 可以使用setvbuf()函数创建一个缓冲区，其大小是该数据对象大小的倍数
+
+
+自己提供缓冲区
+char buf[4096];
+setvbuf(fp, buf, _IOFBF, 4096);
+系统分配缓冲区
+setvbuf(fp, NULL, _IOFBF, 4096);
+
+
+size_t fwrite(
+const void * restrict ptr, 
+size_t size, 
+size_t nmemb,
+FILE * restrict fp
+);
+
+char buffer[256];
+fwrite(buffer, 256, 1, fp);
+把一块256字节的数据从buffer写入文件
+
+fwrite(地址, 每块多少字节, 写多少块, 文件), 返回成功写入的块个数
+fwrite(ptr, size, nmemb, fp);
+底层等价于
+write(fd, ptr, size * nmemb);
+所以本质就是写 size × nmemb 个字节
+
+double earnings[10];
+fwrite(earnings, sizeof(double), 10, fp);
+把earnings数组中的数据写入文件，数据被分成10块，每块都是double的大小
+fread()函数接受的参数和fwrite()函数相同。double earnings[10];
+fread(earnings, sizeof (double), 10, fp);
+把10个double大小的值拷贝进earnings数组中。
+第一参是一个指针，指向“存放读取数据的内存缓冲区”
+
+
+sizeof(char) == 1, 这里的 1, 类型是 size_t, 含义是1 个 char 单位
+sizeof(T)返回的是类型 T 占用多少个 “char 单位”
+在 C 标准里char 一定是 1 byte, 但 1 byte ≠ 一定 8 bits
+1 byte = sizeof(char)
+
+size_t n = fread(buf, 1, sizeof(buf), fp);
+if (n < sizeof(buf)) {
+    if (feof(fp)) {
+        printf("End of file\n");
+    }
+    if (ferror(fp)) {
+        printf("Read error\n");
+    }
+}
+
+clearerr(), 清除 EOF 和错误标志
+rewind(fp);等价于
+fseek(fp, 0, SEEK_SET);
+clearerr(fp);
+
+函数内部的 static 变量（静态局部变量）, 作用域（scope）仍然只在函数内部, 存在于 静态存储区 (data segment), 程序开始时创建, 只初始化一次, 程序结束才销毁, 多次函数调用共享同一块内存, 如果在函数 a 内声明了 静态变量 x，那么 多次调用 a 时操作的都是同一个 x
+同一个 .c 文件中，不同函数内部可以声明同名的 static 变量，它们互不影响。
+和 “static 全局变量” 不一样, 如果写在函数外叫静态全局变量, 只能在 当前文件 (.c) 使用, 其他 .c 文件访问不到
+
+
+char a[] = "abc";
+char b[] = "abc";
+if (a == b)
+    printf("equal\n");
+== 比较的是地址
+a == b → false
+strcmp 比较的是字符串内容
+if (strcmp(a, b) == 0)
+    printf("equal\n");
+按 ASCII 值逐字符比较, 从第一个字符开始, 直到出现不同字符或遇到 \0
+负数 → 第一个字符串的字典序更小
+0    → 两个字符串相等
+正数 → 第一个字符串的字典序更大
+
+fputs写字符串到文件, 不自动加 \n
+puts写字符串到屏幕, 标准输出（屏幕）, 自动加 \n
+fgets从文件读取字符串, 可能读到 \n
+fgetc从文件读取一个字符
+
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#define BUFSIZE 4096
+#define SLEN 81
+
+// void append(FILE *source, FILE *dest);
+int append(FILE *source, FILE *dest);
+char *s_gets(char *st, int n);
+
+int main(void)
+{
+    FILE *fa, *fs;
+    int files = 0;
+    char file_app[SLEN];
+    char file_src[SLEN];
+    int ch;
+
+    puts("Enter name of destination file:");
+    s_gets(file_app, SLEN);
+    if ((fa = fopen(file_app, "a+")) == NULL)
+    {
+        fprintf(stderr, "Can't open %s\n", file_app);
+        exit(EXIT_FAILURE);
+    }
+    if (setvbuf(fa, NULL, _IOFBF, BUFSIZE) != 0)
+    // setvbuf操作成功返回0
+    {
+        fputs("Can't create output buffer\n", stderr);
+        // 仍然应该手动 fclose使语义清晰
+        fclose(fa);
+        // exit()之后所有未 fclose 的 FILE*（比如 fa、fs）都会被自动关闭，并刷新缓冲区。
+        exit(EXIT_FAILURE);
+    }
+    puts("Enter name of first source file (empty line to quit):");
+    while (s_gets(file_src, SLEN) && file_src[0] != '\0')
+    // file_src[0] == '\0'
+    // 用户只按了回车, s_gets处理后file_src = "", 内存中为\0
+    {
+        if (strcmp(file_src, file_app) == 0)
+            fputs("Can't append file to itself\n", stderr);
+        else if ((fs = fopen(file_src, "r")) == NULL)
+            fprintf(stderr, "Can't open %s\n", file_src);
+        else
+        {
+            if (setvbuf(fs, NULL, _IOFBF, BUFSIZE) != 0)
+            {
+                fputs("Can't create input buffer\n", stderr);
+                fclose(fs);// 防止多次失败多个文件处于打开状态
+                continue;
+            }           
+            
+/*            
+            append(fs, fa);
+            // 流读写一旦出错，标志位会一直保持,直到调用clearerr(stream);ferror检测这些标志
+            if (ferror(fs) != 0)
+                fprintf(stderr, "Error in reading file %s.\n", file_src);
+            if (ferror(fa) != 0)
+                fprintf(stderr, "Error in writing file %s.\n", file_app);
+*/
+                
+int ret = append(fs, fa);
+if (ret == -1)
+    fprintf(stderr, "Error reading file %s\n", file_src);
+else if (ret == -2)
+    fprintf(stderr, "Error writing file %s\n", file_app);                
+ 
+                               
+            fclose(fs);
+            files++;
+            printf("File %s appended.\n", file_src);
+            puts("Next file (empty line to quit):");
+        }
+    }
+    printf("Done appending.%d files appended.\n", files);
+    rewind(fa);
+    printf("%s contents:\n", file_app);
+    while ((ch = getc(fa)) != EOF)
+        putchar(ch);
+    puts("Done displaying.");
+    fclose(fa);
+    return 0;
+}
+
+/*
+void append(FILE *source, FILE *dest)
+{
+    size_t bytes;
+    static char temp[BUFSIZE];
+    while ((bytes = fread(temp, sizeof(char), BUFSIZE, source)) > 0)
+        // 最后一次读取可能不足BUFSIZE。例如剩余6字节如果写8字节就会把脏数据写入文件。所以必须用实际读取的bytes
+        fwrite(temp, sizeof(char), bytes, dest);
+}
+*/
+
+int append(FILE *source, FILE *dest)
+{
+    size_t bytes_read, bytes_written;
+    char temp[BUFSIZE];
+
+    while ((bytes_read = fread(temp, 1, BUFSIZE, source)) > 0)
+    {
+        bytes_written = fwrite(temp, 1, bytes_read, dest);
+
+        if (bytes_written != bytes_read)
+            return -2; // 写错误
+    }
+    // fread == 0 有两种可能：EOF（正常）,出错（异常）, 必须用 ferror 区分
+    if (ferror(source))
+        return -1; // 读错误
+    // 即使fwrite都成功了, 数据可能还在缓冲区里
+    if (fflush(dest) != 0)
+        return -3; // flush 失败
+    return 0;
+}
+
+char *s_gets(char *st, int n)
+{
+    char *ret_val;
+    char *find;
+    // fget最多读n-1个,第n位补\0
+    ret_val = fgets(st, n, stdin);
+    if (ret_val)
+    {
+        find = strchr(st, '\n');
+        if (find)
+            *find = '\0';
+        // 例如n=5,输入abc回车
+        // fget结果为abc\n\0
+        // st结果abc\n
+        // 找到\n替为\0
+        else
+            // 输入abcde回车
+            // fget结果abcd\0
+            // e\n被消耗
+            while (getchar() != '\n')
+                continue;
+    }
+    return ret_val;
+}
+
+
+缓冲不会影响程序结果，只影响性能和IO行为
+即使你没有手动设置缓冲（比如不用 setvbuf），标准库仍然会自动为 FILE * 分配缓冲区：
+FILE *iofile = fopen(file, "rb");
+默认行为：
+普通文件 → 全缓冲（fully buffered）
+缓冲区大小通常是几 KB（实现相关）
+
+什么时候才需要“无缓冲”？
+实时系统（比如串口、设备）, 调试 IO 行为, stdin/stdout 交互精确控制
+
+
+#include <stdio.h>
+#include <stdlib.h>
+#define ARSIZE 1000
+int main()
+{
+    double numbers[ARSIZE];
+    double value;
+    const char *file = "numbers.dat";
+    int i;
+    long pos;
+    FILE *iofile;
+    
+    for (i = 0; i < ARSIZE; i++)
+        numbers[i] = 100.0 * i + 1.0 / (i + 1);
+    if ((iofile = fopen(file, "wb")) == NULL)
+    {
+        fprintf(stderr, "Could not open %s for output.\n", file);
+        exit(EXIT_FAILURE);
+    }
+    fwrite(numbers, sizeof(double), ARSIZE, iofile);
+    // 模式从wb切rb,关闭文件重新打开
+    fclose(iofile);
+    if ((iofile = fopen(file, "rb")) == NULL)
+    {
+        fprintf(stderr, "Could not open %s for random access.\n", file);
+        exit(EXIT_FAILURE);
+    }
+    printf("Enter an index in the range 0-%d.\n", ARSIZE - 1);
+    while (scanf("%d", &i) == 1 && i >= 0 && i < ARSIZE)
+    {
+        pos = (long)i * sizeof(double);
+
+        fseek(iofile, pos, SEEK_SET);
+        fread(&value, sizeof(double), 1, iofile);
+        printf("The value there is %f.\n", value);
+        printf("Next index (out of range to quit):\n");
+    }
+    fclose(iofile);
+    puts("Bye!");
+    return 0;
+}
+
+
+
+
+#include <stdio.h>
+#include <string.h>
+char *s_gets(char *st, int n);
+#define MAXTITL 41
+#define MAXAUTL 31
+struct book
+{
+    char title[MAXTITL];
+    char author[MAXAUTL];
+    float value;
+};
+int main(void)
+{
+    struct book library;
+    printf("Please enter the book title.\n");
+    s_gets(library.title, MAXTITL);
+    printf("Now enter the author.\n");
+    s_gets(library.author, MAXAUTL);
+    printf("Now enter the value.\n");
+    scanf("%f", &library.value);
+    printf("%s by %s: $%.2f\n", library.title, library.author, library.value);
+    printf("%s: \"%s\" ($%.2f)\n", library.author, library.title, library.value);
+    printf("Done.\n");
+    return 0;
+}
+char *s_gets(char *st, int n)
+{
+    char *ret_val;
+    char *find;
+    ret_val = fgets(st, n, stdin);
+    if (ret_val)
+    {
+        find = strchr(st, '\n');
+        if (find)
+            *find = '\0';
+        else
+            while (getchar() != '\n')
+                continue;
+    }
+    return ret_val;
+}
+
+结构有两层含义。一层含义是“结构布局”，告诉编译器如何表示数据，但是它并未让编译器为数据分配空间。另一个是结构变量，编译器使用布局模板为该变量分配空间：一个内含MAXTITL个元素的char数组、一个内含 MAXAUTL个元素的char数组和一个float类型的变量, 这些存储空间都与一 个名称library结合在一起, 内存结构是是连续存储的
+
+
+结构指针
+struct book doyle, panshin, *ptbook;
+即
+struct book doyle;
+struct book panshin;
+struct book *ptbook; // 指向 struct book 的指针
+ptbook = &doyle;   // 指向一个 struct
+printf("%s", ptbook->title);
+ptbook->title 等价于 (*ptbook).title
+
+
+结构嵌套
+struct Date {
+    int year;
+    int month;
+    int day;
+};
+struct Student {
+    char name[20];
+    struct Date birthday; 
+};
+struct Student s;
+s.birthday.year = 2000;
+s.birthday.month = 5;
+s.birthday.day = 20;
+
+要么全部顺序初始化,“往后填”
+struct Student s = {
+    "Tom",
+    {2000, 5, 20}
+};
+要么全部指定初始化, 清晰,不怕顺序错
+struct Student s = {
+    .name = "Tom",
+    .birthday = { .year = 2000, .month = 5, .day = 20 }
+};
+
+struct Student *ps = &s;
+ps->birthday.year = 2000;
+等价于
+(*ps).birthday.year = 2000;
+
+struct Node {
+    struct Node next;  // 不能嵌套自己, 无限递归
+};
+struct Node {
+    int data;
+    struct Node *next;  // 正确写法用指针
+};
+这就是链表的基础
+
+匿名结构
+struct Student {
+    char name[20];
+    struct {
+        int year;
+        int month;
+        int day;
+    } birthday;   // 没有 struct 名, 不能单独声明这个内部 struct
+};
+s.birthday.year = 2000;
+匿名 struct 提供“类型”，而 birthday 是这个类型的“实例（成员变量）”，属于 Student
+
+struct names { 
+char first[20];
+char last[20];
+};
+struct person { 
+int id;
+struct names name;// 嵌套结构成员 
+};
+struct person ted = {8483, {"Ted", "Grass"}};
+puts(ted.name.first);
+
+嵌套的匿名成员结构
+struct person { 
+int id;
+struct {
+char first[20]; 
+char last[20];
+}; // 匿名结构 
+};
+struct person ted = {8483, {"Ted", "Grass"}};
+只需把first看作是person的成员那样使用它：
+puts(ted.first);
+
+初始化
+普通嵌套 struct
+{外, {内}} 或 .name = {...}
+匿名 struct（无成员名）
+{外, {内}} 或 {外, 展开}
+匿名 struct + 成员
+{外, {内}} 或 .birthday = {...}
+
+声明结构的过程和定义结构变量的过程可以组合成一个步骤
+struct book { 
+    char title[MAXTITL];
+    char author[AXAUTL];
+    float value;
+} library;
+
+struct book a;
+a={"cooking","Bob",22.5}; // 错误
+初始化列表 {} 只能在“定义时”使用，不能用于赋值
+
+struct book a = {"cooking", "Bob", 22.5};
+或者用复合字面量, 先构造一个临时 struct，再整体赋值给 a, C 语言允许结构体整体赋值
+a = (struct book){"cooking", "Bob", 22.5};
+
+a.title = "cooking";   // ❌ 错误,试图改变数组指向 
+赋值符号要求左边必须是一个可修改的左值
+a.title是数组名代表固定地址, 不是变量（不能被赋值）
+数组退化为指针只发生在取值场景
+当你“用它的值”时：
+strcpy(a.title, "cooking");  // ✔ 退化为 char *
+当你“把它放在赋值左边”时： a.title = ...  // ❌ 不看退化，直接判定为数组左值
+#include <stdio.h>
+#include <string.h>
+char* s_gets(char* st, int n);
+#define MAXTITL 40
+#define MAXAUTL 40
+#define MAXBKS 100
+struct book {
+	char title[MAXTITL];
+	char author[MAXAUTL];
+	float value;
+};
+int main(void) {
+	struct book library[MAXBKS];
+	int count = 0;
+	int index;
+
+	printf("Please enter the book title.\n");
+	printf("Press [enter] at the start of a line to stop.\n");
+
+	while (count < MAXBKS &&
+		s_gets(library[count].title, MAXTITL) != NULL &&
+		library[count].title[0] != '\0') { //直接回车s_gets 处理为"\0"
+
+		printf("Now enter the author.\n");
+		s_gets(library[count].author, MAXAUTL);
+
+		printf("Now enter the value.\n");
+		scanf("%f", &library[count++].value);
+
+		while (getchar() != '\n')
+			continue;
+
+		if (count < MAXBKS)
+			printf("Enter the next title.\n");
+	}
+
+	if (count > 0) {
+		printf("Here is the list of your books:\n");
+
+		for (index = 0; index < count; index++)
+			printf("%s by %s: $%.2f\n",
+				library[index].title,
+				library[index].author,
+				library[index].value);
+	}
+	else {
+		printf("No books? Too bad.\n");
+	}
+
+	return 0;
+}
+
+struct book library[MAXBKS];  /* 声明结构数组, book类型结构的数组 */
+
+传递结构指针使用的是原始的结构进行计算
+传递结构根据结构模板创建自动结构变量副本
+
+把一个结构赋值给另一个结构，但是数组不能这样做。
+如果n_data和o_data都是相同类型的结构
+o_data = n_data; // 把一个结构赋值给另一个结构
+这条语句把n_data的每个成员的值都赋给o_data的相应成员。即使成员是数组，也能完成赋值。
+结构体整体赋值时，编译器会做完整内存拷贝, 数组成员是“逐元素拷贝”的，结果是两个完全独立的数组（深拷贝），不是同一个数组。
+
+把一个结构初始化为相同类型的另一个结构
+struct names right_field = {"Ruthie", "George"};
+struct names captain = right_field; // 把一个结构初始化为另一个结构
+
+
+struct names { char first[LEN]; char last[LEN];};
+struct pnames { char * first; char * last;};
+struct names veep = {"Talia", "Summers"};
+struct pnames treas = {"Brad", "Fallingjaw"};
+printf("%s and %s\n", veep.first, treas.first);
+
+对于struct names类型的结构变量veep，以上字符串都储存在结构内部， 结构总共要分配40字节储存姓名。
+对于struct pnames类型的结构变量 treas，以上字符串储存在编译器储存常量的地方。结构本身只储存了两个地址，用来管理那些已分配和在别处分配的字符串。
+
+struct names accountant;
+struct pnames attorney;
+puts("Enter the last name of your accountant:");
+scanf("%s", accountant.last);
+puts("Enter the last name of your attorney:");
+scanf("%s", attorney.last); // 未定义行为
+这里的 attorney.last是没有初始化指向未知内存的野指针, scanf 会把输入写到这个“未知地址”
+
+使用数组或者分配内存
+attorney.last = malloc(LEN * sizeof(char));
+scanf("%s", attorney.last);
+最后free(attorney.last);
+或者初始化指针指向已有空间
+char buffer[LEN];
+attorney.last = buffer;
+scanf("%s", attorney.last);
+
+
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+
+#define SLEN 81
+
+struct namect {
+	char* fname;
+	char* lname; 
+	int letters;
+};
+
+void getinfo(struct namect*);
+void makeinfo(struct namect*);
+void showinfo(const struct namect*);
+void cleanup(struct namect*);
+char* s_gets(char* st, int n);
+
+int main(void) { 
+	struct namect person; 
+	getinfo(&person); 
+	makeinfo(&person); 
+	showinfo(&person); 
+	cleanup(&person); 
+	return 0; 
+}
+
+void getinfo(struct namect* pst) {
+	char temp[SLEN]; 
+	printf("Please enter your first name.\n"); 
+	s_gets(temp, SLEN);
+	pst->fname = (char*)malloc(strlen(temp) + 1); // 从堆中申请,不会自动回收
+	strcpy(pst->fname, temp); 
+	printf("Please enter your last name.\n"); 
+	s_gets(temp, SLEN); 
+	pst->lname = (char*)malloc(strlen(temp) + 1); 
+	strcpy(pst->lname, temp);
+}
+
+void makeinfo(struct namect* pst) { 
+	pst->letters = strlen(pst->fname) + strlen(pst->lname); 
+}
+
+void showinfo(const struct namect* pst) { 
+	printf("%s %s, your name contains %d letters.\n", pst->fname, pst->lname, pst->letters); 
+}
+
+void cleanup(struct namect* pst) { 
+	free(pst->fname); 
+	free(pst->lname); 
+}
+
+
+struct rect {double x; double y;}; 
+如果函数接受一个结构，可以把复合字面量作为实际参数传递
+double rect_area(struct rect r){return r.x * r.y;}
+double area;
+area = rect_area( (struct rect) {10.5, 20.0});
+如果函数接受一个地址，可以传递复合字面量的地址
+struct rect {double x; double y;};
+double rect_areap(struct rect * rp){return rp->x * rp->y;}
+double area;
+area = rect_areap( &(struct rect) {10.5, 20.0});
+
+
+结构体中“伸缩数组”（也叫柔性数组成员 / flexible array member）
+data[] 没有指定大小
+必须是结构体的最后一个成员
+结构体本身不包含数组实际存储空间
+不能单独使用（必须 malloc）
+
+伸缩数组的优势：
+减少一次内存分配（更高效）
+内存连续（缓存友好）
+不需要额外指针（避免碎片）
+
+#include <stdio.h>
+#include <stdlib.h>
+
+struct flex {
+	size_t count;
+	double average;
+	double scores[];//伸缩型数组成员
+};
+
+void showFlex(const struct flex *);
+
+int main(void) {
+	struct flex* p1, * p2;
+	int i;
+	int n = 5;
+	double t = 0;
+	p1 = malloc(sizeof(struct flex) + n * sizeof(double));
+	for (i = 0; i < n; i++) {
+		p1->scores[i] = 20 + 0.5 * i;
+		t += p1->scores[i];
+	}
+	p1->count = n;
+	p1->average = t / n;
+	showFlex(p1);
+
+	n = 8;
+	t = 0;
+	p2 = malloc(sizeof(struct flex) + n * sizeof(double));
+	for (i = 0; i < n; i++) {
+		p2->scores[i] = 30 + 0.5 * i;
+		t += p2->scores[i];
+	}
+	p2->count = n;
+	p2->average = t / n;
+	showFlex(p2);
+
+	free(p1);
+	free(p2);
+	return 0;
+}
+
+void showFlex(const struct flex *f) {
+	int i;
+	printf("scores: \n");
+	for (i = 0; i < f->count; i++) {
+		printf("%.2f ", f->scores[i]);
+	}
+	printf("\navg: %g\n", f->average);
+}
+
+
+
+#define LEN 20 
+struct names { 
+char first[LEN];
+char last[LEN];
+};
+struct pnames { 
+char * first;
+char * last;
+};
+struct names veep = {"Talia", "Summers"};
+struct pnames treas = {"Brad", "Fallingjaw"};
+printf("%s and %s\n", veep.first, treas.first);
+struct names accountant;
+struct pnames attorney;
+puts("Enter the last name of your accountant:");
+scanf("%s", accountant.last);
+puts("Enter the last name of your attorney:");
+scanf("%s", attorney.last);  // 危险,未经初始化,写在了野指针上
+
+
+如果使用malloc()分配内存并使用指针储存该地址，那么在结构中使用 指针处理字符串就比较合理。这种方法的优点是，可以请求malloc()为字符 串分配合适的存储空间。可以要求用4字节储存"Joe"和用18字节储 存"Rasolofomasoandro"
+
+
+大 O 表示法
+它来自 Big O notation，用于描述算法执行时间随数据规模增长的变化趋势
+O(1) —— 常数级（最快）
+访问一次就结束, n = 10 和 n = 1亿，时间一样
+
+O(log n) —— 对数级（很快）
+每次把问题规模“砍一半”, 典型例子：二分查找
+比如查 1000 个数据：
+第1次 → 剩500
+第2次 → 剩250
+第3次 → 剩125
+
+O(n) —— 线性级
+for循环一个一个看, n 越大，时间越长
+
+O(n log n) —— 高效排序常见
+比 O(n) 慢一点，但仍然很优秀, “一边拆分，一边遍历”
+典型算法：
+快速排序
+归并排序
+
+O(n²) —— 平方级（开始变慢）
+两层循环
+
+增长速度对比
+假设 n = 1000：
+复杂度和大概操作次数
+O(1) 1
+O(log n) ~10
+O(n) 1000
+O(n log n) ~10000
+O(n²) 1,000,000
+
+/* funds4.c -- 把结构数组传递给函数 */
+#include <stdio.h>
+#define FUNDLEN 50
+#define N 2
+struct funds
+{
+    char bank[FUNDLEN];
+    double bankfund;
+    char save[FUNDLEN];
+    double savefund;
+};
+
+double sum(const struct funds money[], int n);
+
+int main(void)
+{
+    struct funds jones[N] = {
+        {"Garlic-Melon Bank", 4032.27, "Lucky's Savings and Loan", 8543.94}, 
+        {"Honest Jack's Bank", 3620.88, "Party Time Savings", 3802.91}
+    };
+
+    printf("The Joneses have a total of $%.2f.\n", sum(jones, N));
+
+    return 0;
+}
+
+double sum(const struct funds money[], int n)
+{
+    double total;
+    int i;
+    for (i = 0, total = 0; i < n; i++)
+        total += money[i].bankfund + money[i].savefund;
+    return (total);
+}
+
+
+/* booksave.c -- 在文件中保存结构中的内容 */
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#define MAXTITL 40
+#define MAXAUTL 40
+#define MAXBKS 10
+char * s_gets(char * st, int n);
+struct book {
+    char title[MAXTITL];
+    char author[MAXAUTL];
+    float value;
+};
+
+int main(void){
+    struct book library[MAXBKS];
+    int count = 0;
+    int index, filecount;
+    FILE * pbooks;
+    int size = sizeof(struct book);
+    if ((pbooks = fopen("book.dat", "a+b")) == NULL){
+        fputs("Can't open book.dat file\n", stderr);
+        exit(1);
+    }
+    rewind(pbooks);
+    while (count < MAXBKS && fread(&library[count], size,1, pbooks) == 1){
+        if (count == 0)
+            puts("Current contents of book.dat:");
+        printf("%s by %s: $%.2f\n", library[count].title,library[count].author, library[count].value);
+        count++;
+    }
+    filecount = count;
+    if (count == MAXBKS){
+        fputs("The book.dat file is full.", stderr);
+        exit(2);
+    }
+    puts("Please add new book titles.");
+    puts("Press [enter] at the start of a line to stop.");
+
+    char a;
+    while  (count  <  MAXBKS  &&  s_gets(library[count].title,  MAXTITL)  !=NULL && library[count].title[0] != '\0'){
+        puts("Now enter the author.");
+        s_gets(library[count].author, MAXAUTL);
+        puts("Now enter the value.");
+        scanf("%f", &library[count++].value); // c中函数参数在调用前就会被求值, 此句的顺序是先计算count++,取值, 再调用scanf, scanf失败, 变量不会赋值,但count依然自增
+       
+        while ((a = getchar()) != '\n') { //赋值注意运算符优先级
+            putchar(a);
+            continue;
+        }
+        if (count < MAXBKS)
+            puts("Enter the next title.");
+    }
+    if (count > 0){
+        puts("Here is the list of your books:");
+        for (index = 0; index < count; index++)
+            printf("%s by %s: $%.2f\n", library[index].title,library[index].author, library[index].value);
+        fwrite(&library[filecount], size, count - filecount,pbooks);
+    } else
+        puts("No books? Too bad.\n");
+    puts("Bye.\n");
+    fclose(pbooks);
+    return 0;
+}
+
+char * s_gets(char * st, int n){
+    char * ret_val;
+    char * find;
+    ret_val = fgets(st, n, stdin);
+    if (ret_val){
+        find = strchr(st, '\n');
+        if (find)
+            *find = '\0';
+        else
+            while (getchar() != '\n')
+                continue;
+    }
+    return ret_val;
+}
+
+
+
+
+
+
+
+
+</pre>
+ </body>
+</html>

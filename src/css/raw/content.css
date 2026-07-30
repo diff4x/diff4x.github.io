@@ -386,3 +386,22 @@ code span {
 #destroy {
     display: none;
 }
+
+/* 严格匹配基础色 */
+::highlight(search-exact) {
+    background-color: yellow;
+    color: black;
+}
+/* 宽容匹配降级色 */
+::highlight(search-tolerant) {
+    background-color: #fcd34d;
+    color: black;
+    /* 注意：CSS API 暂不支持 border-bottom 虚线，可用 text-decoration 代替 */
+    text-decoration: underline dashed #f59e0b; 
+}
+/* 激活态焦点色 (优先级最高) */
+::highlight(search-active) {
+    background-color: red;
+    color: white;
+    font-weight: bold;
+}

@@ -1,9 +1,10 @@
 MIYUKI/
 Playboy Collection - 1377 Issues/
 SpongeBob SquarePants/
-html/*__.html
+vtt/
+html/__*.html
 gallery/playboy/
 gallery/diary/
 txn.txt
 src/js/data/shadow*
-last-page/
+big/

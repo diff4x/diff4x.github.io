@@ -6,7 +6,7 @@
   <title>python基础</title>
  </head>
  <body>
-  <span id="anchor">20260616191806-其它|python</span>
+  <span id="anchor">20260616191806-21.技巧|python</span>
   <pre>
 没有 {}, 靠缩进表示代码块
 #普通注释
@@ -357,6 +357,254 @@ while 'cat' in pets:
 print(pets)
 
 #使用用户输入填充字典
+
+
+# 函数
+def greet_user(username): 
+    """函数文档注释"""  
+    print(f"Hello, {username.title()}!")  
+greet_user('jesse') 
+
+def describe_pet(animal_type, pet_name):
+    print(f"\nI have a {animal_type}.")
+    print(f"My {animal_type}'s name is {pet_name.title()}.")  
+# 位置实参
+describe_pet('hamster', 'harry')
+# 使用关键字实参可以不必考虑函数定义中的形参顺序
+describe_pet(pet_name='harry', animal_type='hamster')
+
+# 当使用默认值时，必须在形参列表中先列出没有默认值的形参，再列出有默认值的形参。以便正确地解读位置实参
+def describe_pet(pet_name, animal_type='dog'): 
+    print(f"\nI have a {animal_type}.")  
+    print(f"My {animal_type}'s name is {pet_name.title()}.")  
+describe_pet('willie')
+
+def build_person(first_name, last_name): 
+    """返回一个字典，其中包含有关一个人的信息""" 
+    person = {'first': first_name, 'last': last_name} 
+    return person   
+musician = build_person('jimi', 'hendrix') 
+print(musician)
+
+# 其默认值被设置为特殊值 None（表示变量没有值）。
+# 可将 None 视为占位值。在条件测试 中，None 相当于 False。
+def build_person(first_name, last_name, age=None): 
+    """返回一个字典，其中包含有关一个人的信息"""  
+    person = {'first': first_name, 'last': last_name}  
+    if age: 
+        person['age'] = age  
+    return person  
+# 这里使用了关键字实参
+musician = build_person('jimi', 'hendrix', age=27) 
+print(musician)
+
+def greet_users(names): 
+    """向列表中的每个用户发出简单的问候"""  
+    for name in names: 
+        msg = f"Hello, {name.title()}!"  
+        print(msg)  
+usernames = ['hannah', 'ty', 'margot'] 
+greet_users(usernames)
+
+有时候需要禁止函数修改列表, 要将列表的副本传递给函数，可以用切片表示法 [:] 创建列表的副本 function_name(list_name[:]) 
+
+有时候预先不知道函数需要接受多少个实参
+def make_pizza(*toppings): 
+    """打印顾客点的所有配料"""  
+    print(toppings)
+形参名 *toppings 中的星号让 Python 创建一个名为 toppings 的元组，该元组包含函数收到的所有值
+
+任意数量的关键字实参
+def build_profile(first, last, **user_info): 
+    """创建一个字典，其中包含我们知道的有关用户的一切"""
+    user_info['first_name'] = first  
+    user_info['last_name'] = last  
+    return user_info 
+user_profile = build_profile('albert', 'einstein',  location='princeton',  field='physics')  
+print(user_profile)
+形参 **user_info 中的两个星号让 Python 创建一个名为 user_info 的字典，该字典包含函数收到的 其他所有名值对
+
+
+# 导入模块a.py中所有方法
+import a
+a.func()
+
+导入特定的函数
+from module_name import function_0, function_1
+function_0()
+
+使用 as 给函数指定别名
+如果要导入的函数的名称太长或者可能与程序中既有的名称冲突，可指定简短而独一无二的别名
+import pizza as p  
+p.make_pizza(16, 'pepperoni')
+
+使用星号导入模块中的所有函数 
+from pizza import *
+由于导入了每个函数，可通过名称来调用每个函数，无须使用点号, 如果模块中有函数的名称与当前项目中既有的名称相同，可能导致意想不到的结果
+最佳的做法是，要么只导入需要使用的函数，要么导入整个模块并使用点号。这都能让代码更清晰，更容易阅读和理解
+
+# 函数编写指南
+给函数指定描述性名称且只使用小写字母和下划线
+
+给每个函数写简要阐述其功能的注释
+
+给形参指定默认值, 或使用关键字实参时，等号两边不要有空格
+def function_name(parameter_0, parameter_1='default value')  function_name(value_0, parameter_1='value')
+
+建议代码行的长度不要超过 79 个字符
+如果形参很多，可在函数定义中输入左括号后按回车键，并在下一 行连按两次制表符键，从而将形参列表和只缩进一层的函数体区分开来
+def function_name(  
+        parameter_0, parameter_1, parameter_2,
+        parameter_3, parameter_4, parameter_5): 
+    function body...
+
+如果程序或模块包含多个函数，可使用两个空行将相邻的函数分开。 这样将更容易知道前一个函数到什么地方结束，下一个函数从什么地 方开始。
+
+
+# 类
+根据约定，在 Python 中，首字母大写的名称指的是类。
+
+class Dog: 
+  """一次模拟小狗的简单尝试"""
+  def __init__(self, name, age): 
+    """初始化属性 name 和 age""" 
+    self.name = name  
+    self.age = age 
+  def sit(self): 
+    """模拟小狗收到命令时坐下"""  
+    print(f"{self.name} is now sitting.")   
+  def roll_over(self): 
+    """模拟小狗收到命令时打滚"""  
+    print(f"{self.name} rolled over!")
+
+my_dog = Dog('Willie', 6) 
+print(f"My dog's name is {my_dog.name}.") 
+print(f"My dog is {my_dog.age} years old.")
+my_dog.sit()
+my_dog.roll_over()
+
+
+
+# 异常
+
+if second_number == 'q':
+    break
+try:
+    answer = int(first_number) / int(second_number)
+except ZeroDivisionError:
+    print("You can't divide by 0!")
+else:
+    print(answer)
+
+这里的 else 是和 try 配对的，而不是和 if 配对
+try:
+    # 可能会发生异常的代码
+except SomeException:
+    # 如果发生了指定异常，执行这里
+else:
+    # 如果没有发生任何异常，执行这里
+finally:
+    # （可选）无论是否发生异常都会执行
+
+使用 try-except 一是避免用户看到 traceback，二是让程序可以继续运行而非直接停止
+
+静默失败 pass, 在发生异常时保持静默，就像什么都没有发生一样继续运行
+def count_words(path): 
+    """计算一个文件大致包含多少个单词"""  
+    try: 
+        --snip--  
+    except FileNotFoundError: 
+        pass  
+    else: 
+        --snip--
+
+
+
+from pathlib import Path  
+import json   
+path = Path('username.json') 
+if path.exists(): 
+    contents = path.read_text()  
+    username = json.loads(contents)
+    print(f"Welcome back, {username}!") 
+else: 
+    username = input("What is your name? ")
+    contents = json.dumps(username)
+    path.write_text(contents)  
+    print(f"We'll remember you when you come back, {username}!")
+
+
+# pytest
+@pytest.fixture
+def numbers():
+    return []
+def test_a(numbers):
+    numbers.append(1)
+def test_b(numbers):
+    assert numbers == []
+
+@pytest.fixture
+def survey():
+    s = AnonymousSurvey("Hello")
+    print(id(s))
+    return s
+def test_a(survey):
+    pass
+def test_b(survey):
+    pass
+夹具默认作用域是function, 每运行一个测试函数，就重新调用一次 fixture，每个测试都会获得一个全新的实例
+
+可以把 fixture 看成一个"资源仓库", 然后测试像点菜一样拿资源
+@pytest.fixture
+def db():
+    ...
+@pytest.fixture
+def redis():
+    ...
+@pytest.fixture
+def client():
+    ...
+@pytest.fixture
+def admin():
+    ...
+def test_a(db):
+    ...
+def test_b(redis, client):
+    ...
+def test_c(db, admin):
+    ...
+
+
+import pytest
+
+@pytest.fixture
+def resources():
+    return {
+        "db": Database(),
+        "user": User("Alice"),
+        "survey": AnonymousSurvey("What language?")
+    }
+def test_db(resources):
+    db = resources["db"]
+    ...
+def test_user(resources):
+    user = resources["user"]
+    ...
+资源彼此独立（数据库、浏览器、用户、Redis 等）→ 一个资源一个 fixture（推荐）。
+资源本身就是一个整体（例如一个包含多个配置和对象的测试上下文）→ 返回一个对象（或 dataclass）是合理的。
+返回一个大 dict 让所有测试自己取 → 可以，但通常不是 pytest 的最佳实践，因为会降低可读性，并可能创建大量用不到的资源。
+
+
+fixture 可以互相依赖, pytest 会自动决定创建顺序、生命周期、清理顺序
+@pytest.fixture
+def db():
+    ...
+
+@pytest.fixture
+def user(db):
+    ...
+
+
 
 
 </pre>

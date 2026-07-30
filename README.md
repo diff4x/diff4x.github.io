@@ -10,12 +10,13 @@
   - 增量热更新
   - 离线高可用
   - 公私文件并存
+  - 版本比对
   - 状态快照
 - 工具链
   - HTTP Server、Custom URL Protocol、Batch、Java、Rust、Git
 - Web 平台
   - Vanilla JS、iframe、postMessage、Proxy、localStorage、Service Worker、IndexedDB、Web Worker、WebAssembly
-> Workflow designed by diff4x | Optimized by Gemini & ChatGPT & Claude
+> Workflow designed by diff4x | Optimized or implemented by Gemini & ChatGPT & Claude
 ---
 
 ## 使用
@@ -33,7 +34,7 @@
   - 搜索框内置命令 `@bomb`, `@rebirth` 分别进行可选式重置与恢复个人数据
 - 页面
   - 本地按页面左上角 `edit` 即以本地编辑器打开对应实体页同时覆写时间戳, 编辑完回到页面, 双击顶部菜单中 `CLI` 即时构建呈现
-  - 页面左上角 `diff` 查看新版差异
+  - 页面左上角 `diff` 查看版本差异
   - `html`, `pdf`, `epub`, `txt` 页面选中单字提示拼音, 多字提示摘抄
   - `pdf`, `epub`, `txt` 横向对开
   - `gallery`, `video`, `pdf`, `txt` 中击全屏
@@ -42,7 +43,8 @@
   - 本地首页(书签页)通过拖拽内部或外部书签实现即时增删移, 这些操作都是固化的
   - 本地双语比对支持页面内即时修改与固化
   - 侧栏支持条目 `mark`
-  - 侧栏双击条目复制条目名
+  - 侧栏 hover 图片视频条目显示缩略
+  - 侧栏双击条目复制条目名 (与 QTranslate 冲突)
   - 侧栏右键单击弹出书签, 右键双击调出原始菜单
   - 侧栏栏宽可调, 分类附有其下的文件数量,近期更新过的页面数量并有颜色醒目
   - 侧栏菜单条目
@@ -61,6 +63,7 @@
   - 灯箱支持拖动, 滚轮缩放
   - `gallery` 中全景图片文件名称约定前缀 `pano_`, 双击进入沉浸式浏览
     - `gallery/img` 默认为 `HTML` 页面同级引用源
+    - `As wallpaper` 添加到 bookmark 壁纸列表, 在 bookmark 页面右下角集中管理
 - HTML 预设规则
   - 正文: 直接写在 `<pre>` 标签内，免除 `<br>`
   - h 标签：行首 `n`个`#` + 空格，自动转换为 `<h{n}>` 参与页内目录生成
@@ -103,7 +106,8 @@
  ┣  ┣ 📂 bibi
  ┣  ┣ 📂 pdfjs
  ┣  ┣ 📂 photo-sphere-viewer
- ┣  ┗ 📂 prism
+ ┣  ┣ 📂 prism
+ ┣  ┗ 📂 other
  ┣ 📂 wasm
  ┣ 📂 tpl                              # 样板
  ┗ 📜 cmt_mapper.json                  # 评论映射

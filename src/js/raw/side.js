@@ -179,6 +179,7 @@ function buildCatalogFromLiteData(liteData) {
     if (!window._eventsBound) {
         if (typeof click_func === 'function') click_func(); 
         if (typeof dbl_click_func === 'function') dbl_click_func();
+        if (typeof hover_func == "function") hover_func();
         window._eventsBound = true;
     }
     if (typeof updateRecentLinks === 'function') updateRecentLinks();
@@ -501,8 +502,35 @@ function click_func() {
 }
 function dbl_click_func() {
     function copy_to_clipboard(text) {
-        text = text.replace(/\[(?:Mark|UnMark)\]/g, "");
-        if (navigator.clipboard) navigator.clipboard.writeText(text).catch(err => console.warn("复制失败", err));
+        text = text.replace(/\[(?:Mark|UnMark)\]/g, "").trim();
+
+        // 降级方案: 当 navigator.clipboard 不可用(非安全上下文/iframe 未获得
+        // clipboard-write 权限)或写入被拒绝时, 使用传统 execCommand('copy') 兜底
+        function fallbackCopy(str) {
+            const ta = document.createElement('textarea');
+            ta.value = str;
+            // 避免出现在可视区域内导致页面跳动
+            ta.style.position = 'fixed';
+            ta.style.top = '-9999px';
+            ta.style.left = '-9999px';
+            ta.readOnly = true;
+            document.body.appendChild(ta);
+            ta.focus();
+            ta.select();
+            ta.setSelectionRange(0, str.length);
+            try {
+                document.execCommand('copy');
+            } catch (err) {
+                console.warn("复制失败", err);
+            }
+            document.body.removeChild(ta);
+        }
+
+        if (navigator.clipboard && window.isSecureContext) {
+            navigator.clipboard.writeText(text).catch(() => fallbackCopy(text));
+        } else {
+            fallbackCopy(text);
+        }
     }
 
     ["#gallery", "#audio", "#video", "#ebook"].forEach(sel => {
@@ -816,4 +844,106 @@ function go_top() {
             ticking = true;
         }
     }, { passive: true });
+}
+
+// 图片与视频 Hover 预览
+let previewTooltip = null;
+let hoverTimeout = null;
+let lastMouseX = 0;
+let lastMouseY = 0;
+
+function initPreviewTooltip() {
+    if (previewTooltip) return;
+    previewTooltip = document.createElement('div');
+    previewTooltip.id = 'side-preview-tooltip';
+    document.body.appendChild(previewTooltip);
+}
+
+function movePreviewTooltip() {
+    if (!previewTooltip) return;
+    const x = lastMouseX + 15;
+    const y = lastMouseY + 15;
+    
+    // 防止超出右下侧视口边界
+    const maxLeft = window.innerWidth - 200;
+    const maxTop = window.innerHeight - 150;
+    
+    const finalX = Math.min(x, maxLeft);
+    const finalY = Math.min(y, maxTop);
+    
+    // 使用 translate3d 进行零重排位移
+    previewTooltip.style.transform = `translate3d(${finalX}px, ${finalY}px, 0)`;
+}
+
+function hover_func() {
+    initPreviewTooltip();
+
+    function bindHoverEvent(selector, type) {
+        const container = document.querySelector(selector);
+        if (!container) return;
+
+        // 鼠标进入
+        container.addEventListener('mouseover', (e) => {
+            const a = e.target.closest('a');
+            if (!a || !container.contains(a)) return;
+            if (e.relatedTarget && a.contains(e.relatedTarget)) return;
+
+            // 记录初始鼠标位置
+            lastMouseX = e.clientX;
+            lastMouseY = e.clientY;
+
+            // 1. 如果还在上次延迟等待中，取消它 (防抖)
+            if (hoverTimeout) clearTimeout(hoverTimeout);
+
+            // 2. 开启 350 毫秒的意图延迟
+            hoverTimeout = setTimeout(() => {
+                const path = "../../" + a.dataset.path;
+                
+                if (type === 'image') {
+                    previewTooltip.innerHTML = `<img src="${path}" style="width: 100%; max-height: 140px; object-fit: contain; display: block;" />`;
+                } else if (type === 'video') {
+                    previewTooltip.innerHTML = `<video src="${path}" preload="metadata" muted style="width: 100%; max-height: 140px; object-fit: contain; display: block;"></video>`;
+                    const v = previewTooltip.querySelector('video');
+                    v.addEventListener('loadeddata', () => {
+                        v.currentTime = 0.5;
+                    });
+                }
+                
+                // 在展示前强制刷新一次位置，防止出现屏幕左上角闪烁
+                movePreviewTooltip();
+                previewTooltip.style.display = 'block';
+            }, 350); 
+        });
+
+        // 鼠标移动
+        container.addEventListener('mousemove', (e) => {
+            const a = e.target.closest('a');
+            if (a && container.contains(a)) {
+                lastMouseX = e.clientX;
+                lastMouseY = e.clientY;
+                // 只有当弹窗处于显示状态时，才跟随光标渲染位置
+                if (previewTooltip.style.display === 'block') {
+                    movePreviewTooltip();
+                }
+            }
+        });
+
+        // 鼠标移出
+        container.addEventListener('mouseout', (e) => {
+            const a = e.target.closest('a');
+            if (!a || !container.contains(a)) return;
+            if (e.relatedTarget && a.contains(e.relatedTarget)) return;
+
+            if (hoverTimeout) {
+                clearTimeout(hoverTimeout);
+                hoverTimeout = null;
+            }
+
+            previewTooltip.style.display = 'none';
+            previewTooltip.innerHTML = ''; 
+        });
+    }
+
+    bindHoverEvent('#gallery', 'image');
+    bindHoverEvent('#video', 'video');
 }

@@ -5,17 +5,26 @@
  * @param {Uint8Array} fat_bytes
  * @param {Uint8Array} shadow_bytes
  * @param {boolean} is_offline
- * @returns {Array<any>}
+ * @returns {Uint8Array}
  */
 export function build_flat_data(lite_bytes, fat_bytes, shadow_bytes, is_offline) {
-    const ptr0 = passArray8ToWasm0(lite_bytes, wasm.__wbindgen_export);
-    const len0 = WASM_VECTOR_LEN;
-    const ptr1 = passArray8ToWasm0(fat_bytes, wasm.__wbindgen_export);
-    const len1 = WASM_VECTOR_LEN;
-    const ptr2 = passArray8ToWasm0(shadow_bytes, wasm.__wbindgen_export);
-    const len2 = WASM_VECTOR_LEN;
-    const ret = wasm.build_flat_data(ptr0, len0, ptr1, len1, ptr2, len2, is_offline);
-    return takeObject(ret);
+    try {
+        const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+        const ptr0 = passArray8ToWasm0(lite_bytes, wasm.__wbindgen_export);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passArray8ToWasm0(fat_bytes, wasm.__wbindgen_export);
+        const len1 = WASM_VECTOR_LEN;
+        const ptr2 = passArray8ToWasm0(shadow_bytes, wasm.__wbindgen_export);
+        const len2 = WASM_VECTOR_LEN;
+        wasm.build_flat_data(retptr, ptr0, len0, ptr1, len1, ptr2, len2, is_offline);
+        var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+        var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+        var v4 = getArrayU8FromWasm0(r0, r1).slice();
+        wasm.__wbindgen_export3(r0, r1 * 1, 1);
+        return v4;
+    } finally {
+        wasm.__wbindgen_add_to_stack_pointer(16);
+    }
 }
 
 /**
@@ -67,10 +76,12 @@ export function search(keyword) {
 }
 
 /**
- * @param {Array<any>} js_array
+ * @param {Uint8Array} bytes
  */
-export function set_data(js_array) {
-    wasm.set_data(addHeapObject(js_array));
+export function set_data(bytes) {
+    const ptr0 = passArray8ToWasm0(bytes, wasm.__wbindgen_export);
+    const len0 = WASM_VECTOR_LEN;
+    wasm.set_data(ptr0, len0);
 }
 function __wbg_get_imports() {
     const import0 = {
@@ -82,24 +93,8 @@ function __wbg_get_imports() {
             getDataViewMemory0().setInt32(arg0 + 4 * 1, len1, true);
             getDataViewMemory0().setInt32(arg0 + 4 * 0, ptr1, true);
         },
-        __wbg___wbindgen_string_get_b0ca35b86a603356: function(arg0, arg1) {
-            const obj = getObject(arg1);
-            const ret = typeof(obj) === 'string' ? obj : undefined;
-            var ptr1 = isLikeNone(ret) ? 0 : passStringToWasm0(ret, wasm.__wbindgen_export, wasm.__wbindgen_export2);
-            var len1 = WASM_VECTOR_LEN;
-            getDataViewMemory0().setInt32(arg0 + 4 * 1, len1, true);
-            getDataViewMemory0().setInt32(arg0 + 4 * 0, ptr1, true);
-        },
         __wbg___wbindgen_throw_344f42d3211c4765: function(arg0, arg1) {
             throw new Error(getStringFromWasm0(arg0, arg1));
-        },
-        __wbg_get_507a50627bffa49b: function(arg0, arg1) {
-            const ret = getObject(arg0)[arg1 >>> 0];
-            return addHeapObject(ret);
-        },
-        __wbg_length_370319915dc99107: function(arg0) {
-            const ret = getObject(arg0).length;
-            return ret;
         },
         __wbg_new_32b398fb48b6d94a: function() {
             const ret = new Array();
@@ -107,10 +102,6 @@ function __wbg_get_imports() {
         },
         __wbg_new_da52cf8fe3429cb2: function() {
             const ret = new Object();
-            return addHeapObject(ret);
-        },
-        __wbg_new_with_length_f8cbc3a5b9ff9368: function(arg0) {
-            const ret = new Array(arg0 >>> 0);
             return addHeapObject(ret);
         },
         __wbg_set_6be42768c690e380: function(arg0, arg1, arg2) {
@@ -228,6 +219,11 @@ function dropObject(idx) {
     heap_next = idx;
 }
 
+function getArrayU8FromWasm0(ptr, len) {
+    ptr = ptr >>> 0;
+    return getUint8ArrayMemory0().subarray(ptr / 1, ptr / 1 + len);
+}
+
 let cachedDataViewMemory0 = null;
 function getDataViewMemory0() {
     if (cachedDataViewMemory0 === null || cachedDataViewMemory0.buffer.detached === true || (cachedDataViewMemory0.buffer.detached === undefined && cachedDataViewMemory0.buffer !== wasm.memory.buffer)) {
@@ -254,10 +250,6 @@ let heap = new Array(1024).fill(undefined);
 heap.push(undefined, null, true, false);
 
 let heap_next = heap.length;
-
-function isLikeNone(x) {
-    return x === undefined || x === null;
-}
 
 function passArray8ToWasm0(arg, malloc) {
     const ptr = malloc(arg.length * 1, 1) >>> 0;

@@ -47,7 +47,7 @@ if ('serviceWorker' in navigator) {
         if (event.data && event.data.type === 'SW_UPDATE_STATUS') {
             const isUpdate = event.data.isUpdate;
             sessionStorage.setItem("isUpdate", isUpdate ? "1" : "0");
-            console.log(`📡 [Main] 收到 SW 同步状态: 是否为热更新 -> ${isUpdate}`);
+            // console.log(`📡 [Main] 收到 SW 同步状态: 是否为热更新 -> ${isUpdate}`);
         }
     });
 }
@@ -744,7 +744,7 @@ async function loadScripts(concurrency) {
         // 注入哈希账本与公开索引
         // 主线程 index.js 和 Service Worker 线程 sw.js, 两者是完全不同的平行宇宙
         try {
-            await injectScript(`src/third/msgpack.min.js`);
+            await injectScript(`src/third/other/msgpack.min.js`);
             await injectScript(`src/js/core-list.js?t=${now}`);
         } catch (e) {
             // 离线或冷启动异常时的统一保底方案
@@ -951,30 +951,34 @@ async function loadDataInBatches(files, now, concurrency) {
         shadowDataChunks.forEach(chunk => Object.assign(shadow_data_merged, chunk));
 
         // 💥 Wasm 接管：通过 MessagePack 的 Uint8Array 将任务推给底层的 Rust
+        let dataBytes = new Uint8Array(0); 
         try {
             const wasm = await import('../wasm/compute_intensive_task_processor.min.js');
             await wasm.default(); // 初始化
-            
+
             const isOffline = store.online_flag === "0";
-            
-            // 👇 使用全局对象 MessagePack 进行二进制序列化
+
             const liteBytes = MessagePack.encode(window.lite_data || {});
             const fatBytes = MessagePack.encode(fat_data_merged);
             const shadowBytes = MessagePack.encode(shadow_data_merged);
-            
-            window.data = wasm.build_flat_data(
+
+            dataBytes = wasm.build_flat_data(
                 liteBytes,
                 fatBytes,
                 shadowBytes,
                 isOffline
             );
+
+            window.data = MessagePack.decode(dataBytes);
         } catch (e) {
             console.error("Wasm 数据组装引擎崩溃，请检查依赖:", e);
             window.data = []; // 异常兜底
+            dataBytes = new Uint8Array(0);
         }
-
-        // 全量喂给 worker 
-        searchWorker.postMessage({ type: 'SET_DATA', payload: window.data });
+        searchWorker.postMessage(
+            { type: 'SET_DATA', payload: dataBytes.buffer },
+            [dataBytes.buffer]
+        );
 
         // 侦测媒体资源的变动
         try {
@@ -2220,17 +2224,13 @@ const imageLogic = function () {
                 currentIndex: 0,
                 mode: 'fixed',
                 interval: 3600000,
-                layout: 'cover'
+                layout: 'contain'
             };
 
             // 去重添加
             if (!config.list.includes(path)) {
                 config.list.push(path);
                 store.wallpaper_config = config;
-                btn.textContent = '✅ 已添加壁纸';
-                setTimeout(() => { btn.textContent = '🖼️ 添加到壁纸'; }, 1500);
-            } else {
-                alert('该图片已经在壁纸列表中了！');
             }
         } catch (err) {
             console.error("添加壁纸失败", err);
@@ -3410,33 +3410,7 @@ function stopFaviconBlink() {
 
 // 撒花特效
 function playConfetti() {
-    const startAnimation1 = () => {
-        const end = Date.now() + 3 * 1000;
-        const colors = ['#bb0000', '#ffffff'];
-        (function frame() {
-            confetti({
-                particleCount: 2,
-                angle: 60,
-                spread: 55,
-                origin: { x: 0 },
-                colors
-            });
-
-            confetti({
-                particleCount: 2,
-                angle: 120,
-                spread: 55,
-                origin: { x: 1 },
-                colors
-            });
-
-            if (Date.now() < end) {
-                requestAnimationFrame(frame);
-            }
-        })();
-    };
-
-    const startAnimation2 = () => {
+    const startAnimation = () => {
         var defaults = {
         spread: 360,
         ticks: 50,
@@ -3467,19 +3441,13 @@ function playConfetti() {
         setTimeout(shoot, 200);
     };
 
-    const startAnimation = () => {
-        const animations = [startAnimation1, startAnimation2];
-        const randomAnimation = animations[Math.floor(Math.random() * animations.length)];
-        randomAnimation();
-    };
-
     if (window.confetti) {
         startAnimation();
         return;
     }
 
     const script = document.createElement('script');
-    script.src = "src/third/confetti.browser.min.js";
+    script.src = "src/third/other/confetti.browser.min.js";
     script.onload = () => {
         script.remove();
         startAnimation();

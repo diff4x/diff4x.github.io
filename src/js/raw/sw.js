@@ -1,10 +1,10 @@
 // 触发 SW 更新检查
-self.SW_VERSION = '1785354204731';
+self.SW_VERSION = '1785428102446';
 
 // 远程修复指令, id递增
 self.EMERGENCY = 'repair_command_id=1';
 
-importScripts('/src/js/core-list.js?v=1785354204731');
+importScripts('/src/js/core-list.js?v=1785428102446');
 
 // sw.js 顶部新增原生压缩辅助函数
 async function compressText(text) {

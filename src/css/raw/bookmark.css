@@ -79,7 +79,7 @@ div#del.dragover {
     width: 100vw;
     height: 100vh;
     z-index: -1;
-    background-size: cover;
+    background-size: contain;
     background-position: center;
     background-repeat: no-repeat;
     transition: background-image 0.5s ease;
@@ -149,7 +149,9 @@ div#del.dragover {
     position: fixed;
     width: 160px;
     height: 100px;
-    background-size: cover;
+    background-size: contain; 
+    background-repeat: no-repeat; 
+    background-color: #000;
     background-position: center;
     border: 2px solid #fff;
     box-shadow: 0 4px 12px rgba(0,0,0,0.6);

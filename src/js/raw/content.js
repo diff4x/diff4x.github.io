@@ -98,10 +98,19 @@ window.addEventListener('message', (e) => {
             break;
             
         case "DESTROY_HIGHLIGHT": 
+            if (CSS.highlights) {
+                CSS.highlights.clear();
+            }
+            if (window._searchMatchRanges) {
+                window._searchMatchRanges.clear();
+            }
+            
+            // 兼容原有的 DOM 卸载逻辑
             const destroyBtn = document.getElementById("destroy");
             if (destroyBtn) {
                 destroyBtn.click(); 
             } else {
+                // 如果此时 DOM 尚未插入破坏按钮，直接销毁可能存在的降级旧 DOM 标签
                 document.querySelectorAll(".match-highlight").forEach(h => {
                     h.parentNode.replaceChild(document.createTextNode(h.textContent), h);
                 });
@@ -296,6 +305,7 @@ async function format() {
     }
 }
 
+window._searchMatchRanges = new Map();
 // 搜索
 function search() {
     // 拦截非搜索跳转
@@ -306,7 +316,6 @@ function search() {
     if (!rawKeyword || !wasmEngineReady) return; // 确保 Wasm 引擎已初始化
 
     // 1. 遍历 DOM 提取纯文本，建立物理节点与全局文本的偏移量映射表
-    // Wasm 无法直接读取 DOM，这部分“采矿”工作必须由 JS 完成
     const element = document.body;
     const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT, null, false);
     const textNodes = [];
@@ -324,8 +333,6 @@ function search() {
     }
 
     // 2. 跨语言调用：将整片文章作为 globalText 发送给 Rust (Wasm)
-    // 由底层执行多轨正则匹配、宽容降级、位置合并、摘要提取
-    // 返回包含: { count, matches: [{start, end, index}], snippets, isTolerantMatch }
     const resultObj = find_content_matches(globalText, rawKeyword);
     
     const matches = resultObj.matches || [];
@@ -338,7 +345,18 @@ function search() {
         return;
     }
 
-    // 3. 渲染高亮：按物理节点进行局部切割
+    // 如果浏览器不支持 CSS Custom Highlight API，给出警告并中止（可自行保留旧版降级方案）
+    if (!CSS.highlights) {
+        console.warn("浏览器不支持 CSS Highlights，高亮渲染已中止。建议升级浏览器。");
+        return; 
+    }
+
+    // 3. 渲染高亮：收集 Range（绝对零 DOM 修改）
+    CSS.highlights.clear(); // 清空历史高亮
+    window._searchMatchRanges.clear();
+    
+    const generalRanges = []; // 存储所有高亮选区
+
     nodeMap.forEach(item => {
         const node = item.node;
         const nodeText = node.nodeValue;
@@ -348,47 +366,30 @@ function search() {
         
         if (nodeMatches.length === 0) return;
 
-        const fragment = document.createDocumentFragment();
-        let cursor = 0;
-
-        // 确保局部匹配片段按顺序渲染
         nodeMatches.sort((a, b) => a.start - b.start).forEach(m => {
             const localStart = Math.max(m.start - item.start, 0);
             const localEnd = Math.min(m.end - item.start, nodeText.length);
-
-            // 插入匹配前的未高亮文本
-            if (localStart > cursor) {
-                fragment.appendChild(document.createTextNode(nodeText.substring(cursor, localStart)));
-            }
-
-            // 插入高亮碎片
+            
             if (localEnd > localStart) {
-                const span = document.createElement("span");
-                span.className = "match-highlight";
-                span.setAttribute("data-match-index", m.index); // m.index 是 Wasm 给出的独立分组 ID，用于控制中心化高亮
+                const range = new Range();
+                range.setStart(node, localStart);
+                range.setEnd(node, localEnd);
                 
-                // 核心 UI 改动：根据 Wasm 返回的降级模式 (Tolerant) 赋予不同警告色
-                if (isTolerantMatch) {
-                    span.setAttribute("data-tolerant", "true");
-                    span.style.cssText = "background-color: #fcd34d !important; color: black !important; border-bottom: 2px dashed #f59e0b; z-index: 10; position: relative;"; // 柔和的琥珀色，带虚线下划线
-                } else {
-                    span.style.cssText = "background-color: yellow !important; color: black !important; z-index: 10; position: relative;";
-                }
-                
-                span.appendChild(document.createTextNode(nodeText.substring(localStart, localEnd)));
-                fragment.appendChild(span);
-            }
-            cursor = localEnd;
-        });
+                generalRanges.push(range);
 
-        // 插入尾部剩余文本
-        if (cursor < nodeText.length) {
-            fragment.appendChild(document.createTextNode(nodeText.substring(cursor)));
-        }
-        
-        // 用包含 span 标签的虚拟节点替换原有的纯文本节点
-        node.parentNode.replaceChild(fragment, node);
+                if (!window._searchMatchRanges.has(m.index)) {
+                    window._searchMatchRanges.set(m.index, []);
+                }
+                window._searchMatchRanges.get(m.index).push(range);
+            }
+        });
     });
+
+    if (generalRanges.length > 0) {
+        const highlightName = isTolerantMatch ? 'search-tolerant' : 'search-exact';
+        const highlightObj = new Highlight(...generalRanges);
+        CSS.highlights.set(highlightName, highlightObj);
+    }
 
     // 4. 将高亮摘要统计结果反馈给顶级系统 (index.js)
     sendToParent("LOCAL_SEARCH_RESULT", { 
@@ -413,9 +414,8 @@ function search() {
             destroyButton.id = "destroy";
             destroyButton.innerText = "destroy";
             destroyButton.onclick = function () {
-                document.querySelectorAll(".match-highlight").forEach(h => {
-                    h.parentNode.replaceChild(document.createTextNode(h.textContent), h);
-                });
+                // 触发内部清除逻辑
+                if (CSS.highlights) CSS.highlights.clear();
                 const nav = $("#s_nav");
                 if (nav) nav.innerHTML = "";
                 store.jump_from_search = "0";
@@ -433,25 +433,29 @@ function search() {
 
         indexDisplay.innerText = " " + (currentIndex + 1) + " / " + totalMatches;
 
-        // 恢复全部背景色 (清除旧的焦点)
-        document.querySelectorAll("span.match-highlight").forEach(s => {
-            if (s.dataset.tolerant === "true") {
-                s.style.cssText = "background-color: #fcd34d !important; color: black !important; border-bottom: 2px dashed #f59e0b; z-index: 10; position: relative;";
-            } else {
-                s.style.cssText = "background-color: yellow !important; color: black !important; z-index: 10; position: relative;";
-            }
-        });
+        // 移除旧的激活态，覆盖全新的 search-active 高亮层
+        if (CSS.highlights.has('search-active')) {
+            CSS.highlights.delete('search-active');
+        }
 
-        // 定位当前组所有碎片，涂成红色激活态
-        const currentGroup = document.querySelectorAll(`span.match-highlight[data-match-index="${currentIndex}"]`);
-        if (currentGroup.length > 0) {
-            currentGroup.forEach(s => {
-                s.style.cssText = "background-color: red !important; color: white !important; font-weight: bold; z-index: 20; position: relative;";
-            });
+        const currentGroupRanges = window._searchMatchRanges.get(currentIndex) || [];
+        if (currentGroupRanges.length > 0) {
+            const activeHighlight = new Highlight(...currentGroupRanges);
+            CSS.highlights.set('search-active', activeHighlight);
 
             // 抑制滚动冲突锁
             isAutoScrolling = true;
-            currentGroup[0].scrollIntoView({ block: "center", behavior: "smooth" });
+            
+            // 获取当前分组第一个碎片的边界盒子进行平滑滚动
+            const firstRange = currentGroupRanges[0];
+            const rect = firstRange.getBoundingClientRect();
+            const absoluteTop = window.scrollY + rect.top;
+            
+            window.scrollTo({
+                top: absoluteTop - (window.innerHeight / 2),
+                behavior: "smooth"
+            });
+            
             setTimeout(() => { isAutoScrolling = false; }, 600);
         }
     }
@@ -1328,9 +1332,11 @@ async function initDiffUI() {
     fromSelect.value = options[1] ? options[1].val : options[0].val; // history[0] (上一版)
 
     const label1 = document.createElement('span');
-    label1.textContent = '在';
+    label1.textContent = 'based on';
+    label1.style.cssText = "font-family: serif!important;"
     const label2 = document.createElement('span');
-    label2.textContent = '基础上的改动';
+    label2.textContent = '⇌';
+    label2.style.cssText = "font-family: serif!important;"
 
     const btnStart = document.createElement('button');
     btnStart.textContent = 'diff';
@@ -1338,7 +1344,7 @@ async function initDiffUI() {
 
     const btnCancel = document.createElement('button');
     btnCancel.textContent = 'cancel diff';
-    btnCancel.style.cssText = 'margin-left:4px;display:none;';
+    btnCancel.style.cssText = 'color: red;margin-left:4px;display:none;';
 
     originalBtn.parentNode.insertBefore(wrapper, originalBtn);
     originalBtn.remove(); 

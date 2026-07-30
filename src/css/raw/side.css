@@ -28,6 +28,7 @@ a {
     color: #222bc0;
     cursor: pointer;
     word-break: break-all;
+    text-decoration: none;
 }
 
 div:not(.history-list) {
@@ -35,7 +36,7 @@ div:not(.history-list) {
     padding: 5px 0;
 }
 
-div:not(#menu-b):not(#loading-mask):not(#menu-b div):not(#update-banner):not(#gotop)::before {
+div:not(#menu-b):not(#loading-mask):not(#menu-b div):not(#update-banner):not(#gotop):not(#side-preview-tooltip)::before {
     float: right;
     color: #0000ba;
     content: "[" attr(id) "]";
@@ -98,10 +99,11 @@ li:before {
 }
 
 .recent:after {
+    vertical-align: super;
     font-size: .6rem;
     margin-left: 5px;
-    background: lightgreen;
-    content: " NEW";
+    background: #90ee90;
+    content: " new ";
 }
 
 #a {
@@ -292,4 +294,20 @@ a.unlocked::before {
 
 .t::after {
     content: "\2197";
+}
+
+#side-preview-tooltip {
+    position: fixed;
+    left: 0; 
+    top: 0;
+    width: 180px;
+    background-color: #000;
+    border: 2px solid #fff;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.6);
+    pointer-events: none; /* 穿透鼠标，不阻挡下方点击 */
+    z-index: 100001;
+    display: none;
+    border-radius: 4px;
+    overflow: hidden;
+    will-change: transform; /* 提示浏览器为其单独开启 GPU 图层 */
 }

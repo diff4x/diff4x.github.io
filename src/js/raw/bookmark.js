@@ -27,6 +27,36 @@ window.addEventListener('DOMContentLoaded', () => {
 
     loadFaviconsWhenIdle();
     initWallpaperModule();
+
+    const footer_links = document.querySelectorAll('#copyright a');
+    let usageLink = null;
+    for (let link of footer_links) {
+        if (link.textContent.trim() === '[使用说明]') { //[cite: 1]
+            usageLink = link;
+            break;
+        }
+    }
+    if (usageLink) {
+        usageLink.addEventListener('mouseenter', function() {
+            if (!this.title) {
+                this.title = "正在获取项目体积...";
+                fetch('https://api.github.com/repos/diff4x/diff4x.github.io')
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data && data.size) {
+                            const sizeInMb = (data.size / 1024).toFixed(2);
+                            this.title = `当前项目体积: ${sizeInMb}Mb`;
+                        } else {
+                            this.title = "获取体积失败";
+                        }
+                    })
+                    .catch(error => {
+                        console.error('Error fetching repo data:', error);
+                        this.title = "获取体积失败";
+                    });
+            }
+        });
+    }
 });
 document.addEventListener('keydown', (e) => {
   if (e.key === '\\') {
@@ -234,6 +264,7 @@ function initWallpaperModule() {
         return; 
     }
     document.body.style.background = "transparent";
+    document.documentElement.style.background = "#000";
 
     applyWallpaper(config);
 
@@ -270,7 +301,7 @@ function applyWallpaper(config) {
 
     const currentUrl = config.list[config.currentIndex];
     bgLayer.style.backgroundImage = `url("../../${currentUrl}")`;
-    bgLayer.style.backgroundSize = config.layout || 'cover';
+    bgLayer.style.backgroundSize = config.layout || 'contain';
 }
 
 function startWallpaperTimer(config) {
@@ -358,8 +389,8 @@ function renderPanelInnerContent(panel, config, tooltip) {
             </label>
             <label>显示布局: 
                 <select id="wp-layout-select" style="background:#2a2a2a; color:#eee; border:1px solid #555;">
-                    <option value="cover">Cover</option>
                     <option value="contain">Contain</option>
+                    <option value="cover">Cover</option>
                     <option value="repeat">Repeat</option>
                     <option value="auto">Auto</option>
                 </select>
@@ -456,7 +487,7 @@ function bindPanelEvents(config) {
 
     if(modeSelect) modeSelect.value = config.mode || 'fixed';
     if(intervalSelect) intervalSelect.value = config.interval || 3600000;
-    if(layoutSelect) layoutSelect.value = config.layout || 'cover';
+    if(layoutSelect) layoutSelect.value = config.layout || 'contain';
 
     const saveChanges = () => {
         let cur = JSON.parse(localStorage.getItem('wallpaper_config')) || {};
@@ -483,5 +514,5 @@ function updateWallpaperPanelUI(config) {
     const layoutSelect = document.getElementById('wp-layout-select');
     if(modeSelect) modeSelect.value = config.mode || 'fixed';
     if(intervalSelect) intervalSelect.value = config.interval || 3600000;
-    if(layoutSelect) layoutSelect.value = config.layout || 'cover';
+    if(layoutSelect) layoutSelect.value = config.layout || 'contain';
 }

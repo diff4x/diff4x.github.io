@@ -62,17 +62,8 @@ pub struct MatchPos {
 // ==========================================
 
 #[wasm_bindgen]
-pub fn set_data(js_array: js_sys::Array) {
-    let mut local_vec = Vec::with_capacity(js_array.length() as usize);
-    for i in 0..js_array.length() {
-        if let Some(s) = js_array.get(i).as_string() {
-            local_vec.push(s);
-        } else {
-            local_vec.push(String::new());
-        }
-    }
-    
-    // 一次性写入 Wasm 内存
+pub fn set_data(bytes: &[u8]) {
+    let local_vec: Vec<String> = from_slice(bytes).unwrap_or_default();
     GLOBAL_DATA.with(|data| {
         *data.borrow_mut() = local_vec;
     });
@@ -418,35 +409,28 @@ pub fn format_markdown(text: &str) -> String {
 // ==========================================
 #[wasm_bindgen]
 pub fn build_flat_data(
-    lite_bytes: &[u8], 
-    fat_bytes: &[u8], 
-    shadow_bytes: &[u8], 
-    is_offline: bool
-) -> js_sys::Array {
-    
-    // 从 Uint8Array 切片直接反序列化为 Value 对象，跳过了昂贵的 UTF-8 校验和字符串解析
+    lite_bytes: &[u8],
+    fat_bytes: &[u8],
+    shadow_bytes: &[u8],
+    is_offline: bool,
+) -> Vec<u8> {
     let lite: Value = from_slice(lite_bytes).unwrap_or(Value::Null);
     let fat: Value = from_slice(fat_bytes).unwrap_or(Value::Null);
     let shadow: Value = from_slice(shadow_bytes).unwrap_or(Value::Null);
 
-    let mut results = Vec::new();
+    let mut results: Vec<String> = Vec::new();
     let buckets = [
-        ("html", "html/"), ("image", "gallery/"), 
-        ("video", "video/"), ("audio", "audio/"), ("ebook", "ebook/")
+        ("html", "html/"), ("image", "gallery/"),
+        ("video", "video/"), ("audio", "audio/"), ("ebook", "ebook/"),
     ];
-
     for (bucket, prefix) in buckets.iter() {
         if let Some(root) = lite.get(bucket) {
             flatten_tree_recursive(root, prefix, bucket, &fat, &shadow, is_offline, &mut results);
         }
     }
-    
-    // 生成标准的平铺数组返回给 JS，供 worker 初始化或直接使用
-    let js_array = js_sys::Array::new_with_length(results.len() as u32);
-    for (i, s) in results.into_iter().enumerate() {
-        js_array.set(i as u32, JsValue::from_str(&s));
-    }
-    js_array
+
+    // 原生序列化，一次性打包成字节流
+    rmp_serde::to_vec(&results).unwrap_or_default()
 }
 
 fn flatten_tree_recursive(node: &Value, prefix: &str, bucket: &str, fat: &Value, shadow: &Value, is_offline: bool, results: &mut Vec<String>) {
