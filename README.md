@@ -3,7 +3,7 @@
 ---
 
 # 基建
-- 这是一个 DIY 小型 Web OS, 特点包括：
+- 这是一个小型静态文档检索系统, 特点包括：
   - 聚合浏览
     - HTML、PDF、EPUB、TXT、图片、音视频、全景图
   - 超级搜索
@@ -16,7 +16,7 @@
   - HTTP Server、Custom URL Protocol、Batch、Java、Rust、Git
 - Web 平台
   - Vanilla JS、iframe、postMessage、Proxy、localStorage、Service Worker、IndexedDB、Web Worker、WebAssembly
-> Workflow designed by diff4x | Optimized or implemented by Gemini & ChatGPT & Claude
+> Workflow designed by diff4x | Optimized or implemented by Gemini & ChatGPT & Claude & Grok
 ---
 
 ## 使用
@@ -30,8 +30,10 @@
   - 按日期搜索
     - html 页面时间戳和 `img` 图片名皆按格式`yyyymmddhhmmss`
     - 例如查找2024年1月份更新过的页面, 可输入 `202401` 或更短的 `2401`
-  - 无结果时主从接力搜索或降级宽容搜索 (将搜索词按序打散, 字符间进行 0~3 字符通配。例如能命中数据「烟枪侍女太师椅」的搜索词有「烟侍女椅」,「烟侍椅」等等 29 种组合)
-  - 搜索框内置命令 `@bomb`, `@rebirth` 分别进行可选式重置与恢复个人数据
+  - 搜索框内置命令
+    - `@noise=3` 将搜索词的宽容程度设为 `3`, 搜索词字符间按 0~3 字符通配, 例如能命中数据 `烟枪侍女太师椅` 的搜索词有 `烟侍女椅`, `烟侍椅` 等等 29 种组合
+      - 设为 `0` 表示精准匹配, 上限 `5`
+    - `@bomb`, `@rebirth` 分别进行可选式重置与恢复个人数据
 - 页面
   - 本地按页面左上角 `edit` 即以本地编辑器打开对应实体页同时覆写时间戳, 编辑完回到页面, 双击顶部菜单中 `CLI` 即时构建呈现
   - 页面左上角 `diff` 查看版本差异
@@ -71,6 +73,11 @@
   - 链接解析：相对路径或完整 `URL` 自动被 `<img>` 或 `<a>` 包裹
   - 轻量表格：写在 `<p>` 标签中，行间以 `|` 分隔，自动渲染为 `<table><td>`
   - 代码着色：使用 `<code c>` 即表示要渲染的目标语种为 `c`
+  - 文件名：
+    - 开头仅以 `1` 个 `_` 命名的 html 文件定义为超大型文档
+      - 正文不参与切片制作, 但在该页面下所进行的搜索结果可被持久化
+    - 开头以 `2` 个 `_` 命名的 html 文件定义为私人页面
+      - 正文参与切片制作但不参与发布, 仅线下可被搜索及访问
 - CLI
   - `gen` 核心构建, 扫描资源目录与 `html` 正文生成数据切片, 压缩源码, 维护文件哈希账本与评论映射
   - `new` 交互指定标题和分类链, 分类链中以`|`作为子类分隔符
@@ -86,6 +93,9 @@
   - `vpn-heartbeat-tray` 任务栏常驻互联网状态标识
 - 其它
   - `cmt_mapper` 中 `records` 记录评论与页面 `title` 的对应关系, `orphanIds` 记录孤立失联的评论便于定点清除
+  - 异常修复：
+    - 站点地址附带 `?repair=1` 重新访问
+    - 若搜索框可见, 输入 `@bomb` 可彻底重置
 ---
 
 ## 目录结构
@@ -95,6 +105,7 @@
  ┣ 📂 server                           # 本地服务器
  ┣ 📂 jar                              # 数据清洗
  ┣ 📂 rs                               # 冷排
+ ┣ 📂 secrets                          # 凭据,任务,流水
  ┣ 📂 woff2_split                      # 字体切片
  ┣ 📜 CLI.bat                          # 构建入口
  ┗ 📜 config.properties                # 配置

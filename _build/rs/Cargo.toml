@@ -15,7 +15,7 @@ regex = "1.10"
 js-sys = "0.3"
 lazy_static = "1.4"
 lru = "0.12"
-rmp-serde = "1.1"
+similar = "2"
 
 [package.metadata.wasm-pack.profile.release]
 wasm-opt = false

@@ -36,6 +36,52 @@ const iframes = {
     side: $('#side')
 };
 
+if (window.__LITE_BUS__) {
+    window.__LITE_BUS__.close();
+}
+window.__LITE_BUS__ = new BroadcastChannel('bus');
+const BUS = window.__LITE_BUS__;
+
+window.addEventListener('unload', () => {
+    if (window.__LITE_BUS__) {
+        window.__LITE_BUS__.close();
+        window.__LITE_BUS__ = null;
+    }
+});
+
+const ctxId = window.top === window.self ? 'index' : window.childId; 
+
+function emitEvent(type, payload, target = '*') {
+    if (!window.__LITE_BUS__) return;
+    try {
+        window.__LITE_BUS__.postMessage({
+            type,
+            payload,
+            from: ctxId,
+            target
+        });
+    } catch (e) {}
+}
+
+
+window.sharedWasm = {
+    ready: false,
+    format_markdown: null,
+    find_content_matches: null,
+    compute_lcs_diff: null
+};
+
+import('../wasm/compute_intensive_task_processor.min.js').then(async (wasmModule) => {
+    await wasmModule.default();
+    window.sharedWasm.format_markdown = wasmModule.format_markdown;
+    window.sharedWasm.find_content_matches = wasmModule.find_content_matches;
+    window.sharedWasm.compute_lcs_diff = wasmModule.compute_lcs_diff;
+    window.sharedWasm.ready = true;
+    // console.log("[Main] Wasm 单例引擎加载完毕");
+}).catch(err => {
+    console.error("[Main] Wasm 模块加载失败:", err);
+});
+
 let searchWorker = null;
 let audioInitialized = false;
 let comments_first_flag = false;
@@ -89,61 +135,49 @@ window._globalWatchdog = setTimeout(() => {
 }, 60000);
 
 // 事件网关
-window.addEventListener('message', async (e) => {
-    if (e.origin === "https://giscus.app" && e.data?.giscus) {
-        const params = new URLSearchParams(window.location.search);
-        if (params.get("giscus")) {
-            window.history.replaceState({}, document.title, window.location.pathname);
-        }
+BUS.addEventListener('message', async (e) => {
+    const { type, payload, target, from } = e.data || {};
+    if (target !== '*' && target !== ctxId) return;
 
-        const data = e.data.giscus;
-        if (data.discussion) {
-            totalCount = data.discussion.totalCommentCount || 0;
-            sendToIframe("content", "cm_count", totalCount);
-        }
-        if (data.post) {
-            totalCount++;
-            sendToIframe("content", "cm_count", totalCount);
-            console.log("新增评论:", data.post);
-        }
-        if (data.error) {
-            if (data.error == "Discussion not found") {
-                sendToIframe("content", "cm_count", 0);
-            } else {
-                console.error("Giscus 错误:", data.error);
-            }
-        }
-        return;
-    }
-    
-    const { type, payload, from } = e.data || {};
-    if (!type || !from) return;
     switch (type) {
-        case "LOCAL_SEARCH_RESULT":
+        case 'REQUEST_CATALOG':
+            if (window.lite_data) {
+                emitEvent('RENDER_CATALOG', window.lite_data, 'side');
+            }
+            break;
+        case "LOCAL_SEARCH_RESULT": {
+            const activeKw = payload.keyword || store.keyword;
+            // 关键词已变：丢弃滞后回写，防止旧词 snippets 污染新词列表
+            const inputEl = document.getElementById("searchInput");
+            const liveKw = (inputEl ? inputEl.value.trim() : "") || store.keyword || "";
+            if (activeKw && liveKw && normalizeKeyword(activeKw) !== normalizeKeyword(liveKw)) {
+                break;
+            }
+
             let hist = store.last_li_a;
             if (!Array.isArray(hist)) hist = hist ? [hist] : [];
-            let globalResults = (await store.SearchCache.get(payload.keyword || store.keyword)) || [];
-            
+            let globalResults = (await store.SearchCache.get(activeKw)) || [];
+
             if (store.resource_type === "html" && hist.length > 0) {
                 const currentPath = hist[0];
                 const strippedPath = currentPath.startsWith('../') ? currentPath.substring(3) : currentPath;
                 const existingIndex = globalResults.findIndex(r => r.path === currentPath || r.path === strippedPath);
-                
+
                 if (existingIndex !== -1) {
                     const item = globalResults.splice(existingIndex, 1)[0];
-                    // item.count = payload.count;
                     if (payload.snippets) {
                         item.snippets = payload.snippets;
                         item.isTolerantMatch = payload.isTolerantMatch;
+                    }
+                    if (typeof payload.count === 'number') {
+                        item.count = payload.count;
                     }
                     globalResults.unshift(item);
                 } else if (payload.count > 0) {
                     let isActuallyPrivate = false;
                     if (window.data && window.data.length > 0) {
-                        // window.data 的结构是 [title, info, path, type] 循环
                         for (let i = 2; i < window.data.length; i += 4) {
                             if (window.data[i] === currentPath || window.data[i] === strippedPath) {
-                                // i - 1 是 info 字段 (即 val1)
                                 if (typeof window.data[i - 1] === 'string' && window.data[i - 1].startsWith('localOnly')) {
                                     isActuallyPrivate = true;
                                 }
@@ -164,13 +198,13 @@ window.addEventListener('message', async (e) => {
                 }
             }
 
-            const activeKw = payload.keyword || store.keyword;
             if (activeKw && !activeKw.startsWith('@')) {
                 store.SearchCache.set(activeKw, globalResults);
             }
 
-            updateSearchResults(globalResults);
+            updateSearchResults(globalResults, activeKw);
             break;
+        }
 
         case "reload_bookmark":
             store.bookmarkhtml_modifing = "1";
@@ -392,9 +426,65 @@ window.addEventListener('message', async (e) => {
         case 'CLOSE_GLOBAL_BOOKMARKS':
             if (window._closeGlobalMenu) window._closeGlobalMenu();
             break;
-
+            
+        case "PLAY_PRESET_AUDIO":
+            store.resource_type = "audio";
+            store.song_path = payload;
+            const fileName = payload.split('/').pop();
+            const dir = payload.substring(0, payload.lastIndexOf('/') + 1);
+            
+            // 初始化或切换音频
+            audio(fileName, dir);
+            
+            // 延后切换状态
+            setTimeout(() => {
+                // 切换为单曲循环
+                const slpBtn = document.getElementById("btn_slp");
+                if (slpBtn && !slpBtn.classList.contains("active2")) {
+                    slpBtn.click();
+                }
+                // 如音频面板隐藏则唤出
+                const playerContainer = document.getElementById("audio");
+                if (playerContainer && playerContainer.style.display !== 'none') {
+                    const toggleBtn = document.getElementById("audio_btn");
+                    if (toggleBtn) toggleBtn.click();
+                }
+            }, 100);
+            
+            // 通知侧栏菜单激活状态
+            emitEvent('#audio a', payload, 'side');
+            emitEvent('show_current', null, 'side');
+            break;
         default:
             break;
+    }
+});
+
+window.addEventListener('message', async (e) => {
+    if (e.origin === "https://giscus.app" && e.data?.giscus) {
+        const params = new URLSearchParams(window.location.search);
+        if (params.get("giscus")) {
+            window.history.replaceState({}, document.title, window.location.pathname);
+        }
+
+        const data = e.data.giscus;
+        if (data.discussion) {
+            totalCount = data.discussion.totalCommentCount || 0;
+            emitEvent("cm_count", totalCount, "content");
+        }
+        if (data.post) {
+            totalCount++;
+            emitEvent("cm_count", totalCount, "content");
+            console.log("新增评论:", data.post);
+        }
+        if (data.error) {
+            if (data.error == "Discussion not found") {
+                emitEvent("cm_count", 0, "content");
+            } else {
+                console.error("Giscus 错误:", data.error);
+            }
+        }
+        return;
     }
 });
 
@@ -470,22 +560,10 @@ window.onload = () => {
     window.alertTimer = safeInterval(ls_alert, 60000);
 
     initBackupReminder();
-}
 
-// postMessage 封装
-function sendToIframe(targetId, type, payload) {
-    const ids = (targetId === '*' || targetId === 'all') ? Object.keys(iframes) : [targetId];
-    ids.forEach(id => {
-        const target = iframes[id];
-        if (target && target.contentWindow) {
-            target.contentWindow.postMessage({
-                type,
-                payload,
-                from: 'parent',
-                to: id
-            }, '*');
-        }
-    });
+    if (store.online_flag === "0") {
+        initDueTasksPingPong();
+    }
 }
 
 // 通用代理 
@@ -495,37 +573,38 @@ function createStore(defaults = {}) {
             if (prop === 'SearchCache') {
                 return {
                     get: async (kw) => {
-                        try { 
+                        try {
+                            const meta = await store.SearchCache.getMeta(kw);
+                            return meta ? meta.results : null;
+                        } catch (e) {
+                            return null;
+                        }
+                    },
+
+                    // exact: 当前词精确命中；prefix: 更短词的超集预热（不可当作本词权威结果入库）
+                    getMeta: async (kw) => {
+                        try {
                             const normKw = normalizeKeyword(kw);
                             if (!normKw) return null;
 
-                            // 1. 尝试精确归一化命中
                             let res = await dbProxy.get('search_cache', normKw);
-                            if (res) return res;
+                            if (res) return { results: res, exact: true, sourceKey: normKw };
 
-                            // 2. 前缀模糊降级 (Prefix Fallback)
-                            // 逻辑：如果用户输入的词更长，去缓存里找有没有“它是其前缀的较短缓存”（即更宽泛的超集缓存）
-                            // 例如用户输入 "javascript"，缓存里有 "java"
                             const keys = await dbProxy.getAllKeys('search_cache');
-                            // 筛选出所有是 normKw 前缀的缓存 key (要求 key 长度大于 2，避免单个字母误伤)
                             const matchingKeys = keys.filter(k => typeof k === 'string' && normKw.startsWith(k) && k.length > 2);
-                            
+
                             if (matchingKeys.length > 0) {
-                                // 按 key 长度降序排序，优先取最长的那个前缀（最接近当前输入）
                                 matchingKeys.sort((a, b) => b.length - a.length);
                                 const bestKey = matchingKeys[0];
                                 const broaderResults = await dbProxy.get('search_cache', bestKey);
-                                
                                 if (broaderResults && broaderResults.length > 0) {
-                                    // 命中前缀降级：直接返回更宽泛的缓存作为“秒开预热”
-                                    // (注：由于是超集，它包含所有匹配项，可直接呈现，后台 Worker 会随后计算出精确结果并自然覆盖)
-                                    return broaderResults;
+                                    return { results: broaderResults, exact: false, sourceKey: bestKey };
                                 }
                             }
 
-                            return null; 
-                        } catch (e) { 
-                            return null; 
+                            return null;
+                        } catch (e) {
+                            return null;
                         }
                     },
 
@@ -562,6 +641,10 @@ function createStore(defaults = {}) {
                 };
             }
 
+            if (prop === 'pinyinData') {
+                return window.top.pinyinData || {};
+            }
+
             const val = localStorage.getItem(prop);
             if (val === null)
                 return defaults[prop];
@@ -577,7 +660,9 @@ function createStore(defaults = {}) {
                 console.warn("store.SearchCache 是只读内置对象，禁止覆盖！");
                 return false;
             }
-
+            if (prop === 'pinyinData') {
+                return true; 
+            }
             localStorage.setItem(prop, JSON.stringify(value));
             return true;
         },
@@ -586,17 +671,28 @@ function createStore(defaults = {}) {
             if (prop === 'SearchCache')
                 return false;
 
+            if (prop === 'pinyinData') return true;
+
             localStorage.removeItem(prop);
             return true;
         }
     });
 }
 
-// IndexedDB 代理
+// IndexedDB 单例长连接代理
 function createDBProxy(dbName, storeName) {
+    let dbInstance = null;
+    let initPromise = null;
+
     const init = async () => {
-        return new Promise((resolve, reject) => {
+        // 1. 如果已有可用连接，直接返回
+        if (dbInstance) return dbInstance;
+        // 2. 如果正在初始化中，复用当前的 Promise 防止重复 open
+        if (initPromise) return initPromise;
+
+        initPromise = new Promise((resolve, reject) => {
             const request = indexedDB.open(dbName, 2);
+            
             request.onupgradeneeded = (e) => {
                 const db = e.target.result;
                 if (!db.objectStoreNames.contains(storeName)) 
@@ -610,10 +706,34 @@ function createDBProxy(dbName, storeName) {
                 if (!db.objectStoreNames.contains('html_snapshots')) 
                     db.createObjectStore('html_snapshots');
             };
-            request.onsuccess = (e) => resolve(e.target.result);
-            request.onerror = (e) => reject(e.target.error);
+
+            request.onsuccess = (e) => {
+                dbInstance = e.target.result;
+                initPromise = null;
+
+                // 监听连接意外关闭
+                dbInstance.onclose = () => {
+                    dbInstance = null;
+                };
+
+                // 监听多标签页版本升级冲突
+                dbInstance.onversionchange = () => {
+                    dbInstance.close();
+                    dbInstance = null;
+                };
+
+                resolve(dbInstance);
+            };
+
+            request.onerror = (e) => {
+                initPromise = null;
+                reject(e.target.error);
+            };
         });
+
+        return initPromise;
     };
+
     return {
         async save(id, payload) {
             const db = await init();
@@ -695,7 +815,7 @@ function createDBProxy(dbName, storeName) {
             return new Promise((resolve, reject) => {
                 const tx = db.transaction(targetStore, 'readwrite');
                 tx.oncomplete = () => resolve();
-                tx.onerror = () => reject(tx.error);
+                tx.onerror = () => reject(targetStore.error || event.target.error);
                 try { 
                     tx.objectStore(targetStore).put(value, key); 
                 } catch (err) { 
@@ -709,7 +829,7 @@ function createDBProxy(dbName, storeName) {
             return new Promise((resolve, reject) => {
                 const tx = db.transaction(targetStore, 'readwrite');
                 tx.oncomplete = () => resolve();
-                tx.onerror = () => reject(tx.error);
+                tx.onerror = (e) => reject(e.target.error);
                 tx.objectStore(targetStore).clear();
             });
         },
@@ -744,7 +864,6 @@ async function loadScripts(concurrency) {
         // 注入哈希账本与公开索引
         // 主线程 index.js 和 Service Worker 线程 sw.js, 两者是完全不同的平行宇宙
         try {
-            await injectScript(`src/third/other/msgpack.min.js`);
             await injectScript(`src/js/core-list.js?t=${now}`);
         } catch (e) {
             // 离线或冷启动异常时的统一保底方案
@@ -777,12 +896,12 @@ async function loadScripts(concurrency) {
 
         // 通知侧边栏渲染目录
         if (iframes?.side?.contentDocument?.readyState === 'complete') {
-            sendToIframe('side', 'RENDER_CATALOG', window.lite_data);
+            emitEvent('RENDER_CATALOG', window.lite_data, 'side');
         } else {
             await new Promise(resolve => {
                 iframes.side.addEventListener('load', resolve, { once: true });
             });
-            sendToIframe('side', 'RENDER_CATALOG', window.lite_data);
+            emitEvent('RENDER_CATALOG', window.lite_data, 'side');
         }
 
         // 恢复快照
@@ -848,14 +967,19 @@ async function loadDataInBatches(files, now, concurrency) {
     });
 
     // worker 注册
-    window._lastSavedKw = "";
     if (!searchWorker) {
         searchWorker = new Worker('src/js/worker.js', { type: 'module' });
         searchWorker.onmessage = async (e) => {
-            const { type, results, keyword, token } = e.data;
+            // 增加接收 inheritFrom
+            const { type, results, keyword, token, inheritFrom, payload } = e.data;
+            
+            // 【新增】：接收 Worker 传来的删除指令，执行物理清理
+            if (type === 'DELETE_CACHE') {
+                store.SearchCache.remove(keyword);
+                return;
+            }
+
             if (type === 'SEARCH_RESULTS') {
-                
-                // 如果回来的 Token 不是目前最新的，说明是过期/滞后的结果，直接丢弃
                 if (token !== window._searchToken) {
                     console.log(`[Search] 拦截到滞后结果 "${keyword}"，已丢弃。`);
                     return;
@@ -864,17 +988,15 @@ async function loadDataInBatches(files, now, concurrency) {
                 const activeKw = keyword || store.keyword;
 
                 if (activeKw) {
-                    // 1. 尝试获取当前词的缓存
                     let sourceCache = await store.SearchCache.get(activeKw);
-                    let isExactMatch = true; // 新增：标记是否为当前词的精确缓存
+                    let isExactMatch = true; 
                     
-                    // 2. 如果当前词没有缓存，触发了贪吃蛇剪枝逻辑，则尝试继承上一个短词的富集缓存
-                    if ((!sourceCache || sourceCache.length === 0) && window._lastSavedKw && activeKw.startsWith(window._lastSavedKw)) {
-                        sourceCache = await store.SearchCache.get(window._lastSavedKw);
-                        isExactMatch = false; // 借用旧词缓存，标记为 false
+                    // 【修改】：废弃主线程自己的判断，严格采纳 Worker 传来的权威建议 (inheritFrom)
+                    if ((!sourceCache || sourceCache.length === 0) && inheritFrom) {
+                        sourceCache = await store.SearchCache.get(inheritFrom);
+                        isExactMatch = false; 
                     }
                     
-                    // 3. 异步等待后，再次核对 Token，防止被新输入插队
                     if (token !== window._searchToken) return;
 
                     if (sourceCache && sourceCache.length > 0) {
@@ -913,31 +1035,31 @@ async function loadDataInBatches(files, now, concurrency) {
                 if (activeKw && !activeKw.startsWith('@')) {
                     clearTimeout(window._idbWriteTimer);
                     // 输入防抖
-                    window._idbWriteTimer = setTimeout(async () => {
-                        // 子串剪枝追踪算法 (贪吃蛇)
-                        // 如果有旧词，且新词以旧词开头，且新词更长，删掉旧词
-                        if (window._lastSavedKw && activeKw.startsWith(window._lastSavedKw) && activeKw.length > window._lastSavedKw.length) {
-                            await store.SearchCache.remove(window._lastSavedKw);
-                        }
-                        // 存入完整的新词，更新追踪游标
-                        // store.SearchCache.set(activeKw, results);
-                        window._lastSavedKw = activeKw;
+                    window._idbWriteTimer = setTimeout(() => {
+                        // 【修改】：主线程不再做任何计算，直接将当前游标提交给 Worker 处理状态转移
+                        searchWorker.postMessage({ type: 'COMMIT_CURSOR', payload: { keyword: activeKw } });
                     }, 600);
                 }
 
                 processAndShowResults(results, activeKw);
             }
+
+            else if (type === 'DATA_READY') {
+                window.data = payload;
+                await finalizeDataLoad();
+            }
         };
     }
 
     const buildAndPushData = async () => {
-        // 合并胖数据和影子数据
+        // 1. 合并胖数据
         let fat_data_merged = {};
         files.forEach(src => {
             const chunkData = chunkDataMap.get(src);
             if (chunkData) Object.assign(fat_data_merged, chunkData);
         });
 
+        // 2. 合并影子数据
         let shadow_data_merged = {};
         const shadowDataChunks = new Map();
         if (store.online_flag === "0" && window.shadowIndex.length > 0) {
@@ -950,106 +1072,29 @@ async function loadDataInBatches(files, now, concurrency) {
         }
         shadowDataChunks.forEach(chunk => Object.assign(shadow_data_merged, chunk));
 
-        // 💥 Wasm 接管：通过 MessagePack 的 Uint8Array 将任务推给底层的 Rust
-        let dataBytes = new Uint8Array(0); 
+        // 3. 直接传递原始 JS 对象
         try {
-            const wasm = await import('../wasm/compute_intensive_task_processor.min.js');
-            await wasm.default(); // 初始化
-
             const isOffline = store.online_flag === "0";
 
-            const liteBytes = MessagePack.encode(window.lite_data || {});
-            const fatBytes = MessagePack.encode(fat_data_merged);
-            const shadowBytes = MessagePack.encode(shadow_data_merged);
+            searchWorker.postMessage({ 
+                type: 'BUILD_DATA', 
+                payload: {
+                    liteData: window.lite_data || {},
+                    fatData: fat_data_merged,
+                    shadowData: shadow_data_merged,
+                    isOffline: isOffline
+                }
+            });
 
-            dataBytes = wasm.build_flat_data(
-                liteBytes,
-                fatBytes,
-                shadowBytes,
-                isOffline
-            );
-
-            window.data = MessagePack.decode(dataBytes);
         } catch (e) {
-            console.error("Wasm 数据组装引擎崩溃，请检查依赖:", e);
-            window.data = []; // 异常兜底
-            dataBytes = new Uint8Array(0);
-        }
-        searchWorker.postMessage(
-            { type: 'SET_DATA', payload: dataBytes.buffer },
-            [dataBytes.buffer]
-        );
-
-        // 侦测媒体资源的变动
-        try {
-            const currentMediaPaths = new Set();
-            for (let i = 0; i < window.data.length; i += 4) {
-                const type = window.data[i + 3];
-                if (['image', 'video', 'audio', 'ebook'].includes(type)) {
-                    currentMediaPaths.add(window.data[i + 2]);
-                }
-            }
-
-            const oldMediaListRaw = await dbProxy.get('sys_state', 'media_paths_snapshot');
-            
-            // 【新增2】冷启动侦测：如果本地没有任何旧快照记录，直接静默落盘初始状态，不写日志
-            if (!oldMediaListRaw) {
-                await dbProxy.put('sys_state', 'media_paths_snapshot', Array.from(currentMediaPaths));
-            } else {
-                const oldMediaPaths = new Set(oldMediaListRaw);
-                let hasMediaUpdates = false;
-
-                // Diff 1: 找新增
-                for (const path of currentMediaPaths) {
-                    if (!oldMediaPaths.has(path)) {
-                        await dbProxy.addLog(`✅ 新增媒体: /${path}`);
-                        hasMediaUpdates = true;
-                    }
-                }
-
-                // Diff 2: 找删除
-                for (const path of oldMediaPaths) {
-                    if (!currentMediaPaths.has(path)) {
-                        await dbProxy.addLog(`⛔ 删除媒体: /${path}`);
-                        hasMediaUpdates = true;
-                    }
-                }
-
-                if (hasMediaUpdates) {
-                    await dbProxy.put('sys_state', 'media_paths_snapshot', Array.from(currentMediaPaths));
-                }
-            }
-        } catch (err) {
-            console.warn("媒体资源 Diff 侦测失败", err);
+            console.error("❌ 数据推送 Worker 异常，降级处理:", e);
+            window.data = [];
+            await finalizeDataLoad();
         }
 
-        // 洗盘子释放内存
+        // 4. 洗盘子释放临时内存
         fat_data_merged = null;
         chunkDataMap.clear();
-
-        // 结束与撒花逻辑...
-        if (store.force_refresh_cache === "1") {
-            store.force_refresh_cache = "0";
-            const triggerConfetti = () => {
-                if (window.restoreSnapPromise) {
-                    window.restoreSnapPromise.then(() => { 
-                        idleRun(playConfetti); 
-                        // 【修改点】快照恢复完毕后，判断是否允许自动弹出日志（错峰 800ms 避免阻塞页面重绘）
-                        if (store.auto_show_changelog !== "0") {
-                            setTimeout(showChangelog, 800);
-                        }
-                        window.restoreSnapPromise = null; 
-                    });
-                } else { 
-                    idleRun(playConfetti); 
-                    // 【修改点】非快照环境的后备触发
-                    if (store.auto_show_changelog !== "0") {
-                        setTimeout(showChangelog, 800);
-                    }
-                }
-            };
-            triggerConfetti();
-        }
     };
 
     // 无更新时, 直接拼装
@@ -1099,6 +1144,76 @@ async function loadDataInBatches(files, now, concurrency) {
     }
 
     await buildAndPushData();
+}
+
+// 数据装配异步收尾 (由 Worker 回传 DATA_READY 或 异常降级 时触发)
+async function finalizeDataLoad() {
+    // 侦测媒体资源的变动 (Diff 比较)
+    try {
+        const currentMediaPaths = new Set();
+        if (window.data && window.data.length > 0) {
+            for (let i = 0; i < window.data.length; i += 4) {
+                const type = window.data[i + 3];
+                if (['image', 'video', 'audio', 'ebook'].includes(type)) {
+                    currentMediaPaths.add(window.data[i + 2]);
+                }
+            }
+        }
+
+        const oldMediaListRaw = await dbProxy.get('sys_state', 'media_paths_snapshot');
+        
+        // 冷启动侦测：如果本地没有任何旧快照记录，直接静默落盘初始状态，不写日志
+        if (!oldMediaListRaw) {
+            await dbProxy.put('sys_state', 'media_paths_snapshot', Array.from(currentMediaPaths));
+        } else {
+            const oldMediaPaths = new Set(oldMediaListRaw);
+            let hasMediaUpdates = false;
+
+            // Diff 1: 找新增
+            for (const path of currentMediaPaths) {
+                if (!oldMediaPaths.has(path)) {
+                    await dbProxy.addLog(`✅ 新增媒体: /${path}`);
+                    hasMediaUpdates = true;
+                }
+            }
+
+            // Diff 2: 找删除
+            for (const path of oldMediaPaths) {
+                if (!currentMediaPaths.has(path)) {
+                    await dbProxy.addLog(`⛔ 删除媒体: /${path}`);
+                    hasMediaUpdates = true;
+                }
+            }
+
+            if (hasMediaUpdates) {
+                await dbProxy.put('sys_state', 'media_paths_snapshot', Array.from(currentMediaPaths));
+            }
+        }
+    } catch (err) {
+        console.warn("媒体资源 Diff 侦测失败", err);
+    }
+
+    // 结束与撒花逻辑
+    if (store.force_refresh_cache === "1") {
+        store.force_refresh_cache = "0";
+        const triggerConfetti = () => {
+            if (window.restoreSnapPromise) {
+                window.restoreSnapPromise.then(() => { 
+                    idleRun(playConfetti); 
+                    if (store.auto_show_changelog !== "0") {
+                        setTimeout(showChangelog, 800);
+                    }
+                    window.restoreSnapPromise = null; 
+                });
+            } else { 
+                idleRun(playConfetti); 
+                if (store.auto_show_changelog !== "0") {
+                    setTimeout(showChangelog, 800);
+                }
+            }
+        };
+        triggerConfetti();
+    }
 }
 
 // 代理拦截
@@ -1154,9 +1269,9 @@ function sw() {
                             return false; 
                         }
                     }, 10000, 150).then(() => {
-                        sendToIframe('side', 'show_update_banner', null);
+                        emitEvent('show_update_banner', null, 'side');
                     }).catch(() => {
-                        sendToIframe('side', 'show_update_banner', null);
+                        emitEvent('show_update_banner', null, 'side');
                     });
                 }
             }
@@ -1172,7 +1287,7 @@ function sw() {
 
             if (!window._swMsgBound) {
                 window._swMsgBound = true;
-                window.addEventListener('message', (e) => {
+                BUS.addEventListener('message', (e) => {
                     if (e.data && e.data.type === 'execute_update') {
                         const latestWaitingWorker = reg.waiting;
                         if (latestWaitingWorker) {
@@ -1219,19 +1334,17 @@ function search_box() {
         var title = option.dataset.title;
         var path = option.dataset.path;
         if (type == "html") {
-            sendToIframe('side', '#html a', path);
+            emitEvent('#html a', path, 'side')
         } else if (type == "image") {
-            sendToIframe('side', '#gallery a', path);
+            emitEvent('#gallery a', path, 'side')
         } else if (type == "video") {
-            sendToIframe('side', '#video a', path);
+            emitEvent('#video a', path, 'side')
         } else if (type == "pdf" || type == "epub" || type == "txt") {
-            sendToIframe('side', '#ebook a', path);
-        } else if (type == "pdf" || type == "epub" || type == "txt") {
-            sendToIframe('side', '#ebook a', path);
+            emitEvent('#ebook a', path, 'side')
         } else if (type == "audio") {
-            sendToIframe('side', '#audio a', path);
+            emitEvent('#audio a', path, 'side')
         }
-        sendToIframe('side', 'show_current');
+        emitEvent('show_current', null, 'side');
     }
 
     // 选择列表动作平台适配
@@ -1260,10 +1373,27 @@ function search_box() {
     }
 
     // 搜索框监听
+    let searchDebounceTimer = null;
+
     elSearchInput.addEventListener("input", async function () {
-        // 判空与核弹
         const val = this.value;
+    
+        // 解析 @noise=n 语法
+        if (val.startsWith('@noise=')) {
+            const n = parseInt(val.split('=')[1]);
+            if (!isNaN(n) && n >= 0 && n <= 5) {
+                store.noise_level = n;
+                elSearchInput.value = "";
+                elSearchInput.placeholder = `已将搜索宽容度设为: ${n}`;
+                setTimeout(() => elSearchInput.placeholder = "Search...", 2000);
+                store.SearchCache.clear(); // 清理旧宽容度的缓存
+                if (searchWorker) searchWorker.postMessage({ type: 'CLEAR_CURSOR', payload: { keyword: "" } });
+            }
+            return;
+        }
+
         if (val.trim() === "") {
+            clearTimeout(searchDebounceTimer);
             updateSearchResults([]);
             showSearchHistoryByTime();
             return;
@@ -1275,17 +1405,20 @@ function search_box() {
             return;
         }
 
-        // 即时搜索
-        search(val.trim());
-        store.keyword = val;
-
-        // 提示补全
+        // 1. 本地联想与历史建议保持实时响应，零延迟
         const history = store.searchHistory || [];
         const matchingHistory = history.filter(item =>
             item.keyword.startsWith(val) || item.keyword.includes(val)
         );
         initHistoryBox(1);
         await updateAutocompleteSuggestions(val);
+
+        // 2. 🚀 对高负载的 Worker 全文检索进行 150ms 防抖限流，彻底消除 CPU 抖动
+        clearTimeout(searchDebounceTimer);
+        searchDebounceTimer = setTimeout(() => {
+            search(val.trim());
+            store.keyword = val;
+        }, 150);
     });
 
     // 焦点
@@ -1373,10 +1506,11 @@ function search_box() {
             // 2. 无论它是历史还是孤儿缓存，从 IndexedDB 缓存池中彻底抹除
             await store.SearchCache.remove(keywordToDelete);
             
-            // 🚀 修复点：如果被删除的词刚好是当前的贪吃蛇游标，必须将其销毁，防止成为幽灵游标
-            if (window._lastSavedKw === keywordToDelete) {
-                window._lastSavedKw = "";
-            }
+            // 【修改】：通知 Worker 同步销毁其内部的贪吃蛇游标，彻底消灭幽灵状态
+            searchWorker.postMessage({
+                type: 'SEARCH',
+                payload: { keyword: kw, token: currentToken, noise: Number(store.noise_level ?? 3) }
+            });
 
             // 3. 刷新下拉框视图
             const currentVal = $("#searchInput").value.trim();
@@ -1425,7 +1559,7 @@ function search_box() {
         store.keyword = "";
         store.jump_from_search = "0";
         store.jump_from_search_ex = "0";
-        sendToIframe('content', 'DESTROY_HIGHLIGHT', null);
+        emitEvent('DESTROY_HIGHLIGHT', null, 'content');
     });
 
     // 位置联动
@@ -1564,52 +1698,111 @@ function search_box() {
 
             // --- Html 渲染代码保持原有逻辑不变 ---
             const resultData = (window._currentRenderedResults || []).find(r => r.path === path);
-            const keyword = elSearchInput.value.trim();
+            // 【修复】：不能直接读 elSearchInput.value —— 用户可能已经继续往下打字
+            // （比如已经敲到"一个人的"），但 resultData.snippets 挂着的还是上一轮
+            // （比如"一个人"）异步返回、尚未被新结果覆盖的旧快照。用最新输入去匹配
+            // 旧关键词截出来的 snippet 文本，经常匹配不上，表现为 snip 不着色。
+            // 这里改成始终使用 _currentRenderedResults 对应的那个关键词，
+            // 保证"高亮用的正则"和"snippet 是围绕哪个关键词截出来的"严格一致。
+            const keyword = window._currentRenderedKeyword || elSearchInput.value.trim();
             
             const escapeRegExp = (string) => string.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
             // 🚀 重新定义高亮正则：严格模式允许任意空白符，宽容模式允许至多3个杂字
             const buildSnippetRegex = (kw, isTolerant) => {
                 const cleanKw = kw.replace(/\s+/g, "");
                 const tokens = cleanKw.split("").map(c => escapeRegExp(c));
+                const noise = Number(store.noise_level ?? 3); // 提取动态宽容度
                 
-                if (!isTolerant) {
-                    // 严格模式：字与字之间，仅允许存在空白符（空格、换行、Tab等）
+                if (!isTolerant || noise === 0) {
                     return new RegExp(`(${tokens.join("\\s*")})`, 'gi');
                 } else {
-                    // 宽容模式：字与字之间，允许存在至多 3 个任意杂字
-                    return new RegExp(`(${tokens.join("\\s*(?:[\\s\\S]{0,3}?)\\s*")})`, 'gi');
+                    // 动态替换最大字符数
+                    return new RegExp(`(${tokens.join(`\\s*(?:[\\s\\S]{0,${noise}}?)\\s*`)})`, 'gi');
                 }
             };
+// --- 替换 index.js 原有的 Html 渲染逻辑片段 ---
+if (resultData && resultData.snippets && resultData.snippets.length > 0) {
+    previewBox.style.display = 'flex';
+    header.style.color = '#abb2bf';
+    
+    let displayCount = resultData.snippets.length;
+    let countStr = displayCount == 1 ? `1 snippet` : `${displayCount} snippets`;
+    
+    header.innerHTML = `
+        <div style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
+            <span style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 75%;">${resultData.title}</span>
+            <span style="color: #61afef; font-size: 11px; white-space: nowrap;">${countStr}</span>
+        </div>
+    `;
 
-            if (resultData && resultData.snippets && resultData.snippets.length > 0) {
-                previewBox.style.display = 'flex';
-                header.style.color = '#abb2bf';
-                
-                let displayCount = resultData.snippets.length;
-                let countStr = displayCount == 1 ? `1 snippet` : `${displayCount} snippets`;
-                
-                header.innerHTML = `
-                    <div style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
-                        <span style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 75%;">${resultData.title}</span>
-                        <span style="color: #61afef; font-size: 11px; white-space: nowrap;">${countStr}</span>
-                    </div>
-                `;
+    // 超级模式：永远只用宽容正则扫
+    const hlRegex = buildSnippetRegex(keyword, true);
+    // 提前计算出用户输入的纯净字数
+    const cleanKwLen = keyword.replace(/\s+/g, "").length;
+    const maxNoise = Number(store.noise_level ?? 3);
 
-                const isTolerant = resultData.isTolerantMatch;
-                const hlRegex = buildSnippetRegex(keyword, isTolerant);
+// 1. 计算每个 snippet 的最小杂字数量 (noise)，过滤掉对当前 keyword 完全无命中的脏片段
+    let snipsWithNoise = resultData.snippets.map(snip => {
+        const text = typeof snip === 'string' ? snip : (snip && (snip.text || snip.snip)) || '';
+        let minNoise = 999;
+        let match;
+        hlRegex.lastIndex = 0;
+        while ((match = hlRegex.exec(text)) !== null) {
+            const cleanMatchLen = match[0].replace(/\s+/g, "").length;
+            const noise = Math.max(0, cleanMatchLen - cleanKwLen);
+            if (noise < minNoise) minNoise = noise;
+        }
+        return { text, noise: minNoise };
+    }).filter(item => item.noise <= maxNoise); // 无匹配(999)或超出当前宽容度的一律丢弃
 
-                const hlStyle = isTolerant 
-                    ? 'color: #f59e0b; font-weight: bold; background: rgba(252, 211, 77, 0.2); border-bottom: 1px dashed #f59e0b;' 
-                    : 'color: #e5c07b; font-weight: bold; background: rgba(229, 192, 123, 0.2);';
+    if (snipsWithNoise.length === 0) {
+        previewBox.style.display = 'none';
+        return;
+    }
 
-                let singleHtml = resultData.snippets.map((snip, index) => {
-                    let safeSnip = snip.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-                    let highlighted = safeSnip.replace(hlRegex, `<span style="${hlStyle}">$1</span>`);
-                    return `<div style="margin-bottom: 12px; border-bottom: 1px dashed #4b5263; padding-bottom: 8px;"><span style="color: #61afef; font-size: 11px;">[${index + 1}]</span> ${highlighted}</div>`;
-                }).join('');
-                
-                scrollContent.innerHTML = `<div class="loop-block">${singleHtml}</div><div class="loop-block">${singleHtml}</div>`;
-                
+    // 2. 排序：按杂字数量升序排序（杂字越少/匹配度越高 越靠前）
+    snipsWithNoise.sort((a, b) => a.noise - b.noise);
+
+    displayCount = snipsWithNoise.length;
+    countStr = displayCount == 1 ? `1 snippet` : `${displayCount} snippets`;
+    header.innerHTML = `
+        <div style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
+            <span style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 75%;">${resultData.title}</span>
+            <span style="color: #61afef; font-size: 11px; white-space: nowrap;">${countStr}</span>
+        </div>
+    `;
+
+    // 3. 渲染：循环处理排好序的 snippet，赋予和 content 页面一致的渐变色系
+    let singleHtml = snipsWithNoise.map((item, index) => {
+        let safeSnip = item.text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+        
+        let highlighted = safeSnip.replace(hlRegex, (match) => {
+            const cleanMatchLen = match.replace(/\s+/g, "").length;
+            const noise = Math.max(0, cleanMatchLen - cleanKwLen);
+            
+            let hlStyle = '';
+            if (noise === 0) {
+                // 级别 0：最强视觉响度。高浓度纯黄背景 + 纯黑文字 + 加粗
+                hlStyle = 'background-color: rgba(255, 235, 0, 0.75); color: #000000; font-weight: bold;';
+            } else if (noise === 1) {
+                // 级别 1：中等视觉响度。透明度骤降 + 深灰文字
+                hlStyle = 'background-color: rgba(255, 235, 0, 0.45); color: #111111; font-weight: bold;';
+            } else if (noise === 2) {
+                // 级别 2：偏弱视觉响度。浅黄底色 + 灰黑文字 + 正常字重
+                hlStyle = 'background-color: rgba(255, 235, 0, 0.25); color: #333333; font-weight: normal;';
+            } else {
+                // 级别 3+：最低视觉响度。极淡的黄底色 + 灰色文字，几乎融入背景
+                hlStyle = 'background-color: rgba(255, 235, 0, 0.12); font-weight: normal;';
+            }
+
+            return `<span style="${hlStyle}">${match}</span>`;
+        });
+        
+        return `<div style="margin-bottom: 12px; border-bottom: 1px dashed #4b5263; padding-bottom: 8px;"><span style="color: #61afef; font-size: 11px;">[${index + 1}]</span> ${highlighted}</div>`;
+    }).join('');
+    
+    scrollContent.innerHTML = `<div class="loop-block">${singleHtml}</div><div class="loop-block">${singleHtml}</div>`;
+// ...后续滚动逻辑保持不变  
                 currentScrollY = 0;
                 scrollContent.style.transform = `translateY(0px)`;
 
@@ -1724,8 +1917,20 @@ function search_box() {
         destroyMediaPreview();
     });
 }
-function processAndShowResults(results, keyword) {
+// provisional: 前缀超集预热结果 —— 只刷新 UI，禁止写入本词权威缓存，避免长词被短词 snippets/count 污染
+function processAndShowResults(results, keyword, options = {}) {
+    const provisional = !!options.provisional;
     let finalResults = [...(results || [])];
+
+    // 前缀预热：剥离 snippets，避免 hover 展示围绕短词截取的脏片段
+    if (provisional) {
+        finalResults = finalResults.map(r => {
+            const copy = Object.assign({}, r);
+            delete copy.snippets;
+            delete copy.isTolerantMatch;
+            return copy;
+        });
+    }
 
     let activeKw = keyword || store.keyword || "";
     if (!activeKw) {
@@ -1736,7 +1941,7 @@ function processAndShowResults(results, keyword) {
     let history = store.last_li_a;
     if (!Array.isArray(history)) history = history ? [history] : [];
 
-    let currentIndex = -1; 
+    let currentIndex = -1;
 
     if (store.resource_type === "html" && history.length > 0) {
         const currentPath = history[0];
@@ -1745,27 +1950,26 @@ function processAndShowResults(results, keyword) {
         currentIndex = finalResults.findIndex(r => r.path === currentPath || r.path === strippedPath);
     }
 
-    // [修复点 1] 无论如何，先把最新的结果写入缓存。解决原版因 early return 导致完全没有缓存的问题。
-    // 🚀 修复点：严格阻断 @ 开头的控制符指令污染持久化缓存数据库
-    if (activeKw !== "" && !activeKw.startsWith('@')) {
-        // [修复点 2] 连贯异步链：保证写入 IDB 完成后再发送指令，彻底终结与 LOCAL_SEARCH_RESULT 的竞态错位
+    // 权威结果才入库；前缀预热不得以长词为 key 写入，否则会把短词超集永久固化为本词缓存
+    if (!provisional && activeKw !== "" && !activeKw.startsWith('@')) {
         store.SearchCache.set(activeKw, finalResults).then(() => {
             if (currentIndex === -1) {
-                sendToIframe('content', 'LOCAL_SEARCH_COUNT', activeKw);
+                emitEvent('LOCAL_SEARCH_COUNT', activeKw, 'content');
             }
         });
+    } else if (provisional && currentIndex === -1 && activeKw && !activeKw.startsWith('@')) {
+        // 预热阶段仍可向当前打开页要精确 count/snippets，由 LOCAL_SEARCH_RESULT 回填
+        emitEvent('LOCAL_SEARCH_COUNT', activeKw, 'content');
     }
 
-    // [修复点 3] 将针对当前页面的置顶处理和 UI 渲染移到缓存动作下方
     if (currentIndex !== -1) {
         const currentItem = finalResults.splice(currentIndex, 1)[0];
         finalResults.unshift(currentItem);
-        updateSearchResults(finalResults);
+        updateSearchResults(finalResults, activeKw);
         return;
     }
 
-    // 不满足特殊条件时，正常显示
-    updateSearchResults(finalResults);
+    updateSearchResults(finalResults, activeKw);
 }
 
 // 搜索
@@ -1775,18 +1979,20 @@ async function search(rawKeyword) {
         return;
     }
     const kw = rawKeyword.trim();
-    
-    // 发起新搜索前，Token 自增并记录当前请求的版本
-    const currentToken = ++window._searchToken; 
-    const cached = await store.SearchCache.get(kw);
-    if (cached) {
-        // 如果命中缓存，也要比对 Token，防止缓存的瞬间读取覆盖了后面新输入的请求
-        if (currentToken === window._searchToken) {
-            processAndShowResults(cached, kw);
+
+    const currentToken = ++window._searchToken;
+    const meta = await store.SearchCache.getMeta(kw);
+
+    if (meta && meta.results && currentToken === window._searchToken) {
+        if (meta.exact) {
+            // 精确缓存：直接展示并结束（仍与 token 对齐）
+            processAndShowResults(meta.results, kw, { provisional: false });
+            return;
         }
-        return;
+        // 前缀超集：秒开列表，但必须继续打 Worker 算精确结果，且不入库
+        processAndShowResults(meta.results, kw, { provisional: true });
     }
-    
+
     try {
         if (!searchWorker) {
             console.warn("搜索引擎尚未就绪");
@@ -1794,7 +2000,7 @@ async function search(rawKeyword) {
         }
         searchWorker.postMessage({
             type: 'SEARCH',
-            payload: { keyword: kw, token: currentToken } // 把 Token 传给 Worker
+            payload: { keyword: kw, token: currentToken, noise: Number(store.noise_level ?? 3) }
         });
     } catch (err) {
         console.error("web worker 通信失败", err);
@@ -1887,9 +2093,16 @@ function normalizeKeyword(kw) {
 }
 
 // 搜索结果填充
-function updateSearchResults(results) {
+function updateSearchResults(results, keyword) {
     // 将最新结果挂载到全局供 Hover 读取
     window._currentRenderedResults = results;
+    // 【修复】：同时记录这批结果对应的关键词。之前 Hover 高亮阶段直接现读
+    // elSearchInput.value，但用户可能正在逐字继续输入（比如已经敲到"一个人的"），
+    // 而 _currentRenderedResults 里挂着的其实还是上一轮（比如"一个人"）异步返回的结果，
+    // 其 snippets 是围绕旧关键词的匹配位置截取的。用当下最新的关键词去给"旧关键词
+    // 截出来的 snippet"生成高亮正则，自然经常匹配不上，表现为 snip 不着色。
+    // 只要 snippets 和用来生成高亮正则的关键词严格来自同一轮结果，这个问题就不会出现。
+    window._currentRenderedKeyword = keyword || "";
 
     let resultsBox = $('#searchResults');
     resultsBox.innerHTML = '';
@@ -1913,9 +2126,7 @@ function updateSearchResults(results) {
             const isPrivate = (result.localOnly === true || result.info === "localOnly");
             const title = result.type === "html" ? result.title.replace(/\.html$/, '') : result.title;
 
-            // option.text = (isPrivate ? (store.online_flag === "1" ? "🔒 " : "🔓 ") : "") + `${title} [${result.count}]`;
-            const tolerantTag = result.isTolerantMatch ? " ❓" : "";
-            option.text = (isPrivate ? (store.online_flag === "1" ? "🔒 " : "🔓 ") : "") + `${title} [${result.count}]${tolerantTag}`;
+            option.text = (isPrivate ? (store.online_flag === "1" ? "🔒 " : "🔓 ") : "") + `${title} [${result.count}]`;
 
             option.style.opacity = (isPrivate ? (store.online_flag === "1" ? 0.5 : 1) : 1);
             option.dataset.path = result.path;
@@ -1967,13 +2178,29 @@ const iframeCommonLogic = function () {
         });
     };
     window.childId = 'content';
-    window.sendToParent = function (type, payload) {
-        parent.postMessage({ type, payload, from: childId }, '*');
-    };
-    window.sendToSibling = function (targetId, type, payload) {
-        const target = window.parent.document.getElementById(targetId)?.contentWindow;
-        if (target) target.postMessage({ type, payload, from: childId, to: targetId }, '*');
-    };
+
+    if (window.__LITE_BUS__) {
+        window.__LITE_BUS__.close();
+    }
+    window.__LITE_BUS__ = new BroadcastChannel('bus');
+    const BUS = window.__LITE_BUS__;
+
+    window.addEventListener('unload', () => {
+        if (window.__LITE_BUS__) {
+            window.__LITE_BUS__.close();
+            window.__LITE_BUS__ = null;
+        }
+    });
+
+    const ctxId = window.top === window.self ? 'index' : window.childId; 
+    window.emitEvent = function (type, payload, target = '*') {
+        BUS.postMessage({
+            type,
+            payload,
+            from: ctxId,
+            target
+        });
+    }
 
     window.bindSwipeGestures = function (element, callbacks, thresholdPercent = 0.15) {
         let startX = 0, startY = 0;
@@ -2073,7 +2300,7 @@ const imageLogic = function () {
         }
     }, { passive: false });
 
-    window.enableDrag = function (target) {
+    function enableDrag(target) {
         let isDragging = false, startX = 0, startY = 0;
         target.dataset.tx = target.dataset.tx || 0;
         target.dataset.ty = target.dataset.ty || 0;
@@ -2126,7 +2353,7 @@ const imageLogic = function () {
         target.style.cursor = "grab";
     };
 
-    window.enableDrag(img);
+    enableDrag(img);
 
     const path = store.image_path || ("gallery/" + decodeURIComponent(img.src).split("/gallery/")[1]);
     const imagelist = store.imagelist || [];
@@ -2141,7 +2368,8 @@ const imageLogic = function () {
         img.style.transform = `translate(0px, 0px) scale(1.0)`;
         
         store.image_path = nPath;
-        sendToParent("image"); sendToSibling('side', '#gallery a', nPath);
+        emitEvent("image", null, "index");
+        emitEvent("image", "#gallery a", "side");
     };
     
     $("#p").onclick = () => go(imagelist[(idx - 1 + imagelist.length) % imagelist.length]);
@@ -2154,7 +2382,7 @@ const imageLogic = function () {
     $("#f").onclick = () => {
         store.lightbox_stauts = store.lightbox_stauts !== "1" ? "1" : "0";
         store.lightbox_stauts === "1" ? sc.classList.add("hide") : sc.classList.remove("hide");
-        sendToParent("lightbox", { status: store.lightbox_stauts });
+        emitEvent("lightbox", { status: store.lightbox_stauts }, "index") 
     };
 
     const toggleFullscreen = (e) => {
@@ -2249,7 +2477,8 @@ const videoLogic = function () {
     const category = (!_cat || _cat === "") ? "未分类" : _cat;
     const go = (nPath) => {
         store.video_path = nPath;
-        sendToParent("video"); sendToSibling('side', '#video a', nPath);
+        emitEvent("video", null, "index");
+        emitEvent("video", "#video a", "side");
     };
 
     $("#p").onclick = () => go(videolist[(idx - 1 + videolist.length) % videolist.length]);
@@ -2262,7 +2491,7 @@ const videoLogic = function () {
     $("#f").onclick = () => {
         store.lightbox_stauts = store.lightbox_stauts !== "1" ? "1" : "0";
         store.lightbox_stauts === "1" ? sc.classList.add("hide") : sc.classList.remove("hide");
-        sendToParent("lightbox", { status: store.lightbox_stauts });
+        emitEvent("lightbox", { status: store.lightbox_stauts }, "index");
     };
 
     const toggleFullscreen = (e) => {
@@ -2505,16 +2734,12 @@ function snap() {
     if ('serviceWorker' in navigator) {
         let isRefreshing = false;
         let hadController = !!navigator.serviceWorker.controller;
-        
+        const GUARD_KEY = "sw_reload_guard";
+        const COUNT_KEY = "sw_reload_count";
+        const WINDOW_MS = 8000;
+        const MAX_RELOADS = 2;
+
         navigator.serviceWorker.addEventListener('controllerchange', async () => {
-            const lastReload = sessionStorage.getItem("sw_reload_guard");
-            const now = Date.now();
-
-            if (lastReload && (now - parseInt(lastReload) < 5000)) {
-                    console.error("🚨 检测到 SW 无限刷新死循环，已强制阻断！");
-                    return;
-            }
-
             if (window._isBombing || isRefreshing) return;
 
             if (!hadController) {
@@ -2522,11 +2747,37 @@ function snap() {
                 return;
             }
 
+            const now = Date.now();
+            const last = parseInt(sessionStorage.getItem(GUARD_KEY) || "0", 10);
+            let count = parseInt(sessionStorage.getItem(COUNT_KEY) || "0", 10);
+
+            if (last && (now - last) < WINDOW_MS) {
+                count += 1;
+            } else {
+                count = 1;
+            }
+            sessionStorage.setItem(GUARD_KEY, String(now));
+            sessionStorage.setItem(COUNT_KEY, String(count));
+
+            // 窗口内连续 claim 超过阈值：阻断自动 reload，避免白屏风暴；
+            // 同时提示用户，并清掉计数以便手动 F5 后恢复正常路径。
+            // 不再静默停在「新 SW 已激活 + 旧页面壳」的半新半旧状态而不给出路。
+            if (count > MAX_RELOADS) {
+                sessionStorage.removeItem(COUNT_KEY);
+                try {
+                    const tip = document.createElement("div");
+                    tip.setAttribute("role", "alert");
+                    tip.style.cssText = "position:fixed;z-index:2147483647;left:50%;bottom:24px;transform:translateX(-50%);background:#1e293b;color:#f8fafc;padding:10px 16px;border-radius:8px;font-size:13px;box-shadow:0 8px 24px rgba(0,0,0,.35);max-width:90vw;";
+                    tip.innerHTML = "站点更新异常（SW 反复切换）。请手动刷新；若仍异常可在地址后加 <code>?repair=1</code>";
+                    document.body.appendChild(tip);
+                    setTimeout(() => tip.remove(), 12000);
+                } catch (e) {}
+                return;
+            }
+
             await Promise.resolve();
             isRefreshing = true;
             store.force_refresh_cache = "1";
-
-            sessionStorage.setItem("sw_reload_guard", now.toString());
             takeSnapshot(true);
         });
     }
@@ -2651,7 +2902,7 @@ async function restore_snap() {
         iframes.content.src = "src/tpl/bookmark.html";
 
         // 发送更新菜单指令，切断后续异常链条
-        sendToIframe('side', 'update_bookmark_menu', null);
+        emitEvent('update_bookmark_menu', null, 'side');
     }
 
     try {
@@ -2659,8 +2910,8 @@ async function restore_snap() {
             let sel = state.main_type;
             if (['pdf', 'epub', 'txt'].includes(sel)) sel = 'ebook';
             if (sel === 'image') sel = 'gallery';
-            sendToIframe('side', '#' + sel + ' a', state.main_path);
-            sendToIframe('side', 'show_current');
+            emitEvent('#' + sel + ' a', state.main_path, 'side');
+            emitEvent('show_current', null, 'side');
             // 独立还原视频进度
             if (state.main_type === 'video' && state.video_strict) {
                 await AsyncUtils.waitFor(() => {
@@ -2847,7 +3098,7 @@ function audio(_song, _level) {
         }
         store.favList = items;
         backfill();
-        sendToIframe('side', 'UPDATE_FAV_LIST', null);
+        emitEvent('UPDATE_FAV_LIST', null, 'side');
     };
     closeBtn.onclick = () => {
         playerContainer.remove();
@@ -3239,8 +3490,8 @@ async function showChangelog() {
                 else if (bucket === 'ebook') typeSelector = '#ebook a';
 
                 if (typeSelector) {
-                    sendToIframe('side', typeSelector, path);
-                    sendToIframe('side', 'show_current', null);
+                    emitEvent(typeSelector, path, 'side');
+                    emitEvent('show_current', null, 'side');
                 }
             }
         });
@@ -4242,4 +4493,126 @@ function showGlobalBookmarkMenu(x, y, source) {
         document.removeEventListener('click', closeMenu);
         window._closeGlobalMenu = null;
     };
+}
+
+// 临期任务
+function initDueTasksPingPong () {
+    const JSON_URL = '/_build/secrets/upcoming_tasks.json';
+    const CHECK_INTERVAL = 5 * 60 * 1000;
+    const SNOOZE_KEY = 'task_snooze_until';
+
+    let bounceTimer = null;
+    let initialized = false;
+
+    const box = document.createElement('div');
+    box.id = 'task-pingpong-box';
+    box.innerHTML = `
+        <button class="close-btn" title="暂时屏蔽15分钟">×</button>
+        <h3>⚠️ 任务到期</h3>
+        <ul id="task-pingpong-list"></ul>
+    `;
+    document.body.appendChild(box);
+
+    const closeBtn = box.querySelector('.close-btn');
+    closeBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const snoozeUntil = Date.now() + 15 * 60 * 1000;
+        localStorage.setItem(SNOOZE_KEY, snoozeUntil);
+        stopAnimation();
+        box.style.display = 'none';
+    });
+
+    box.addEventListener('mouseenter', () => {
+        stopAnimation();
+    });
+
+    box.addEventListener('mouseleave', () => {
+        if (box.style.display === 'block') {
+            startAnimation();
+        }
+    });
+
+    const MOVE_SPEED = 0.2;
+    let posX = 0, posY = 0;
+    let vx = MOVE_SPEED, vy = MOVE_SPEED;
+
+    function startAnimation() {
+        if (bounceTimer) return;
+        box.style.display = 'block';
+
+        if (!initialized) {
+            const maxX = window.innerWidth - box.offsetWidth;
+            const maxY = window.innerHeight - box.offsetHeight;
+            posX = maxX / 2;
+            posY = maxY / 2;
+            initialized = true;
+        }
+
+        function frame() {
+            const currentMaxX = window.innerWidth - box.offsetWidth;
+            const currentMaxY = window.innerHeight - box.offsetHeight;
+            posX += vx;
+            posY += vy;
+
+            if (posX <= 0) {
+                posX = 0;
+                vx = -vx;
+            } else if (posX >= currentMaxX) {
+                posX = currentMaxX;
+                vx = -vx;
+            }
+
+            if (posY <= 0) {
+                posY = 0;
+                vy = -vy;
+            } else if (posY >= currentMaxY) {
+                posY = currentMaxY;
+                vy = -vy;
+            }
+
+            box.style.left = posX + 'px';
+            box.style.top = posY + 'px';
+            bounceTimer = requestAnimationFrame(frame);
+        }
+
+        bounceTimer = requestAnimationFrame(frame);
+    }
+
+    function stopAnimation() {
+        if (bounceTimer) {
+            cancelAnimationFrame(bounceTimer);
+            bounceTimer = null;
+        }
+    }
+
+    async function checkTasks() {
+        const snoozeTime = parseInt(localStorage.getItem(SNOOZE_KEY) || '0', 10);
+        if (Date.now() < snoozeTime) return;
+
+        try {
+            const response = await fetch(JSON_URL + '?t=' + Date.now(), { cache: 'no-store' });
+            if (!response.ok) return;
+
+            const tasks = await response.json();
+            const listContainer = document.getElementById('task-pingpong-list');
+
+            if (Array.isArray(tasks) && tasks.length > 0) {
+                listContainer.innerHTML = tasks.map(t => {
+                    const dueDateStr = t.due ? t.due.split('T')[0] : '无截止时间';
+                    return `<li>${t.title} <span style="font-size:11px;opacity:0.9;">(${dueDateStr})</span></li>`;
+                }).join('');
+
+                box.style.display = 'block';
+                if (!bounceTimer) startAnimation();
+            } else {
+                stopAnimation();
+                box.style.display = 'none';
+            }
+        } catch (err) {
+            console.warn('获取任务 JSON 失败:', err);
+        }
+    }
+
+    setInterval(checkTasks, CHECK_INTERVAL);
+    checkTasks();
 }

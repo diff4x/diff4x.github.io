@@ -5,6 +5,7 @@ if (window.top === window.self) {
 }
 
 const childId = 'side';
+window.childId = childId;
 const store = createStore({ last_li_a: [] });
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => document.querySelectorAll(selector);
@@ -18,23 +19,49 @@ let rightClickTimer = null;
 const RIGHT_CLICK_DOUBLE_MS = 300;
 const RIGHT_CLICK_DISTANCE = 8;
 
-// 事件网关
-window.addEventListener('message', (e) => {
-    const { type, payload, to } = e.data || {};
-    
-    if (type === 'RENDER_CATALOG') {
-        buildCatalogFromLiteData(payload);
-        return;
-    }
 
-    if (to && to !== childId) return;
+if (window.__LITE_BUS__) {
+    window.__LITE_BUS__.close();
+}
+window.__LITE_BUS__ = new BroadcastChannel('bus');
+const BUS = window.__LITE_BUS__;
+
+window.addEventListener('unload', () => {
+    if (window.__LITE_BUS__) {
+        window.__LITE_BUS__.close();
+        window.__LITE_BUS__ = null;
+    }
+});
+
+const ctxId = window.top === window.self ? 'index' : window.childId; 
+
+function emitEvent(type, payload, target = '*') {
+    if (!window.__LITE_BUS__) return;
+    try {
+        window.__LITE_BUS__.postMessage({
+            type,
+            payload,
+            from: ctxId,
+            target
+        });
+    } catch (e) {}
+}
+
+// 事件网关
+BUS.addEventListener('message', (e) => {
+    const { type, payload, target, from } = e.data || {};
+    if (target !== '*' && target !== ctxId) return;
+
     switch (type) {
+        case 'RENDER_CATALOG':
+            buildCatalogFromLiteData(payload);
+            break;
         case 'show_update_banner':
             if (document.getElementById('update-banner')) return;
             const banner = document.createElement('div');
             banner.id = 'update-banner';
             banner.innerText = '发现新版本, 点击更新';
-            banner.onclick = () => { sendToParent('execute_update', null); banner.remove(); };
+            banner.onclick = () => { emitEvent('execute_update', null, "index"); banner.remove(); };
             document.body.prepend(banner); 
             break;
         case '#html a':
@@ -59,9 +86,16 @@ window.addEventListener('message', (e) => {
     }
 });
 
+
+if (window.top?.lite_data) {
+    buildCatalogFromLiteData(window.top.lite_data);
+} else {
+    emitEvent('index', 'REQUEST_CATALOG', null);
+}
+
 // 其它监听
 document.addEventListener('keydown', (e) => {
-    if (e.key === '\\') sendToParent("quick_search","");
+    if (e.key === '\\') emitEvent("quick_search", null, "index");
 });
 window.addEventListener('contextmenu', e => {
     if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
@@ -86,11 +120,11 @@ window.addEventListener('contextmenu', e => {
     e.preventDefault(); 
     
     rightClickTimer = setTimeout(() => {
-        sendToParent('SHOW_GLOBAL_BOOKMARKS', {
+        emitEvent('SHOW_GLOBAL_BOOKMARKS', {
             x: e.clientX,
             y: e.clientY,
             source: 'side' // 或 'content'
-        });
+        }, "index");
     }, RIGHT_CLICK_DOUBLE_MS);
 });
 window.onload = () => {
@@ -111,17 +145,6 @@ window.onload = () => {
 
     document.getElementById("a2").setAttribute("href", store.protocol_name+"://3{/Dropbox/diff4x.github.io");
     document.getElementById("a3").setAttribute("href", store.protocol_name+"://8");
-}
-
-// postMessage 封装
-function sendToParent(type, payload) {
-    parent.postMessage({ type, payload, from: childId }, '*');
-}
-function sendToSibling(targetId, type, payload) {
-    const targetIframe = window.parent.document.getElementById(targetId)?.contentWindow;
-    if (targetIframe) {
-        targetIframe.postMessage({ type, payload, from: childId, to: targetId }, '*');
-    }
 }
 
 // ls 代理
@@ -421,7 +444,7 @@ function click_func() {
     }
 
     delegateClick("#html", "a", (a) => {
-        sendToParent("mask", { op: "add" });
+        emitEvent('mask', { op: "add" }, 'index')
         store.resource_type = "html";
         store.last_html = a.dataset.path;
 
@@ -448,14 +471,14 @@ function click_func() {
     });
 
     delegateClick("#ebook", "a", (a) => {
-        sendToParent("mask", { op: "add" });
+        emitEvent('mask', { op: "add" }, 'index')
         switch (a.dataset.type) {
             case "txt": store.txt_path = a.dataset.path; break;
             case "pdf": store.pdf_path = a.dataset.path; break;
             case "epub": store.epub_path = a.dataset.path; break;
         }
         store.resource_type = a.dataset.type;
-        sendToParent(a.dataset.type);
+        emitEvent(a.dataset.type, null, "index");
 
         $$('li').forEach(l => l.classList.remove('current'));
         a.parentElement.classList.add('current');
@@ -463,11 +486,11 @@ function click_func() {
     });
 
     delegateClick("#video", "a", (a) => {
-        sendToParent("mask", { op: "add" });
+        emitEvent('mask', { op: "add" }, 'index')
         store.videolist = getGroupLinks(a).map(x => x.dataset.path);
         store.resource_type = "video";
         store.video_path = a.dataset.path;
-        sendToParent("video");
+        emitEvent("video", null, "index");
 
         $$('li').forEach(l => l.classList.remove('current'));
         a.parentElement.classList.add('current');
@@ -478,7 +501,7 @@ function click_func() {
         store.playlist = getGroupLinks(a).map(x => x.textContent);
         store.resource_type = "audio";
         store.song_path = a.dataset.path;
-        sendToParent("audio");
+        emitEvent("audio", null, "index");
 
         $$('li').forEach(l => l.classList.remove('current'));
         a.parentElement.classList.add('current');
@@ -486,18 +509,18 @@ function click_func() {
     });
 
     delegateClick("#gallery", "a", (a) => {
-        sendToParent("mask", { op: "add" });
+        emitEvent('mask', { op: "add" }, 'index')
         store.imagelist = getGroupLinks(a).map(x => x.dataset.path);
         store.resource_type = "image";
         store.image_path = a.dataset.path;
-        sendToParent("image");
+        emitEvent("image", null, "index");
 
         $$('li').forEach(l => l.classList.remove('current'));
         a.parentElement.classList.add('current');
         recordHistory(a.dataset.path);
     });
 
-    $("#a a").addEventListener("click", function () { sendToParent("mask", { op: "remove" }); });
+    $("#a a").addEventListener("click", function () { emitEvent("mask", { op: "remove" }, "index"); });
     store.resource_type = "bookmark";
 }
 function dbl_click_func() {
@@ -597,7 +620,7 @@ async function menu() {
         logBtn.style.cursor = 'pointer';
         logBtn.className = 'o';
         logBtn.onclick = () => {
-            sendToParent('show_changelog', null);
+            emitEvent('show_changelog', null, "index")
             menuB.style.display = 'none';
             setTimeout(() => menuB.style.display = '', 100);
         };
@@ -613,7 +636,7 @@ async function menu() {
         excerptsBtn.style.cursor = 'pointer';
         excerptsBtn.className = 'o';
         excerptsBtn.onclick = () => {
-            sendToParent('OPEN_EXCERPTS_NOTEBOOK', null);
+            emitEvent('OPEN_EXCERPTS_NOTEBOOK', null, "index");
             menuB.style.display = 'none';
             setTimeout(() => menuB.style.display = '', 100);
         };
@@ -740,7 +763,7 @@ function render_fav_trigger() {
     favTrigger.onclick = () => {
         const audioList = document.querySelectorAll('#audio li');
         if(audioList) audioList.forEach(l => l.classList.remove('current'));
-        sendToParent('play_fav_list', null);
+        emitEvent('play_fav_list', null, "index");
     };
 
     const historyNode = document.getElementById('historyWrapper'); 
@@ -823,8 +846,8 @@ function parse_date(dp) {
 }
 
 function adj_width() {
-    $("#c").addEventListener("click", function () { sendToParent("adj_side_width", { op: "+" }); });
-    $("#d").addEventListener("click", function () { sendToParent("adj_side_width", { op: "-" }); });
+    $("#c").addEventListener("click", function () { emitEvent("adj_side_width", { op: "+" }, "index"); });
+    $("#d").addEventListener("click", function () { emitEvent("adj_side_width", { op: "-" }, "index"); });
 }
 
 function go_top() {

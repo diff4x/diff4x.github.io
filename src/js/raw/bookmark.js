@@ -1,6 +1,34 @@
 const childId = 'content';
+window.childId = childId;
 const store = createStore();
 store.resource_type = "bookmark";
+
+if (window.__LITE_BUS__) {
+    window.__LITE_BUS__.close();
+}
+window.__LITE_BUS__ = new BroadcastChannel('bus');
+const BUS = window.__LITE_BUS__;
+
+window.addEventListener('unload', () => {
+    if (window.__LITE_BUS__) {
+        window.__LITE_BUS__.close();
+        window.__LITE_BUS__ = null;
+    }
+});
+
+const ctxId = window.top === window.self ? 'index' : window.childId; 
+
+function emitEvent(type, payload, target = '*') {
+    if (!window.__LITE_BUS__) return;
+    try {
+        window.__LITE_BUS__.postMessage({
+            type,
+            payload,
+            from: ctxId,
+            target
+        });
+    } catch (e) {}
+}
 
 // 事件网关
 window.addEventListener('DOMContentLoaded', () => {
@@ -57,10 +85,53 @@ window.addEventListener('DOMContentLoaded', () => {
             }
         });
     }
+
+const presets = {
+    "预设1": ["gallery/尤物/6162026-75408-PM.png", "audio/Modern Talking - Lonely Tears In Chinatown (1986).mp3"]
+};
+
+const presetContainer = document.createElement('span');
+presetContainer.style.cssText = "position: fixed; top: 10px; right: 10px; z-index: 1000; display: flex; gap: 8px;";
+
+for (const [name, [img, audioPath]] of Object.entries(presets)) {
+    const btn = document.createElement('button');
+    btn.textContent = name;
+    btn.style.cssText = "padding: 5px 12px; background: rgba(0,0,0,0.6); color: #fff; border: 1px solid #555; cursor: pointer; border-radius: 4px; font-size:12px;";
+    
+    btn.onclick = () => {
+        const normalizedImg = img.replace(/^\//, '');
+        let config = store.wallpaper_config || { list: [], currentIndex: 0, mode: 'fixed', interval: 3600000, layout: 'contain' };
+        if (!config.list.includes(normalizedImg)) config.list.push(normalizedImg);
+        config.currentIndex = config.list.indexOf(normalizedImg);
+        config.mode = 'fixed';
+        config.layout = 'contain';
+        store.wallpaper_config = config;
+        
+        document.body.style.background = "transparent";
+        document.documentElement.style.background = "#000";
+        if (typeof applyWallpaper === 'function') {
+            applyWallpaper(config);
+            if (!document.getElementById('wallpaper-panel') && typeof createWallpaperPanel === 'function') {
+                createWallpaperPanel(config);
+            } else if (typeof updateWallpaperPanelUI === 'function') {
+                updateWallpaperPanelUI(config);
+            }
+            if (typeof startWallpaperTimer === 'function') {
+                startWallpaperTimer(config);
+            }
+        }
+
+        const normalizedAudio = audioPath.replace(/^\//, '');
+        emitEvent("PLAY_PRESET_AUDIO", normalizedAudio, "index");
+    };
+    presetContainer.appendChild(btn);
+}
+document.body.appendChild(presetContainer);
+
 });
 document.addEventListener('keydown', (e) => {
   if (e.key === '\\') {
-    sendToParent("quick_search", "");
+    emitEvent("quick_search", "", "index");
   }
 });
 
@@ -91,17 +162,6 @@ function createStore(defaults = {}) {
             return true;
         }
     });
-}
-
-// postMessage 封装
-function sendToParent(type, payload) {
-  parent.postMessage({ type, payload, from: childId }, '*');
-}
-function sendToSibling(targetId, type, payload) {
-    const targetIframe = window.parent.document.getElementById(targetId)?.contentWindow;
-    if (targetIframe) {
-        targetIframe.postMessage({ type, payload, from: childId, to: targetId }, '*');
-    }
 }
 
 // ast
@@ -148,7 +208,7 @@ function setupDragAndDrop() {
       }
 
       const param = blockId + "}" + linkTitle + "}" + linkHref;
-      sendToParent('reload_bookmark');
+      emitEvent("reload_bookmark", null, "index");
       location.href = store.protocol_name + "://2{" + encodeURIComponent(param);
     });
   });

@@ -47,6 +47,7 @@ if (window.top === window.self) {
 }
 
 const childId = 'content';
+window.childId = childId;
 const store = createStore();
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => document.querySelectorAll(selector);
@@ -56,16 +57,68 @@ let isAutoScrolling = false;
 let wasmEngineReady = false;
 let find_content_matches = null;
 let format_markdown = null;
-const wasmInitPromise = import('../wasm/compute_intensive_task_processor.min.js').then(async (wasmModule) => {
-    const init = wasmModule.default;
-    find_content_matches = wasmModule.find_content_matches;
-    format_markdown = wasmModule.format_markdown;
-    await init();
-    wasmEngineReady = true;
-    // console.log("[Content] Rust 渲染与探测引擎加载完毕 (动态引入)");
-}).catch(err => {
-    console.error("[Content] Wasm 模块动态加载失败:", err);
+let compute_lcs_diff = null;
+
+const wasmInitPromise = (async () => {
+    // 检查父窗口是否已经初始化好 Wasm 单例
+    if (window.top && window.top.sharedWasm && window.top.sharedWasm.ready) {
+        const sw = window.top.sharedWasm;
+        format_markdown = sw.format_markdown;
+        find_content_matches = sw.find_content_matches;
+        compute_lcs_diff = sw.compute_lcs_diff;
+        wasmEngineReady = true;
+        return;
+    }
+
+    // 兜底：如果父窗口还在加载中，轮询等待其就绪
+    await new Promise((resolve) => {
+        const check = setInterval(() => {
+            if (window.top && window.top.sharedWasm && window.top.sharedWasm.ready) {
+                clearInterval(check);
+                const sw = window.top.sharedWasm;
+                format_markdown = sw.format_markdown;
+                find_content_matches = sw.find_content_matches;
+                compute_lcs_diff = sw.compute_lcs_diff;
+                wasmEngineReady = true;
+                resolve();
+            }
+        }, 20);
+    });
+})();
+
+if (window.__LITE_BUS__) {
+    window.__LITE_BUS__.close();
+}
+window.__LITE_BUS__ = new BroadcastChannel('bus');
+const BUS = window.__LITE_BUS__;
+
+window.addEventListener('unload', () => {
+    if (window.__LITE_BUS__) {
+        window.__LITE_BUS__.close();
+        window.__LITE_BUS__ = null;
+    }
 });
+
+const ctxId = window.top === window.self ? 'index' : window.childId; 
+function emitEvent(type, payload, target = '*') {
+    if (!window.__LITE_BUS__) return;
+    try {
+        window.__LITE_BUS__.postMessage({
+            type,
+            payload,
+            from: ctxId,
+            target
+        });
+    } catch (e) {}
+}
+
+window._activeSearchBorders = [];
+function clearActiveSearchBorders() {
+    if (window._activeSearchBorders.length > 0) {
+        window._activeSearchBorders.forEach(el => el.remove());
+        window._activeSearchBorders = []; 
+    }
+}
 
 // 事件网关
 if (document.readyState === "loading") {
@@ -73,9 +126,11 @@ if (document.readyState === "loading") {
 } else {
     start();
 }
-window.addEventListener('message', (e) => {
-    const { type, payload, to } = e.data || {};
-    if (to && to !== childId) return;
+
+BUS.addEventListener('message', (e) => {
+    const { type, payload, target, from } = e.data || {};
+    if (target !== '*' && target !== ctxId) return;
+
     switch (type) {
         case "cm_count":
             $("#cm").innerText="💬 "+payload;
@@ -85,16 +140,19 @@ window.addEventListener('message', (e) => {
             }
             $("#cm").style.display = "block";
             break;
-            
+
         case "LOCAL_SEARCH_COUNT":
-            const resultObj = countMatchesEnhanced(payload);
-            sendToParent("LOCAL_SEARCH_RESULT", { 
-                keyword: payload, 
-                count: resultObj.count, 
-                title: document.title,
-                snippets: resultObj.snippets,
-                isTolerantMatch: resultObj.isTolerantMatch 
-            });
+            (async () => {
+                if (!wasmEngineReady) await wasmInitPromise;
+                const resultObj = countMatchesEnhanced(payload);
+                emitEvent("LOCAL_SEARCH_RESULT", {
+                    keyword: payload, 
+                    count: resultObj.count, 
+                    title: document.title,
+                    snippets: resultObj.snippets,
+                    isTolerantMatch: resultObj.isTolerantMatch 
+                }, "index");
+            })();
             break;
             
         case "DESTROY_HIGHLIGHT": 
@@ -104,7 +162,8 @@ window.addEventListener('message', (e) => {
             if (window._searchMatchRanges) {
                 window._searchMatchRanges.clear();
             }
-            
+            clearActiveSearchBorders();
+
             // 兼容原有的 DOM 卸载逻辑
             const destroyBtn = document.getElementById("destroy");
             if (destroyBtn) {
@@ -127,26 +186,25 @@ window.addEventListener('message', (e) => {
     }
 });
 window.addEventListener('unload', () => {
-    sendToParent("lightbox", { status: "0" });
+    emitEvent("lightbox", { status: "0" }, "index");
 });
 document.addEventListener('keydown', (e) => {
     if (e.key === '\\') {
-        sendToParent("quick_search", "");
+        emitEvent("quick_search", "", "index");
     }
 });
 
 // 样式注入
 (function initStyles() {
+    const style = document.createElement('style');
+    style.textContent = "body { opacity: 0; transition: opacity 0.3s ease; }";
+    document.documentElement.appendChild(style); 
     if (!document.querySelector('link[href*="content.css"]')) {
         const css = document.createElement('link');
         css.rel = 'stylesheet';
         css.href = '../src/css/content.css';
         document.head.appendChild(css);
     }
-    document.addEventListener("DOMContentLoaded", () => {
-        document.body.style.opacity = 0;
-        document.body.style.transition = "opacity 0.3s ease";
-    });
 })();
 
 // 代理
@@ -176,17 +234,6 @@ function createStore(defaults = {}) {
             return true;
         }
     });
-}
-
-// postMessage 封装
-function sendToParent(type, payload) {
-    parent.postMessage({ type, payload, from: childId }, '*');
-}
-function sendToSibling(targetId, type, payload) {
-    const targetIframe = window.parent.document.getElementById(targetId)?.contentWindow;
-    if (targetIframe) {
-        targetIframe.postMessage({ type, payload, from: childId, to: targetId }, '*');
-    }
 }
 
 // 核心渲染
@@ -266,7 +313,7 @@ async function format() {
         bar.innerHTML = `
             <span id='s_nav'></span>
             <span id='diff-btn'></span>
-            <span id='cm' title='0 comment' style="display:none" onclick='sendToParent("sh_comments", document.getElementById("stamp")?.innerText || "")'>💬</span>
+            <span id='cm' title='0 comment' style="display:none" onclick='emitEvent("sh_comments", document.getElementById("stamp")?.innerText || "", "index");'>💬</span>
             <span id='stamp' title='${format_date(parts[0])}'>${parts[1]} > ${document.title}</span>
             <div style='top:0;left:0'>
                 <div id='processBar' style='height: 3px; background: violet; width: 0%;'></div>
@@ -333,7 +380,8 @@ function search() {
     }
 
     // 2. 跨语言调用：将整片文章作为 globalText 发送给 Rust (Wasm)
-    const resultObj = find_content_matches(globalText, rawKeyword);
+    const noise = Number(store.noise_level ?? 3);
+    const resultObj = find_content_matches(globalText, rawKeyword, noise);
     
     const matches = resultObj.matches || [];
     const snippets = resultObj.snippets || [];
@@ -341,7 +389,7 @@ function search() {
 
     // 搜索无结果处理
     if (matches.length === 0) {
-        sendToParent("LOCAL_SEARCH_RESULT", { keyword: rawKeyword, count: 0, title: document.title });
+        emitEvent("LOCAL_SEARCH_RESULT", { keyword: rawKeyword, count: 0, title: document.title }, "index");
         return;
     }
 
@@ -352,18 +400,18 @@ function search() {
     }
 
     // 3. 渲染高亮：收集 Range（绝对零 DOM 修改）
-    CSS.highlights.clear(); // 清空历史高亮
+    CSS.highlights.clear(); 
     window._searchMatchRanges.clear();
+    clearActiveSearchBorders();
     
-    const generalRanges = []; // 存储所有高亮选区
+    // [新增] 建立根据杂字数分层的高亮池
+    const rangesByNoise = new Map();
 
     nodeMap.forEach(item => {
         const node = item.node;
         const nodeText = node.nodeValue;
         
-        // 找出所有落在这个节点范围内的匹配项碎片 (Wasm 已经排除了重叠)
         const nodeMatches = matches.filter(m => m.start < item.end && m.end > item.start);
-        
         if (nodeMatches.length === 0) return;
 
         nodeMatches.sort((a, b) => a.start - b.start).forEach(m => {
@@ -375,7 +423,10 @@ function search() {
                 range.setStart(node, localStart);
                 range.setEnd(node, localEnd);
                 
-                generalRanges.push(range);
+                // 将碎片的杂字数抽离作为键名分类存放
+                const noise = m.noise || 0;
+                if (!rangesByNoise.has(noise)) rangesByNoise.set(noise, []);
+                rangesByNoise.get(noise).push(range);
 
                 if (!window._searchMatchRanges.has(m.index)) {
                     window._searchMatchRanges.set(m.index, []);
@@ -385,20 +436,21 @@ function search() {
         });
     });
 
-    if (generalRanges.length > 0) {
-        const highlightName = isTolerantMatch ? 'search-tolerant' : 'search-exact';
-        const highlightObj = new Highlight(...generalRanges);
-        CSS.highlights.set(highlightName, highlightObj);
-    }
+    // 循环注册不同级别的 CSS Highlights 图层
+    rangesByNoise.forEach((ranges, noise) => {
+        const highlightName = noise === 0 ? 'search-exact' : `search-noise-${Math.min(noise, 3)}`; // 超过3个杂字兜底为3级
+        CSS.highlights.set(highlightName, new Highlight(...ranges));
+    });
+    
 
     // 4. 将高亮摘要统计结果反馈给顶级系统 (index.js)
-    sendToParent("LOCAL_SEARCH_RESULT", { 
+    emitEvent("LOCAL_SEARCH_RESULT", { 
         keyword: rawKeyword, 
         count: resultObj.count, 
         title: document.title,
         snippets: snippets,
         isTolerantMatch: isTolerantMatch
-    });
+    }, "index");
 
     // 5. 组装导航面板 (Next / Prev)
     const totalMatches = resultObj.count;
@@ -414,8 +466,8 @@ function search() {
             destroyButton.id = "destroy";
             destroyButton.innerText = "destroy";
             destroyButton.onclick = function () {
-                // 触发内部清除逻辑
                 if (CSS.highlights) CSS.highlights.clear();
+                clearActiveSearchBorders();
                 const nav = $("#s_nav");
                 if (nav) nav.innerHTML = "";
                 store.jump_from_search = "0";
@@ -433,20 +485,31 @@ function search() {
 
         indexDisplay.innerText = " " + (currentIndex + 1) + " / " + totalMatches;
 
-        // 移除旧的激活态，覆盖全新的 search-active 高亮层
-        if (CSS.highlights.has('search-active')) {
-            CSS.highlights.delete('search-active');
-        }
+        // 每次跳转先清除前一个红框
+        clearActiveSearchBorders();
 
         const currentGroupRanges = window._searchMatchRanges.get(currentIndex) || [];
-        if (currentGroupRanges.length > 0) {
-            const activeHighlight = new Highlight(...currentGroupRanges);
-            CSS.highlights.set('search-active', activeHighlight);
+            if (currentGroupRanges.length > 0) {
+                
+                const fragment = document.createDocumentFragment();
+                
+                currentGroupRanges.forEach(range => {
+                    const rect = range.getBoundingClientRect();
+                    const box = document.createElement('div');
+                    box.className = 'active-search-border';
+                    box.style.cssText = `
+                        left: ${window.scrollX + rect.left - 4}px; 
+                        top: ${window.scrollY + rect.top - 3}px; 
+                        width: ${rect.width + 8}px; 
+                        height: ${rect.height + 8}px; 
+                    `;
+                    fragment.appendChild(box);
+                    window._activeSearchBorders.push(box);
+                });
 
-            // 抑制滚动冲突锁
+                document.body.appendChild(fragment);
+
             isAutoScrolling = true;
-            
-            // 获取当前分组第一个碎片的边界盒子进行平滑滚动
             const firstRange = currentGroupRanges[0];
             const rect = firstRange.getBoundingClientRect();
             const absoluteTop = window.scrollY + rect.top;
@@ -501,8 +564,8 @@ function countMatchesEnhanced(kw) {
         globalText += walker.currentNode.nodeValue;
     }
 
-    // 以前这里要写一堆重复正则，现在一行代码搞定！
-    const resultObj = find_content_matches(globalText, kw);
+    const noise = Number(store.noise_level ?? 3);
+    const resultObj = find_content_matches(globalText, kw, noise);
 
     return { 
         count: resultObj.count, 
@@ -650,7 +713,7 @@ function lightbox() {
         var lightbox = $('.lightbox');
         if (lightbox) lightbox.remove();
         scale = 1.0;
-        sendToParent("lightbox", { status: "0" });
+        emitEvent("lightbox", { status: "0" }, "index");
         document.body.style.overflow = "";
         
         if (isFromPopState !== true && history.state && history.state.lightboxOpen) {
@@ -838,7 +901,7 @@ function lightbox() {
     images.forEach(function (img, index) {
         img.addEventListener('click', function () {
             openLightbox(index, images.length);
-            sendToParent("lightbox", { status: "1" });
+            emitEvent("lightbox", { status: "1" }, "index");
             document.body.style.overflow = "hidden";
         });
     });
@@ -997,7 +1060,15 @@ function postion_func() {
         window.scrollTo(0, parseInt(scrollPosition));
     }
 
-    let scrollTimer = null; 
+    let memPositions = Object.assign({}, positions);
+    let dirty = false;
+    let scrollTimer = null;
+
+    function flushPositions() {
+        if (!dirty) return;
+        store.positions = memPositions;
+        dirty = false;
+    }
 
     window.addEventListener('scroll', function (e) {
         if (isAutoScrolling) return;
@@ -1009,9 +1080,8 @@ function postion_func() {
         scrollTimer = setTimeout(function() {
             var pageTitle = document.title;
             var scrollPosition = window.pageYOffset;
-            const positions = store.positions || {};
-            positions[pageTitle] = scrollPosition;
-            store.positions = positions;
+            memPositions[pageTitle] = scrollPosition;
+            dirty = true;
 
             if ($("#gotop")) {
                 document.body.scrollTop > 500 || document.documentElement.scrollTop > 500
@@ -1031,6 +1101,12 @@ function postion_func() {
         }, 300);
         
     }, false);
+
+    document.addEventListener('visibilitychange', function () {
+        if (document.visibilityState === 'hidden') flushPositions();
+    });
+    window.addEventListener('pagehide', flushPositions);
+    window.addEventListener('beforeunload', flushPositions);
 }
 
 // 回顶
@@ -1073,10 +1149,10 @@ function pinyin_func() {
 function comments() {
     if(document.title.trim() !== "" && store.online_flag == "1"){
         const stampText = document.getElementById("stamp")?.innerText || "";
-        sendToParent("load_comments", {
+        emitEvent("load_comments", {
             title: document.title.trim(),
             stamp: stampText
-        });
+        }, "index");
     }
 }
 
@@ -1094,11 +1170,7 @@ function initExcerptTrigger() {
             const sel = window.getSelection();
             const text = sel.toString().trim();
             if (text.length > 1) {
-                if (typeof sendToParent === 'function') {
-                    sendToParent('SAVE_EXCERPT', text);
-                } else {
-                    window.parent.postMessage({ type: 'SAVE_EXCERPT', payload: text, from: 'content' }, '*');
-                }
+                emitEvent('SAVE_EXCERPT', text, 'index');
                 
                 const oldText = btn.textContent;
                 btn.textContent = '✅ 已摘抄';
@@ -1310,7 +1382,7 @@ async function initDiffUI() {
 
     const wrapper = document.createElement('span');
     wrapper.id = 'diff-controls-wrapper';
-    wrapper.style.cssText = 'position:fixed; left:80px; display:flex; align-items:center; gap:6px; z-index: 100;';
+    wrapper.style.cssText = 'padding: 0 3px;background: #cfe4ff;top: 3px;position: fixed;left: 80px;display: flex;align-items: center;gap: 6px;z-index: 100;';
     
     const selectStyle = '';
     const fromSelect = document.createElement('select');
@@ -1392,6 +1464,7 @@ async function initDiffUI() {
                 diffPre.style.marginBottom = originMarginBottom;
                 
                 renderDiffView(oldTokens, newTokens, diffPre);
+                updateDiffMinimap(diffPre);
 
                 window._isDiffMode = true;
                 btnStart.textContent = 're-diff';
@@ -1410,7 +1483,8 @@ async function initDiffUI() {
         
         if (diffPre) diffPre.remove();
         if (originalPre) originalPre.style.display = 'block';
-        
+        hideDiffMinimap();
+
         window._isDiffMode = false;
         btnStart.textContent = 'diff';
         btnCancel.style.display = 'none';
@@ -1422,7 +1496,7 @@ function renderDiffView(oldTokens, newTokens, preTag) {
     const oldKeys = oldTokens.map(t => t.content);
     const newKeys = newTokens.map(t => t.content);
 
-    const diffOps = computeLCSDiff(oldKeys, newKeys);
+    const diffOps = compute_lcs_diff(oldKeys, newKeys);
     let mergedHtml = "";
 
     const isBlank = (t) => {
@@ -1479,6 +1553,158 @@ function renderDiffView(oldTokens, newTokens, preTag) {
 
     preTag.innerHTML = mergedHtml;
     preTag.querySelectorAll('code').forEach(updateLineNumbers);
+}
+
+// ------------------------------------------------------------------
+// Diff Minimap（滚动条旁的改动位置概览条，类似 VS Code 的 overview ruler）
+// ------------------------------------------------------------------
+let _diffMinimapEl = null;
+let _diffMinimapResizeBound = false;
+let _diffMinimapResizeTimer = null;
+let _diffMinimapActivePre = null;
+
+function ensureDiffMinimapEl() {
+    if($("#toc")) $("#toc").style.display = "none";
+    if($("#gotop")) $("#gotop").style.right = "20px";
+
+    if (_diffMinimapEl && document.body.contains(_diffMinimapEl)) return _diffMinimapEl;
+
+    const el = document.createElement('div');
+    el.id = 'diff-minimap';
+    el.style.cssText = `
+        position: fixed;
+        top: 0;
+        right: 0;
+        width: 20px;
+        height: 100vh;
+        z-index: 1000;
+        pointer-events: none;
+        background: rgba(127, 127, 127, 0.08);
+        display: none;
+    `;
+    document.body.appendChild(el);
+    _diffMinimapEl = el;
+    return el;
+}
+
+// 从渲染好的 diff-pre 中提取所有被标记为增/删的行，合并成相邻的「变更块」(hunk)
+function collectDiffHunks(diffPre) {
+    const marked = diffPre.querySelectorAll('[style*="border-left"]');
+    if (marked.length === 0) return [];
+
+    // 🚀 优化：批量读取 offsetTop 替代 getBoundingClientRect，且直接按 DOM 顺序遍历，无需 sort()
+    const items = Array.from(marked).map(el => {
+        // 直接读取 style 对象属性，比字符串 includes 快
+        const isInsert = el.style.borderLeftColor === 'rgb(16, 185, 129)' || el.style.borderLeftColor === '#10b981';
+        const type = isInsert ? 'insert' : 'delete';
+        
+        return {
+            top: el.offsetTop, 
+            bottom: el.offsetTop + el.offsetHeight,
+            type
+        };
+    });
+
+    const MERGE_GAP = 6;
+    const hunks = [];
+    let current = null;
+
+    items.forEach(item => {
+        if (current && item.top - current.bottom <= MERGE_GAP) {
+            current.bottom = Math.max(current.bottom, item.bottom);
+            current.types.add(item.type);
+        } else {
+            current = { top: item.top, bottom: item.bottom, types: new Set([item.type]) };
+            hunks.push(current);
+        }
+    });
+
+    return hunks;
+}
+
+function renderDiffMinimapMarks(diffPre) {
+    const container = ensureDiffMinimapEl();
+    container.innerHTML = '';
+
+    const hunks = collectDiffHunks(diffPre);
+    if (hunks.length === 0) {
+        container.style.display = 'none';
+        return;
+    }
+
+    const totalHeight = Math.max(document.documentElement.scrollHeight, document.body.scrollHeight, 1);
+
+    hunks.forEach(hunk => {
+        const topRatio = hunk.top / totalHeight;
+        const heightRatio = (hunk.bottom - hunk.top) / totalHeight;
+
+        const isMixed = hunk.types.has('insert') && hunk.types.has('delete');
+        const isInsertOnly = hunk.types.has('insert') && !hunk.types.has('delete');
+        let background;
+        if (isMixed) {
+            background = 'linear-gradient(180deg, #ef4444 50%, #10b981 50%)';
+        } else if (isInsertOnly) {
+            background = '#10b981';
+        } else {
+            background = '#ef4444';
+        }
+
+        const mark = document.createElement('div');
+        mark.title = isMixed ? '修改' : (isInsertOnly ? '新增' : '删除');
+        mark.style.cssText = `
+            position: absolute;
+            left: 1px;
+            right: 1px;
+            top: ${topRatio * 100}%;
+            height: max(3px, ${heightRatio * 100}%);
+            background: ${background};
+            border-radius: 2px;
+            pointer-events: auto;
+            cursor: pointer;
+            box-shadow: 0 0 0 1px rgba(0,0,0,0.15);
+        `;
+        mark.onclick = () => {
+            const targetY = Math.max(0, hunk.top - window.innerHeight / 2);
+            window.scrollTo({ top: targetY, behavior: 'smooth' });
+        };
+        container.appendChild(mark);
+    });
+
+    container.style.display = 'block';
+}
+
+let _diffMinimapResizeHandler = null;
+function updateDiffMinimap(diffPre) {
+    _diffMinimapActivePre = diffPre;
+    renderDiffMinimapMarks(diffPre);
+
+    if (!_diffMinimapResizeBound) {
+        _diffMinimapResizeHandler = () => {
+            if (!_diffMinimapActivePre || !document.body.contains(_diffMinimapActivePre)) return;
+            clearTimeout(_diffMinimapResizeTimer);
+            _diffMinimapResizeTimer = setTimeout(() => {
+                renderDiffMinimapMarks(_diffMinimapActivePre);
+            }, 150);
+        };
+        window.addEventListener('resize', _diffMinimapResizeHandler);
+        _diffMinimapResizeBound = true;
+    }
+}
+
+function hideDiffMinimap() {
+    if($("#toc")) $("#toc").style.display = "flex";
+    if($("#gotop")) $("#gotop").style.right = "0";
+
+    _diffMinimapActivePre = null;
+    if (_diffMinimapEl) {
+        _diffMinimapEl.innerHTML = '';
+        _diffMinimapEl.style.display = 'none';
+    }
+
+    if (_diffMinimapResizeBound) {
+        window.removeEventListener('resize', _diffMinimapResizeHandler);
+        _diffMinimapResizeBound = false;
+    }
 }
 
 // 分词序列化
@@ -1593,81 +1819,4 @@ async function getTokensForSource(value, historyList) {
     const rawHtml = match ? match[1] : rawText;
 
     return buildRenderedTokens(rawHtml);
-}
-
-// LCS 逐行对比算法
-function computeLCSDiff(oldLines, newLines) {
-    let start = 0;
-    const N = oldLines.length;
-    const M = newLines.length;
-    
-    // 前缀剪枝
-    while (start < N && start < M && oldLines[start] === newLines[start]) {
-        start++;
-    }
-    
-    // 后缀剪枝
-    let oldEnd = N - 1;
-    let newEnd = M - 1;
-    while (oldEnd >= start && newEnd >= start && oldLines[oldEnd] === newLines[newEnd]) {
-        oldEnd--;
-        newEnd--;
-    }
-    
-    const result = [];
-    
-    // 将公共前缀直接作为 equal 压入
-    for (let i = 0; i < start; i++) {
-        result.push({ type: 'equal', oldIdx: i, newIdx: i });
-    }
-    
-    const trimmedOld = oldLines.slice(start, oldEnd + 1);
-    const trimmedNew = newLines.slice(start, newEnd + 1);
-    const trimN = trimmedOld.length;
-    const trimM = trimmedNew.length;
-    
-    // 经过剪枝，只有真正在发生变动的极小区间才会进入核心 DP 矩阵
-    if (trimN > 0 || trimM > 0) {
-        if (trimN * trimM > 25000000) {
-            alert("⚠️ 差异区间过大，降级显示。");
-            result.push(...trimmedOld.map((_, i) => ({ type: 'delete', oldIdx: start + i })));
-            result.push(...trimmedNew.map((_, j) => ({ type: 'insert', newIdx: start + j })));
-        } else {
-            const dp = new Int32Array((trimN + 1) * (trimM + 1));
-            const idx = (i, j) => i * (trimM + 1) + j;
-            
-            for (let i = 1; i <= trimN; i++) {
-                for (let j = 1; j <= trimM; j++) {
-                    if (trimmedOld[i - 1] === trimmedNew[j - 1]) {
-                        dp[idx(i, j)] = dp[idx(i - 1, j - 1)] + 1;
-                    } else {
-                        dp[idx(i, j)] = Math.max(dp[idx(i - 1, j)], dp[idx(i, j - 1)]);
-                    }
-                }
-            }
-            
-            let i = trimN, j = trimM;
-            const diffs = [];
-            while (i > 0 || j > 0) {
-                if (i > 0 && j > 0 && trimmedOld[i - 1] === trimmedNew[j - 1]) {
-                    diffs.push({ type: 'equal', oldIdx: start + i - 1, newIdx: start + j - 1 });
-                    i--; j--;
-                } else if (j > 0 && (i === 0 || dp[idx(i, j - 1)] >= dp[idx(i - 1, j)])) {
-                    diffs.push({ type: 'insert', newIdx: start + j - 1 });
-                    j--;
-                } else if (i > 0 && (j === 0 || dp[idx(i, j - 1)] < dp[idx(i - 1, j)])) {
-                    diffs.push({ type: 'delete', oldIdx: start + i - 1 });
-                    i--;
-                }
-            }
-            result.push(...diffs.reverse());
-        }
-    }
-    
-    // 将公共后缀直接作为 equal 压入
-    for (let i = oldEnd + 1, j = newEnd + 1; i < N && j < M; i++, j++) {
-        result.push({ type: 'equal', oldIdx: i, newIdx: j });
-    }
-    
-    return result;
 }

@@ -485,3 +485,46 @@ audio {
     align-items: center;
     padding: 0;
 }
+
+#task-pingpong-box {
+    position: fixed;
+    width: 280px;
+    padding: 8px 20px;
+    background: #2d2d2d;
+    color: #fff;
+    display: none;
+}
+
+#task-pingpong-box .close-btn {
+    position: absolute;
+    top: 8px;
+    right: 10px;
+    background: #0003;
+    color: #ff0000;
+    width: 22px;
+    height: 22px;
+    cursor: pointer;
+}
+
+#task-pingpong-box .close-btn:hover {
+    background: rgba(0,0,0,0.4);
+}
+
+#task-pingpong-box h3 {
+    margin: 0 0 8px 0;
+    font-size: 16px;
+    border-bottom: 1px solid rgba(255,255,255,.3);
+    padding-bottom: 4px;
+}
+
+#task-pingpong-box ul {
+    margin: 0;
+    padding-left: 18px;
+    font-size: 14px;
+    max-height: 120px;
+    overflow-y: auto;
+}
+#task-pingpong-box li {
+    margin-bottom: 4px;
+    word-break: break-all;
+}

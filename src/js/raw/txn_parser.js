@@ -1366,7 +1366,7 @@ function withTip(innerHTML, tipHTML) { return `<span class="has-tip">${innerHTML
 if (store.online_flag === "0") {
   currentFilename = "txn.txt"; // 本地环境固定使用默认文件名
 
-  fetch(`../../_build/txn.txt?t=${Date.now()}`)
+  fetch(`../../_build/secrets/txn.txt?t=${Date.now()}`)
     .then(res => {
       if (!res.ok) throw new Error('HTTP ' + res.status);
       return res.text();

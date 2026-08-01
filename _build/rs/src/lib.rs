@@ -5,19 +5,20 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsValue;
 use lru::LruCache;
 use std::num::NonZeroUsize;
-use rmp_serde::from_slice;
 use lazy_static::lazy_static;
 use serde_json::Value;
+use similar::{Algorithm, DiffOp, capture_diff_slices};
 
 // ==========================================
 // 1. 全局内存驻留区 & LRU 编译缓存
 // ==========================================
+const CACHE_CAP: usize = 32;
+
 thread_local! {
     static GLOBAL_DATA: RefCell<Vec<String>> = RefCell::new(Vec::new());
-    
-    // 🚀 均改为缓存 Regex 对象
-    static EXACT_CACHE: RefCell<LruCache<String, Regex>> = RefCell::new(LruCache::new(NonZeroUsize::new(32).unwrap()));
-    static TOLERANT_CACHE: RefCell<LruCache<String, Regex>> = RefCell::new(LruCache::new(NonZeroUsize::new(32).unwrap()));
+
+    // 🚀 缓存 Regex 对象（key 里同时编码 noise_level，避免不同宽容度串扰）
+    static TOLERANT_CACHE: RefCell<LruCache<String, Regex>> = RefCell::new(LruCache::new(NonZeroUsize::new(CACHE_CAP).unwrap()));
 }
 
 // ==========================================
@@ -55,71 +56,7 @@ pub struct MatchPos {
     pub start: usize,
     pub end: usize,
     pub index: usize,
-}
-
-// ==========================================
-// 3. Worker 专属接口 (数据灌入与全局搜索)
-// ==========================================
-
-#[wasm_bindgen]
-pub fn set_data(bytes: &[u8]) {
-    let local_vec: Vec<String> = from_slice(bytes).unwrap_or_default();
-    GLOBAL_DATA.with(|data| {
-        *data.borrow_mut() = local_vec;
-    });
-}
-
-#[wasm_bindgen]
-pub fn search(keyword: &str) -> JsValue {
-    if keyword.is_empty() {
-        return serde_wasm_bindgen::to_value(&Vec::<SearchResult>::new()).unwrap();
-    }
-
-    // 1. 获取严格匹配的 Regex（利用缓存，支持字间空白符）
-    let exact_regex = EXACT_CACHE.with(|cache| {
-        let mut cache = cache.borrow_mut();
-        if let Some(re) = cache.get(keyword) {
-            return re.clone();
-        }
-        let re = build_regex(keyword, false);
-        cache.put(keyword.to_string(), re.clone());
-        re
-    });
-
-    // 2. 获取宽容匹配的 Regex（利用缓存，支持最多 3 个杂字）
-    let tolerant_regex = TOLERANT_CACHE.with(|cache| {
-        let mut cache = cache.borrow_mut();
-        if let Some(re) = cache.get(keyword) {
-            return re.clone();
-        }
-        let re = build_regex(keyword, true);
-        cache.put(keyword.to_string(), re.clone());
-        re
-    });
-
-    // 3. 执行全局扫描与合并排序
-    GLOBAL_DATA.with(|data| {
-        let pool = data.borrow();
-        if pool.is_empty() {
-            return serde_wasm_bindgen::to_value(&Vec::<SearchResult>::new()).unwrap();
-        }
-
-        // 第一遍：严格模式（现已完美支持“姓 名”这类中间夹杂空格的排版）
-        let mut hits = execute_scan(&pool, &exact_regex, false);
-
-        // 融合扫描：严格模式若无果，自动降级跑宽容模式
-        if hits.is_empty() {
-            hits = execute_scan(&pool, &tolerant_regex, true);
-        }
-
-        hits.sort_by(|a, b| {
-            b.score.cmp(&a.score)
-                .then(b.count.cmp(&b.count))
-                .then(a.title.cmp(&b.title)) 
-        });
-
-        serde_wasm_bindgen::to_value(&hits).unwrap()
-    })
+    pub noise: usize,
 }
 
 // ==========================================
@@ -127,51 +64,58 @@ pub fn search(keyword: &str) -> JsValue {
 // ==========================================
 
 #[wasm_bindgen]
-pub fn find_content_matches(global_text: &str, keyword: &str) -> JsValue {
+pub fn find_content_matches(global_text: &str, keyword: &str, noise_level: usize) -> JsValue {
     if keyword.trim().is_empty() || global_text.is_empty() {
         return serde_wasm_bindgen::to_value(&ContentMatchResult {
-            count: 0,
-            matches: vec![],
-            snippets: vec![],
-            is_tolerant_match: false,
+            count: 0, matches: vec![], snippets: vec![], is_tolerant_match: false,
         }).unwrap();
     }
 
-    // ✅ 修复点：在最外层作用域提前构建好两种正则，保证后续都能借用到
-    let exact_regex = build_regex(keyword, false);
-    let tolerant_regex = build_regex(keyword, true);
-    let mut is_tolerant = false;
+    let kw_len = keyword.chars().filter(|c| !c.is_whitespace()).count();
+    let tolerant_regex = build_regex(keyword, noise_level);
     
-    // 第一遍：精准匹配
-    let mut hits = find_hits(global_text, &exact_regex);
+    // 只扫描一次
+    let mut hits = Vec::new();
+    let mut group_index = 0;
     
-    // 融合扫描：宽容降级
-    if hits.is_empty() {
-        hits = find_hits(global_text, &tolerant_regex);
-        if !hits.is_empty() {
-            is_tolerant = true;
-        }
+    let mut utf16_mapping = vec![0; global_text.len() + 1];
+    let mut utf16_len = 0;
+    for (byte_idx, ch) in global_text.char_indices() {
+        utf16_mapping[byte_idx] = utf16_len;
+        utf16_len += ch.len_utf16(); 
+    }
+    utf16_mapping[global_text.len()] = utf16_len;
+
+    for mat in tolerant_regex.find_iter(global_text) {
+        if mat.start() == mat.end() { continue; } 
+        
+        // 计算当前碎片的杂字数
+        let match_chars = mat.as_str().chars().filter(|c| !c.is_whitespace()).count();
+        let noise = match_chars.saturating_sub(kw_len);
+
+        let utf16_start = utf16_mapping[mat.start()];
+        let utf16_end = utf16_mapping[mat.end()];
+
+        hits.push(MatchPos {
+            start: utf16_start,
+            end: utf16_end,
+            index: group_index,
+            noise, // 携带置信度丢给 JS
+        });
+        group_index += 1;
     }
 
     let count = hits.len();
     if count == 0 {
         return serde_wasm_bindgen::to_value(&ContentMatchResult {
-            count: 0,
-            matches: vec![],
-            snippets: vec![],
-            is_tolerant_match: false,
+            count: 0, matches: vec![], snippets: vec![], is_tolerant_match: false,
         }).unwrap();
     }
 
-    // 现在 active_re 可以安全地借用外层的正则对象了
-    let active_re = if is_tolerant { &tolerant_regex } else { &exact_regex };
-    let snippets = extract_snippets(global_text, active_re);
+    let snippets = extract_snippets(global_text, &tolerant_regex);
 
     serde_wasm_bindgen::to_value(&ContentMatchResult {
-        count,
-        matches: hits,
-        snippets,
-        is_tolerant_match: is_tolerant,
+        count, matches: hits, snippets, is_tolerant_match: true,
     }).unwrap()
 }
 
@@ -179,32 +123,75 @@ pub fn find_content_matches(global_text: &str, keyword: &str) -> JsValue {
 // 5. 内部通用引擎库
 // ==========================================
 
-/// 构建正规或宽容正则表达式
-fn build_regex(kw: &str, is_tolerant: bool) -> Regex {
+/// 构建宽容正则表达式（字间允许 0-3 个任意字符，兼容换行与两端空格）
+/// 🚀 命中 TOLERANT_CACHE 时直接复用已编译对象，避免重复编译正则的开销。
+/// 缓存键必须同时携带 noise_level：同一个关键词在不同宽容度下会产出不同的正则，
+/// 若只用关键词做键，会出现"用 noise=3 编译好的正则被 noise=1 的请求误用"的串档问题。
+fn build_regex(kw: &str, noise_level: usize) -> Regex {
+    let cache_key = format!("{}\u{0}{}", noise_level, kw);
+
+    if let Some(cached) = TOLERANT_CACHE.with(|cache| cache.borrow_mut().get(&cache_key).cloned()) {
+        return cached;
+    }
+
     let chars: Vec<char> = kw.chars().filter(|c| !c.is_whitespace()).collect();
     let mut regex_str = String::new();
+    
+    let is_too_long = chars.len() > 25;
     
     for (i, c) in chars.iter().enumerate() {
         regex_str.push_str(&regex::escape(&c.to_string()));
         if i < chars.len() - 1 {
-            if is_tolerant {
-                // 宽容：字间允许 0-3 个任意字符（包括换行）及两端空格
-                regex_str.push_str(r"\s*(?:.|\n){0,3}?\s*");
-            } else {
-                // 严格：字间仅允许任意数量的空白符（空格、换行等）
+            if is_too_long || noise_level == 0 {
+                // 宽容度为0 或 防御超长字符串灾难时：仅允许空白符
                 regex_str.push_str(r"\s*");
+            } else {
+                // 根据下发的 noise_level 动态设置通配区间
+                regex_str.push_str(&format!(r"\s*(?:.|\n){{0,{}}}?\s*", noise_level));
             }
         }
     }
+    let compiled = Regex::new(&format!("(?i){}", regex_str)).unwrap_or_else(|_| Regex::new("^$").unwrap());
 
-    Regex::new(&format!("(?i){}", regex_str)).unwrap_or_else(|_| Regex::new("^$").unwrap())
+    TOLERANT_CACHE.with(|cache| {
+        cache.borrow_mut().put(cache_key, compiled.clone());
+    });
+
+    compiled
 }
 
-/// 统一执行扫描（严格/宽容复用同一套逻辑，仅正则引擎不同）
-fn execute_scan<'a>(pool: &'a [String], re: &Regex, is_tolerant: bool) -> Vec<SearchResult<'a>> {
+#[wasm_bindgen]
+pub fn search(keyword: &str, noise_level: usize) -> JsValue {
+    if keyword.is_empty() {
+        return serde_wasm_bindgen::to_value(&Vec::<SearchResult>::new()).unwrap();
+    }
+    let kw_len = keyword.chars().filter(|c| !c.is_whitespace()).count();
+    
+    let tolerant_regex = build_regex(keyword, noise_level);
+
+    GLOBAL_DATA.with(|data| {
+        let pool = data.borrow();
+        if pool.is_empty() {
+            return serde_wasm_bindgen::to_value(&Vec::<SearchResult>::new()).unwrap();
+        }
+
+        // 直接执行合并扫描
+        let mut hits = execute_scan(&pool, &tolerant_regex, kw_len);
+
+        // 排序：优先看超高权重的 Score
+        hits.sort_by(|a, b| {
+            b.score.cmp(&a.score)
+                .then(b.count.cmp(&a.count))
+                .then(a.title.cmp(&b.title)) 
+        });
+
+        serde_wasm_bindgen::to_value(&hits).unwrap()
+    })
+}
+
+// 改造 execute_scan 引入动态计分
+fn execute_scan<'a>(pool: &'a [String], re: &Regex, kw_len: usize) -> Vec<SearchResult<'a>> {
     let mut results = Vec::new();
-    let weight_title = 50;
-    let weight_content = 1;
 
     for i in (0..pool.len()).step_by(4) {
         if i + 3 >= pool.len() { break; }
@@ -224,9 +211,26 @@ fn execute_scan<'a>(pool: &'a [String], re: &Regex, is_tolerant: bool) -> Vec<Se
             raw_content
         };
 
-        let title_hits = re.find_iter(&title).count();
-        let content_hits = re.find_iter(searchable_content).count();
-        let mut count = title_hits + content_hits;
+        let mut count = 0;
+        let mut score = 0;
+
+        // 标题命中计分 (断层权重)
+        for mat in re.find_iter(title) {
+            count += 1;
+            let match_chars = mat.as_str().chars().filter(|c| !c.is_whitespace()).count();
+            let noise = match_chars.saturating_sub(kw_len);
+            score += if noise == 0 { 5000 } else { 500 - noise * 50 };
+        }
+
+        // 正文命中计分
+        let mut content_hits = 0;
+        for mat in re.find_iter(searchable_content) {
+            count += 1;
+            content_hits += 1;
+            let match_chars = mat.as_str().chars().filter(|c| !c.is_whitespace()).count();
+            let noise = match_chars.saturating_sub(kw_len);
+            score += if noise == 0 { 100 } else { 10 - noise };
+        }
         
         if count == 0 && res_type != &"html" && res_type != &"image" {
             count = re.find_iter(path).count();
@@ -241,42 +245,11 @@ fn execute_scan<'a>(pool: &'a [String], re: &Regex, is_tolerant: bool) -> Vec<Se
         };
 
         results.push(SearchResult {
-            title, count, score: (title_hits * weight_title) + (content_hits * weight_content),
-            res_type, path, local_only: is_local_only, snippets, is_tolerant_match: is_tolerant,
+            title, count, score,
+            res_type, path, local_only: is_local_only, snippets, is_tolerant_match: true,
         });
     }
     results
-}
-
-/// 针对 content.js 的单页精准坐标扫描（附带 UTF8 -> UTF16 转换防偏移）
-fn find_hits(text: &str, re: &Regex) -> Vec<MatchPos> {
-    let mut hits = Vec::new();
-    let mut group_index = 0;
-    
-    // 安全构建索引映射（Byte index -> UTF-16 length）
-    let mut utf16_mapping = vec![0; text.len() + 1];
-    let mut utf16_len = 0;
-    for (byte_idx, ch) in text.char_indices() {
-        utf16_mapping[byte_idx] = utf16_len;
-        utf16_len += ch.len_utf16(); 
-    }
-    utf16_mapping[text.len()] = utf16_len;
-
-    for mat in re.find_iter(text) {
-        if mat.start() == mat.end() { continue; } 
-        
-        // 关键：返回给 JS 的永远是转化后的 UTF-16 坐标
-        let utf16_start = utf16_mapping[mat.start()];
-        let utf16_end = utf16_mapping[mat.end()];
-
-        hits.push(MatchPos {
-            start: utf16_start,
-            end: utf16_end,
-            index: group_index,
-        });
-        group_index += 1;
-    }
-    hits
 }
 
 /// 针对 content.js 的切片生成器
@@ -404,19 +377,32 @@ pub fn format_markdown(text: &str) -> String {
 }
 
 // ==========================================
-// 改造后的二进制数据接收口
-// 签名由 &str 变更为 &[u8]，wasm-bindgen 会自动将其映射为 JS 的 Uint8Array
+// 改造后的 Wasm 内存接收口
+// 签名变更为 JsValue，直接在内存边界映射 JS 数组，消灭反序列化开销
+// ==========================================
+#[wasm_bindgen]
+pub fn set_data(data_val: JsValue) {
+    let local_vec: Vec<String> = serde_wasm_bindgen::from_value(data_val).unwrap_or_default();
+    GLOBAL_DATA.with(|data| {
+        *data.borrow_mut() = local_vec;
+    });
+}
+
+// ==========================================
+// 改造后的数据拼装引擎
+// 直接接收 JS 对象句柄，返回装配好的 JS 数组对象
 // ==========================================
 #[wasm_bindgen]
 pub fn build_flat_data(
-    lite_bytes: &[u8],
-    fat_bytes: &[u8],
-    shadow_bytes: &[u8],
+    lite_val: JsValue,
+    fat_val: JsValue,
+    shadow_val: JsValue,
     is_offline: bool,
-) -> Vec<u8> {
-    let lite: Value = from_slice(lite_bytes).unwrap_or(Value::Null);
-    let fat: Value = from_slice(fat_bytes).unwrap_or(Value::Null);
-    let shadow: Value = from_slice(shadow_bytes).unwrap_or(Value::Null);
+) -> JsValue {
+    // 跨越 Wasm 边界，零拷贝映射为 Rust 的 serde_json::Value
+    let lite: Value = serde_wasm_bindgen::from_value(lite_val).unwrap_or(Value::Null);
+    let fat: Value = serde_wasm_bindgen::from_value(fat_val).unwrap_or(Value::Null);
+    let shadow: Value = serde_wasm_bindgen::from_value(shadow_val).unwrap_or(Value::Null);
 
     let mut results: Vec<String> = Vec::new();
     let buckets = [
@@ -429,8 +415,8 @@ pub fn build_flat_data(
         }
     }
 
-    // 原生序列化，一次性打包成字节流
-    rmp_serde::to_vec(&results).unwrap_or_default()
+    // 抛弃 rmp_serde 二进制打包，直接返回 JS 数组对象给 Worker
+    serde_wasm_bindgen::to_value(&results).unwrap_or(JsValue::NULL)
 }
 
 fn flatten_tree_recursive(node: &Value, prefix: &str, bucket: &str, fat: &Value, shadow: &Value, is_offline: bool, results: &mut Vec<String>) {
@@ -494,6 +480,197 @@ fn flatten_tree_recursive(node: &Value, prefix: &str, bucket: &str, fat: &Value,
                     format!("{}{}/", prefix, k)
                 };
                 flatten_tree_recursive(v, &next_prefix, bucket, fat, shadow, is_offline, results);
+            }
+        }
+    }
+}
+
+// ==========================================
+// LCS 逐行对比算法 (similar crate, 对齐 JS computeLCSDiff 输出形状)
+// ==========================================
+
+/// 单条 diff 操作，与 JS 侧 { type, oldIdx?, newIdx? } 对齐
+#[derive(Serialize, Clone)]
+pub struct DiffLineOp {
+    #[serde(rename = "type")]
+    pub op_type: &'static str,
+    #[serde(rename = "oldIdx", skip_serializing_if = "Option::is_none")]
+    pub old_idx: Option<usize>,
+    #[serde(rename = "newIdx", skip_serializing_if = "Option::is_none")]
+    pub new_idx: Option<usize>,
+}
+
+/// 对两行数组做 LCS 逐行 diff，返回与 JS computeLCSDiff 相同形状的操作列表。
+/// - equal: 两边都有 oldIdx / newIdx
+/// - delete: 只有 oldIdx
+/// - insert: 只有 newIdx
+///
+/// 内部使用 similar 的 LCS 算法，并带与 JS 相同的前缀/后缀剪枝 + 超大区间降级。
+#[wasm_bindgen]
+pub fn compute_lcs_diff(old_lines: JsValue, new_lines: JsValue) -> JsValue {
+    let old: Vec<String> = match serde_wasm_bindgen::from_value(old_lines) {
+        Ok(v) => v,
+        Err(_) => return serde_wasm_bindgen::to_value(&Vec::<DiffLineOp>::new()).unwrap(),
+    };
+    let new: Vec<String> = match serde_wasm_bindgen::from_value(new_lines) {
+        Ok(v) => v,
+        Err(_) => return serde_wasm_bindgen::to_value(&Vec::<DiffLineOp>::new()).unwrap(),
+    };
+
+    let ops = compute_lcs_diff_inner(&old, &new);
+    serde_wasm_bindgen::to_value(&ops).unwrap()
+}
+
+fn compute_lcs_diff_inner(old_lines: &[String], new_lines: &[String]) -> Vec<DiffLineOp> {
+    let n = old_lines.len();
+    let m = new_lines.len();
+    let mut result = Vec::new();
+
+    // 前缀剪枝
+    let mut start = 0usize;
+    while start < n && start < m && old_lines[start] == new_lines[start] {
+        start += 1;
+    }
+
+    // 后缀剪枝
+    let mut old_end = n as isize - 1;
+    let mut new_end = m as isize - 1;
+    while old_end >= start as isize
+        && new_end >= start as isize
+        && old_lines[old_end as usize] == new_lines[new_end as usize]
+    {
+        old_end -= 1;
+        new_end -= 1;
+    }
+
+    // 公共前缀 → equal
+    for i in 0..start {
+        result.push(DiffLineOp {
+            op_type: "equal",
+            old_idx: Some(i),
+            new_idx: Some(i),
+        });
+    }
+
+    let old_mid_end = if old_end < start as isize {
+        start
+    } else {
+        (old_end + 1) as usize
+    };
+    let new_mid_end = if new_end < start as isize {
+        start
+    } else {
+        (new_end + 1) as usize
+    };
+    let trimmed_old = &old_lines[start..old_mid_end];
+    let trimmed_new = &new_lines[start..new_mid_end];
+    let trim_n = trimmed_old.len();
+    let trim_m = trimmed_new.len();
+
+    if trim_n > 0 || trim_m > 0 {
+        // 与 JS 相同：超大区间降级为纯 delete + insert
+        if trim_n.saturating_mul(trim_m) > 25_000_000 {
+            for i in 0..trim_n {
+                result.push(DiffLineOp {
+                    op_type: "delete",
+                    old_idx: Some(start + i),
+                    new_idx: None,
+                });
+            }
+            for j in 0..trim_m {
+                result.push(DiffLineOp {
+                    op_type: "insert",
+                    old_idx: None,
+                    new_idx: Some(start + j),
+                });
+            }
+        } else {
+            // 使用 similar 的 LCS 算法
+            let diff_ops = capture_diff_slices(Algorithm::Lcs, trimmed_old, trimmed_new);
+            expand_diff_ops(&diff_ops, start, &mut result);
+        }
+    }
+
+    // 公共后缀 → equal
+    let mut i = (old_end + 1) as usize;
+    let mut j = (new_end + 1) as usize;
+    while i < n && j < m {
+        result.push(DiffLineOp {
+            op_type: "equal",
+            old_idx: Some(i),
+            new_idx: Some(j),
+        });
+        i += 1;
+        j += 1;
+    }
+
+    result
+}
+
+/// 把 similar 的 range-based DiffOp 展开成与 JS 一致的逐行操作
+fn expand_diff_ops(ops: &[DiffOp], offset: usize, out: &mut Vec<DiffLineOp>) {
+    for op in ops {
+        match *op {
+            DiffOp::Equal {
+                old_index,
+                new_index,
+                len,
+            } => {
+                for k in 0..len {
+                    out.push(DiffLineOp {
+                        op_type: "equal",
+                        old_idx: Some(offset + old_index + k),
+                        new_idx: Some(offset + new_index + k),
+                    });
+                }
+            }
+            DiffOp::Delete {
+                old_index,
+                old_len,
+                ..
+            } => {
+                for k in 0..old_len {
+                    out.push(DiffLineOp {
+                        op_type: "delete",
+                        old_idx: Some(offset + old_index + k),
+                        new_idx: None,
+                    });
+                }
+            }
+            DiffOp::Insert {
+                new_index,
+                new_len,
+                ..
+            } => {
+                for k in 0..new_len {
+                    out.push(DiffLineOp {
+                        op_type: "insert",
+                        old_idx: None,
+                        new_idx: Some(offset + new_index + k),
+                    });
+                }
+            }
+            DiffOp::Replace {
+                old_index,
+                old_len,
+                new_index,
+                new_len,
+            } => {
+                // LCS 通常不会产生 Replace，但为安全起见仍展开为 delete + insert
+                for k in 0..old_len {
+                    out.push(DiffLineOp {
+                        op_type: "delete",
+                        old_idx: Some(offset + old_index + k),
+                        new_idx: None,
+                    });
+                }
+                for k in 0..new_len {
+                    out.push(DiffLineOp {
+                        op_type: "insert",
+                        old_idx: None,
+                        new_idx: Some(offset + new_index + k),
+                    });
+                }
             }
         }
     }

@@ -21,7 +21,6 @@ public class Config {
 
     public static final String FILE_LITE_DATA = "lite_data.js";
     public static final String FILE_FAT_DATA_PREFIX = "fat_data_";
-    public static final String FILE_DATA_INDEX = "dataIndex.js";
     public static final String FILE_CORE_LIST = "core-list.js";
     public static final String FILE_CORE_BUNDLE = "core-bundle.json";
     public static final String FILE_SW_JS = "sw.js";
@@ -32,6 +31,18 @@ public class Config {
     public static final String PREFIX_VIDEO = "video/";
     public static final String PREFIX_AUDIO = "audio/";
     public static final String PREFIX_EBOOK = "ebook/";
+
+    /** credentials.json 路径（相对工作目录或绝对路径） */
+    public static final String CREDENTIALS_FILE = "secrets/credentials.json";
+    /** token 持久化目录（会生成 StoredCredential） */
+    public static final String TOKENS_DIR = "secrets/tokens";
+    /** 临期任务 JSON 输出路径 */
+    public static final String TASKS_JSON_PATH = "secrets/upcoming_tasks.json";
+    /** 拉取间隔（毫秒），例如 5 分钟 */
+    public static final long TASKS_POLL_INTERVAL_MS = 5 * 60 * 1000L;
+    /** 临期窗口：未来 N 天内的任务（含已过期未完成） */
+    public static final int DUE_WITHIN_DAYS = 7;
+
 
     public static Path buildRoot;
     public static Path htmlDir;

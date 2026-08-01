@@ -1,10 +1,10 @@
 // 触发 SW 更新检查
-self.SW_VERSION = '1785428102446';
+self.SW_VERSION = '1785594836759';
 
 // 远程修复指令, id递增
-self.EMERGENCY = 'repair_command_id=1';
+self.EMERGENCY = 'repair_command_id=2';
 
-importScripts('/src/js/core-list.js?v=1785428102446');
+importScripts('/src/js/core-list.js?v=1785594836759');
 
 // sw.js 顶部新增原生压缩辅助函数
 async function compressText(text) {
@@ -52,16 +52,27 @@ const inFlightRequests = new Map();
 async function fetchWithLock(request, options = {}) {
     const urlStr = typeof request === 'string' ? request : request.url;
     
-    // 如果这个 URL 正在被下载（无论是主线程还是 SW 安装线程发起的），直接白嫖它的 Promise
+    // 如果该 URL 正在被下载，直接白嫖它的 Promise
     if (inFlightRequests.has(urlStr)) {
         const sharedResponse = await inFlightRequests.get(urlStr);
-        return sharedResponse.clone(); // 必须 clone，满足多路并发的分发
+        return sharedResponse.clone();
     }
 
-    const fetchPromise = fetch(request, options).then(res => {
+    // 【新增】：30秒超时熔断机制
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => {
+        controller.abort();
+    }, 30000); 
+    
+    // 合并 signal
+    const fetchOptions = { ...options, signal: controller.signal };
+
+    const fetchPromise = fetch(request, fetchOptions).then(res => {
+        clearTimeout(timeoutId); // 成功则解除定时器
         inFlightRequests.delete(urlStr);
         return res;
     }).catch(err => {
+        clearTimeout(timeoutId); // 失败也解除定时器
         inFlightRequests.delete(urlStr);
         throw err;
     });

@@ -78,8 +78,32 @@ pinyin_func();
 
 
 const childId = 'content';
-function sendToParent(type, payload) {
-    parent.parent.postMessage({ type, payload, from: childId }, '*');
+window.childId = childId;
+if (window.__LITE_BUS__) {
+    window.__LITE_BUS__.close();
+}
+window.__LITE_BUS__ = new BroadcastChannel('bus');
+const BUS = window.__LITE_BUS__;
+
+window.addEventListener('unload', () => {
+    if (window.__LITE_BUS__) {
+        window.__LITE_BUS__.close();
+        window.__LITE_BUS__ = null;
+    }
+});
+
+const ctxId = window.top === window.self ? 'index' : window.childId; 
+
+function emitEvent(type, payload, target = '*') {
+    if (!window.__LITE_BUS__) return;
+    try {
+        window.__LITE_BUS__.postMessage({
+            type,
+            payload,
+            from: ctxId,
+            target
+        });
+    } catch (e) {}
 }
 function initExcerptTrigger() {
     let btn = document.getElementById('excerpt-pop-btn');
@@ -94,11 +118,7 @@ function initExcerptTrigger() {
             const sel = window.getSelection();
             const text = sel.toString().trim();
             if (text.length > 1) {
-                if (typeof sendToParent === 'function') {
-                    sendToParent('SAVE_EXCERPT', text);
-                } else {
-                    window.parent.postMessage({ type: 'SAVE_EXCERPT', payload: text, from: 'content' }, '*');
-                }
+                emitEvent('SAVE_EXCERPT', text, 'index');
                 
                 const oldText = btn.textContent;
                 btn.textContent = '✅ 已摘抄';

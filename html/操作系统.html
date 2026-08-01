@@ -6,7 +6,7 @@
   <title>操作系统</title>
  </head>
  <body>
-  <span id="anchor">20260718133822-21.技巧</span>
+  <span id="anchor">20260801003113-21.技巧</span>
   <pre>
 # pixel在中国地区的IMS注册
 2G,3G时代,手机里有两套网络
@@ -296,7 +296,24 @@ window.onload=()=>{const t={a:"/2c****c1/h****a",b:"/a3****84/h****b"},n=documen
 </code>
 
 # 远程桌面
-Chrome Remote Desktop
+## Chrome Remote Desktop
+    偏重兼容性
+    安装简单
+    Google 中继服务器
+## RustDesk
+    可以不用官方服务器, 不需要完全信任一家公司的黑盒实现
+        自建服务器(例如GCP)可以控制哪些设备可以注册
+    RustDesk ID + 无人值守密码(20~30位)
+        RustDesk ID 不是固定绑定硬件的序列号, 而是根据首次运行时创建的密钥所生成的一个设备 ID
+    两种连接方式
+        P2P
+            服务器只负责"介绍双方认识"。连接建立后数据直接传输。 
+            这种情况下官方服务器和自建服务器几乎没有性能区别   
+        Relay
+            如果官方 Relay 离你很远：日本 → 美国 → 日本, 延迟可能增加不少
+            如果你自己在东京、新加坡、香港部署 Relay, 延迟就会明显降低
+https://github.com/rustdesk/rustdesk/releases/tag/1.4.9
+
 
 # 鼠标键
 20260425184741.webp
@@ -477,15 +494,16 @@ gh api repos/diff4x/comments -q ".node_id"
 gh api graphql -f query="query { repository(owner: \"diff4x\", name: \"comments\") { discussionCategories(first: 10) { nodes { id name } } } }" -q ".data.repository.discussionCategories.nodes[] | \"\(.name): \(.id)\""
 </code>
 
-# GCP 之 Street View Publish
+# GCP
+## Street View Publish
 在谷歌街景中发布个人全景图
-## 参考
+### 参考
     REST
         https://developers.google.com/streetview/publish/reference/rest/?apix=true
     Place ID Finder
         https://developers.google.com/maps/documentation/javascript/examples/places-placeid-finder
 
-## 准备
+### 准备
 Google Cloud Console 创建新项目
     https://console.cloud.google.com/projectcreate
 API & Services
@@ -504,8 +522,11 @@ API & Services
                 Authorized JavaScript origins
                     例如 http://localhost:8000
             保存 client_id
+        Data Access
+            scope 增加
+                https://www.googleapis.com/auth/streetviewpublish
 
-## 交互
+### 交互
 先向 Google 服务器请求一个专门的、临时的上传地址。
     POST： https://streetviewpublish.googleapis.com/v1/photo:startUpload
     Header： 需要附带你的 OAuth 2.0 Authorization: Bearer YOUR_ACCESS_TOKEN。
@@ -555,15 +576,15 @@ API & Services
 }
 </code>
 
-## 全景图要求
+### 全景图要求
 JPEG 格式
 宽高比 2:1
 至少 750 万像素
 单张图片不应超过 50MB
 带有全景 XMP 标签
 
-## 旧 webp 全景加工
-### 转 jpeg
+### 旧 webp 全景加工
+#### 转 jpeg
 <code bash>
 pip install Pillow
 </code>
@@ -576,11 +597,32 @@ im_rgb = im.convert("RGB")
 im_rgb.save("output.jpg", "JPEG", quality=95)
 </code>
 
-### 注入 XMP 标签
+#### 注入 XMP 标签
 https://sourceforge.net/projects/exiftool/files/exiftool-13.59_64.zip/download
 <code batch>
 exiftool -ProjectionType="equirectangular" -UsePanoramaViewer="True" 20250817165030.jpg
 </code>
+
+## Google Tasks
+API & Services
+    Enable APIs and services
+        搜索并启用 Tasks
+    OAuth consent screen 
+        User type
+            External
+        Audience
+            Test users
+                Add users
+        Clients
+            Create OAuth client ID
+                Application type
+                    Desktop app
+            保存 client_id
+        Data Access
+            scope 增加
+                https://www.googleapis.com/auth/tasks.readonly
+
+# GCP 之 RustDesk 中继
 </pre>
  </body>
 </html>
