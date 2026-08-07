@@ -13,12 +13,6 @@ export function build_flat_data(lite_val, fat_val, shadow_val, is_offline) {
 }
 
 /**
- * 对两行数组做 LCS 逐行 diff，返回与 JS computeLCSDiff 相同形状的操作列表。
- * - equal: 两边都有 oldIdx / newIdx
- * - delete: 只有 oldIdx
- * - insert: 只有 newIdx
- *
- * 内部使用 similar 的 LCS 算法，并带与 JS 相同的前缀/后缀剪枝 + 超大区间降级。
  * @param {any} old_lines
  * @param {any} new_lines
  * @returns {any}
@@ -225,6 +219,10 @@ function __wbg_get_imports() {
             const ret = getObject(arg0).length;
             return ret;
         },
+        __wbg_length_381d540857ec99e8: function(arg0) {
+            const ret = getObject(arg0).length;
+            return ret;
+        },
         __wbg_new_32b398fb48b6d94a: function() {
             const ret = new Array();
             return addHeapObject(ret);
@@ -235,6 +233,10 @@ function __wbg_get_imports() {
         },
         __wbg_new_da52cf8fe3429cb2: function() {
             const ret = new Object();
+            return addHeapObject(ret);
+        },
+        __wbg_new_with_length_f048f86e32f1515e: function(arg0) {
+            const ret = new Uint32Array(arg0 >>> 0);
             return addHeapObject(ret);
         },
         __wbg_next_6dbf2c0ac8cde20f: function(arg0) {
@@ -251,8 +253,15 @@ function __wbg_get_imports() {
         __wbg_set_6be42768c690e380: function(arg0, arg1, arg2) {
             getObject(arg0)[takeObject(arg1)] = takeObject(arg2);
         },
+        __wbg_set_8535240470bf2500: function() { return handleError(function (arg0, arg1, arg2) {
+            const ret = Reflect.set(getObject(arg0), getObject(arg1), getObject(arg2));
+            return ret;
+        }, arguments); },
         __wbg_set_8a16b38e4805b298: function(arg0, arg1, arg2) {
             getObject(arg0)[arg1 >>> 0] = takeObject(arg2);
+        },
+        __wbg_set_b5e6b338281ca6ff: function(arg0, arg1, arg2) {
+            getObject(arg0).set(getArrayU32FromWasm0(arg1, arg2));
         },
         __wbg_value_a5d5488a9589444a: function(arg0) {
             const ret = getObject(arg0).value;
@@ -372,6 +381,11 @@ function dropObject(idx) {
     heap_next = idx;
 }
 
+function getArrayU32FromWasm0(ptr, len) {
+    ptr = ptr >>> 0;
+    return getUint32ArrayMemory0().subarray(ptr / 4, ptr / 4 + len);
+}
+
 function getArrayU8FromWasm0(ptr, len) {
     ptr = ptr >>> 0;
     return getUint8ArrayMemory0().subarray(ptr / 1, ptr / 1 + len);
@@ -387,6 +401,14 @@ function getDataViewMemory0() {
 
 function getStringFromWasm0(ptr, len) {
     return decodeText(ptr >>> 0, len);
+}
+
+let cachedUint32ArrayMemory0 = null;
+function getUint32ArrayMemory0() {
+    if (cachedUint32ArrayMemory0 === null || cachedUint32ArrayMemory0.byteLength === 0) {
+        cachedUint32ArrayMemory0 = new Uint32Array(wasm.memory.buffer);
+    }
+    return cachedUint32ArrayMemory0;
 }
 
 let cachedUint8ArrayMemory0 = null;
@@ -494,6 +516,7 @@ function __wbg_finalize_init(instance, module) {
     wasm = instance.exports;
     wasmModule = module;
     cachedDataViewMemory0 = null;
+    cachedUint32ArrayMemory0 = null;
     cachedUint8ArrayMemory0 = null;
     return wasm;
 }

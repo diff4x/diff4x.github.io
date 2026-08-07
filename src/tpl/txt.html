@@ -23,11 +23,12 @@
             font-family: 'Noto Serif SC';
         }
 
+        /* 彻底屏蔽原生外层滚动，由中心定位 */
         html, body {
             padding: 0;
             margin: 0;
             background-color: #0f172a !important; 
-            overflow: hidden; /* 彻底屏蔽原生外层滚动 */
+            overflow: hidden; 
         }
 
         body {
@@ -36,24 +37,31 @@
             justify-content: center;
             height: 100vh;
             width: 100vw;
+            position: relative;
         }
 
+        /* 核心：固定逻辑分辨率，锁定为标准的双页书本尺寸 */
         .book-container {
             display: block;
-            width: 94vw;
-            height: 94vh;
-            aspect-ratio: 1.414 / 1;
-            max-width: calc(94vh * 1.414);
-            max-height: calc(94vw / 1.414);
+            width: 1131px;  /* 固定逻辑宽度 */
+            height: 800px;  /* 固定逻辑高度 */
             
             box-shadow: 0 15px 50px rgba(0,0,0,0.8);
             border-radius: 4px;
             padding: 40px 56px; 
             box-sizing: border-box;
-            position: relative;
+            
+            /* 使用绝对定位使其居中，便于后续使用 transform 缩放 */
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%); /* 初始状态，JS 会动态补充 scale */
+            transform-origin: center center;
+            
             transition: background-color 0.3s;
         }
 
+        /* 书缝阴影保留，增加纸质感 */
         .book-container::after {
             content: '';
             position: absolute;
@@ -66,6 +74,7 @@
             z-index: 10;
         }
 
+        /* 始终维持双列布局 */
         pre {
             width: 100%;
             height: 100%;
@@ -518,18 +527,16 @@
                 });
             },
 
+            // GPU缩放：维持固定的高宽比，缩小适应视口
             calibrateBookSize() {
-                UI.bookContainer.style.width = '94vw'; 
-                UI.bookContainer.style.maxWidth = 'calc(94vh * 1.414)';
+                const logicalWidth = 1131;
+                const logicalHeight = 800;
                 
-                const rawWidth = UI.bookContainer.clientWidth;
-                const availableTextWidth = rawWidth - 112 - 8;
+                const scaleX = (window.innerWidth * 0.94) / logicalWidth;
+                const scaleY = (window.innerHeight * 0.94) / logicalHeight;
+                const scale = Math.min(scaleX, scaleY);
                 
-                const col_w = Math.floor((availableTextWidth - 80) / 2);
-                const exactContainerWidth = (col_w * 2) + 80 + 8 + 112;
-                
-                UI.bookContainer.style.width = exactContainerWidth + 'px';
-                UI.bookContainer.style.maxWidth = 'none'; 
+                UI.bookContainer.style.transform = `translate(-50%, -50%) scale(${scale})`;
             },
 
             loadSettings() {
@@ -694,7 +701,7 @@
                     setTimeout(() => { isPaging = false; }, 400); 
                 }, { passive: false });
 
-                // 窗口尺寸变化时，校准跨页断点并重构容器尺寸，抵御拉扯导致的断层
+                // 响应视口改变，只调节 transform scale 缩放，不改变盒子逻辑尺寸避免卡顿
                 window.addEventListener('resize', Utils.debounce(() => {
                     this.calibrateBookSize(); 
                     
@@ -704,7 +711,7 @@
                     const pageIndex = Math.round(currScroll / step);
                     UI.content.scrollTo({ left: pageIndex * step, behavior: 'instant' });
                     triggerProgressBarUpdate();
-                }, 200));
+                }, 50));
 
                 let ticking = false;
                 UI.content.addEventListener("scroll", () => {
@@ -842,32 +849,32 @@
             }
         };
 
-        const FullscreenControl = {
-            init() {
-                this.isFullscreen = false;
-                document.body.addEventListener("mousedown", (e) => {
-                    if (e.button === 1 && !e.target.closest('#ui-drawer') && !e.target.closest('#excerpts-popup')) {
-                        e.preventDefault();
-                        this.isFullscreen ? this.exit() : this.enter();
-                        this.isFullscreen = !this.isFullscreen;
-                    }
-                });
-            },
-            enter() {
-                const el = document.documentElement;
-                if (el.requestFullscreen) el.requestFullscreen();
-                else if (el.webkitRequestFullScreen) el.webkitRequestFullScreen();
-                else if (el.mozRequestFullScreen) el.mozRequestFullScreen();
-                else if (el.msRequestFullscreen) el.msRequestFullscreen();
-            },
-            exit() {
-                if (document.exitFullscreen) document.exitFullscreen();
-                else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
-                else if (document.mozCancelFullScreen) document.mozCancelFullScreen();
-                else if (document.msExitFullscreen) document.msExitFullscreen();
-            }
-        };
+const FullscreenControl = {
+    init() {
+        document.body.addEventListener("mousedown", (e) => {
+            if (e.button === 1 && !e.target.closest('#ui-drawer') && !e.target.closest('#excerpts-popup')) {
+                e.preventDefault();
+                const parentDoc = window.parent.document;
+                const isFullscreen = !!parentDoc.fullscreenElement;
 
+                if (!isFullscreen) {
+                    parentDoc.documentElement.requestFullscreen().catch(err => console.warn(err));
+                    emitEvent("lightbox", { status: "1" }, "index");
+                } else {
+                    if (parentDoc.exitFullscreen) parentDoc.exitFullscreen();
+                    emitEvent("lightbox", { status: "0" }, "index");
+                }
+            }
+        });
+    }
+};
+
+if (window.top && window.top.VirtualCursor) {
+    window.top.VirtualCursor.attach(window);
+}
+
+        const childId = 'content';
+        window.childId = childId;
         if (window.__LITE_BUS__) {
             window.__LITE_BUS__.close();
         }

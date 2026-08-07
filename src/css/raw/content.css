@@ -387,11 +387,6 @@ code span {
     display: none;
 }
 
-::highlight(search-exact) { background-color: rgba(255, 235, 0, 0.75); color: #000000; }
-::highlight(search-noise-1) { background-color: rgba(255, 235, 0, 0.45); color: #111111; }
-::highlight(search-noise-2) { background-color: rgba(255, 235, 0, 0.25); color: #333333; }
-::highlight(search-noise-3) { background-color: rgba(255, 235, 0, 0.12); color: #555555; }
-
 .active-search-border {
     position: absolute;
     border: 3px solid rgb(188 209 238);

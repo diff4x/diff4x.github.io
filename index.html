@@ -1,81 +1,90 @@
 <!DOCTYPE html>
 <html lang="zh-CN" style="background-color: #003b14">
+
 <head>
-    <meta charset="utf-8">
-    <title>diff4x's digital garden</title>
-    <meta name="description" content="本人觉得有趣的、有启发性的、阴暗的东西，以及各类总结、备忘、导航。">
-    <meta name="robots" content="index,follow,max-image-preview:large">
-    <meta name="google-site-verification" content="woyOCyjo1PJc0g_4CVXExlnRlRHOKCDpFkpB9RTZUC4" />
-    <link rel="canonical" href="https://diff4x.github.io/">
-    <meta property="og:title" content="diff4x's digital garden">
-    <meta property="og:description" content="本人觉得有趣的、有启发性的、阴暗的东西，以及各类总结、备忘、导航。">
-    <meta property="og:type" content="website">
-    <meta property="og:url" content="https://diff4x.github.io/">
-    <script>
-        (function () {
-            const ua = navigator.userAgent.toLowerCase();
-            const isBot = /googlebot|bingbot|slurp|duckduckbot|baiduspider|yandexbot|sogou|exabot|facebot|ia_archiver/i.test(ua);
-            if (isBot) return;
+  <meta charset="utf-8">
+  <meta name="viewport"
+    content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <title>diff4x's digital garden</title>
+  <meta name="description" content="本人觉得有趣的、有启发性的、阴暗的东西，以及各类总结、备忘、导航。">
+  <meta name="robots" content="index,follow,max-image-preview:large">
+  <meta name="google-site-verification" content="woyOCyjo1PJc0g_4CVXExlnRlRHOKCDpFkpB9RTZUC4" />
+  <link rel="canonical" href="https://diff4x.github.io/">
+  <meta property="og:title" content="diff4x's digital garden">
+  <meta property="og:description" content="本人觉得有趣的、有启发性的、阴暗的东西，以及各类总结、备忘、导航。">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://diff4x.github.io/">
+  <script>
+    (function () {
+      const ua = navigator.userAgent.toLowerCase();
+      const isBot = /googlebot|bingbot|slurp|duckduckbot|baiduspider|yandexbot|sogou|exabot|facebot|ia_archiver/i.test(ua);
+      if (isBot) return;
 
-            function getCookie(name) {
-                const value = `; ${document.cookie}`;
-                const parts = value.split(`; ${name}=`);
-                if (parts.length === 2) return parts.pop().split(';').shift();
-                return null;
-            }
-            function setCookie(name, value, days) {
-                const date = new Date();
-                date.setTime(date.getTime() + (days * 24 * 60 * 60 * 1000));
-                const expires = "expires=" + date.toUTCString();
-                document.cookie = `${name}=${value}; ${expires}; path=/; secure; SameSite=Lax`;
-            }
-            if (getCookie("adult_verified") !== "true") {
-                const ok = confirm(
-                    "⚠️ 本站包含成人内容\n\n" +
-                    "点击【确定】表示您已满18周岁并继续访问，点击【取消】离开本站"
-                );
-                if (ok) {
-                    setCookie("adult_verified", "true", 365);
-                } else {
-                    location.href = "https://www.google.com/ncr";
-                    return;
-                }
-            }
-        })();
-    </script>
-    <link rel="stylesheet" type="text/css" id="css">
-    <style>
-        .sr-only {
-            position: absolute;
-            width: 1px;
-            height: 1px;
-            padding: 0;
-            margin: -1px;
-            overflow: hidden;
-            clip: rect(0, 0, 0, 0);
-            white-space: nowrap;
-            border-width: 0;
+      function getCookie(name) {
+        const value = `; ${document.cookie}`;
+        const parts = value.split(`; ${name}=`);
+        if (parts.length === 2) return parts.pop().split(';').shift();
+        return null;
+      }
+      function setCookie(name, value, days) {
+        const date = new Date();
+        date.setTime(date.getTime() + (days * 24 * 60 * 60 * 1000));
+        const expires = "expires=" + date.toUTCString();
+        document.cookie = `${name}=${value}; ${expires}; path=/; secure; SameSite=Lax`;
+      }
+      if (getCookie("adult_verified") !== "true") {
+        const ok = confirm(
+          "⚠️ 本站包含成人内容\n\n" +
+          "点击【确定】表示您已满18周岁并继续访问，点击【取消】离开本站"
+        );
+        if (ok) {
+          setCookie("adult_verified", "true", 365);
+        } else {
+          location.href = "https://www.google.com/ncr";
+          return;
         }
-    </style>
+      }
+    })();
+  </script>
+  <link rel="stylesheet" type="text/css" id="css">
+  <style>
+    .sr-only {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border-width: 0;
+    }
+  </style>
 </head>
-<body>
-    <div id="search" style="display: none">
-        <select id="searchResults"></select>
-        <input id="searchInput" placeholder="search..">
-        <input id="clear" type="button" value="clear" title="中击结果列表、历史词列表、搜索框, 等同于点击 clear">
-        <select id="searchHistory"></select>
-    </div>
 
-    <iframe style="border: none" id="content" name="content"></iframe>
-    <iframe style="border: none" id="side" name="side" allow="clipboard-write"></iframe>
+<body>
+  <div id="stage">
+    <iframe style="border: none" id="content" name="content" allow="autoplay; fullscreen"></iframe>
+    <iframe style="border: none" id="side" name="side" allow="clipboard-write; autoplay; fullscreen"></iframe>
+
+    <div id="search" style="display: none">
+      <select id="searchResults"></select>
+      <input type="search" enterkeyhint="search" id="searchInput" placeholder="search..">
+      <input id="clear" type="button" value="clear" title="...">
+      <select id="searchHistory"></select>
+    </div>
 
     <div id="giscus-popup" class="elastic-anim" style="display: none;">
-        <div id="popup-header">
-            <button id="close-popup">✖</button>
-        </div>
-        <div id="giscus-container" style="width:100%; height: calc(100% - 30px);"></div>
+      <div id="popup-header">
+        <button id="close-popup">✖</button>
+      </div>
+      <div id="giscus-container" style="width:100%; height: calc(100% - 30px);"></div>
     </div>
-<!-- PARAM-BEGIN -->
+  </div>
+
+  <div id="touchpad-panel"></div>
+
+  <!-- PARAM-BEGIN -->
 <script>
   const github_page = "diff4x.github.io";
   const data_repo = "diff4x/comments";
@@ -85,25 +94,30 @@
   const update_interval_local = 2000;
 </script>
 <!-- PARAM-END -->
-    <script id="js" type="text/javascript" charset="UTF-8"></script>
-    <script>
-        document.getElementById("js").src = "src/js/index.js";
-        document.getElementById("css").href = "src/css/index.css";
-    </script>
+  <script id="js" type="text/javascript" charset="UTF-8"></script>
+  <script>
+    document.getElementById("js").src = "src/js/index.js";
+    document.getElementById("css").href = "src/css/index.css";
+  </script>
 
-<!-- SEO-BEGIN -->
+  <!-- SEO-BEGIN -->
 <div id="seo-content" class="sr-only">
 <h1>diff4x's digital garden</h1>
 <p>本人觉得有趣的、有启发性的、阴暗的东西，以及各类总结、备忘、导航</p>
 <h2>最新内容</h2>
 <article>
-<h3>走向共和</h3>
-<p>1 借少了, 你是他孙子, 借多了, 他反而成了你的孙子 享清福不在为官, 只要囊有钱, 仓有粟, 腹有诗书, 便是山中宰相, 祈大年无须服药, 但愿身无病, 心无忧, 门无债主, 即称得上是地上神仙 官职是朝廷的名器</p>
-<time datetime="2026-08-01">2026-08-01</time>
+<h3>权重模型</h3>
+<p>权重转化为知识 本质上是不断根据前面的 Token，预测下一个 Token Token（词元）：AI 处理文字时使用的“最小语言单位”之一，可以看成 AI 自己的字典 预测 → 计算误差 → 反向传播 → 调整权重 → 如此循环，每生成一个 Token，都在利用数十亿甚至更多的权重进行一次巨大的数学计算 现代大模型通过“预测下一个 Token”这种简单机制，规模足够大以后，涌现出推理、总结、翻...</p>
+<time datetime="2026-08-07">2026-08-07</time>
 </article>
 <article>
 <h3>操作系统</h3>
 <p>pixel在中国地区的IMS注册 2G,3G时代,手机里有两套网络 打电话,电路交换（CS） 上网,数据网络 4G LTE 被设计成纯数据网络（All-IP Network）,LTE 没有语音通道 刚进入 4G 时，运营商用了一个临时办法, 打电话时信号从 4G 切回 3G VoLTE Voice over LTE 本质是把电话变成一种“特殊的数据业务”, 即实时数据通信 VoLTE 依赖 I...</p>
+<time datetime="2026-08-07">2026-08-07</time>
+</article>
+<article>
+<h3>走向共和</h3>
+<p>1 借少了, 你是他孙子, 借多了, 他反而成了你的孙子 享清福不在为官, 只要囊有钱, 仓有粟, 腹有诗书, 便是山中宰相, 祈大年无须服药, 但愿身无病, 心无忧, 门无债主, 即称得上是地上神仙 官职是朝廷的名器</p>
 <time datetime="2026-08-01">2026-08-01</time>
 </article>
 <article>
@@ -125,11 +139,6 @@
 <h3>rust</h3>
 <p>curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh rustc --version cargo install wasm-pack cargo new --lib rs cd rs @echo off setlocal set WASM_OUT_DIR=..\..\src\wasm set TARGET_DIR=D:\_te...</p>
 <time datetime="2026-07-24">2026-07-24</time>
-</article>
-<article>
-<h3>权重模型</h3>
-<p>权重转化为知识 本质上是不断根据前面的 Token，预测下一个 Token Token（词元）：AI 处理文字时使用的“最小语言单位”之一，可以看成 AI 自己的字典 预测 → 计算误差 → 反向传播 → 调整权重 → 如此循环，每生成一个 Token，都在利用数十亿甚至更多的权重进行一次巨大的数学计算 现代大模型通过“预测下一个 Token”这种简单机制，规模足够大以后，涌现出推理、总结、翻...</p>
-<time datetime="2026-07-22">2026-07-22</time>
 </article>
 <article>
 <h3>亚当斯一家</h3>
@@ -410,14 +419,20 @@
   "blogPost": [
     {
       "@type": "BlogPosting",
-      "headline": "走向共和",
-      "description": "1 借少了, 你是他孙子, 借多了, 他反而成了你的孙子 享清福不在为官, 只要囊有钱, 仓有粟, 腹有诗书, 便是山中宰相, 祈大年无须服药, 但愿身无病, 心无忧, 门无债主, 即称得上是地上神仙 官职是朝廷的名器",
-      "datePublished": "2026-08-01"
+      "headline": "权重模型",
+      "description": "权重转化为知识 本质上是不断根据前面的 Token，预测下一个 Token Token（词元）：AI 处理文字时使用的“最小语言单位”之一，可以看成 AI 自己的字典 预测 → 计算误差 → 反向传播 → 调整权重 → 如此循环，每生成一个 Token，都在利用数十亿甚至更多的权重进行一次巨大的数学计算 现代大模型通过“预测下一个 Token”这种简单机制，规模足够大以后，涌现出推理、总结、翻...",
+      "datePublished": "2026-08-07"
     },
     {
       "@type": "BlogPosting",
       "headline": "操作系统",
       "description": "pixel在中国地区的IMS注册 2G,3G时代,手机里有两套网络 打电话,电路交换（CS） 上网,数据网络 4G LTE 被设计成纯数据网络（All-IP Network）,LTE 没有语音通道 刚进入 4G 时，运营商用了一个临时办法, 打电话时信号从 4G 切回 3G VoLTE Voice over LTE 本质是把电话变成一种“特殊的数据业务”, 即实时数据通信 VoLTE 依赖 I...",
+      "datePublished": "2026-08-07"
+    },
+    {
+      "@type": "BlogPosting",
+      "headline": "走向共和",
+      "description": "1 借少了, 你是他孙子, 借多了, 他反而成了你的孙子 享清福不在为官, 只要囊有钱, 仓有粟, 腹有诗书, 便是山中宰相, 祈大年无须服药, 但愿身无病, 心无忧, 门无债主, 即称得上是地上神仙 官职是朝廷的名器",
       "datePublished": "2026-08-01"
     },
     {
@@ -443,12 +458,6 @@
       "headline": "rust",
       "description": "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh rustc --version cargo install wasm-pack cargo new --lib rs cd rs @echo off setlocal set WASM_OUT_DIR=..\..\src\wasm set TARGET_DIR=D:\_te...",
       "datePublished": "2026-07-24"
-    },
-    {
-      "@type": "BlogPosting",
-      "headline": "权重模型",
-      "description": "权重转化为知识 本质上是不断根据前面的 Token，预测下一个 Token Token（词元）：AI 处理文字时使用的“最小语言单位”之一，可以看成 AI 自己的字典 预测 → 计算误差 → 反向传播 → 调整权重 → 如此循环，每生成一个 Token，都在利用数十亿甚至更多的权重进行一次巨大的数学计算 现代大模型通过“预测下一个 Token”这种简单机制，规模足够大以后，涌现出推理、总结、翻...",
-      "datePublished": "2026-07-22"
     },
     {
       "@type": "BlogPosting",
@@ -766,4 +775,5 @@
 </script>
 <!-- SEO-END -->
 </body>
+
 </html>

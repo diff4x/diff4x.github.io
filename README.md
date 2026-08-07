@@ -3,7 +3,7 @@
 ---
 
 # 基建
-- 这是一个小型静态文档检索系统, 特点包括：
+- 这是一套 DIY 静态文档检索系统, 特点包括：
   - 聚合浏览
     - HTML、PDF、EPUB、TXT、图片、音视频、全景图
   - 超级搜索
@@ -11,11 +11,12 @@
   - 离线高可用
   - 公私文件并存
   - 版本比对
+  - 摘抄管理
   - 状态快照
 - 工具链
   - HTTP Server、Custom URL Protocol、Batch、Java、Rust、Git
 - Web 平台
-  - Vanilla JS、iframe、postMessage、Proxy、localStorage、Service Worker、IndexedDB、Web Worker、WebAssembly
+  - Vanilla JS、iframe、BroadcastChannel、postMessage、Proxy、localStorage、Service Worker、IndexedDB、Web Worker、WebAssembly、CSS Custom Highlight
 > Workflow designed by diff4x | Optimized or implemented by Gemini & ChatGPT & Claude & Grok
 ---
 
@@ -30,9 +31,11 @@
   - 按日期搜索
     - html 页面时间戳和 `img` 图片名皆按格式`yyyymmddhhmmss`
     - 例如查找2024年1月份更新过的页面, 可输入 `202401` 或更短的 `2401`
-  - 搜索框内置命令
-    - `@noise=3` 将搜索词的宽容程度设为 `3`, 搜索词字符间按 0~3 字符通配, 例如能命中数据 `烟枪侍女太师椅` 的搜索词有 `烟侍女椅`, `烟侍椅` 等等 29 种组合
-      - 设为 `0` 表示精准匹配, 上限 `5`
+  - 搜索框内置命令 (回车生效)
+    - `@noise=n` 设置搜索宽容度（n 取值 0~5，默认 5）, 相邻两个搜索词字符之间，最多允许插入 n 个非空白杂字
+      - 中文环境下名词和形容词的近义词大多四字以内, 按近义词搜索 `他简直是疯了`, 可命中 `他一定是秀逗了`
+      - 搜索词长 (不含空格) 超过 `25` 自动从宽容匹配降为完全匹配 
+        - `[@noise=5, 有效词长25]` 将跨越24 (间隙) × 5 (最大杂字) + 25 (搜索词本体) = 145 个有效字符, 在一两百字里零星拼凑出 25 个字，结果通常是无意义的噪音
     - `@bomb`, `@rebirth` 分别进行可选式重置与恢复个人数据
 - 页面
   - 本地按页面左上角 `edit` 即以本地编辑器打开对应实体页同时覆写时间戳, 编辑完回到页面, 双击顶部菜单中 `CLI` 即时构建呈现
@@ -90,7 +93,17 @@
   - `push` git push
   - `registering-protocol` 本地 `url` 协议注册
   - `simulation` 线上仿真, 启用本地虚拟服务器 [9000 info] 同时在隐身窗口打开站点首页
-  - `vpn-heartbeat-tray` 任务栏常驻互联网状态标识
+  - `vpn-heartbeat-tray` 任务栏常驻互联网状态标识 & `Google Tasks API` 轮询
+- 移动端虚拟触控板
+  - [光标映射区] 镜头跟随
+  - [▲ / ▼] 滚动结果列表或内文目录
+  - [+ / -] 缩放页面
+  - [框选] 启用后按钮高亮, 滑动选中文字, 停用框选, 提示拼音或进行摘抄
+  - [拖拽] 作用于浮动窗[日志,摘抄,评论]标题栏, 启用后按钮高亮, 窗口跟随光标移动
+  - [左双击] 用于全景图沉浸浏览, 以及 side 条目文本复制, 音频播放器销毁
+  - [中击] 用于全屏或退出搜索
+  - [右击] 用于搜索结果中的音视频条目预览, 以及 side 区域书签呼出
+  - [日志] 调试消息
 - 其它
   - `cmt_mapper` 中 `records` 记录评论与页面 `title` 的对应关系, `orphanIds` 记录孤立失联的评论便于定点清除
   - 异常修复：

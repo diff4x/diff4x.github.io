@@ -147,7 +147,6 @@
         saveBtn.addEventListener('click', () => {
             clearTimeout(debounceTimer);
 
-            // 克隆整个 DOM 树，在虚拟内存中进行操作，不影响当前真实视觉
             const htmlClone = document.documentElement.cloneNode(true);
 
             const clonedZhText = htmlClone.querySelector('#zhText');
@@ -164,13 +163,12 @@
                 clonedToggleBtn.style.borderColor = "";
             }
 
-            // 摘除所有由 content.js 动态注入的运行时挂件
             const garbageSelectors = [
-                '#bar',               // 底部状态栏与进度条
-                '#gotop',             // 回到顶部按钮
-                '.pinyin-tooltip',    // 拼音悬浮窗
-                '#giscus-popup',      // 评论区弹窗
-                'link[href*="content.css"]' // 动态注入的 CSS 文件
+                '#bar',
+                '#gotop',
+                '.pinyin-tooltip',
+                '#giscus-popup',
+                'link[href*="content.css"]'
             ];
             garbageSelectors.forEach(selector => {
                 htmlClone.querySelectorAll(selector).forEach(el => el.remove());
@@ -186,15 +184,12 @@
             document.execCommand('copy');
             document.body.removeChild(textarea);
 
-            // 呼叫协议
             const safeTitle = document.title.trim() || "Unknown";
             const protocolUrl = localStorage.getItem("protocol_name").replace(/"/g, '') + `://5{` + encodeURIComponent(safeTitle);
             window.location.href = protocolUrl;
 
-            // 炸库
             destroyDraft();
 
-            // 封锁 UI，等待重载
             lockScreen.style.display = "flex";
             lockScreen.innerHTML = "⌛固化中..";
         });

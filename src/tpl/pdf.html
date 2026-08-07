@@ -507,22 +507,51 @@ div#errorWrapper {
         }
       }
 
-      document.body.onmousedown = function (e) {
-        if (e.button == 1) {
-          e.preventDefault();
-          if (flag == 1) {
-            document.getElementsByClassName("toolbar")[0].classList.add("x");
-            document.querySelector('#viewerContainer').classList.add("y");
-            fullScreen();
-            flag = 0;
-          } else {
-            document.getElementsByClassName("toolbar")[0].classList.remove("x");
-            document.querySelector('#viewerContainer').classList.remove("y");
-            exitFullScreen();
-            flag = 1;
-          }
-        }
-      }
+      // document.body.onmousedown = function (e) {
+      //   if (e.button == 1) {
+      //     e.preventDefault();
+      //     if (flag == 1) {
+      //       document.getElementsByClassName("toolbar")[0].classList.add("x");
+      //       document.querySelector('#viewerContainer').classList.add("y");
+      //       fullScreen();
+      //       flag = 0;
+      //     } else {
+      //       document.getElementsByClassName("toolbar")[0].classList.remove("x");
+      //       document.querySelector('#viewerContainer').classList.remove("y");
+      //       exitFullScreen();
+      //       flag = 1;
+      //     }
+      //   }
+      // }
+
+document.body.onmousedown = function (e) {
+  if (e.button == 1) {
+    e.preventDefault();
+    const parentDoc = window.parent.document;
+    const isFullscreen = !!parentDoc.fullscreenElement;
+
+    if (!isFullscreen) {
+      document.getElementsByClassName("toolbar")[0].classList.add("x");
+      document.querySelector('#viewerContainer').classList.add("y");
+      
+      // 调用父级全屏
+      parentDoc.documentElement.requestFullscreen().catch(err => console.warn(err));
+      // 通知 index 隐藏侧边栏 UI
+      emitEvent("lightbox", { status: "1" }, "index"); 
+      flag = 0;
+    } else {
+      document.getElementsByClassName("toolbar")[0].classList.remove("x");
+      document.querySelector('#viewerContainer').classList.remove("y");
+      
+      // 退出父级全屏
+      if (parentDoc.exitFullscreen) parentDoc.exitFullscreen();
+      // 通知 index 恢复侧边栏 UI
+      emitEvent("lightbox", { status: "0" }, "index"); 
+      flag = 1;
+    }
+  }
+}
+
     }
 
 
@@ -582,7 +611,9 @@ function pinyin_func() {
 const store = createStore();
 
 pinyin_func();
-
+if (window.top && window.top.VirtualCursor) {
+    window.top.VirtualCursor.attach(window);
+}
 const childId = 'content';
 window.childId = childId;
 if (window.__LITE_BUS__) {

@@ -51,7 +51,7 @@ div#a a {
     color: #b06cef;
 }
 
-div>a:hover {
+div>a:hover, div>a[data-touchpad-hover] {
     color: #98fda5!important;
 }
 
@@ -71,7 +71,6 @@ div#del.dragover {
     color: red;
 }
 
-/* 壁纸沉底层 */
 #wallpaper-bg {
     position: fixed;
     top: 0;
@@ -85,10 +84,9 @@ div#del.dragover {
     transition: background-image 0.5s ease;
 }
 
-/* 壁纸控制面板触发按钮 */
 #wallpaper-trigger-btn {
     position: fixed;
-    bottom: 20px;
+    bottom: 60px;
     right: 20px;
     background: rgba(0, 0, 0, 0.6);
     color: #fff;
@@ -104,7 +102,6 @@ div#del.dragover {
     font-size: 18px;
 }
 
-/* 壁纸面板弹出框 */
 #wallpaper-panel {
     position: fixed;
     bottom: 70px;

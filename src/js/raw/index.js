@@ -7,22 +7,21 @@ window.isDataSyncing = false;
 window._searchToken = 0;
 window.cachedFaviconImg = null;
 window.faviconBlinkTimer = null;
+if (window.__LITE_BUS__) {
+    window.__LITE_BUS__.close();
+}
+window.__LITE_BUS__ = new BroadcastChannel('bus');
+window.sharedWasm = {
+    ready: false,
+    format_markdown: null,
+    find_content_matches: null,
+    compute_lcs_diff: null
+};
+window._tpZoom = 1;
 
-const store = createStore({
-    resource_type: "",
-    content_src: "",
-    searchHistory: [],
-    force_refresh_cache: "0"
-});
-store.github_page = github_page;
-store.protocol_name = github_page.split(".")[0];
-// 端口隔离仿线上
+const BUS = window.__LITE_BUS__;
+const ctxId = window.top === window.self ? 'index' : window.childId;
 const isLocalEnv = (location.hostname === 'localhost' || location.hostname === '127.0.0.1' || location.protocol === 'file:') && location.port !== '9000';
-store.online_flag = isLocalEnv ? "0" : "1";
-store.bookmarkhtml_modifing = "0";
-store.lightbox_stauts = "0";
-store.jump_from_search = "0";
-
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => document.querySelectorAll(selector);
 const idleRun = (fn) => window.requestIdleCallback ? requestIdleCallback(fn) : setTimeout(50);
@@ -36,51 +35,19 @@ const iframes = {
     side: $('#side')
 };
 
-if (window.__LITE_BUS__) {
-    window.__LITE_BUS__.close();
-}
-window.__LITE_BUS__ = new BroadcastChannel('bus');
-const BUS = window.__LITE_BUS__;
-
-window.addEventListener('unload', () => {
-    if (window.__LITE_BUS__) {
-        window.__LITE_BUS__.close();
-        window.__LITE_BUS__ = null;
-    }
+const store = createStore({
+    resource_type: "",
+    content_src: "",
+    searchHistory: [],
+    force_refresh_cache: "0"
 });
+store.github_page = github_page;
+store.protocol_name = github_page.split(".")[0];
+store.online_flag = isLocalEnv ? "0" : "1";
+store.bookmarkhtml_modifing = "0";
+store.lightbox_stauts = "0";
+store.jump_from_search = "0";
 
-const ctxId = window.top === window.self ? 'index' : window.childId; 
-
-function emitEvent(type, payload, target = '*') {
-    if (!window.__LITE_BUS__) return;
-    try {
-        window.__LITE_BUS__.postMessage({
-            type,
-            payload,
-            from: ctxId,
-            target
-        });
-    } catch (e) {}
-}
-
-
-window.sharedWasm = {
-    ready: false,
-    format_markdown: null,
-    find_content_matches: null,
-    compute_lcs_diff: null
-};
-
-import('../wasm/compute_intensive_task_processor.min.js').then(async (wasmModule) => {
-    await wasmModule.default();
-    window.sharedWasm.format_markdown = wasmModule.format_markdown;
-    window.sharedWasm.find_content_matches = wasmModule.find_content_matches;
-    window.sharedWasm.compute_lcs_diff = wasmModule.compute_lcs_diff;
-    window.sharedWasm.ready = true;
-    // console.log("[Main] Wasm 单例引擎加载完毕");
-}).catch(err => {
-    console.error("[Main] Wasm 模块加载失败:", err);
-});
 
 let searchWorker = null;
 let audioInitialized = false;
@@ -88,17 +55,16 @@ let comments_first_flag = false;
 let records = [];
 let totalCount = 0;
 
-if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.addEventListener('message', (event) => {
-        if (event.data && event.data.type === 'SW_UPDATE_STATUS') {
-            const isUpdate = event.data.isUpdate;
-            sessionStorage.setItem("isUpdate", isUpdate ? "1" : "0");
-            // console.log(`📡 [Main] 收到 SW 同步状态: 是否为热更新 -> ${isUpdate}`);
-        }
-    });
-}
+import('../wasm/compute_intensive_task_processor.min.js').then(async (wasmModule) => {
+    await wasmModule.default();
+    window.sharedWasm.format_markdown = wasmModule.format_markdown;
+    window.sharedWasm.find_content_matches = wasmModule.find_content_matches;
+    window.sharedWasm.compute_lcs_diff = wasmModule.compute_lcs_diff;
+    window.sharedWasm.ready = true;
+}).catch(err => {
+    console.error("[Main] Wasm 模块加载失败:", err);
+});
 
-// 站点自愈
 const executeSelfHealing = async (reason, commandId = null) => {
     console.warn(`🚧  触发站点自愈程序: ${reason}`);
     try {
@@ -111,21 +77,155 @@ const executeSelfHealing = async (reason, commandId = null) => {
             for (const k of keys) await caches.delete(k);
         }
         if (window.indexedDB) {
-            indexedDB.deleteDatabase('MainDB'); 
+            indexedDB.deleteDatabase('MainDB');
         }
         sessionStorage.removeItem("sw_reload_guard");
         sessionStorage.removeItem("ss_restore_strict");
         if (commandId !== null && commandId !== undefined) {
             store.repair_command_id = commandId.toString();
         }
-    } catch(e) {
+    } catch (e) {
         console.error("自愈过程发生异常", e);
     }
     alert(`🚧 需要进行站点修复。\n[${reason}]`);
     window.location.href = window.location.origin;
 };
 
-// 看门狗
+window.VirtualCursor = {
+    attach: function (targetWindow) {
+        let lastHoverEl = null;
+        let selectStartRange = null;
+        const doc = targetWindow.document;
+
+        const getCaret = (x, y) => {
+            if (doc.caretRangeFromPoint) return doc.caretRangeFromPoint(x, y);
+            if (doc.caretPositionFromPoint) {
+                const pos = doc.caretPositionFromPoint(x, y);
+                if (pos) { const r = doc.createRange(); r.setStart(pos.offsetNode, pos.offset); r.collapse(true); return r; }
+            }
+            return null;
+        };
+        const getAncestors = (el) => { const c = []; while (el) { c.push(el); el = el.parentElement; } return c; };
+        const maybeFocus = (el) => { if ((el.matches && el.matches('input,textarea,select,[contenteditable]')) || el.tabIndex >= 0) el.focus({ preventScroll: true }); };
+
+        targetWindow.handleSimPointer = function (payload) {
+            const { op, x, y, deltaX, deltaY } = payload || {};
+            if (op === 'leave') {
+                if (lastHoverEl) {
+                    const chain = getAncestors(lastHoverEl);
+                    lastHoverEl.dispatchEvent(new targetWindow.MouseEvent('mouseout', { bubbles: true, relatedTarget: null }));
+                    chain.forEach(a => a.dispatchEvent(new targetWindow.MouseEvent('mouseleave', { bubbles: false })));
+                    lastHoverEl = null;
+                }
+                return;
+            }
+            if (op === 'enter') return;
+
+            if (op === 'enter') return;
+            const safeX = Math.max(0, Math.min(doc.documentElement.clientWidth - 1, x));
+            const safeY = Math.max(0, Math.min(doc.documentElement.clientHeight - 1, y));
+            const el = doc.elementFromPoint(safeX, safeY);
+            if (!el) return;
+
+            const base = { bubbles: true, cancelable: true, view: targetWindow, clientX: x, clientY: y };
+            const fire = (type, opts) => el.dispatchEvent(new targetWindow.MouseEvent(type, Object.assign({}, base, opts)));
+
+            switch (op) {
+                case 'move':
+                    if (el !== lastHoverEl) {
+                        const oldChain = lastHoverEl ? getAncestors(lastHoverEl) : [];
+                        const newChain = getAncestors(el);
+                        const oldSet = new Set(oldChain);
+                        let common = null;
+                        for (const node of newChain) { if (oldSet.has(node)) { common = node; break; } }
+                        if (lastHoverEl) {
+                            const oldLi = lastHoverEl ? lastHoverEl.closest('li, .history-row, #menu-b a, div > a') : null;
+                            if (oldLi) oldLi.removeAttribute('data-touchpad-hover');
+                            lastHoverEl.dispatchEvent(new targetWindow.MouseEvent('mouseout', Object.assign({}, base, { relatedTarget: el })));
+                            for (const node of oldChain) { if (node === common) break; node.dispatchEvent(new targetWindow.MouseEvent('mouseleave', Object.assign({}, base, { bubbles: false, relatedTarget: el }))); }
+                        }
+                        const newLi = el.closest ? el.closest('li, .history-row, #menu-b a, div > a') : null;
+                        if (newLi) newLi.setAttribute('data-touchpad-hover', 'true');
+                        el.dispatchEvent(new targetWindow.MouseEvent('mouseover', Object.assign({}, base, { relatedTarget: lastHoverEl || null })));
+                        const toEnter = [];
+                        for (const node of newChain) { if (node === common) break; toEnter.push(node); }
+                        toEnter.reverse().forEach(node => node.dispatchEvent(new targetWindow.MouseEvent('mouseenter', Object.assign({}, base, { bubbles: false, relatedTarget: lastHoverEl || null }))));
+                        lastHoverEl = el;
+                    }
+                    fire('mousemove', { button: 0 });
+                    break;
+                case 'click':
+                    fire('mousedown', { button: 0 }); maybeFocus(el); fire('mouseup', { button: 0 }); fire('click', { button: 0 });
+                    if (el.tagName === 'VIDEO' || el.tagName === 'AUDIO') { if (el.paused) el.play().catch(() => { }); else el.pause(); }
+                    break;
+                case 'dblclick':
+                    fire('mousedown', { button: 0 }); maybeFocus(el); fire('mouseup', { button: 0 }); fire('click', { button: 0 });
+                    fire('mousedown', { button: 0 }); fire('mouseup', { button: 0 }); fire('click', { button: 0 });
+                    fire('dblclick', { button: 0 });
+                    break;
+                case 'auxclick': fire('mousedown', { button: 1 }); fire('mouseup', { button: 1 }); fire('auxclick', { button: 1 }); break;
+                case 'contextmenu': fire('contextmenu', { button: 2 }); break;
+                case 'drag_start': fire('mousedown', { button: 0 }); break;
+                case 'drag_end': fire('mouseup', { button: 0 }); break;
+                case 'select_start': { const r = getCaret(x, y); if (r) { selectStartRange = r; const sel = targetWindow.getSelection(); sel.removeAllRanges(); sel.addRange(r); } break; }
+                case 'select_move': { if (selectStartRange) { const r = getCaret(x, y); if (r) { const sel = targetWindow.getSelection(); sel.removeAllRanges(); if (sel.setBaseAndExtent) sel.setBaseAndExtent(selectStartRange.startContainer, selectStartRange.startOffset, r.startContainer, r.startOffset); } } break; }
+                case 'select_end': selectStartRange = null; fire('mouseup', { button: 0 }); break;
+
+                case 'wheel': {
+                    const wheelDeltaX = deltaX || 0;
+                    const wheelDeltaY = deltaY || 0;
+                    const safeX = Math.max(0, Math.min(doc.documentElement.clientWidth - 1, x));
+                    const safeY = Math.max(0, Math.min(doc.documentElement.clientHeight - 1, y));
+                    const el = doc.elementFromPoint(safeX, safeY);
+                    if (!el) return;
+
+                    fire('wheel', { deltaX: wheelDeltaX, deltaY: wheelDeltaY, deltaMode: 0 });
+                    let scrollTarget = el;
+                    let handled = false;
+
+                    while (scrollTarget && scrollTarget !== doc.body && scrollTarget !== doc.documentElement) {
+                        const style = targetWindow.getComputedStyle(scrollTarget);
+                        let canScrollY = (wheelDeltaY !== 0) && (scrollTarget.scrollHeight > scrollTarget.clientHeight) &&
+                            (style.overflowY === 'auto' || style.overflowY === 'scroll' || style.overflowY === 'overlay');
+                        let canScrollX = (wheelDeltaX !== 0) && (scrollTarget.scrollWidth > scrollTarget.clientWidth) &&
+                            (style.overflowX === 'auto' || style.overflowX === 'scroll' || style.overflowX === 'overlay');
+
+                        if (canScrollY) {
+                            if (wheelDeltaY > 0 && Math.ceil(scrollTarget.scrollTop + scrollTarget.clientHeight) >= scrollTarget.scrollHeight) canScrollY = false;
+                            if (wheelDeltaY < 0 && scrollTarget.scrollTop <= 0) canScrollY = false;
+                        }
+                        if (canScrollX) {
+                            if (wheelDeltaX > 0 && Math.ceil(scrollTarget.scrollLeft + scrollTarget.clientWidth) >= scrollTarget.scrollWidth) canScrollX = false;
+                            if (wheelDeltaX < 0 && scrollTarget.scrollLeft <= 0) canScrollX = false;
+                        }
+
+                        if (canScrollY || canScrollX) { handled = true; break; }
+                        scrollTarget = scrollTarget.parentElement;
+                    }
+
+                    if (handled) {
+                        scrollTarget.scrollBy({ left: wheelDeltaX, top: wheelDeltaY, behavior: 'auto' });
+                    } else {
+                        const mainScroll = doc.scrollingElement || doc.documentElement;
+                        mainScroll.scrollBy({ left: wheelDeltaX, top: wheelDeltaY, behavior: 'auto' });
+                    }
+                    break;
+                }
+            }
+        };
+    }
+};
+window.VirtualCursor.attach(window);
+
+if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.addEventListener('message', (event) => {
+        if (event.data && event.data.type === 'SW_UPDATE_STATUS') {
+            const isUpdate = event.data.isUpdate;
+            sessionStorage.setItem("isUpdate", isUpdate ? "1" : "0");
+        }
+    });
+}
+
 if (window._globalWatchdog) {
     clearTimeout(window._globalWatchdog);
     window._globalWatchdog = null;
@@ -134,7 +234,13 @@ window._globalWatchdog = setTimeout(() => {
     executeSelfHealing("核心数据组装严重超时 (疑似 IDB/Wasm 崩溃)");
 }, 60000);
 
-// 事件网关
+window.addEventListener('unload', () => {
+    if (window.__LITE_BUS__) {
+        window.__LITE_BUS__.close();
+        window.__LITE_BUS__ = null;
+    }
+});
+
 BUS.addEventListener('message', async (e) => {
     const { type, payload, target, from } = e.data || {};
     if (target !== '*' && target !== ctxId) return;
@@ -147,7 +253,6 @@ BUS.addEventListener('message', async (e) => {
             break;
         case "LOCAL_SEARCH_RESULT": {
             const activeKw = payload.keyword || store.keyword;
-            // 关键词已变：丢弃滞后回写，防止旧词 snippets 污染新词列表
             const inputEl = document.getElementById("searchInput");
             const liveKw = (inputEl ? inputEl.value.trim() : "") || store.keyword || "";
             if (activeKw && liveKw && normalizeKeyword(activeKw) !== normalizeKeyword(liveKw)) {
@@ -316,10 +421,10 @@ BUS.addEventListener('message', async (e) => {
         case "load_comments":
             const commentTitle = (payload && typeof payload === 'object') ? payload.title : payload;
             const currentStamp = (payload && typeof payload === 'object') ? payload.stamp : '';
-            
+
             window._latestCommentTitle = commentTitle;
             window._currentStampText = currentStamp;
-            
+
             if (currentStamp) {
                 updatePopupHeaderWithStamp(currentStamp);
             }
@@ -332,7 +437,7 @@ BUS.addEventListener('message', async (e) => {
                     return;
                 }
                 const record = records.find(r => r.title === commentTitle);
-                if (!record) return; // 此时如果还找不到，才是真的没有
+                if (!record) return;
                 if (!comments_first_flag) {
                     discussion(record.id);
                     comments_first_flag = true;
@@ -344,7 +449,6 @@ BUS.addEventListener('message', async (e) => {
                             "https://giscus.app"
                         );
                     } else {
-                        // 如果 giscus_flag 是 true，但 iframe 被意外销毁或还没渲染完，兜底重载
                         comments_first_flag = false;
                         discussion(record.id);
                         comments_first_flag = true;
@@ -355,16 +459,21 @@ BUS.addEventListener('message', async (e) => {
             break;
 
         case "sh_comments":
-        if ($("#giscus-popup").style.display == "none") {
-            $("#giscus-popup").style.display = "flex";
-            const stamp = payload || window._currentStampText;
-            updatePopupHeaderWithStamp(stamp);
-            
-            if (typeof takeSnapshot === 'function') takeSnapshot(false);
-        } else {
-            $("#giscus-popup").style.display = "none";
-        }
-        break;
+            const popup = $("#giscus-popup");
+            if (popup.style.display == "none" || !popup.style.display) {
+                popup.style.display = "flex";
+                popup.style.transform = 'none';
+                const popupWidth = popup.offsetWidth || 600;
+                popup.style.left = (window.innerWidth - popupWidth) / 2 + 'px';
+
+                const stamp = payload || window._currentStampText;
+                updatePopupHeaderWithStamp(stamp);
+
+                if (typeof takeSnapshot === 'function') takeSnapshot(false);
+            } else {
+                popup.style.display = "none";
+            }
+            break;
 
         case "show_changelog":
             showChangelog();
@@ -405,7 +514,7 @@ BUS.addEventListener('message', async (e) => {
         case "OPEN_EXCERPTS_NOTEBOOK":
             ExcerptsUIManager.openAndRefresh();
             break;
-            
+
         case "SAVE_EXCERPT":
             let bookName = "html";
             if (store.resource_type === 'txt' && store.txt_path) bookName = store.txt_path.split('/').pop();
@@ -426,32 +535,27 @@ BUS.addEventListener('message', async (e) => {
         case 'CLOSE_GLOBAL_BOOKMARKS':
             if (window._closeGlobalMenu) window._closeGlobalMenu();
             break;
-            
+
         case "PLAY_PRESET_AUDIO":
             store.resource_type = "audio";
             store.song_path = payload;
             const fileName = payload.split('/').pop();
             const dir = payload.substring(0, payload.lastIndexOf('/') + 1);
-            
-            // 初始化或切换音频
+
             audio(fileName, dir);
-            
-            // 延后切换状态
+
             setTimeout(() => {
-                // 切换为单曲循环
                 const slpBtn = document.getElementById("btn_slp");
                 if (slpBtn && !slpBtn.classList.contains("active2")) {
                     slpBtn.click();
                 }
-                // 如音频面板隐藏则唤出
                 const playerContainer = document.getElementById("audio");
                 if (playerContainer && playerContainer.style.display !== 'none') {
                     const toggleBtn = document.getElementById("audio_btn");
                     if (toggleBtn) toggleBtn.click();
                 }
             }, 100);
-            
-            // 通知侧栏菜单激活状态
+
             emitEvent('#audio a', payload, 'side');
             emitEvent('show_current', null, 'side');
             break;
@@ -488,7 +592,6 @@ window.addEventListener('message', async (e) => {
     }
 });
 
-// 其它监听
 document.addEventListener('keydown', (e) => {
     if (e.key === '\\') {
         if (document.activeElement !== $("#searchInput")) {
@@ -498,13 +601,11 @@ document.addEventListener('keydown', (e) => {
     }
 });
 window.onload = () => {
-    // URL 附带 ?repair=1 手动修复
     if (window.location.search.includes('repair=1')) {
         executeSelfHealing("URL手动指令");
-        return; 
+        return;
     }
 
-    // 远端修复指令
     setTimeout(() => {
         if (navigator.onLine) {
             fetch('/sw.js?_bypass=' + Date.now(), { cache: 'no-store' })
@@ -525,7 +626,7 @@ window.onload = () => {
                             executeSelfHealing(`接收到远端修复指令: ${remoteId}`, remoteId);
                         }
                     }
-                }).catch(() => {});
+                }).catch(() => { });
         }
     }, 2000);
 
@@ -546,7 +647,6 @@ window.onload = () => {
 
     AsyncUtils.wait(10).then(() => loadScripts(6));
 
-    // 低优先级
     cmt_mapper();
     comments();
     loadPinyinData();
@@ -555,7 +655,7 @@ window.onload = () => {
     setTimeout(() => {
         updateTitle();
         window.updateTitleTimer = safeInterval(updateTitle, 60 * 1000);
-    }, (60 - new Date().getSeconds()) * 1000 - new Date().getMilliseconds()); // 分钟对齐
+    }, (60 - new Date().getSeconds()) * 1000 - new Date().getMilliseconds());
 
     window.alertTimer = safeInterval(ls_alert, 60000);
 
@@ -566,7 +666,18 @@ window.onload = () => {
     }
 }
 
-// 通用代理 
+function emitEvent(type, payload, target = '*') {
+    if (!window.__LITE_BUS__) return;
+    try {
+        window.__LITE_BUS__.postMessage({
+            type,
+            payload,
+            from: ctxId,
+            target
+        });
+    } catch (e) { }
+}
+
 function createStore(defaults = {}) {
     return new Proxy({}, {
         get(_, prop) {
@@ -575,13 +686,12 @@ function createStore(defaults = {}) {
                     get: async (kw) => {
                         try {
                             const meta = await store.SearchCache.getMeta(kw);
-                            return meta ? meta.results : null;
+                            return (meta && meta.exact) ? meta.results : null;
                         } catch (e) {
                             return null;
                         }
                     },
 
-                    // exact: 当前词精确命中；prefix: 更短词的超集预热（不可当作本词权威结果入库）
                     getMeta: async (kw) => {
                         try {
                             const normKw = normalizeKeyword(kw);
@@ -617,8 +727,8 @@ function createStore(defaults = {}) {
                             const keys = await dbProxy.getAllKeys('search_cache');
                             if (keys.length > 500) {
                                 const keysToDelete = keys.slice(0, keys.length - 500);
-                                for (let k of keysToDelete) { 
-                                    await dbProxy.delete('search_cache', k); 
+                                for (let k of keysToDelete) {
+                                    await dbProxy.delete('search_cache', k);
                                 }
                             }
                         } catch (e) {
@@ -627,16 +737,16 @@ function createStore(defaults = {}) {
                     },
 
                     remove: async (kw) => {
-                        try { 
+                        try {
                             const normKw = normalizeKeyword(kw);
                             if (normKw) {
-                                await dbProxy.delete('search_cache', normKw); 
+                                await dbProxy.delete('search_cache', normKw);
                             }
-                        } catch (e) {}
+                        } catch (e) { }
                     },
 
                     clear: async () => {
-                        try { await dbProxy.clear('search_cache'); } catch (e) {}
+                        try { await dbProxy.clear('search_cache'); } catch (e) { }
                     }
                 };
             }
@@ -661,7 +771,7 @@ function createStore(defaults = {}) {
                 return false;
             }
             if (prop === 'pinyinData') {
-                return true; 
+                return true;
             }
             localStorage.setItem(prop, JSON.stringify(value));
             return true;
@@ -679,31 +789,28 @@ function createStore(defaults = {}) {
     });
 }
 
-// IndexedDB 单例长连接代理
 function createDBProxy(dbName, storeName) {
     let dbInstance = null;
     let initPromise = null;
 
     const init = async () => {
-        // 1. 如果已有可用连接，直接返回
         if (dbInstance) return dbInstance;
-        // 2. 如果正在初始化中，复用当前的 Promise 防止重复 open
         if (initPromise) return initPromise;
 
         initPromise = new Promise((resolve, reject) => {
             const request = indexedDB.open(dbName, 2);
-            
+
             request.onupgradeneeded = (e) => {
                 const db = e.target.result;
-                if (!db.objectStoreNames.contains(storeName)) 
+                if (!db.objectStoreNames.contains(storeName))
                     db.createObjectStore(storeName);
-                if (!db.objectStoreNames.contains('update_logs')) 
+                if (!db.objectStoreNames.contains('update_logs'))
                     db.createObjectStore('update_logs', { autoIncrement: true });
-                if (!db.objectStoreNames.contains('search_cache')) 
+                if (!db.objectStoreNames.contains('search_cache'))
                     db.createObjectStore('search_cache');
-                if (!db.objectStoreNames.contains('sys_state')) 
+                if (!db.objectStoreNames.contains('sys_state'))
                     db.createObjectStore('sys_state');
-                if (!db.objectStoreNames.contains('html_snapshots')) 
+                if (!db.objectStoreNames.contains('html_snapshots'))
                     db.createObjectStore('html_snapshots');
             };
 
@@ -711,12 +818,10 @@ function createDBProxy(dbName, storeName) {
                 dbInstance = e.target.result;
                 initPromise = null;
 
-                // 监听连接意外关闭
                 dbInstance.onclose = () => {
                     dbInstance = null;
                 };
 
-                // 监听多标签页版本升级冲突
                 dbInstance.onversionchange = () => {
                     dbInstance.close();
                     dbInstance = null;
@@ -741,10 +846,10 @@ function createDBProxy(dbName, storeName) {
                 const tx = db.transaction(storeName, 'readwrite');
                 tx.oncomplete = () => resolve();
                 tx.onerror = (e) => reject(tx.error || e.target.error);
-                try { 
-                    tx.objectStore(storeName).put(payload, id); 
-                } catch (err) { 
-                    reject(err); 
+                try {
+                    tx.objectStore(storeName).put(payload, id);
+                } catch (err) {
+                    reject(err);
                 }
             });
         },
@@ -816,10 +921,10 @@ function createDBProxy(dbName, storeName) {
                 const tx = db.transaction(targetStore, 'readwrite');
                 tx.oncomplete = () => resolve();
                 tx.onerror = () => reject(targetStore.error || event.target.error);
-                try { 
-                    tx.objectStore(targetStore).put(value, key); 
-                } catch (err) { 
-                    reject(err); 
+                try {
+                    tx.objectStore(targetStore).put(value, key);
+                } catch (err) {
+                    reject(err);
                 }
             });
         },
@@ -846,10 +951,9 @@ function createDBProxy(dbName, storeName) {
     };
 }
 
-// 核心引擎
 async function loadScripts(concurrency) {
-// console.time("⏱️ loadScripts 总耗时");
-    // 挂锁
+    console.time("⏱️ loadScripts 总耗时");
+
     window.isDataSyncing = true;
     const injectScript = (src) => new Promise((resolve, reject) => {
         const script = document.createElement("script");
@@ -861,17 +965,14 @@ async function loadScripts(concurrency) {
     const now = Date.now();
 
     try {
-        // 注入哈希账本与公开索引
-        // 主线程 index.js 和 Service Worker 线程 sw.js, 两者是完全不同的平行宇宙
         try {
             await injectScript(`src/js/core-list.js?t=${now}`);
         } catch (e) {
-            // 离线或冷启动异常时的统一保底方案
             window.FILE_MANIFEST = window.FILE_MANIFEST || {};
             window.dataIndex = [];
             window._isOfflineDataFallback = true;
         }
-        // 线下探测并注入影子索引
+
         window.shadowIndex = [];
         if (store.online_flag === "0") {
             try {
@@ -881,12 +982,11 @@ async function loadScripts(concurrency) {
             }
         }
 
-        // 注入轻量目录
         try {
             const litePath = "/src/js/data/lite_data.js";
             const liteHash = FILE_MANIFEST[litePath] ? FILE_MANIFEST[litePath].hash : now;
             await injectScript(`src/js/data/lite_data.js?v=${liteHash}`);
-            if (!window.LITE_DATA) 
+            if (!window.LITE_DATA)
                 throw new Error(`lite_data.js 内无有效数据`);
             window.lite_data = window.LITE_DATA;
         } catch (e) {
@@ -894,7 +994,6 @@ async function loadScripts(concurrency) {
             window.lite_data = { html: {}, image: {}, video: {}, audio: {}, ebook: {} };
         }
 
-        // 通知侧边栏渲染目录
         if (iframes?.side?.contentDocument?.readyState === 'complete') {
             emitEvent('RENDER_CATALOG', window.lite_data, 'side');
         } else {
@@ -904,7 +1003,6 @@ async function loadScripts(concurrency) {
             emitEvent('RENDER_CATALOG', window.lite_data, 'side');
         }
 
-        // 恢复快照
         window.restoreSnapPromise = restore_snap();
 
         window.restoreSnapPromise
@@ -914,39 +1012,33 @@ async function loadScripts(concurrency) {
             .finally(() => {
                 $("#search").style.display = "block";
             });
-        
-        // 静默下载胖数据
+
         const fatFiles = window.dataIndex.filter(f => f.startsWith('fat_data_'));
 
-        // 数据拼装
         await loadDataInBatches(fatFiles, now, concurrency);
     } catch (err) {
         console.error("❌ 核心流程中断，降级处理:", err);
     } finally {
         window.isDataSyncing = false;
-        // 核心流程全部走通，解除看门狗
-    if (window._globalWatchdog) {
+        if (window._globalWatchdog) {
             clearTimeout(window._globalWatchdog);
             window._globalWatchdog = null;
         }
     }
-// console.timeEnd("⏱️ loadScripts 总耗时");
+
+    console.timeEnd("⏱️ loadScripts 总耗时");
 }
 
-// 数据拼装
 async function loadDataInBatches(files, now, concurrency) {
-    // 取出老本
     const cachedChunks = await dbProxy.getAll();
     const cachedMap = new Map(cachedChunks.map(c => [c.id, c.fingerprint]));
     const chunkDataMap = new Map(cachedChunks.map(c => [c.id, c.data]));
 
-    // 离线重构
     if (window._isOfflineDataFallback) {
         files = cachedChunks.map(c => c.id);
     }
     const validFatFiles = new Set(files);
 
-    // 在线垃圾清理
     if (!window._isOfflineDataFallback) {
         for (const cached of cachedChunks) {
             if (!validFatFiles.has(cached.id)) {
@@ -957,23 +1049,19 @@ async function loadDataInBatches(files, now, concurrency) {
         }
     }
 
-    // 拟定请求
     const filesToFetch = [];
     files.forEach(src => {
         const webPath = "/src/js/data/" + src;
         const newHash = FILE_MANIFEST[webPath] ? FILE_MANIFEST[webPath].hash : null;
-        if (cachedMap.get(src) !== newHash) 
+        if (cachedMap.get(src) !== newHash)
             filesToFetch.push(src);
     });
 
-    // worker 注册
     if (!searchWorker) {
         searchWorker = new Worker('src/js/worker.js', { type: 'module' });
         searchWorker.onmessage = async (e) => {
-            // 增加接收 inheritFrom
             const { type, results, keyword, token, inheritFrom, payload } = e.data;
-            
-            // 【新增】：接收 Worker 传来的删除指令，执行物理清理
+
             if (type === 'DELETE_CACHE') {
                 store.SearchCache.remove(keyword);
                 return;
@@ -989,22 +1077,19 @@ async function loadDataInBatches(files, now, concurrency) {
 
                 if (activeKw) {
                     let sourceCache = await store.SearchCache.get(activeKw);
-                    let isExactMatch = true; 
-                    
-                    // 【修改】：废弃主线程自己的判断，严格采纳 Worker 传来的权威建议 (inheritFrom)
+                    let isExactMatch = true;
+
                     if ((!sourceCache || sourceCache.length === 0) && inheritFrom) {
                         sourceCache = await store.SearchCache.get(inheritFrom);
-                        isExactMatch = false; 
+                        isExactMatch = false;
                     }
-                    
+
                     if (token !== window._searchToken) return;
 
                     if (sourceCache && sourceCache.length > 0) {
                         results.forEach(newItem => {
                             const oldItem = sourceCache.find(o => o.path === newItem.path);
                             if (oldItem) {
-                                // 🚀 修复：必须限制只有在“精确命中同一个词”时，才能继承旧数据！
-                                // 绝不能将短词（前缀）的庞大命中数，强行覆盖长词的真实命中数
                                 if (isExactMatch) {
                                     if (oldItem.count > newItem.count) {
                                         newItem.count = oldItem.count;
@@ -1016,27 +1101,20 @@ async function loadDataInBatches(files, now, concurrency) {
                                 }
                             }
                         });
-                        
-                        // 核心修复 2：只有精确命中同一个词时，才把 Worker 漏掉的巨型页面补回来（防止不同词的结果混入列表）
+
                         if (isExactMatch) {
                             sourceCache.forEach(oldItem => {
                                 if (oldItem.snippets && !results.some(r => r.path === oldItem.path)) {
-                                    results.push(JSON.parse(JSON.stringify(oldItem))); 
+                                    results.push(JSON.parse(JSON.stringify(oldItem)));
                                 }
                             });
                         }
                     }
                 }
 
-                // 缓存入库
-                // 搜索缓存和搜索历史不需要强行绑定成 1:1 的关系，因为它们的职责不同
-                // 搜索历史记录的是“有意识的显式行为”（回车或点击条目）。它的目的是让用户能找回自己曾经明确查找过、关注过的内容，属于“用户资产”。
-                // 搜索缓存记录的是“无意识的瞬时计算结果”（只要输入框在变，哪怕只打了一个字）。它的目的是作为瞬时性能垫脚石, 提供极致的输入响应速度，属于“系统缓存”。
                 if (activeKw && !activeKw.startsWith('@')) {
                     clearTimeout(window._idbWriteTimer);
-                    // 输入防抖
                     window._idbWriteTimer = setTimeout(() => {
-                        // 【修改】：主线程不再做任何计算，直接将当前游标提交给 Worker 处理状态转移
                         searchWorker.postMessage({ type: 'COMMIT_CURSOR', payload: { keyword: activeKw } });
                     }, 600);
                 }
@@ -1052,14 +1130,12 @@ async function loadDataInBatches(files, now, concurrency) {
     }
 
     const buildAndPushData = async () => {
-        // 1. 合并胖数据
         let fat_data_merged = {};
         files.forEach(src => {
             const chunkData = chunkDataMap.get(src);
             if (chunkData) Object.assign(fat_data_merged, chunkData);
         });
 
-        // 2. 合并影子数据
         let shadow_data_merged = {};
         const shadowDataChunks = new Map();
         if (store.online_flag === "0" && window.shadowIndex.length > 0) {
@@ -1072,12 +1148,11 @@ async function loadDataInBatches(files, now, concurrency) {
         }
         shadowDataChunks.forEach(chunk => Object.assign(shadow_data_merged, chunk));
 
-        // 3. 直接传递原始 JS 对象
         try {
             const isOffline = store.online_flag === "0";
 
-            searchWorker.postMessage({ 
-                type: 'BUILD_DATA', 
+            searchWorker.postMessage({
+                type: 'BUILD_DATA',
                 payload: {
                     liteData: window.lite_data || {},
                     fatData: fat_data_merged,
@@ -1092,18 +1167,15 @@ async function loadDataInBatches(files, now, concurrency) {
             await finalizeDataLoad();
         }
 
-        // 4. 洗盘子释放临时内存
         fat_data_merged = null;
         chunkDataMap.clear();
     };
 
-    // 无更新时, 直接拼装
     if (filesToFetch.length === 0) {
         await buildAndPushData();
         return;
     }
 
-    // 有更新时, 翻新后才能继续拼装, 缓存作废 
     store.SearchCache.clear();
     for (let i = 0; i < filesToFetch.length; i += concurrency) {
         const batch = filesToFetch.slice(i, i + concurrency);
@@ -1116,14 +1188,13 @@ async function loadDataInBatches(files, now, concurrency) {
                 const controller = new AbortController();
                 const timeoutTimer = setTimeout(() => controller.abort(), 60000);
                 try {
-                    // 现在这里的 newHash 就有值了
                     const response = await fetch(`src/js/data/${src}?v=${newHash}`, { cache: 'no-store', signal: controller.signal });
                     if (!response.ok) throw new Error(`HTTP ${response.status}`);
-                    
+
                     const chunkData = await response.json();
-                    if (!chunkData || typeof chunkData !== 'object') 
+                    if (!chunkData || typeof chunkData !== 'object')
                         throw new Error(`结构无效`);
-                    
+
                     chunkDataMap.set(src, chunkData);
                     await dbProxy.save(src, { id: src, fingerprint: newHash, data: chunkData });
 
@@ -1146,9 +1217,7 @@ async function loadDataInBatches(files, now, concurrency) {
     await buildAndPushData();
 }
 
-// 数据装配异步收尾 (由 Worker 回传 DATA_READY 或 异常降级 时触发)
 async function finalizeDataLoad() {
-    // 侦测媒体资源的变动 (Diff 比较)
     try {
         const currentMediaPaths = new Set();
         if (window.data && window.data.length > 0) {
@@ -1161,15 +1230,13 @@ async function finalizeDataLoad() {
         }
 
         const oldMediaListRaw = await dbProxy.get('sys_state', 'media_paths_snapshot');
-        
-        // 冷启动侦测：如果本地没有任何旧快照记录，直接静默落盘初始状态，不写日志
+
         if (!oldMediaListRaw) {
             await dbProxy.put('sys_state', 'media_paths_snapshot', Array.from(currentMediaPaths));
         } else {
             const oldMediaPaths = new Set(oldMediaListRaw);
             let hasMediaUpdates = false;
 
-            // Diff 1: 找新增
             for (const path of currentMediaPaths) {
                 if (!oldMediaPaths.has(path)) {
                     await dbProxy.addLog(`✅ 新增媒体: /${path}`);
@@ -1177,7 +1244,6 @@ async function finalizeDataLoad() {
                 }
             }
 
-            // Diff 2: 找删除
             for (const path of oldMediaPaths) {
                 if (!currentMediaPaths.has(path)) {
                     await dbProxy.addLog(`⛔ 删除媒体: /${path}`);
@@ -1193,20 +1259,19 @@ async function finalizeDataLoad() {
         console.warn("媒体资源 Diff 侦测失败", err);
     }
 
-    // 结束与撒花逻辑
     if (store.force_refresh_cache === "1") {
         store.force_refresh_cache = "0";
         const triggerConfetti = () => {
             if (window.restoreSnapPromise) {
-                window.restoreSnapPromise.then(() => { 
-                    idleRun(playConfetti); 
+                window.restoreSnapPromise.then(() => {
+                    idleRun(playConfetti);
                     if (store.auto_show_changelog !== "0") {
                         setTimeout(showChangelog, 800);
                     }
-                    window.restoreSnapPromise = null; 
+                    window.restoreSnapPromise = null;
                 });
-            } else { 
-                idleRun(playConfetti); 
+            } else {
+                idleRun(playConfetti);
                 if (store.auto_show_changelog !== "0") {
                     setTimeout(showChangelog, 800);
                 }
@@ -1216,18 +1281,15 @@ async function finalizeDataLoad() {
     }
 }
 
-// 代理拦截
 function sw() {
     if ('serviceWorker' in navigator) {
         navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' }).then(reg => {
-            // 开局先捞一遍有没有处于等待激活状态的“僵尸”新版本
             if (reg.waiting && navigator.serviceWorker.controller) {
                 promptUpdate(reg.waiting);
             }
 
             let isUpdating = false;
             const checkUpdate = async () => {
-                // console.log("checkUpdate..");
                 if (isUpdating || !navigator.onLine) return;
                 isUpdating = true;
                 try {
@@ -1241,19 +1303,16 @@ function sw() {
                 }
             };
 
-            // 开局侦查
             checkUpdate();
 
-            // 防移动端休眠
             document.addEventListener('visibilitychange', () => {
                 if (document.visibilityState === 'visible') {
                     checkUpdate();
                 }
             });
 
-            // 保底的轮询
             if (window.updateTimer) {
-                clearInterval(window.updateTimer); 
+                clearInterval(window.updateTimer);
             }
             window.updateTimer = safeInterval(checkUpdate, store.online_flag === "0" ? update_interval_local : update_interval);
 
@@ -1265,8 +1324,8 @@ function sw() {
                         try {
                             const win = iframes.side.contentWindow;
                             return win && typeof win.buildCatalogFromLiteData === 'function';
-                        } catch(e) { 
-                            return false; 
+                        } catch (e) {
+                            return false;
                         }
                     }, 10000, 150).then(() => {
                         emitEvent('show_update_banner', null, 'side');
@@ -1300,14 +1359,12 @@ function sw() {
     }
 }
 
-// 搜索框
 function search_box() {
     const elSearchInput = $("#searchInput");
     const elSearchHistory = $("#searchHistory");
     const elSearchResults = $("#searchResults");
     elSearchInput.setAttribute("autocomplete", "off");
 
-    // 搜索历史排序
     function showSearchHistoryByTime() {
         const elSearchHistory = $("#searchHistory");
         elSearchHistory.innerHTML = "";
@@ -1322,7 +1379,6 @@ function search_box() {
         elSearchHistory.options.length > 10 ? elSearchHistory.setAttribute("size", "10") : elSearchHistory.setAttribute("size", elSearchHistory.options.length);
     }
 
-    // 通知右栏所选条目
     async function loadContent(selectedIndex) {
         const option = elSearchResults.options[selectedIndex];
 
@@ -1347,14 +1403,12 @@ function search_box() {
         emitEvent('show_current', null, 'side');
     }
 
-    // 选择列表动作平台适配
     function clickOrChange(select, handler) {
         let isHandling = false;
         const wrap = function () {
             if (isHandling || this.selectedIndex < 0) return;
             isHandling = true;
             handler(this.selectedIndex);
-            // 150毫秒内，无视一切因为 click 和 change 同时触发导致的并发事件
             setTimeout(() => { isHandling = false; }, 150);
         };
         const isMobile = /Mobi|Android/i.test(navigator.userAgent);
@@ -1366,19 +1420,16 @@ function search_box() {
         }
     }
 
-    // 搜索历史清空
     function initHistoryBox(status) {
         elSearchHistory.innerHTML = "";
         elSearchHistory.style.display = status === 1 ? "block" : "none";
     }
 
-    // 搜索框监听
     let searchDebounceTimer = null;
 
     elSearchInput.addEventListener("input", async function () {
         const val = this.value;
-    
-        // 解析 @noise=n 语法
+
         if (val.startsWith('@noise=')) {
             const n = parseInt(val.split('=')[1]);
             if (!isNaN(n) && n >= 0 && n <= 5) {
@@ -1386,7 +1437,7 @@ function search_box() {
                 elSearchInput.value = "";
                 elSearchInput.placeholder = `已将搜索宽容度设为: ${n}`;
                 setTimeout(() => elSearchInput.placeholder = "Search...", 2000);
-                store.SearchCache.clear(); // 清理旧宽容度的缓存
+                store.SearchCache.clear();
                 if (searchWorker) searchWorker.postMessage({ type: 'CLEAR_CURSOR', payload: { keyword: "" } });
             }
             return;
@@ -1397,15 +1448,8 @@ function search_box() {
             updateSearchResults([]);
             showSearchHistoryByTime();
             return;
-        } else if (val === "@bomb") {
-            bomb();
-            return;
-        } else if (val === '@rebirth') {
-            rebirth();
-            return;
         }
 
-        // 1. 本地联想与历史建议保持实时响应，零延迟
         const history = store.searchHistory || [];
         const matchingHistory = history.filter(item =>
             item.keyword.startsWith(val) || item.keyword.includes(val)
@@ -1413,7 +1457,6 @@ function search_box() {
         initHistoryBox(1);
         await updateAutocompleteSuggestions(val);
 
-        // 2. 🚀 对高负载的 Worker 全文检索进行 150ms 防抖限流，彻底消除 CPU 抖动
         clearTimeout(searchDebounceTimer);
         searchDebounceTimer = setTimeout(() => {
             search(val.trim());
@@ -1421,7 +1464,6 @@ function search_box() {
         }, 150);
     });
 
-    // 焦点
     elSearchInput.addEventListener("focus", function () {
         initHistoryBox(1);
         const history = store.searchHistory;
@@ -1434,29 +1476,48 @@ function search_box() {
         elSearchHistory.selectedIndex = -1;
     });
 
-    // 单击
     elSearchInput.addEventListener("click", function () {
         this.select();
     });
 
-    // 按键
     elSearchInput.addEventListener("keydown", function (e) {
-        let select = $('#searchResults');
+        const val = this.value.trim();
         if (e.keyCode === 40 || e.keyCode === 13 || e.key === "Enter") {
             e.preventDefault();
+            if (val.startsWith("@noise=")) {
+                const n = parseInt(val.split("=")[1], 10);
+                if (!isNaN(n) && n >= 0 && n <= 5) {
+                    store.noise_level = n;
+                    this.value = "";
+                    this.placeholder = `已将搜索宽容度设为: ${n}`;
+                    setTimeout(() => this.placeholder = "Search...", 2000);
+                    store.SearchCache.clear();
+                    if (searchWorker) searchWorker.postMessage({ type: "CLEAR_CURSOR", payload: { keyword: "" } });
+                } else {
+                    this.placeholder = "宽容度只能是 0~5（当前输入无效）";
+                    setTimeout(() => this.placeholder = "Search...", 2500);
+                    this.value = "";
+                }
+                return;
+            }
+            if (val === "@bomb") {
+                bomb();
+                this.value = "";
+                return;
+            }
+            if (val === "@rebirth") {
+                rebirth();
+                this.value = "";
+                return;
+            }
+            const select = $("#searchResults");
             select.focus();
             select.selectedIndex = -1;
-            const keyword = elSearchInput.value.trim();
-            if (keyword !== "") {
-                const history = [...(store.searchHistory || [])]
-                const existingIndex = history.findIndex(item => item.keyword === keyword);
-                if (existingIndex !== -1) {
-                    history.splice(existingIndex, 1);
-                }
-                history.push({
-                    keyword,
-                    timestamp: new Date().getTime()
-                });
+            if (val !== "") {
+                const history = [...(store.searchHistory || [])];
+                const i = history.findIndex(item => item.keyword === val);
+                if (i !== -1) history.splice(i, 1);
+                history.push({ keyword: val, timestamp: Date.now() });
                 history.sort((a, b) => b.timestamp - a.timestamp);
                 store.searchHistory = history;
             }
@@ -1469,11 +1530,11 @@ function search_box() {
         const val = elSearchInput.value.trim();
         elSearchHistory.innerHTML = "";
         const history = store.searchHistory || [];
-        
+
         if (val === "") {
             showSearchHistoryByTime();
         } else {
-            const matchingHistory = history.filter(item => 
+            const matchingHistory = history.filter(item =>
                 item.keyword.startsWith(val) || item.keyword.includes(val)
             );
             if (matchingHistory.length === 0) {
@@ -1489,46 +1550,40 @@ function search_box() {
         }
     }
 
-    // 右击删除记录
     elSearchHistory.addEventListener("contextmenu", async function (e) {
         if (e.target.tagName === 'OPTION') {
             e.preventDefault();
             e.stopPropagation();
             const keywordToDelete = e.target.text;
-            
-            // 1. 如果它存在于搜索历史中，从历史中剔除
+
             let history = [...(store.searchHistory || [])];
             const newHistory = history.filter(item => item.keyword !== keywordToDelete);
             if (newHistory.length !== history.length) {
                 store.searchHistory = newHistory;
             }
-            
-            // 2. 无论它是历史还是孤儿缓存，从 IndexedDB 缓存池中彻底抹除
+
             await store.SearchCache.remove(keywordToDelete);
-            
-            // 【修改】：通知 Worker 同步销毁其内部的贪吃蛇游标，彻底消灭幽灵状态
+
             searchWorker.postMessage({
                 type: 'SEARCH',
-                payload: { keyword: kw, token: currentToken, noise: Number(store.noise_level ?? 3) }
+                payload: { keyword: kw, token: currentToken, noise: Number(store.noise_level ?? 5) }
             });
 
-            // 3. 刷新下拉框视图
             const currentVal = $("#searchInput").value.trim();
             if (currentVal !== "") {
-                // 如果用户正在输入联想，局部重新计算联想列表（使刚删除的词瞬间消失，不重置视图）
                 await updateAutocompleteSuggestions(currentVal);
             } else {
-                // 如果输入框为空，刷新历史列表
                 refreshHistoryList();
             }
         }
     });
     elSearchHistory.title = "右击删除该记录";
 
-    // 列表动作
     clickOrChange(elSearchHistory, function (index) {
         elSearchInput.value = elSearchHistory.options[index].text;
-        elSearchInput.focus();
+        if (!document.body.classList.contains('touchpad-active')) {
+            elSearchInput.focus();
+        }
         const e = elSearchInput.value;
         search(e);
         store.keyword = e;
@@ -1551,7 +1606,6 @@ function search_box() {
         }
     });
 
-    // 清理
     $("#clear").addEventListener("click", function () {
         elSearchInput.value = "";
         updateSearchResults([]);
@@ -1562,7 +1616,6 @@ function search_box() {
         emitEvent('DESTROY_HIGHLIGHT', null, 'content');
     });
 
-    // 位置联动
     const layoutObserver = new ResizeObserver(() => {
         if (!$("#content") || !$("#search") || !$("#searchResults")) return;
         const maxW = Math.max(0, $("#content").clientWidth - $("#search").offsetWidth - 10);
@@ -1576,21 +1629,20 @@ function search_box() {
     updateSearchResults([]);
     $("#search").style.right = ($("#side").offsetWidth + 4) + "px";
 
-    // snippet
     let previewBox = document.getElementById('center-snippet-preview');
     if (!previewBox) {
         previewBox = document.createElement('div');
         previewBox.id = 'center-snippet-preview';
-        
+
         let header = document.createElement('div');
         header.id = 'preview-header';
-        
+
         let scrollWrapper = document.createElement('div');
         scrollWrapper.id = 'preview-scroll-wrapper';
-        
+
         let scrollContent = document.createElement('div');
         scrollContent.id = 'preview-scroll-content';
-        
+
         scrollWrapper.appendChild(scrollContent);
         previewBox.appendChild(header);
         previewBox.appendChild(scrollWrapper);
@@ -1605,7 +1657,6 @@ function search_box() {
 
     const escapeRegExp = (string) => string.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-    // ---------------- [新增] 集中处理销毁预览与媒体的辅助函数 ----------------
     function destroyMediaPreview() {
         if (previewBox) previewBox.style.display = 'none';
         lastHoveredPath = null;
@@ -1613,16 +1664,13 @@ function search_box() {
         if (previewTimeoutId) clearTimeout(previewTimeoutId);
         if (previewScrollFrame) cancelAnimationFrame(previewScrollFrame);
         const scrollContent = document.getElementById('preview-scroll-content');
-        if (scrollContent) scrollContent.innerHTML = ''; // 清空内容即销毁 audio/video，停止播放
+        if (scrollContent) scrollContent.innerHTML = '';
     }
 
-    // ---------------- [新增] 全局失焦 (Alt-Tab 切后台) 时销毁 ----------------
     window.addEventListener('blur', destroyMediaPreview);
 
-    // ---------------- [修改/新增] 统一的中击清除逻辑 ----------------
     const handleMiddleClick = (e) => {
-        // 使用 mousedown 判断 button === 1，在 select/option 等表单控件中兼容性更强
-        if (e.button === 1) { 
+        if (e.button === 1) {
             e.preventDefault();
             const clearBtn = document.getElementById('clear');
             if (clearBtn) clearBtn.click();
@@ -1630,18 +1678,14 @@ function search_box() {
         }
     };
 
-    // 搜索结果列表中击
     elSearchResults.addEventListener('mousedown', handleMiddleClick);
-    
-    // 历史记录列表中击
+
     const elSearchHistoryNode = document.getElementById('searchHistory');
     if (elSearchHistoryNode) elSearchHistoryNode.addEventListener('mousedown', handleMiddleClick);
 
-    // [新增] 搜索框本身中击
     const elSearchInputNode = document.getElementById('searchInput');
     if (elSearchInputNode) elSearchInputNode.addEventListener('mousedown', handleMiddleClick);
 
-    // ---------------- 核心悬浮逻辑 (mousemove) ----------------
     elSearchResults.addEventListener('mousemove', (e) => {
         if (e.target.tagName.toUpperCase() === 'OPTION') {
             const path = e.target.dataset.path;
@@ -1660,7 +1704,6 @@ function search_box() {
             const isMedia = type === 'video' || type === 'audio' || /\.(mp4|webm|ogg|mp3|wav|flac|m4a)$/i.test(path);
             const isImage = type === 'image' || /\.(png|jpg|jpeg|gif|webp|bmp|svg|ico)$/i.test(path);
 
-            // 1. 设置 Title 提示
             if (type === 'html') {
                 e.target.title = "右击滚动或停止";
             } else if (isMedia) {
@@ -1669,14 +1712,11 @@ function search_box() {
                 e.target.title = "";
             }
 
-            // 2. 避免同一条目重复触发渲染
-            if (path === lastHoveredPath) return; 
-            
-            // 如果切换了 Hover 的条目，先销毁上一个预览和媒体
+            if (path === lastHoveredPath) return;
+
             destroyMediaPreview();
             lastHoveredPath = path;
 
-            // 如果是媒体，只更新提示，**不弹出窗口**，等待右击
             if (isMedia) {
                 return;
             }
@@ -1696,129 +1736,143 @@ function search_box() {
                 return;
             }
 
-            // --- Html 渲染代码保持原有逻辑不变 ---
             const resultData = (window._currentRenderedResults || []).find(r => r.path === path);
-            // 【修复】：不能直接读 elSearchInput.value —— 用户可能已经继续往下打字
-            // （比如已经敲到"一个人的"），但 resultData.snippets 挂着的还是上一轮
-            // （比如"一个人"）异步返回、尚未被新结果覆盖的旧快照。用最新输入去匹配
-            // 旧关键词截出来的 snippet 文本，经常匹配不上，表现为 snip 不着色。
-            // 这里改成始终使用 _currentRenderedResults 对应的那个关键词，
-            // 保证"高亮用的正则"和"snippet 是围绕哪个关键词截出来的"严格一致。
             const keyword = window._currentRenderedKeyword || elSearchInput.value.trim();
-            
+
             const escapeRegExp = (string) => string.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-            // 🚀 重新定义高亮正则：严格模式允许任意空白符，宽容模式允许至多3个杂字
-            const buildSnippetRegex = (kw, isTolerant) => {
+            const buildSnippetRegex = (kw) => {
                 const cleanKw = kw.replace(/\s+/g, "");
+                const kwLen = cleanKw.length;
                 const tokens = cleanKw.split("").map(c => escapeRegExp(c));
-                const noise = Number(store.noise_level ?? 3); // 提取动态宽容度
-                
-                if (!isTolerant || noise === 0) {
+
+                const baseNoise = Number(store.noise_level ?? 5);
+                const effectiveNoise = kwLen > 25 ? 0 : baseNoise;
+
+                if (effectiveNoise === 0) {
                     return new RegExp(`(${tokens.join("\\s*")})`, 'gi');
                 } else {
-                    // 动态替换最大字符数
-                    return new RegExp(`(${tokens.join(`\\s*(?:[\\s\\S]{0,${noise}}?)\\s*`)})`, 'gi');
+                    return new RegExp(`(${tokens.join(`\\s*(?:\\S\\s*){0,${effectiveNoise}}?`)})`, 'gi');
                 }
             };
-// --- 替换 index.js 原有的 Html 渲染逻辑片段 ---
-if (resultData && resultData.snippets && resultData.snippets.length > 0) {
-    previewBox.style.display = 'flex';
-    header.style.color = '#abb2bf';
-    
-    let displayCount = resultData.snippets.length;
-    let countStr = displayCount == 1 ? `1 snippet` : `${displayCount} snippets`;
-    
-    header.innerHTML = `
-        <div style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
-            <span style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 75%;">${resultData.title}</span>
-            <span style="color: #61afef; font-size: 11px; white-space: nowrap;">${countStr}</span>
-        </div>
-    `;
 
-    // 超级模式：永远只用宽容正则扫
-    const hlRegex = buildSnippetRegex(keyword, true);
-    // 提前计算出用户输入的纯净字数
-    const cleanKwLen = keyword.replace(/\s+/g, "").length;
-    const maxNoise = Number(store.noise_level ?? 3);
+            if (resultData && resultData.snippets && resultData.snippets.length > 0) {
+                previewBox.style.display = 'flex';
+                header.style.color = '#abb2bf';
 
-// 1. 计算每个 snippet 的最小杂字数量 (noise)，过滤掉对当前 keyword 完全无命中的脏片段
-    let snipsWithNoise = resultData.snippets.map(snip => {
-        const text = typeof snip === 'string' ? snip : (snip && (snip.text || snip.snip)) || '';
-        let minNoise = 999;
-        let match;
-        hlRegex.lastIndex = 0;
-        while ((match = hlRegex.exec(text)) !== null) {
-            const cleanMatchLen = match[0].replace(/\s+/g, "").length;
-            const noise = Math.max(0, cleanMatchLen - cleanKwLen);
-            if (noise < minNoise) minNoise = noise;
-        }
-        return { text, noise: minNoise };
-    }).filter(item => item.noise <= maxNoise); // 无匹配(999)或超出当前宽容度的一律丢弃
+                let displayCount = resultData.snippets.length;
+                let countStr = displayCount == 1 ? `1 snippet` : `${displayCount} snippets`;
 
-    if (snipsWithNoise.length === 0) {
-        previewBox.style.display = 'none';
-        return;
-    }
+                header.innerHTML = `
+                    <div style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
+                        <span style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 75%;">${resultData.title}</span>
+                        <span style="color: #61afef; font-size: 11px; white-space: nowrap;">${countStr}</span>
+                    </div>
+                `;
 
-    // 2. 排序：按杂字数量升序排序（杂字越少/匹配度越高 越靠前）
-    snipsWithNoise.sort((a, b) => a.noise - b.noise);
+                const hlRegex = buildSnippetRegex(keyword, true);
+                const cleanKwLen = keyword.replace(/\s+/g, "").length;
+                const maxNoise = Number(store.noise_level ?? 5);
 
-    displayCount = snipsWithNoise.length;
-    countStr = displayCount == 1 ? `1 snippet` : `${displayCount} snippets`;
-    header.innerHTML = `
-        <div style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
-            <span style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 75%;">${resultData.title}</span>
-            <span style="color: #61afef; font-size: 11px; white-space: nowrap;">${countStr}</span>
-        </div>
-    `;
+                let snipsWithNoise = resultData.snippets.map(snip => {
+                    const text = typeof snip === 'string' ? snip : (snip && (snip.text || snip.snip)) || '';
+                    let minNoise = 999;
+                    let match;
+                    hlRegex.lastIndex = 0;
+                    while ((match = hlRegex.exec(text)) !== null) {
+                        const cleanMatchLen = match[0].replace(/\s+/g, "").length;
+                        const noise = Math.max(0, cleanMatchLen - cleanKwLen);
+                        if (noise < minNoise) minNoise = noise;
+                    }
+                    return { text, noise: minNoise };
+                }).filter(item => item.noise !== 999);
 
-    // 3. 渲染：循环处理排好序的 snippet，赋予和 content 页面一致的渐变色系
-    let singleHtml = snipsWithNoise.map((item, index) => {
-        let safeSnip = item.text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-        
-        let highlighted = safeSnip.replace(hlRegex, (match) => {
-            const cleanMatchLen = match.replace(/\s+/g, "").length;
-            const noise = Math.max(0, cleanMatchLen - cleanKwLen);
-            
-            let hlStyle = '';
-            if (noise === 0) {
-                // 级别 0：最强视觉响度。高浓度纯黄背景 + 纯黑文字 + 加粗
-                hlStyle = 'background-color: rgba(255, 235, 0, 0.75); color: #000000; font-weight: bold;';
-            } else if (noise === 1) {
-                // 级别 1：中等视觉响度。透明度骤降 + 深灰文字
-                hlStyle = 'background-color: rgba(255, 235, 0, 0.45); color: #111111; font-weight: bold;';
-            } else if (noise === 2) {
-                // 级别 2：偏弱视觉响度。浅黄底色 + 灰黑文字 + 正常字重
-                hlStyle = 'background-color: rgba(255, 235, 0, 0.25); color: #333333; font-weight: normal;';
-            } else {
-                // 级别 3+：最低视觉响度。极淡的黄底色 + 灰色文字，几乎融入背景
-                hlStyle = 'background-color: rgba(255, 235, 0, 0.12); font-weight: normal;';
-            }
+                if (snipsWithNoise.length === 0) {
+                    previewBox.style.display = 'none';
+                    return;
+                }
 
-            return `<span style="${hlStyle}">${match}</span>`;
-        });
-        
-        return `<div style="margin-bottom: 12px; border-bottom: 1px dashed #4b5263; padding-bottom: 8px;"><span style="color: #61afef; font-size: 11px;">[${index + 1}]</span> ${highlighted}</div>`;
-    }).join('');
-    
-    scrollContent.innerHTML = `<div class="loop-block">${singleHtml}</div><div class="loop-block">${singleHtml}</div>`;
-// ...后续滚动逻辑保持不变  
+                snipsWithNoise.sort((a, b) => a.noise - b.noise);
+
+                displayCount = snipsWithNoise.length;
+                countStr = displayCount == 1 ? `1 snippet` : `${displayCount} snippets`;
+                header.innerHTML = `
+                    <div style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
+                        <span style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 75%;">${resultData.title}</span>
+                        <span style="color: #61afef; font-size: 11px; white-space: nowrap;">${countStr}</span>
+                    </div>
+                `;
+
+                let singleHtml = snipsWithNoise.map((item, index) => {
+                    let intervals = [];
+                    let match;
+                    hlRegex.lastIndex = 0;
+
+                    while ((match = hlRegex.exec(item.text)) !== null) {
+                        intervals.push({
+                            start: match.index,
+                            end: match.index + match[0].length,
+                            text: match[0]
+                        });
+                        hlRegex.lastIndex = match.index + 1;
+                    }
+
+                    let merged = [];
+                    intervals.sort((a, b) => a.start - b.start).forEach(iv => {
+                        if (merged.length === 0) {
+                            merged.push(iv);
+                            return;
+                        }
+                        let last = merged[merged.length - 1];
+                        if (iv.start <= last.end) {
+                            last.end = Math.max(last.end, iv.end); // 区间融合
+                        } else {
+                            merged.push(iv);
+                        }
+                    });
+
+                    let parts = [];
+                    let lastIdx = 0;
+                    merged.forEach(m => {
+                        let before = item.text.substring(lastIdx, m.start);
+                        parts.push(before.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"));
+
+                        let rawMatch = item.text.substring(m.start, m.end);
+                        let safeMatch = rawMatch.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+                        let cleanMatchLen = rawMatch.replace(/\s+/g, "").length;
+                        let noise = Math.max(0, cleanMatchLen - cleanKwLen);
+                        let alpha = noise === 0 ? 0.80 : Math.max(0.3, 0.80 - noise * 0.1);
+                        let textColor = '#111111';
+                        let fontWeight = noise <= 1 ? 'bold' : 'normal';
+                        let hlStyle = `background-color: rgba(255, 235, 0, ${alpha.toFixed(2)}); color: ${textColor}; font-weight: ${fontWeight};`;
+
+                        parts.push(`<span style="${hlStyle}">${safeMatch}</span>`);
+                        lastIdx = m.end;
+                    });
+
+                    let after = item.text.substring(lastIdx);
+                    parts.push(after.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"));
+
+                    return `<div style="margin-bottom: 12px; border-bottom: 1px dashed #4b5263; padding-bottom: 8px;"><span style="color: #61afef; font-size: 11px;">[${index + 1}]</span> ${parts.join('')}</div>`;
+                }).join('');
+
+                scrollContent.innerHTML = `<div class="loop-block">${singleHtml}</div><div class="loop-block">${singleHtml}</div>`;
                 currentScrollY = 0;
                 scrollContent.style.transform = `translateY(0px)`;
 
                 previewTimeoutId = setTimeout(() => {
                     const loopBlock = scrollContent.querySelector('.loop-block');
                     if (!loopBlock) return;
-                    
+
                     const blockHeight = loopBlock.offsetHeight;
-                    const visibleHeight = scrollWrapper.offsetHeight; 
+                    const visibleHeight = scrollWrapper.offsetHeight;
 
                     if (blockHeight > visibleHeight) {
                         const autoScroll = () => {
                             if (!isPaused) {
                                 currentScrollY += 0.5;
                                 if (currentScrollY >= blockHeight) {
-                                    currentScrollY -= blockHeight; 
+                                    currentScrollY -= blockHeight;
                                 }
                                 scrollContent.style.transform = `translateY(-${currentScrollY}px)`;
                             }
@@ -1833,14 +1887,13 @@ if (resultData && resultData.snippets && resultData.snippets.length > 0) {
         }
     });
 
-    // ---------------- 核心右击逻辑 (contextmenu) ----------------
     elSearchResults.addEventListener('contextmenu', (e) => {
         if (e.target.tagName.toUpperCase() === 'OPTION') {
-            e.preventDefault(); 
+            e.preventDefault();
             const path = e.target.dataset.path;
             const type = e.target.dataset.type;
 
-             if (e.target.dataset.localOnly === "true" && store.online_flag === "1") {
+            if (e.target.dataset.localOnly === "true" && store.online_flag === "1") {
                 return;
             }
 
@@ -1851,27 +1904,29 @@ if (resultData && resultData.snippets && resultData.snippets.length > 0) {
                 let mediaEl = scrollContent.querySelector('video, audio');
 
                 if (mediaEl && mediaEl.dataset.path === path) {
-                    // 状态：如果在播放同一个媒体，切换播放/暂停
                     if (mediaEl.paused) {
-                        mediaEl.play();
-                        // 恢复波浪线动画
+                        const playPromise = mediaEl.play();
+                        if (playPromise !== undefined) {
+                            playPromise.catch(err => {
+                                if (err.name !== 'AbortError') {
+                                    console.warn("Auto-play prevented", err);
+                                }
+                            });
+                        }
                         scrollContent.querySelectorAll('.wave-bar').forEach(b => b.classList.remove('paused'));
                     } else {
                         mediaEl.pause();
-                        // 暂停波浪线动画
                         scrollContent.querySelectorAll('.wave-bar').forEach(b => b.classList.add('paused'));
                     }
                 } else {
-                    // 状态：首次右击，生成弹窗，注入内容并自动播放
                     previewBox.style.display = 'flex';
-                    previewBox.classList.add('image-preview-mode'); // 复用无 Header 背景
-                    
+                    previewBox.classList.add('image-preview-mode');
+
                     const isVideo = type === 'video' || /\.(mp4|webm|ogg)$/i.test(path);
                     if (isVideo) {
                         scrollContent.innerHTML = `<video src="${path}" data-path="${path}" loop style="max-width: 450px; max-height: 350px; width: 100%; outline: none; object-fit: contain;"></video>`;
                     } else {
                         const filename = path.split('/').pop();
-                        // 音频：加入 CSS 动态波浪线和标题
                         scrollContent.innerHTML = `
                         <style>
                           .wave-bars { display: flex; align-items: flex-end; gap: 4px; height: 40px; justify-content: center; }
@@ -1888,18 +1943,23 @@ if (resultData && resultData.snippets && resultData.snippets.length > 0) {
                         </div>
                         <audio src="${path}" data-path="${path}" loop style="display:none;"></audio>`;
                     }
-                    
-                    // 初始化 10% 音量与播放
+
                     mediaEl = scrollContent.querySelector('video, audio');
                     mediaEl.volume = 0.1;
-                    mediaEl.play().catch(err => console.warn("Auto-play prevented", err));
+                    const playPromise = mediaEl.play();
+                    if (playPromise !== undefined) {
+                        playPromise.catch(err => {
+                            if (err.name !== 'AbortError') {
+                                console.warn("Auto-play prevented", err);
+                            }
+                        });
+                    }
                 }
-                return; // 处理完毕，结束执行
+                return;
             }
 
-            // 对于 HTML 条目，原有逻辑：切换是否暂停滚动
             if (type === 'html' && previewBox.style.display === 'flex' && !previewBox.classList.contains('image-preview-mode')) {
-                isPaused = !isPaused; 
+                isPaused = !isPaused;
                 previewBox.style.borderColor = !isPaused ? '#e5c07b' : '#61afef';
                 const header = document.getElementById('preview-header');
                 if (header) header.style.color = !isPaused ? '#e5c07b' : '#abb2bf';
@@ -1907,22 +1967,19 @@ if (resultData && resultData.snippets && resultData.snippets.length > 0) {
         }
     });
 
-    // ---------------- 鼠标离开 ----------------
     elSearchResults.addEventListener('mouseleave', () => {
         destroyMediaPreview();
     });
-    
-    // ---------------- 左键点击打开 ----------------
+
     elSearchResults.addEventListener('click', () => {
         destroyMediaPreview();
     });
 }
-// provisional: 前缀超集预热结果 —— 只刷新 UI，禁止写入本词权威缓存，避免长词被短词 snippets/count 污染
+
 function processAndShowResults(results, keyword, options = {}) {
     const provisional = !!options.provisional;
     let finalResults = [...(results || [])];
 
-    // 前缀预热：剥离 snippets，避免 hover 展示围绕短词截取的脏片段
     if (provisional) {
         finalResults = finalResults.map(r => {
             const copy = Object.assign({}, r);
@@ -1950,7 +2007,6 @@ function processAndShowResults(results, keyword, options = {}) {
         currentIndex = finalResults.findIndex(r => r.path === currentPath || r.path === strippedPath);
     }
 
-    // 权威结果才入库；前缀预热不得以长词为 key 写入，否则会把短词超集永久固化为本词缓存
     if (!provisional && activeKw !== "" && !activeKw.startsWith('@')) {
         store.SearchCache.set(activeKw, finalResults).then(() => {
             if (currentIndex === -1) {
@@ -1958,7 +2014,6 @@ function processAndShowResults(results, keyword, options = {}) {
             }
         });
     } else if (provisional && currentIndex === -1 && activeKw && !activeKw.startsWith('@')) {
-        // 预热阶段仍可向当前打开页要精确 count/snippets，由 LOCAL_SEARCH_RESULT 回填
         emitEvent('LOCAL_SEARCH_COUNT', activeKw, 'content');
     }
 
@@ -1972,7 +2027,6 @@ function processAndShowResults(results, keyword, options = {}) {
     updateSearchResults(finalResults, activeKw);
 }
 
-// 搜索
 async function search(rawKeyword) {
     if (typeof rawKeyword !== "string" || !rawKeyword.trim()) {
         updateSearchResults([]);
@@ -1985,11 +2039,9 @@ async function search(rawKeyword) {
 
     if (meta && meta.results && currentToken === window._searchToken) {
         if (meta.exact) {
-            // 精确缓存：直接展示并结束（仍与 token 对齐）
             processAndShowResults(meta.results, kw, { provisional: false });
             return;
         }
-        // 前缀超集：秒开列表，但必须继续打 Worker 算精确结果，且不入库
         processAndShowResults(meta.results, kw, { provisional: true });
     }
 
@@ -2000,42 +2052,38 @@ async function search(rawKeyword) {
         }
         searchWorker.postMessage({
             type: 'SEARCH',
-            payload: { keyword: kw, token: currentToken, noise: Number(store.noise_level ?? 3) }
+            payload: { keyword: kw, token: currentToken, noise: Number(store.noise_level ?? 5) }
         });
     } catch (err) {
         console.error("web worker 通信失败", err);
     }
 }
 
-// 提示补全
 async function updateAutocompleteSuggestions(val) {
     const elSearchHistory = $("#searchHistory");
     elSearchHistory.innerHTML = "";
-    
+
     if (!val || val.trim() === "") {
         showSearchHistoryByTime();
         return;
     }
 
     const query = val.trim().toLowerCase();
-    const suggestionMap = new Map(); // keyword -> isHistory (boolean)
+    const suggestionMap = new Map();
 
-    // 第一级：用户搜索历史 (正式条目)
     const history = store.searchHistory || [];
     history.forEach(item => {
         if (item.keyword.toLowerCase().includes(query)) {
-            suggestionMap.set(item.keyword, true); // true 代表正式历史
+            suggestionMap.set(item.keyword, true);
         }
     });
 
-    // 第二级：IndexedDB 缓存池的 Key (联想词/孤儿缓存)
     try {
         const cacheKeys = await dbProxy.getAllKeys('search_cache');
         cacheKeys.forEach(key => {
             if (typeof key === 'string' && key.toLowerCase().includes(query)) {
-                // 如果该词不在历史中，则标记为纯联想词
                 if (!suggestionMap.has(key)) {
-                    suggestionMap.set(key, false); // false 代表联想词
+                    suggestionMap.set(key, false);
                 }
             }
         });
@@ -2044,11 +2092,9 @@ async function updateAutocompleteSuggestions(val) {
     }
 
     const rawList = Array.from(suggestionMap.entries()).map(([keyword, isHistory]) => ({ keyword, isHistory }));
-    
-    // 最长的、最完整的词条排前
+
     rawList.sort((a, b) => b.keyword.length - a.keyword.length);
 
-    // 冗余前缀剪枝
     const filteredSuggestions = [];
     for (const item of rawList) {
         const itemLower = item.keyword.toLowerCase();
@@ -2056,8 +2102,7 @@ async function updateAutocompleteSuggestions(val) {
             filteredSuggestions.push(item);
             continue;
         }
-        // 🚀 修复点：严禁剪枝用户真实的历史记录（isHistory 为 true 时免疫剪枝）
-        const isRedundant = filteredSuggestions.some(existing => 
+        const isRedundant = filteredSuggestions.some(existing =>
             !item.isHistory && existing.keyword.toLowerCase().startsWith(itemLower)
         );
         if (!isRedundant) {
@@ -2074,39 +2119,30 @@ async function updateAutocompleteSuggestions(val) {
     filteredSuggestions.forEach(item => {
         const option = document.createElement("option");
         option.text = item.keyword;
-        
+
         if (!item.isHistory) {
-            option.style.color = "#64748b"; 
+            option.style.color = "#64748b";
             option.style.fontStyle = "italic";
         }
 
         elSearchHistory.appendChild(option);
     });
-    
+
     elSearchHistory.setAttribute("size", Math.max(2, Math.min(10, elSearchHistory.options.length)));
 }
 
-// 键名归一
 function normalizeKeyword(kw) {
     if (!kw || typeof kw !== 'string') return '';
     return kw.trim().toLowerCase().replace(/\s+/g, '');
 }
 
-// 搜索结果填充
 function updateSearchResults(results, keyword) {
-    // 将最新结果挂载到全局供 Hover 读取
     window._currentRenderedResults = results;
-    // 【修复】：同时记录这批结果对应的关键词。之前 Hover 高亮阶段直接现读
-    // elSearchInput.value，但用户可能正在逐字继续输入（比如已经敲到"一个人的"），
-    // 而 _currentRenderedResults 里挂着的其实还是上一轮（比如"一个人"）异步返回的结果，
-    // 其 snippets 是围绕旧关键词的匹配位置截取的。用当下最新的关键词去给"旧关键词
-    // 截出来的 snippet"生成高亮正则，自然经常匹配不上，表现为 snip 不着色。
-    // 只要 snippets 和用来生成高亮正则的关键词严格来自同一轮结果，这个问题就不会出现。
     window._currentRenderedKeyword = keyword || "";
 
     let resultsBox = $('#searchResults');
     resultsBox.innerHTML = '';
-    
+
     if (results.length === 0) {
         resultsBox.style.display = "none";
     } else {
@@ -2118,9 +2154,9 @@ function updateSearchResults(results, keyword) {
         } catch (e) {
             console.warn("无法穿透获取 Mark 系统状态", e);
         }
-        
-        const fragment = document.createDocumentFragment(); 
-        
+
+        const fragment = document.createDocumentFragment();
+
         results.forEach(result => {
             let option = document.createElement('option');
             const isPrivate = (result.localOnly === true || result.info === "localOnly");
@@ -2137,26 +2173,24 @@ function updateSearchResults(results, keyword) {
             if (markedUrls.has(result.path)) {
                 option.style.textDecoration = "line-through";
             }
-            
-            fragment.appendChild(option); // 装入虚拟容器
+
+            fragment.appendChild(option);
         });
-        
-        resultsBox.appendChild(fragment); 
+
+        resultsBox.appendChild(fragment);
         resultsBox.setAttribute("size", Math.max(2, Math.min(10, resultsBox.options.length)));
         resultsBox.style.display = "block";
-        
-        // 根据当前已稳定的视口计算出真实的极限宽度
+
         if ($("#content") && $("#search")) {
             const maxW = Math.max(0, $("#content").clientWidth - $("#search").offsetWidth - 10);
             resultsBox.style.maxWidth = maxW + "px";
         }
-        
+
         resultsBox.style.left = `-${resultsBox.offsetWidth}px`;
         resultsBox.selectedIndex = -1;
     }
 }
 
-// doc 公共逻辑
 const iframeCommonLogic = function () {
     window.$ = (s) => document.querySelector(s);
     window.$$ = (s) => document.querySelectorAll(s);
@@ -2192,7 +2226,7 @@ const iframeCommonLogic = function () {
         }
     });
 
-    const ctxId = window.top === window.self ? 'index' : window.childId; 
+    const ctxId = window.top === window.self ? 'index' : window.childId;
     window.emitEvent = function (type, payload, target = '*') {
         BUS.postMessage({
             type,
@@ -2201,6 +2235,18 @@ const iframeCommonLogic = function () {
             target
         });
     }
+
+    if (window.top && window.top.VirtualCursor) {
+        window.top.VirtualCursor.attach(window);
+    }
+
+    BUS.addEventListener('message', (e) => {
+        const { type, payload, target } = e.data || {};
+        if (target !== '*' && target !== ctxId) return;
+        if (type === 'SIM_POINTER') {
+            window.handleSimPointer(payload);
+        }
+    });
 
     window.bindSwipeGestures = function (element, callbacks, thresholdPercent = 0.15) {
         let startX = 0, startY = 0;
@@ -2224,14 +2270,14 @@ const iframeCommonLogic = function () {
 
         element.addEventListener('touchend', (e) => {
             if (isMultiTouch) return;
-            
+
             const currentScale = callbacks.getScale ? callbacks.getScale() : 1.0;
             if (currentScale > 1.05) return;
 
             if (e.changedTouches.length !== 1) return;
             const deltaX = e.changedTouches[0].clientX - startX;
             const deltaY = e.changedTouches[0].clientY - startY;
-            
+
             const dynamicThreshold = Math.min(window.innerWidth, window.innerHeight) * thresholdPercent;
 
             if (Math.abs(deltaX) > dynamicThreshold || Math.abs(deltaY) > dynamicThreshold) {
@@ -2248,7 +2294,6 @@ const iframeCommonLogic = function () {
     };
 };
 
-// doc-gallery 专属逻辑
 const imageLogic = function () {
     const store = createStore({ lightbox_stauts: "0" });
     const img = $('#img');
@@ -2261,7 +2306,7 @@ const imageLogic = function () {
         img.style.border = "none";
         img.title = "";
     }
-    
+
     let scale = 1.0;
     const maxScale = 10.0;
     const minScale = 0.5;
@@ -2304,24 +2349,24 @@ const imageLogic = function () {
         let isDragging = false, startX = 0, startY = 0;
         target.dataset.tx = target.dataset.tx || 0;
         target.dataset.ty = target.dataset.ty || 0;
-        
+
         const onMove = (e) => {
             if (!isDragging) return;
-            if (e.touches && e.touches.length > 1) return; 
+            if (e.touches && e.touches.length > 1) return;
 
             const clientX = e.touches ? e.touches[0].clientX : e.clientX;
             const clientY = e.touches ? e.touches[0].clientY : e.clientY;
             const tx = clientX - startX, ty = clientY - startY;
-            
+
             if (Math.abs(tx) > 5 || Math.abs(ty) > 5) {
                 dragMoved = true;
             }
-            
+
             target.dataset.tx = tx; target.dataset.ty = ty;
             target.style.transform = `translate(${tx}px, ${ty}px) scale(${scale})`;
             if (e.cancelable) e.preventDefault();
         };
-        
+
         const onUp = () => {
             isDragging = false; target.style.cursor = "grab";
             document.removeEventListener('mousemove', onMove);
@@ -2330,7 +2375,7 @@ const imageLogic = function () {
             document.removeEventListener('touchend', onUp);
             setTimeout(() => dragMoved = false, 100);
         };
-        
+
         const onDown = (e) => {
             if (e.touches && e.touches.length > 1) return;
             isDragging = true;
@@ -2340,14 +2385,14 @@ const imageLogic = function () {
             startX = clientX - parseFloat(target.dataset.tx);
             startY = clientY - parseFloat(target.dataset.ty);
             target.style.cursor = "grabbing";
-            
+
             document.addEventListener('mousemove', onMove, { passive: false });
             document.addEventListener('mouseup', onUp);
             document.addEventListener('touchmove', onMove, { passive: false });
             document.addEventListener('touchend', onUp);
             if (!e.touches && e.cancelable) e.preventDefault();
         };
-        
+
         target.addEventListener('mousedown', onDown);
         target.addEventListener('touchstart', onDown, { passive: false });
         target.style.cursor = "grab";
@@ -2360,36 +2405,36 @@ const imageLogic = function () {
     const idx = imagelist.indexOf(path);
     const _cat = path.split(path.split("/").pop())[0].split("gallery/")[1];
     const category = (!_cat || _cat === "") ? "未分类" : _cat;
-    
+
     const go = (nPath) => {
         scale = 1.0;
         img.style.transition = "none";
         img.dataset.tx = 0; img.dataset.ty = 0;
         img.style.transform = `translate(0px, 0px) scale(1.0)`;
-        
+
         store.image_path = nPath;
         emitEvent("image", null, "index");
         emitEvent("image", "#gallery a", "side");
     };
-    
+
     $("#p").onclick = () => go(imagelist[(idx - 1 + imagelist.length) % imagelist.length]);
     $("#n").onclick = () => go(imagelist[(idx + 1) % imagelist.length]);
     $("#i").innerHTML = `${idx + 1}/${imagelist.length}<input style='width:60px' id='jump' onclick='select(this)'>`;
     $("#c").innerHTML = `[${category}]`;
-    
+
     const sc = $(".span-container");
     if (store.lightbox_stauts === "1") sc.classList.add("hide");
     $("#f").onclick = () => {
         store.lightbox_stauts = store.lightbox_stauts !== "1" ? "1" : "0";
         store.lightbox_stauts === "1" ? sc.classList.add("hide") : sc.classList.remove("hide");
-        emitEvent("lightbox", { status: store.lightbox_stauts }, "index") 
+        emitEvent("lightbox", { status: store.lightbox_stauts }, "index")
     };
 
     const toggleFullscreen = (e) => {
         if (e) e.preventDefault();
         const parentDoc = window.parent.document;
         const isFullscreen = !!parentDoc.fullscreenElement;
-        
+
         if (!isFullscreen) {
             parentDoc.documentElement.requestFullscreen().catch(err => console.warn(err));
             if (store.lightbox_stauts !== "1") $("#f").click();
@@ -2401,7 +2446,7 @@ const imageLogic = function () {
 
     const fsBtn = $("#fs");
     if (fsBtn) fsBtn.onclick = toggleFullscreen;
-  
+
     document.addEventListener('mousedown', (e) => {
         if (e.button === 1) toggleFullscreen(e);
     });
@@ -2421,8 +2466,8 @@ const imageLogic = function () {
     };
 
     if (window.bindSwipeGestures) {
-        window.bindSwipeGestures(document.body, { 
-            onLeft: () => $("#n").click(), 
+        window.bindSwipeGestures(document.body, {
+            onLeft: () => $("#n").click(),
             onRight: () => $("#p").click(),
             getScale: () => scale,
             onSnapBack: () => {
@@ -2455,7 +2500,6 @@ const imageLogic = function () {
                 layout: 'contain'
             };
 
-            // 去重添加
             if (!config.list.includes(path)) {
                 config.list.push(path);
                 store.wallpaper_config = config;
@@ -2466,7 +2510,6 @@ const imageLogic = function () {
     });
 };
 
-// doc-video 专属逻辑
 const videoLogic = function () {
     const store = createStore({ lightbox_stauts: "0" });
     const video = $('#video');
@@ -2498,7 +2541,7 @@ const videoLogic = function () {
         if (e) e.preventDefault();
         const parentDoc = window.parent.document;
         const isFullscreen = !!parentDoc.fullscreenElement;
-        
+
         if (!isFullscreen) {
             parentDoc.documentElement.requestFullscreen().catch(err => console.warn(err));
             if (store.lightbox_stauts !== "1") $("#f").click();
@@ -2562,14 +2605,13 @@ const videoLogic = function () {
     };
 };
 
-// doc 引擎
 function generateDoc(type, payload) {
     const commonStyles = `@charset "UTF-8";@import url("../src/css/font.css");html,body,pre,textarea{font-family:'Noto Serif SC'}html{background-color:#000;touch-action:none;}body{margin:0;display:flex;justify-content:center;align-items:center;height:100vh;position:relative;overflow:hidden;touch-action:none;}.span-container{position:absolute;bottom:10px;right:10px;background:plum;z-index:999}.span-container span{margin-bottom:5px;padding:0 10px;cursor:pointer}.hide{opacity:.2!important}#f{display:none}`;
-    
+
     const baseTag = `<base href="${window.location.href}">`;
     const viewportMeta = `<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"/>`;
     let htmlStr = '';
-    
+
     if (type === 'image') {
         const { imageUrl } = payload;
         const jsUrl = JSON.stringify(imageUrl);
@@ -2612,7 +2654,7 @@ function generateDoc(type, payload) {
         const filename = videoUrl.split('/').pop();
         const basename = filename.includes('.') ? filename.substring(0, filename.lastIndexOf('.')) : filename;
         const vttUrl = isMkv ? `video/vtt/${basename}.vtt` : '';
-        
+
         const jsVideoUrl = JSON.stringify(videoUrl);
         const jsVttUrl = JSON.stringify(vttUrl);
         const jsIsMkv = JSON.stringify(isMkv);
@@ -2652,7 +2694,6 @@ function generateDoc(type, payload) {
     return htmlStr.replace(/>\s+</g, '><').replace(/\n/g, '').trim();
 }
 
-// 快照封装
 function takeSnapshot(reload = false) {
     try {
         const state = {
@@ -2723,55 +2764,26 @@ function takeSnapshot(reload = false) {
     } catch (e) {
         console.error("快照捕捉失败", e);
     }
-    
+
     if (reload) {
         window.location.reload();
     }
 }
 
-// 状态快照
 function snap() {
     if ('serviceWorker' in navigator) {
         let isRefreshing = false;
-        let hadController = !!navigator.serviceWorker.controller;
-        const GUARD_KEY = "sw_reload_guard";
-        const COUNT_KEY = "sw_reload_count";
-        const WINDOW_MS = 8000;
-        const MAX_RELOADS = 2;
+        let currentController = navigator.serviceWorker.controller;
 
         navigator.serviceWorker.addEventListener('controllerchange', async () => {
             if (window._isBombing || isRefreshing) return;
 
-            if (!hadController) {
-                hadController = true;
+            if (navigator.serviceWorker.controller === currentController) {
                 return;
             }
 
-            const now = Date.now();
-            const last = parseInt(sessionStorage.getItem(GUARD_KEY) || "0", 10);
-            let count = parseInt(sessionStorage.getItem(COUNT_KEY) || "0", 10);
-
-            if (last && (now - last) < WINDOW_MS) {
-                count += 1;
-            } else {
-                count = 1;
-            }
-            sessionStorage.setItem(GUARD_KEY, String(now));
-            sessionStorage.setItem(COUNT_KEY, String(count));
-
-            // 窗口内连续 claim 超过阈值：阻断自动 reload，避免白屏风暴；
-            // 同时提示用户，并清掉计数以便手动 F5 后恢复正常路径。
-            // 不再静默停在「新 SW 已激活 + 旧页面壳」的半新半旧状态而不给出路。
-            if (count > MAX_RELOADS) {
-                sessionStorage.removeItem(COUNT_KEY);
-                try {
-                    const tip = document.createElement("div");
-                    tip.setAttribute("role", "alert");
-                    tip.style.cssText = "position:fixed;z-index:2147483647;left:50%;bottom:24px;transform:translateX(-50%);background:#1e293b;color:#f8fafc;padding:10px 16px;border-radius:8px;font-size:13px;box-shadow:0 8px 24px rgba(0,0,0,.35);max-width:90vw;";
-                    tip.innerHTML = "站点更新异常（SW 反复切换）。请手动刷新；若仍异常可在地址后加 <code>?repair=1</code>";
-                    document.body.appendChild(tip);
-                    setTimeout(() => tip.remove(), 12000);
-                } catch (e) {}
+            if (!currentController) {
+                currentController = navigator.serviceWorker.controller;
                 return;
             }
 
@@ -2783,7 +2795,6 @@ function snap() {
     }
 }
 
-// 快照恢复
 async function restore_snap() {
     if (window._snapRestored) return;
     window._snapRestored = true;
@@ -2797,7 +2808,6 @@ async function restore_snap() {
     try {
         state = JSON.parse(restoreStateStr);
     } catch (e) {
-        console.error("快照解析失败，已丢弃脏数据", e);
         iframes.content.src = "src/tpl/bookmark.html";
         return;
     }
@@ -2811,7 +2821,6 @@ async function restore_snap() {
     }, 15000);
     await AsyncUtils.wait(100);
 
-    // 目录树核对
     const checkDataIntegrity = (bucket, path) => {
         if (!window.lite_data || !window.lite_data[bucket] || !path) return false;
 
@@ -2826,14 +2835,11 @@ async function restore_snap() {
             let found = false;
             const targetFileName = clean.split('/').pop();
             const scanNode = (node) => {
-                // 如果已经找到，或者当前节点无效，直接跳出
                 if (found || !node || typeof node !== 'object') return;
-                // 检查当前目录的文件列表
                 if (Array.isArray(node._f) && node._f.some(f => f[0] === targetFileName)) {
                     found = true;
                     return;
                 }
-                // 递归深入子文件夹
                 for (const key of Object.keys(node)) {
                     if (key !== '_f') scanNode(node[key]);
                 }
@@ -2842,66 +2848,56 @@ async function restore_snap() {
             return found;
         }
 
-        // 对于保留了完整路径的资源 (Image/Video/Audio/Ebook)，继续顺藤摸瓜
         let parts = clean.split('/');
         if (parts.length === 1) parts = ['_uncategorized', parts[0]];
         const fileName = parts.pop();
         let curr = window.lite_data[bucket];
         for (const p of parts) {
-            // 目录发生重组或被删除
-            if (!curr || !curr[p]) 
+            if (!curr || !curr[p])
                 return false;
             curr = curr[p];
         }
 
-        // 终点查验：在对应目录的 _f 数组中确认该文件是否存在
         return curr && curr._f && Array.isArray(curr._f) && curr._f.some(f => f[0] === fileName);
     };
 
-    // 校验主视图 (涵盖 html, gallery, video, ebook)
     let needsBookmarkFallback = false;
     if (state.main_type && state.main_path) {
         let bucket = state.main_type;
-        // 统一映射到 LITE_DATA 的大桶名
         if (['pdf', 'epub', 'txt'].includes(bucket)) bucket = 'ebook';
         if (bucket === 'image') bucket = 'image';
         if (!checkDataIntegrity(bucket, state.main_path)) {
             console.warn(`🚨 ${bucket} 目录结构已变或文件丢失，正在销毁脏数据:`, state.main_path);
 
-            // 清洗 ls：重置该分类的数组和路径记录
             if (bucket === 'image') { store.imagelist = []; store.image_path = ""; }
             else if (bucket === 'video') { store.videolist = []; store.video_path = ""; }
             else if (bucket === 'ebook') { store.pdf_path = ""; store.epub_path = ""; store.txt_path = ""; }
             else if (bucket === 'html') { store.last_html = ""; }
 
-            // 清洗导航历史中的遗留死链
             let hist = store.last_li_a;
             if (Array.isArray(hist)) store.last_li_a = hist.filter(p => p !== state.main_path);
-  
+
             state.main_type = null;
             state.main_path = null;
             needsBookmarkFallback = true;
         }
     }
 
-    // 校验音频隐藏视图
     if (state.audio_strict && state.audio_strict.path) {
         if (!checkDataIntegrity('audio', state.audio_strict.path)) {
             console.warn(`🚨 audio 目录结构已变，正在销毁音频脏数据:`, state.audio_strict.path);
             store.playlist = [];
             store.song_path = "";
             state.audio_strict = null;
-            needsBookmarkFallback = true; // 音频出问题也可以考虑回退或至少不报错
+            needsBookmarkFallback = true;
         }
     }
-    // 如果发现解体，强制跳回书签页，修复全局标识
     if (needsBookmarkFallback) {
         store.resource_type = "bookmark";
         store.content_src = "src/tpl/bookmark.html";
         store.lightbox_stauts = "0";
         iframes.content.src = "src/tpl/bookmark.html";
 
-        // 发送更新菜单指令，切断后续异常链条
         emitEvent('update_bookmark_menu', null, 'side');
     }
 
@@ -2912,7 +2908,6 @@ async function restore_snap() {
             if (sel === 'image') sel = 'gallery';
             emitEvent('#' + sel + ' a', state.main_path, 'side');
             emitEvent('show_current', null, 'side');
-            // 独立还原视频进度
             if (state.main_type === 'video' && state.video_strict) {
                 await AsyncUtils.waitFor(() => {
                     const v = iframes.content.contentDocument?.getElementById('video');
@@ -2936,7 +2931,6 @@ async function restore_snap() {
         console.warn("主视图恢复中止:", e.message);
     }
 
-    // 音频
     try {
         const a = state.audio_strict;
         if (a) {
@@ -3006,7 +3000,6 @@ async function restore_snap() {
         console.warn("音频恢复中止:", e.message);
     }
 
-    // 搜索框
     try {
         if (state.search_kw) {
             await AsyncUtils.waitFor(() => window.data && window.data.length > 0, 15000);
@@ -3018,7 +3011,6 @@ async function restore_snap() {
     }
 }
 
-// 音频播放器
 function audio(_song, _level) {
     const oldAudio = $("#audio"); if (oldAudio) oldAudio.remove();
     const oldBtn = $("#audio_btn"); if (oldBtn) oldBtn.remove();
@@ -3028,7 +3020,14 @@ function audio(_song, _level) {
     let songs = store.playlist || [];
     let currentSongIndex = Math.max(0, songs.indexOf(_song));
 
-    document.body.insertAdjacentHTML('beforeend', `<div id="audio"> <div class="audio-progress"><div class="audio-progress-bar" id="a_bar"></div></div> <div class="audio_div"> <div class="header" id="a_hdr">${(_level && _level.includes("audio/")) ? (_level.split("audio/")[1] || "未分类/") : "未分类/"}</div> <ul class="playlist" id="_playlist"></ul><br> <button id="btn_prv">Prev</button><button id="btn_nxt">Next</button><br> <button id="btn_favs">Favorite Songs</button><button id="btn_all">All</button><br> <button id="btn_shf">Shuffle</button><button id="btn_slp">Single Loop</button><button id="btn_llp">List Loop</button><br> <button id="fav">+Fav-</button><audio id="_audio" controls></audio><button id="btn_cls">destroy</button> </div> </div> <button id="audio_btn" title="单击显隐, 双击销毁"> 🎵 </button>`);
+    const stage = document.getElementById('stage');
+    const existingAudio = document.getElementById("audio");
+    if (existingAudio) existingAudio.remove();
+    const existingBtn = document.getElementById("audio_btn");
+    if (existingBtn) existingBtn.remove();
+
+    stage.insertAdjacentHTML('beforeend', `<div id="audio"> <div class="audio-progress"><div class="audio-progress-bar" id="a_bar"></div></div> <div class="audio_div"> <div class="header" id="a_hdr">${(_level && _level.includes("audio/")) ? (_level.split("audio/")[1] || "未分类/") : "未分类/"}</div> <ul class="playlist" id="_playlist"></ul><br> <button id="btn_prv">Prev</button><button id="btn_nxt">Next</button><br> <button id="btn_favs">Favorite Songs</button><button id="btn_all">All</button><br> <button id="btn_shf">Shuffle</button><button id="btn_slp">Single Loop</button><button id="btn_llp">List Loop</button><br> <button id="fav">+Fav-</button><audio id="_audio" controls></audio><button id="btn_cls">destroy</button> </div> </div>`);
+    document.body.insertAdjacentHTML('beforeend', `<button id="audio_btn" title="单击显隐, 双击销毁"> 🎵 </button>`);
 
     const playerContainer = $("#audio"), progressBar = $("#a_bar"), header = $("#a_hdr"),
         playlistElement = $("#_playlist"), audioPlayer = $("#_audio"),
@@ -3158,7 +3157,6 @@ function audio(_song, _level) {
     playSong();
 }
 
-// 评论映射
 function cmt_mapper() {
     if (store.online_flag !== "1") return;
     const maxRetries = 300;
@@ -3187,14 +3185,13 @@ function cmt_mapper() {
     idleRun(checkAndLoad);
 }
 
-// 评论窗口
 async function comments() {
     if (store.online_flag === "1") {
         makeDraggable("#giscus-popup", "#popup-header");
         $("#close-popup").addEventListener("click", () => {
             $("#giscus-popup").style.display = "none";
         });
-        
+
         const params = new URLSearchParams(window.location.search);
         const giscusCode = params.get("giscus");
         if (giscusCode) {
@@ -3205,7 +3202,7 @@ async function comments() {
 function updatePopupHeaderWithStamp(stampText) {
     const header = document.getElementById("popup-header");
     if (!header) return;
-    
+
     let titleEl = document.getElementById("popup-header-title");
     if (!titleEl) {
         titleEl = document.createElement("span");
@@ -3214,7 +3211,7 @@ function updatePopupHeaderWithStamp(stampText) {
         titleEl.style.cssText = "overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 75%;";
         header.insertBefore(titleEl, header.firstChild);
     }
-    
+
     titleEl.textContent = stampText ? `💬 Comment | ${stampText}` : `💬 Comment`;
 
     const closeBtn = document.getElementById("close-popup");
@@ -3229,7 +3226,6 @@ function updatePopupHeaderWithStamp(stampText) {
     }
 }
 
-// giscus 挂载
 function discussion(term) {
     const script = document.createElement('script');
     script.src = "https://giscus.app/client.js";
@@ -3249,7 +3245,6 @@ function discussion(term) {
     $("#giscus-container").appendChild(script);
 }
 
-// 调整搜索框边距
 function adj_search_right() {
     const audio = document.getElementById("audio");
     const search = document.getElementById("search");
@@ -3263,7 +3258,6 @@ function adj_search_right() {
     }
 }
 
-// 调整右栏宽度
 function adj_side_width(op) {
     const contentFlex = parseInt(window.getComputedStyle($("#content")).flexGrow) || 85;
     const sideFlex = parseInt(window.getComputedStyle($("#side")).flexGrow) || 15;
@@ -3285,29 +3279,26 @@ function adj_side_width(op) {
     adj_search_right();
 }
 
-// 通用拖拽
 function makeDraggable(popupSelector, headerSelector) {
     const popup = $(popupSelector);
     const header = $(headerSelector);
     if (!popup || !header) return;
 
     let isDragging = false;
-    let startX = 0, startY = 0;
+    let startX = 0, startY = 0, initialLeft = 0, initialTop = 0;
 
     header.addEventListener('mousedown', (e) => {
         if (e.button !== 0) return;
         isDragging = true;
-        
-        const rect = popup.getBoundingClientRect();
-        startX = e.clientX - rect.left;
-        startY = e.clientY - rect.top;
+        startX = e.clientX;
+        startY = e.clientY;
 
-        popup.style.width = rect.width + 'px';
-        popup.style.height = rect.height + 'px';
-        
-        popup.style.position = 'fixed';
+        initialLeft = popup.offsetLeft;
+        initialTop = popup.offsetTop;
+
+        popup.style.position = 'absolute';
         popup.style.margin = '0';
-        popup.style.transform = 'none';
+        popup.style.transform = 'translateX(0)';
 
         header.style.cursor = 'moving';
         e.preventDefault();
@@ -3315,9 +3306,10 @@ function makeDraggable(popupSelector, headerSelector) {
 
     document.addEventListener('mousemove', (e) => {
         if (!isDragging) return;
-        const left = e.clientX - startX;
-        const top = e.clientY - startY;
-        
+        const scale = window._tpZoom || 1;
+        const left = initialLeft + (e.clientX - startX) / scale;
+        const top = initialTop + (e.clientY - startY) / scale;
+
         popup.style.left = left + 'px';
         popup.style.top = top + 'px';
     });
@@ -3330,7 +3322,6 @@ function makeDraggable(popupSelector, headerSelector) {
     });
 }
 
-// 防死锁工具
 function createAsyncUtils() {
     const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
     const waitFor = async (condition, timeout = 10000, interval = 50) => {
@@ -3349,52 +3340,40 @@ function createAsyncUtils() {
     };
 }
 
-// 拼音文件加载
 function loadPinyinData(maxRetries = 300) {
-    // 30次 容忍 SW 在后台下 1 分钟
     let attempts = 0;
     const checkAndLoad = async () => {
         try {
-            // 构建绝对路径，用于匹配SW缓存里的Key
             const targetUrl = new URL('/src/js/pinyinData.js', window.location.origin).href;
-            // 去翻底层缓存抽屉
             const cachedRes = await caches.match(targetUrl, { ignoreSearch: true });
             if (cachedRes && cachedRes.ok) {
-                // 拿到后把js代码以纯文本形式抽出来
                 const scriptText = await cachedRes.text();
-                // 用“内联代码块”的方式注入内存
                 const pinyinScript = document.createElement("script");
                 pinyinScript.type = "text/javascript";
                 pinyinScript.charset = "UTF-8";
                 pinyinScript.textContent = scriptText;
                 document.body.appendChild(pinyinScript);
-                // 注入后秒删 DOM 节点
                 pinyinScript.remove();
             } else {
-                // 抽屉里暂时还没有,抛出异常触发重试
                 throw new Error("Cache Miss");
             }
         } catch (e) {
             attempts++;
             if (attempts < maxRetries) {
-                // 再翻一遍抽屉
                 setTimeout(checkAndLoad, 2000);
             } else {
                 console.error("❌ pinyinData.js 等待 SW 下载超时");
             }
         }
     };
-    // 浏览器完全空闲时才去翻抽屉
     idleRun(checkAndLoad);
 }
 
-// 安全版定时器
 function safeInterval(fn, interval, maxDrift = interval * 2) {
     let last = Date.now();
     return setInterval(() => {
         const now = Date.now();
         const drift = now - last;
-        // 如果时间跳变太大（比如休眠）直接跳过，不执行 fn
         if (drift > maxDrift) {
             last = now;
             return;
@@ -3404,10 +3383,8 @@ function safeInterval(fn, interval, maxDrift = interval * 2) {
     }, interval);
 }
 
-// localStorage容量告警
 function ls_alert() {
     const runCheck = () => {
-        // 4MB 告警线
         var alertSizeB = 1024 * 1024 * 4;
         var totalBytes = 0;
 
@@ -3430,7 +3407,6 @@ function ls_alert() {
     idleRun(runCheck);
 }
 
-// 日志弹出层
 async function showChangelog() {
     let popup = $('#changelog-popup');
 
@@ -3441,7 +3417,7 @@ async function showChangelog() {
 
         const header = document.createElement('div');
         header.id = 'changelog-header';
-        
+
         header.innerHTML = `
             <span class="cl-title">What's new?</span>
             <div style="display:flex; align-items:center;">
@@ -3475,14 +3451,14 @@ async function showChangelog() {
             }
         };
         makeDraggable('#changelog-popup', '#changelog-header');
-        
+
         content.addEventListener('click', (e) => {
             const link = e.target.closest('.log-link');
             if (link) {
                 const path = link.dataset.path;
                 const bucket = link.dataset.bucket;
                 let typeSelector = '';
-                
+
                 if (bucket === 'html') typeSelector = '#html a';
                 else if (bucket === 'gallery') typeSelector = '#gallery a';
                 else if (bucket === 'video') typeSelector = '#video a';
@@ -3498,9 +3474,14 @@ async function showChangelog() {
     }
 
     popup.style.display = 'flex';
+
+    popup.style.transform = 'none';
+    const popupWidth = popup.offsetWidth || 600;
+    popup.style.left = (window.innerWidth - popupWidth) / 2 + 'px';
+
     const content = $('#changelog-content');
     content.innerHTML = '<div style="color: gray;">加载中...</div>';
-    
+
     try {
         const logs = await dbProxy.getLogs();
         if (logs.length === 0) {
@@ -3511,9 +3492,8 @@ async function showChangelog() {
 
         let html = '';
         let lastTs = null;
-        let seenPaths = new Set(); 
+        let seenPaths = new Set();
 
-        // 提前扫描 window.data 提取出所有 private 路径
         const privatePaths = new Set();
         if (window.data && window.data.length > 0) {
             // data 结构循环: [title, info, path, type]
@@ -3537,7 +3517,7 @@ async function showChangelog() {
 
             let textColor = '#333333';
             let isAddOrUpdate = false;
-            
+
             if (/删除/.test(log.msg)) {
                 textColor = '#cc0000';
             } else if (/新增/.test(log.msg)) {
@@ -3549,22 +3529,17 @@ async function showChangelog() {
             }
 
             let msgHtml = log.msg;
-            
-            // 匹配可选的前导斜杠、存储桶以及剩余的所有字符(直到行尾，包容空格)
+
             const match = log.msg.match(/(\/)?(html|gallery|video|audio|ebook)\/(.+)$/);
 
             if (match) {
                 const fullMatch = match[0];
                 const bucket = match[2];
-                // 取出纯文件名部分，剔除可能存在的版本号参数
                 const rawPath = match[3].split('?')[0].trim();
                 const cleanPath = `${bucket}/${rawPath}`;
-                
-                // 判别私有状态并赋予对应的锁图标
                 const isPrivate = privatePaths.has(cleanPath);
                 const lockIcon = isPrivate ? (store.online_flag === "1" ? "🔒 " : "🔓 ") : "";
 
-                // 首次遇到的最新动态记录
                 if (!seenPaths.has(cleanPath)) {
                     seenPaths.add(cleanPath);
 
@@ -3573,13 +3548,11 @@ async function showChangelog() {
                         const linkHtml = `<span class="log-link" data-path="${cleanPath}" data-bucket="${bucket}" style="cursor: pointer; text-decoration: underline; font-weight: bold;" title="在侧栏中定位并打开">${displayHtml}</span>`;
                         msgHtml = log.msg.replace(fullMatch, linkHtml);
                     } else {
-                        // 如果最新状态是“删除”，保持纯文本，仅补充锁图标
                         if (lockIcon) {
                             msgHtml = log.msg.replace(fullMatch, lockIcon + fullMatch);
                         }
                     }
                 } else {
-                    // 旧历史中的重复记录，不加下划线伪装链，仅补充锁图标
                     if (lockIcon) {
                         msgHtml = log.msg.replace(fullMatch, lockIcon + fullMatch);
                     }
@@ -3593,7 +3566,6 @@ async function showChangelog() {
     }
 }
 
-// 标签页时钟
 function updateTitle() {
     const now = new Date();
     const h = now.getHours();
@@ -3625,7 +3597,7 @@ function startFaviconBlink() {
         ctx.clearRect(0, 0, 16, 16);
         ctx.globalAlpha = opacity;
         ctx.drawImage(img, 0, 0, 16, 16);
-        
+
         faviconLink.href = canvas.toDataURL('image/x-icon');
     };
 
@@ -3641,7 +3613,7 @@ function startFaviconBlink() {
         initBlink(window.cachedFaviconImg);
     } else {
         const img = new Image();
-        img.onload = function() {
+        img.onload = function () {
             window.cachedFaviconImg = img;
             initBlink(img);
         };
@@ -3659,32 +3631,31 @@ function stopFaviconBlink() {
     }
 }
 
-// 撒花特效
 function playConfetti() {
     const startAnimation = () => {
         var defaults = {
-        spread: 360,
-        ticks: 50,
-        gravity: 0,
-        decay: 0.94,
-        startVelocity: 30,
-        colors: ['FFE400', 'FFBD00', 'E89400', 'FFCA6C', 'FDFFB8']
+            spread: 360,
+            ticks: 50,
+            gravity: 0,
+            decay: 0.94,
+            startVelocity: 30,
+            colors: ['FFE400', 'FFBD00', 'E89400', 'FFCA6C', 'FDFFB8']
         };
 
         function shoot() {
-        confetti({
-            ...defaults,
-            particleCount: 40,
-            scalar: 1.2,
-            shapes: ['star']
-        });
+            confetti({
+                ...defaults,
+                particleCount: 40,
+                scalar: 1.2,
+                shapes: ['star']
+            });
 
-        confetti({
-            ...defaults,
-            particleCount: 10,
-            scalar: 0.75,
-            shapes: ['circle']
-        });
+            confetti({
+                ...defaults,
+                particleCount: 10,
+                scalar: 0.75,
+                shapes: ['circle']
+            });
         }
 
         setTimeout(shoot, 0);
@@ -3707,7 +3678,6 @@ function playConfetti() {
     document.body.appendChild(script);
 }
 
-// 配置字典
 const PROTOCOL_OPTIONS = [
     { key: 'favList', label: '音乐收藏' },
     { key: 'marks', label: '条目标记' },
@@ -3721,7 +3691,6 @@ const PROTOCOL_OPTIONS = [
     { key: 'excerpts', label: '摘抄薄' }
 ];
 
-// UI 工厂
 const ProtocolUIFactory = {
     create: (config) => {
         const overlay = document.createElement('div');
@@ -3730,8 +3699,7 @@ const ProtocolUIFactory = {
         const box = document.createElement('div');
         box.className = 'proto-box';
 
-        // 若 options 为空，则生成空列表供后续动态填充
-        const checkboxesHTML = (config.options || []).map(opt => 
+        const checkboxesHTML = (config.options || []).map(opt =>
             `<label class="proto-label"><input type="checkbox" checked value="${opt.key}"> ${opt.label}</label>`
         ).join('');
 
@@ -3759,7 +3727,6 @@ const ProtocolUIFactory = {
     }
 };
 
-// --- 数据恢复核心逻辑 ---
 const restoreData = async (data, selections) => {
     if (selections.includes('favList') && data.favList !== undefined) store.favList = data.favList;
     if (selections.includes('marks') && data.marks !== undefined) store.ss_marks_lifepod = data.marks;
@@ -3772,15 +3739,14 @@ const restoreData = async (data, selections) => {
     if (selections.includes('bibi') && data.BibiBiscuits) for (const [k, v] of Object.entries(data.BibiBiscuits)) localStorage.setItem(k, v);
     if (selections.includes('txt') && data.txts) for (const [k, v] of Object.entries(data.txts)) localStorage.setItem(k, v);
     if (selections.includes('excerpts') && data.excerpts_backup !== undefined && typeof ExcerptsSys !== 'undefined') {
-        try { 
-            const db = await ExcerptsSys.init(); 
-            await new Promise((res, rej) => { const txClear = db.transaction(ExcerptsSys.storeName, 'readwrite'); txClear.objectStore(ExcerptsSys.storeName).clear(); txClear.oncomplete = () => res(); txClear.onerror = () => rej(txClear.error); }); 
-            await new Promise((res, rej) => { const txPut = db.transaction(ExcerptsSys.storeName, 'readwrite'); const storePut = txPut.objectStore(ExcerptsSys.storeName); for (const [bookName, bookObj] of Object.entries(data.excerpts_backup)) { storePut.put(bookObj, bookName); } txPut.oncomplete = () => res(); txPut.onerror = () => rej(txPut.error); }); 
-        } catch(err) { console.error("恢复失败: ", err); }
+        try {
+            const db = await ExcerptsSys.init();
+            await new Promise((res, rej) => { const txClear = db.transaction(ExcerptsSys.storeName, 'readwrite'); txClear.objectStore(ExcerptsSys.storeName).clear(); txClear.oncomplete = () => res(); txClear.onerror = () => rej(txClear.error); });
+            await new Promise((res, rej) => { const txPut = db.transaction(ExcerptsSys.storeName, 'readwrite'); const storePut = txPut.objectStore(ExcerptsSys.storeName); for (const [bookName, bookObj] of Object.entries(data.excerpts_backup)) { storePut.put(bookObj, bookName); } txPut.oncomplete = () => res(); txPut.onerror = () => rej(txPut.error); });
+        } catch (err) { console.error("恢复失败: ", err); }
     }
 };
 
-// 数据重置 (Bomb)
 function bomb() {
     ProtocolUIFactory.create({
         title: '数据清理',
@@ -3824,7 +3790,7 @@ function bomb() {
                 if (selections.includes('pdfjs')) data['pdfjs.history'] = store['pdfjs.history'] || {};
                 if (selections.includes('bibi')) { data.BibiBiscuits = {}; for (let i = 0; i < localStorage.length; i++) { let k = localStorage.key(i); if (k.startsWith('BibiBiscuit')) data.BibiBiscuits[k] = localStorage.getItem(k); } }
                 if (selections.includes('txt')) { data.txts = {}; for (let i = 0; i < localStorage.length; i++) { let k = localStorage.key(i); if (k.startsWith('txt.history')) data.txts[k] = localStorage.getItem(k); } }
-                if (selections.includes('excerpts') && typeof ExcerptsSys !== 'undefined') { data.excerpts_backup = {}; try { const booksMeta = await ExcerptsSys.getAllBooks(); await Promise.all(booksMeta.map(async (b) => { const bData = await ExcerptsSys.getBookData(b.name); data.excerpts_backup[b.name] = bData; })); } catch(err) { console.error("摘抄备份异常: ", err); } }
+                if (selections.includes('excerpts') && typeof ExcerptsSys !== 'undefined') { data.excerpts_backup = {}; try { const booksMeta = await ExcerptsSys.getAllBooks(); await Promise.all(booksMeta.map(async (b) => { const bData = await ExcerptsSys.getBookData(b.name); data.excerpts_backup[b.name] = bData; })); } catch (err) { console.error("摘抄备份异常: ", err); } }
                 return data;
             };
 
@@ -3832,7 +3798,7 @@ function bomb() {
                 window._isBombing = true; lockButtons("正在保存选中数据...");
                 const selections = Array.from(box.querySelectorAll('input[type="checkbox"]:checked')).map(cb => cb.value);
                 const backupData = await getSelectedData(selections);
-                await doWipe(); 
+                await doWipe();
                 const mockSelections = Object.keys(backupData).map(k => {
                     if (k === 'BibiBiscuits') return 'bibi';
                     if (k === 'txts') return 'txt';
@@ -3862,7 +3828,6 @@ function bomb() {
     });
 }
 
-// 数据导入 (Rebirth)
 function rebirth() {
     ProtocolUIFactory.create({
         title: '数据恢复',
@@ -3889,10 +3854,10 @@ function rebirth() {
                     try {
                         loadedData = JSON.parse(event.target.result);
                         listArea.innerHTML = ''; // 清空提示
-                        
+
                         PROTOCOL_OPTIONS.forEach(opt => {
                             let hasData = false;
-                            switch(opt.key) {
+                            switch (opt.key) {
                                 case 'favList': hasData = loadedData.favList !== undefined; break;
                                 case 'marks': hasData = loadedData.marks !== undefined; break;
                                 case 'last_li_a': hasData = loadedData.last_li_a !== undefined; break;
@@ -3908,7 +3873,7 @@ function rebirth() {
                                 listArea.insertAdjacentHTML('beforeend', `<label class="proto-label"><input type="checkbox" checked value="${opt.key}"> ${opt.label}</label>`);
                             }
                         });
-                        
+
                         if (listArea.innerHTML === '') listArea.innerHTML = '<div style="color:red; font-size:12px;">未识别到有效数据模块</div>';
                         else execBtn.disabled = false;
                     } catch (err) { alert("文件解析失败"); }
@@ -3928,9 +3893,8 @@ function rebirth() {
     });
 }
 
-// 定时备份
 function initBackupReminder() {
-    const BACKUP_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000; 
+    const BACKUP_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000;
 
     const checkBackupStatus = async () => {
         const lastBackupStr = localStorage.getItem('last_backup_timestamp');
@@ -3946,10 +3910,10 @@ function initBackupReminder() {
 
                 await (async function () {
                     let data = { timestamp: Date.now() };
-                    
+
                     data.favList = store.favList || [];
                     data.last_li_a = store.last_li_a || [];
-                    data.layout_content_flex = store.layout_content_flex; 
+                    data.layout_content_flex = store.layout_content_flex;
                     data.layout_side_flex = store.layout_side_flex;
                     data.positions = store.positions || {};
                     data.searchHistory = store.searchHistory || [];
@@ -3965,46 +3929,44 @@ function initBackupReminder() {
                     }
                     data.marks = marksArray;
 
-                    data.BibiBiscuits = {}; 
-                    for (let i = 0; i < localStorage.length; i++) { 
-                        let k = localStorage.key(i); 
-                        if (k.startsWith('BibiBiscuit')) data.BibiBiscuits[k] = localStorage.getItem(k); 
-                    }
-                    
-                    data.txts = {}; 
-                    for (let i = 0; i < localStorage.length; i++) { 
-                        let k = localStorage.key(i); 
-                        if (k.startsWith('txt.history')) data.txts[k] = localStorage.getItem(k); 
+                    data.BibiBiscuits = {};
+                    for (let i = 0; i < localStorage.length; i++) {
+                        let k = localStorage.key(i);
+                        if (k.startsWith('BibiBiscuit')) data.BibiBiscuits[k] = localStorage.getItem(k);
                     }
 
-                    if (typeof ExcerptsSys !== 'undefined') { 
-                        data.excerpts_backup = {}; 
-                        try { 
-                            const booksMeta = await ExcerptsSys.getAllBooks(); 
-                            await Promise.all(booksMeta.map(async (b) => { 
-                                const bData = await ExcerptsSys.getBookData(b.name); 
-                                data.excerpts_backup[b.name] = bData; 
-                            })); 
-                        } catch(err) { 
-                            console.error("自动备份: 摘抄备份异常", err); 
-                        } 
+                    data.txts = {};
+                    for (let i = 0; i < localStorage.length; i++) {
+                        let k = localStorage.key(i);
+                        if (k.startsWith('txt.history')) data.txts[k] = localStorage.getItem(k);
+                    }
+
+                    if (typeof ExcerptsSys !== 'undefined') {
+                        data.excerpts_backup = {};
+                        try {
+                            const booksMeta = await ExcerptsSys.getAllBooks();
+                            await Promise.all(booksMeta.map(async (b) => {
+                                const bData = await ExcerptsSys.getBookData(b.name);
+                                data.excerpts_backup[b.name] = bData;
+                            }));
+                        } catch (err) {
+                            console.error("自动备份: 摘抄备份异常", err);
+                        }
                     }
 
                     const a = document.createElement('a');
                     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
                     a.href = URL.createObjectURL(blob);
                     a.download = `backup_${Date.now()}.json`;
-                    document.body.appendChild(a); 
-                    a.click(); 
-                    document.body.removeChild(a); 
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
                     URL.revokeObjectURL(a.href);
                 })();
 
-                // 只有真正完成备份后才更新时间
                 localStorage.setItem('last_backup_timestamp', now.toString());
 
             } else {
-                // 取消后一天后再提醒
                 const delayOneDay = now - BACKUP_INTERVAL_MS + 24 * 60 * 60 * 1000;
                 localStorage.setItem('last_backup_timestamp', delayOneDay.toString());
             }
@@ -4012,18 +3974,16 @@ function initBackupReminder() {
     };
 
     setTimeout(checkBackupStatus, 5000);
-    
-    // 如果一直挂着网页不关，利用现成的 safeInterval 每天做一次静默巡检
+
     if (typeof safeInterval === 'function') {
-        safeInterval(checkBackupStatus, 24 * 60 * 60 * 1000); 
+        safeInterval(checkBackupStatus, 24 * 60 * 60 * 1000);
     }
 }
 
-// 摘抄库引擎
 const ExcerptsSys = {
     dbName: 'ExcerptsDB',
     storeName: 'books',
-    init: async function() {
+    init: async function () {
         return new Promise((resolve, reject) => {
             const req = indexedDB.open(this.dbName, 1);
             req.onupgradeneeded = (e) => {
@@ -4033,7 +3993,7 @@ const ExcerptsSys = {
             req.onerror = () => reject(req.error);
         });
     },
-    save: async function(bookName, text) {
+    save: async function (bookName, text) {
         const db = await this.init();
         return new Promise((resolve, reject) => {
             const tx = db.transaction(this.storeName, 'readwrite');
@@ -4056,8 +4016,7 @@ const ExcerptsSys = {
             tx.onerror = () => reject(tx.error);
         });
     },
-    // 获取所有书目元数据（用于左侧列表与过滤排序）
-    getAllBooks: async function() {
+    getAllBooks: async function () {
         const db = await this.init();
         return new Promise((resolve, reject) => {
             const tx = db.transaction(this.storeName, 'readonly');
@@ -4080,8 +4039,7 @@ const ExcerptsSys = {
             req.onerror = () => reject(req.error);
         });
     },
-    // 读取某本书的全部摘抄条目
-    getBookData: async function(bookName) {
+    getBookData: async function (bookName) {
         const db = await this.init();
         return new Promise((resolve, reject) => {
             const tx = db.transaction(this.storeName, 'readonly');
@@ -4090,8 +4048,7 @@ const ExcerptsSys = {
             req.onerror = () => reject(req.error);
         });
     },
-    // 回写覆写整本书的摘抄包
-    overwriteBook: async function(bookName, excerptsArray) {
+    overwriteBook: async function (bookName, excerptsArray) {
         const db = await this.init();
         return new Promise((resolve, reject) => {
             const tx = db.transaction(this.storeName, 'readwrite');
@@ -4110,8 +4067,7 @@ const ExcerptsSys = {
             tx.onerror = () => reject(tx.error);
         });
     },
-    // 删除当前表
-    deleteBook: async function(bookName) {
+    deleteBook: async function (bookName) {
         const db = await this.init();
         return new Promise((resolve, reject) => {
             const tx = db.transaction(this.storeName, 'readwrite');
@@ -4126,11 +4082,11 @@ const ExcerptsUIManager = {
     allBooksCache: [],
     sortConfig: { type: 'updated', asc: false },
 
-    initPanel: function() {
+    initPanel: function () {
         if (document.getElementById('excerpts-popup')) return;
 
         const html = `
-        <div id="excerpts-popup" class="elastic-anim" style="display:none; position:fixed; top:10vh; left:calc(50vw - 400px); width:800px; height:80vh; background:#fff; border:1px solid #333; box-shadow:0 5px 20px rgba(0,0,0,0.3); z-index:10001; flex-direction:column; border-radius:4px; overflow:hidden;">
+        <div id="excerpts-popup" class="elastic-anim" style="display:none; position:absolute; top:10%; left:50%; transform:translateX(-50%); width:800px; max-width:90%; box-sizing:border-box; height:800px; background:#fff; border:1px solid #333; box-shadow:0 5px 20px rgba(0,0,0,0.3); z-index:10001; flex-direction:column; border-radius:4px; overflow:hidden;">
             <div id="excerpts-header" style="height:35px; background:#eee; cursor:move; display:flex; justify-content:space-between; align-items:center; padding:0 15px; flex-shrink:0; border-bottom:1px solid #ccc; user-select:none; font-size:14px; color:#333;">
                 <span class="cl-title" style="color: red;">Excerpts</span>
                 <div><button id="close-excerpts" class="cl-btn" style="margin-left: 10px; cursor: pointer; padding: 1px 6px;">Close</button></div>
@@ -4156,26 +4112,26 @@ const ExcerptsUIManager = {
                 <button id="exc-btn-save-and-copy">应用修改然后复制</button>
             </div>
         </div>`;
-        
+
         document.body.insertAdjacentHTML('beforeend', html);
         this.bindPanelEvents();
     },
 
-    bindPanelEvents: function() {
+    bindPanelEvents: function () {
         const popup = document.getElementById('excerpts-popup');
         const searchInput = document.getElementById('exc-search');
-        
+
         makeDraggable("#excerpts-popup", "#excerpts-header");
-        
+
         document.getElementById('close-excerpts').onclick = () => popup.style.display = "none";
         searchInput.oninput = () => this.renderLeftList();
-        
+
         document.getElementById('sort-create').onclick = () => this.toggleSort('created');
         document.getElementById('sort-update').onclick = () => this.toggleSort('updated');
 
         document.getElementById('exc-btn-save').onclick = async () => {
             if (!this.currentBook) return alert("当前未选中任何摘抄表");
-            
+
             const items = document.querySelectorAll('.exc-item-text');
             const updatedExcerpts = [];
             items.forEach(el => {
@@ -4186,7 +4142,7 @@ const ExcerptsUIManager = {
                 }
             });
             await ExcerptsSys.overwriteBook(this.currentBook, updatedExcerpts);
-            
+
             const data = await ExcerptsSys.getBookData(this.currentBook);
             if (!data.excerpts || data.excerpts.length === 0) {
                 this.openAndRefresh();
@@ -4196,7 +4152,7 @@ const ExcerptsUIManager = {
 
         document.getElementById('exc-btn-save-and-copy').onclick = async () => {
             if (!this.currentBook) return alert("当前未选中任何摘抄表");
-            
+
             const items = document.querySelectorAll('.exc-item-text');
             const updatedExcerpts = [];
             items.forEach(el => {
@@ -4207,15 +4163,15 @@ const ExcerptsUIManager = {
                 }
             });
             await ExcerptsSys.overwriteBook(this.currentBook, updatedExcerpts);
-            
+
             const data = await ExcerptsSys.getBookData(this.currentBook);
             if (!data.excerpts || data.excerpts.length === 0) {
                 this.openAndRefresh();
                 return;
             }
-            
+
             const textToCopy = data.excerpts.map(e => e.text.trim()).join('\n\n\n');
-            
+
             navigator.clipboard.writeText(textToCopy).then(() => {
                 this.openAndRefresh();
             }).catch(() => {
@@ -4224,18 +4180,18 @@ const ExcerptsUIManager = {
         };
     },
 
-    toggleSort: function(type) {
+    toggleSort: function (type) {
         if (this.sortConfig.type === type) {
             this.sortConfig.asc = !this.sortConfig.asc;
         } else {
             this.sortConfig.type = type;
             this.sortConfig.asc = false;
         }
-        
+
         const cBtn = document.getElementById('sort-create');
         const uBtn = document.getElementById('sort-update');
         cBtn.style.cssText = uBtn.style.cssText = "flex:1; padding:5px; font-size:11px; background:#fff; border:1px solid #cbd5e1; border-radius:4px; cursor:pointer; color:#64748b;";
-        
+
         const activeBtn = type === 'created' ? cBtn : uBtn;
         activeBtn.style.cssText = "flex:1; padding:5px; font-size:11px; background:#fff; border:1px solid #10b981; color:#10b981; font-weight:bold; border-radius:4px; cursor:pointer;";
         activeBtn.textContent = (type === 'created' ? '创建时间 ' : '修改时间 ') + (this.sortConfig.asc ? '▲' : '▽');
@@ -4243,9 +4199,15 @@ const ExcerptsUIManager = {
         this.renderLeftList();
     },
 
-    openAndRefresh: async function() {
+    openAndRefresh: async function () {
         this.initPanel();
-        document.getElementById('excerpts-popup').style.display = "flex";
+
+        const excPopup = document.getElementById('excerpts-popup');
+        excPopup.style.display = "flex";
+
+        excPopup.style.transform = 'none';
+        const popupWidth = excPopup.offsetWidth || 800;
+        excPopup.style.left = (window.innerWidth - popupWidth) / 2 + 'px';
         this.allBooksCache = await ExcerptsSys.getAllBooks();
 
         if (
@@ -4273,7 +4235,7 @@ const ExcerptsUIManager = {
         }
     },
 
-    renderLeftList: function() {
+    renderLeftList: function () {
         const listContainer = document.getElementById('exc-book-list');
         const filterKw = document.getElementById('exc-search').value.toLowerCase().trim();
         listContainer.innerHTML = '';
@@ -4304,7 +4266,7 @@ const ExcerptsUIManager = {
             delAction.style.cssText = "background:transparent; border:none; color:#f87171; cursor:pointer; font-size:11px; padding:2px 4px; font-weight:bold; border-radius:3px; display:none; transition: all 0.15s; flex-shrink:0; line-height:1;";
             delAction.onmouseover = () => delAction.style.background = '#fee2e2';
             delAction.onmouseout = () => delAction.style.background = 'transparent';
-            
+
             delAction.onclick = async (e) => {
                 e.stopPropagation();
                 if (confirm(`此操作不可逆, 确定要删除 [${book.name}] 的相关摘抄吗？`)) {
@@ -4317,7 +4279,7 @@ const ExcerptsUIManager = {
             const labelZone = document.createElement('div');
             labelZone.style.cssText = "flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; display:flex; justify-content:space-between; align-items:center; gap:6px;";
             labelZone.innerHTML = `<span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap;padding:6px 8px;" title="${book.name}">${book.name}</span><span style="background:#f1f5f9; padding:1px 5px; border-radius:8px; font-size:10px; color:#64748b; font-weight:normal; flex-shrink:0;">${book.count}</span>`;
-            
+
             const handleItemSelect = () => {
                 this.currentBook = book.name;
                 this.renderLeftList();
@@ -4333,10 +4295,10 @@ const ExcerptsUIManager = {
         });
     },
 
-    renderRightRecords: async function() {
+    renderRightRecords: async function () {
         const zone = document.getElementById('exc-records-zone');
         zone.innerHTML = '<div style="color:#94a3b8; text-align:center; margin-top:25vh; font-size:13px;">加载条目中...</div>';
-        
+
         const data = await ExcerptsSys.getBookData(this.currentBook);
         zone.innerHTML = '';
 
@@ -4348,7 +4310,7 @@ const ExcerptsUIManager = {
         data.excerpts.forEach(item => {
             const row = document.createElement('div');
             row.style.cssText = "position:relative; display:flex; align-items:flex-start; transition:all 0.2s; padding:0; margin:0 0 2rem 0; border-bottom:1px dashed #cbd5e1;";
-            
+
             const idLabel = document.createElement('div');
             idLabel.style.cssText = "width:32px; height:22px; background:#f1f5f9; color:#64748b; text-align:center; border-radius:4px; font-size:11px; font-weight:bold; font-family:monospace; flex-shrink:0; cursor:default; transition:all 0.2s; line-height:22px; margin: 3px 0px 0px 10px";
             idLabel.textContent = item.id;
@@ -4373,17 +4335,17 @@ const ExcerptsUIManager = {
             textarea.className = 'exc-item-text';
             textarea.dataset.id = item.id;
             textarea.value = item.text;
-            
+
             textarea.style.cssText = "flex:1; border:none; border-radius:0; padding:0 0 0 15px; margin:0; font-size:14px; color:#334155; resize:none; overflow:hidden; outline:none; line-height:1.7; background:transparent; font-family:inherit; display:block;";
-            
+
             textarea.onfocus = () => { row.style.borderBottomColor = '#10b981'; };
             textarea.onblur = () => { row.style.borderBottomColor = '#cbd5e1'; };
 
-            const adjustHeight = function() {
-                this.style.height = '1px'; 
+            const adjustHeight = function () {
+                this.style.height = '1px';
                 this.style.height = this.scrollHeight + 'px';
             };
-            
+
             textarea.addEventListener('input', adjustHeight);
             setTimeout(() => adjustHeight.call(textarea), 0);
 
@@ -4393,11 +4355,10 @@ const ExcerptsUIManager = {
     }
 };
 
-// 右键书签列表
 function showGlobalBookmarkMenu(x, y, source) {
     let absoluteX = x;
     let absoluteY = y;
-    
+
     if (source === 'side' && $('#side')) {
         const sideRect = $('#side').getBoundingClientRect();
         absoluteX += sideRect.left;
@@ -4409,7 +4370,7 @@ function showGlobalBookmarkMenu(x, y, source) {
 
     menu = document.createElement('div');
     menu.id = 'global-bookmark-menu';
-    
+
     menu.style.cssText = `position: fixed; z-index: 100000; background: rgb(51 51 51); border-radius: 4px; box-shadow: rgba(0, 0, 0, 0.4) 0px 4px 12px; display: flex; flex-direction: column; overflow-y: auto; min-width: 150px; visibility: visible; left: 1007.27px; top: 1.5px;`;
 
     const links = store.bookmark_links || [];
@@ -4495,8 +4456,7 @@ function showGlobalBookmarkMenu(x, y, source) {
     };
 }
 
-// 临期任务
-function initDueTasksPingPong () {
+function initDueTasksPingPong() {
     const JSON_URL = '/_build/secrets/upcoming_tasks.json';
     const CHECK_INTERVAL = 5 * 60 * 1000;
     const SNOOZE_KEY = 'task_snooze_until';
@@ -4616,3 +4576,706 @@ function initDueTasksPingPong () {
     setInterval(checkTasks, CHECK_INTERVAL);
     checkTasks();
 }
+
+(function () {
+    'use strict';
+    const isMobile = window.matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window;
+    if (!isMobile) return;
+
+    const TAP_MOVE_THRESHOLD = 8;
+    const DOUBLE_TAP_WINDOW = 300;
+    const DOUBLE_TAP_DIST = 30;
+    const MOVE_SENSITIVITY = 1.15;
+    const MIN_ZOOM = 1, MAX_ZOOM = 3;
+
+    document.body.classList.add('touchpad-active');
+
+    const stage = document.getElementById('stage');
+    const contentFrame = document.getElementById('content');
+    const sideFrame = document.getElementById('side');
+    if (!stage || !contentFrame) return;
+
+    stage.style.transformOrigin = '0 0';
+
+    const panel = document.getElementById('touchpad-panel') || (() => {
+        const p = document.createElement('div');
+        p.id = 'touchpad-panel';
+        document.body.appendChild(p);
+        return p;
+    })();
+
+    panel.innerHTML = `
+    <div class="tp-col-scroll" style="width: 15%; min-width: 50px; display: flex; flex-direction: column;">
+        <div class="tp-btn tp-scroll-btn" data-scroll="-160" style="flex:1; border-bottom: 1px solid var(--tp-line); display:flex; align-items:center; justify-content:center; color:var(--tp-accent); font-weight:bold;">▲</div>
+        <div class="tp-btn tp-scroll-btn" data-scroll="160" style="flex:1; display:flex; align-items:center; justify-content:center; color:var(--tp-accent); font-weight:bold;">▼</div>
+    </div>
+    <div class="tp-col-move" style="touch-action: none;"></div>
+    <div class="tp-col-zoom" style="width: 15%; min-width: 50px; display: flex; flex-direction: column; border-right: 1px solid var(--tp-line); border-left: 1px solid var(--tp-line);">
+        <div class="tp-btn" data-btn="zoom_in" style="flex:1; font-size:18px!important; font-weight:bold; border-bottom: 1px solid var(--tp-line); display:flex; align-items:center; justify-content:center; color:#cfd3dc;">+</div>
+        <div class="tp-btn" data-btn="zoom_out" style="flex:1; font-size:18px!important; font-weight:bold; display:flex; align-items:center; justify-content:center; color:#cfd3dc;">-</div>
+    </div>
+    <div class="tp-col-buttons" style="width: 20%; min-width: 64px; display: flex; flex-direction: column;">
+        <div class="tp-btn" data-btn="select_toggle" style="flex:1; border-bottom: 1px solid var(--tp-line); display:flex; align-items:center; justify-content:center; color:#cfd3dc; font-size:12px;">框选</div>
+        <div class="tp-btn" data-btn="drag_toggle" style="flex:1; border-bottom: 1px solid var(--tp-line); display:flex; align-items:center; justify-content:center; color:#cfd3dc; font-size:12px;">拖拽</div>
+        <div class="tp-btn" data-btn="dblclick" style="flex:1; border-bottom: 1px solid var(--tp-line); display:flex; align-items:center; justify-content:center; color:#cfd3dc; font-size:12px;">左双击</div>
+        <div class="tp-btn" data-btn="auxclick" style="flex:1; border-bottom: 1px solid var(--tp-line); display:flex; align-items:center; justify-content:center; color:#cfd3dc; font-size:12px;">中击</div>
+        <div class="tp-btn" data-btn="contextmenu" style="flex:1; display:flex; align-items:center; justify-content:center; color:#cfd3dc; font-size:12px;">右击</div>
+        <div class="tp-btn" data-btn="toggle_log" style="flex:1; border-bottom: 1px solid var(--tp-line); display:flex; align-items:center; justify-content:center; color:#cfd3dc; font-size:12px;">日志</div>
+    </div>
+    `;
+
+    const colMove = panel.querySelector('.tp-col-move');
+    const btns = panel.querySelectorAll('[data-btn]');
+
+    const cursorEl = document.createElement('div');
+    cursorEl.id = 'tp-cursor';
+    document.body.appendChild(cursorEl);
+
+    const cursor = { x: stage.clientWidth / 2, y: stage.clientHeight / 2 };
+    let zoom = 1, panX = 0, panY = 0;
+    let currentTargetId = null;
+    let isSelectMode = false;
+    let cursorFeedbackTimer = null;
+
+    function playCursorClickFeedback() {
+        if (!cursorEl) return;
+        cursorEl.classList.remove('tp-cursor-click', 'tp-cursor-down');
+        void cursorEl.offsetWidth; // force reflow so animation restarts
+        cursorEl.classList.add('tp-cursor-down');
+        clearTimeout(cursorFeedbackTimer);
+        cursorFeedbackTimer = setTimeout(() => {
+            cursorEl.classList.remove('tp-cursor-down');
+            cursorEl.classList.add('tp-cursor-click');
+            setTimeout(() => cursorEl.classList.remove('tp-cursor-click'), 340);
+        }, 90);
+    }
+
+    function applyTransform() {
+        const transformStr = `translate(${panX}px, ${panY}px) scale(${zoom})`;
+        stage.style.transformOrigin = '0 0';
+        stage.style.transform = transformStr;
+    }
+
+    function doZoom(delta) {
+        const oldZoom = zoom;
+        zoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, zoom + delta));
+        window._tpZoom = zoom;
+        if (zoom === oldZoom) return;
+
+        panX = (window.innerWidth / 2) - cursor.x * zoom;
+        panY = (stage.clientHeight / 2) - cursor.y * zoom;
+
+        clampPan();
+        applyTransform();
+        updateCursorVisual();
+    }
+
+    function clampCursor() {
+        // NOTE: elementFromPoint uses a half-open range [0, size). Clamping to the
+        // exact edge (stage.clientWidth / clientHeight) produces a screen point that is
+        // technically out-of-bounds, so resolveHit() gets null and the wheel/hover event
+        // is silently dropped -> "只能向上跟随不能向下跟随". Keep a 1px safety margin.
+        cursor.x = Math.max(0, Math.min(stage.clientWidth - 1, cursor.x));
+        cursor.y = Math.max(0, Math.min(stage.clientHeight - 1, cursor.y));
+    }
+
+    function clampPan() {
+        const vw = window.innerWidth, vh = stage.clientHeight;
+        const scaledW = stage.clientWidth * zoom;
+        const scaledH = stage.clientHeight * zoom;
+        const minPanX = Math.min(0, vw - scaledW);
+        const minPanY = Math.min(0, vh - scaledH);
+        panX = Math.max(minPanX, Math.min(0, panX));
+        panY = Math.max(minPanY, Math.min(0, panY));
+    }
+
+    function logicalToScreen(lx, ly) {
+        const r = stage.getBoundingClientRect();
+        return { x: r.left + lx * zoom, y: r.top + ly * zoom };
+    }
+
+    function updateCursorVisual() {
+        const p = logicalToScreen(cursor.x, cursor.y);
+        cursorEl.style.left = p.x + 'px';
+        cursorEl.style.top = p.y + 'px';
+    }
+
+    function resolveHit(lx, ly) {
+        const s = logicalToScreen(lx, ly);
+        // elementFromPoint() returns null for points on/outside the viewport boundary.
+        // Clamp defensively so an edge-pinned cursor still resolves to the element under it.
+        const px = Math.max(0, Math.min(window.innerWidth - 1, s.x));
+        const py = Math.max(0, Math.min(document.documentElement.clientHeight - 1, s.y));
+        const topEl = document.elementFromPoint(px, py);
+        if (!topEl) return { kind: 'none' };
+
+        if (topEl === contentFrame) {
+            return { kind: 'frame', id: 'content', x: lx - contentFrame.offsetLeft, y: ly - contentFrame.offsetTop };
+        }
+        if (sideFrame && topEl === sideFrame) {
+            return { kind: 'frame', id: 'side', x: lx - sideFrame.offsetLeft, y: ly - sideFrame.offsetTop };
+        }
+        return { kind: 'local', el: topEl, screenX: s.x, screenY: s.y };
+    }
+
+    function sendToFrame(frameId, op, x, y, extra) {
+        const payload = Object.assign({ op, x, y }, extra);
+        try {
+            if (frameId === 'content' && contentFrame.contentWindow && contentFrame.contentWindow.handleSimPointer) {
+                contentFrame.contentWindow.handleSimPointer(payload);
+            } else if (frameId === 'side' && sideFrame.contentWindow && sideFrame.contentWindow.handleSimPointer) {
+                sideFrame.contentWindow.handleSimPointer(payload);
+            } else {
+                emitEvent('SIM_POINTER', payload, frameId);
+            }
+        } catch (e) {
+            emitEvent('SIM_POINTER', payload, frameId);
+        }
+    }
+
+    let localHoverEl = null;
+    function getAncestors(el) {
+        const chain = [];
+        let cur = el;
+        while (cur) { chain.push(cur); cur = cur.parentElement; }
+        return chain;
+    }
+    const FOCUSABLE_SEL = 'input,textarea,select,[contenteditable],[contenteditable="true"]';
+    function maybeFocus(el) {
+        if (!el || typeof el.focus !== 'function') return;
+        if ((el.matches && el.matches(FOCUSABLE_SEL)) || el.tabIndex >= 0) {
+            el.focus({ preventScroll: true });
+        }
+    }
+
+    function updateLocalHover(newEl, base) {
+        if (newEl === localHoverEl) return;
+        const oldChain = localHoverEl ? getAncestors(localHoverEl) : [];
+        const newChain = getAncestors(newEl);
+        const oldSet = new Set(oldChain);
+        let common = null;
+        for (const el of newChain) { if (oldSet.has(el)) { common = el; break; } }
+
+        if (localHoverEl) {
+            localHoverEl.dispatchEvent(new MouseEvent('mouseout', Object.assign({}, base, { relatedTarget: newEl })));
+            for (const el of oldChain) {
+                if (el === common) break;
+                el.dispatchEvent(new MouseEvent('mouseleave', Object.assign({}, base, { bubbles: false, relatedTarget: newEl })));
+            }
+        }
+        newEl.dispatchEvent(new MouseEvent('mouseover', Object.assign({}, base, { relatedTarget: localHoverEl || null })));
+        const toEnter = [];
+        for (const el of newChain) { if (el === common) break; toEnter.push(el); }
+        toEnter.reverse().forEach(el => {
+            el.dispatchEvent(new MouseEvent('mouseenter', Object.assign({}, base, { bubbles: false, relatedTarget: localHoverEl || null })));
+        });
+        localHoverEl = newEl;
+    }
+
+    function clearLocalHover() {
+        if (!localHoverEl) return;
+        const chain = getAncestors(localHoverEl);
+        localHoverEl.dispatchEvent(new MouseEvent('mouseout', { bubbles: true, cancelable: true, relatedTarget: null }));
+        chain.forEach(a => {
+            a.dispatchEvent(new MouseEvent('mouseleave', { bubbles: false, cancelable: true, relatedTarget: null }));
+        });
+        localHoverEl = null;
+    }
+
+    function dispatchLocal(op, el, screenX, screenY, extra) {
+        const base = { bubbles: true, cancelable: true, view: window, clientX: screenX, clientY: screenY };
+        const fire = (type, opts) => el.dispatchEvent(new MouseEvent(type, Object.assign({}, base, opts)));
+        switch (op) {
+            case 'move':
+                updateLocalHover(el, base);
+                fire('mousemove', { button: 0 });
+                break;
+            case 'click':
+                fire('mousedown', { button: 0 });
+                maybeFocus(el);
+                fire('mouseup', { button: 0 });
+                fire('click', { button: 0 });
+                setTimeout(() => routeOp('move'), 50);
+                if (el.tagName && el.tagName.toUpperCase() === 'OPTION') {
+                    const selectEl = el.closest('select');
+                    if (selectEl) {
+                        selectEl.value = el.value;
+                        selectEl.dispatchEvent(new Event('change', { bubbles: true }));
+                        selectEl.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+                    }
+                }
+
+                if (el.tagName === 'VIDEO' || el.tagName === 'AUDIO') {
+                    if (el.paused) el.play().catch(() => { });
+                    else el.pause();
+                }
+                break;
+            case 'dblclick':
+                fire('mousedown', { button: 0 }); maybeFocus(el); fire('mouseup', { button: 0 }); fire('click', { button: 0 });
+                fire('mousedown', { button: 0 }); fire('mouseup', { button: 0 }); fire('click', { button: 0 });
+                fire('dblclick', { button: 0 });
+                break;
+            case 'auxclick':
+                fire('mousedown', { button: 1 }); fire('mouseup', { button: 1 }); fire('auxclick', { button: 1 });
+                break;
+            case 'contextmenu':
+                fire('contextmenu', { button: 2 });
+                setTimeout(() => routeOp('move'), 50);
+                break;
+            case 'wheel': {
+                const deltaY = (extra && extra.deltaY) || 0;
+                el.dispatchEvent(new WheelEvent('wheel', Object.assign({}, base, { deltaY, deltaMode: 0 })));
+                let scrollTarget = el;
+                let found = false;
+                while (scrollTarget && scrollTarget !== document.body && scrollTarget !== document.documentElement) {
+                    const style = window.getComputedStyle(scrollTarget);
+                    const isListbox = scrollTarget.tagName === 'SELECT';
+                    const overflowsY = scrollTarget.scrollHeight > scrollTarget.clientHeight;
+                    const scrollableY = overflowsY && (isListbox ||
+                        style.overflowY === 'auto' || style.overflowY === 'scroll' || style.overflowY === 'overlay');
+                    if (scrollableY) { found = true; break; }
+                    scrollTarget = scrollTarget.parentElement;
+                }
+
+                if (found) {
+                    const atTop = scrollTarget.scrollTop <= 0;
+                    const atBottom = scrollTarget.scrollTop + scrollTarget.clientHeight >= scrollTarget.scrollHeight - 1;
+                    if ((deltaY < 0 && atTop) || (deltaY > 0 && atBottom)) {
+                        found = false; // this scroll unit is exhausted in this direction, hand off
+                    } else {
+                        scrollTarget.scrollBy({ top: deltaY, behavior: 'auto' });
+                    }
+                }
+
+                if (!found) {
+                    sendToFrame('content', 'wheel', 0, 0, { deltaY });
+                }
+                break;
+            }
+            case 'drag_start':
+                fire('mousedown', { button: 0 });
+                break;
+            case 'drag_end':
+                fire('mouseup', { button: 0 });
+                break;
+        }
+    }
+
+    function routeOp(op, extra) {
+        const hit = resolveHit(cursor.x, cursor.y);
+        const targetId = hit.kind === 'frame' ? hit.id : (hit.kind === 'local' ? 'index' : null);
+
+        if (targetId !== currentTargetId) {
+            if (currentTargetId === 'index') clearLocalHover();
+            else if (currentTargetId) sendToFrame(currentTargetId, 'leave', 0, 0, {});
+
+            if (hit.kind === 'frame') sendToFrame(hit.id, 'enter', hit.x, hit.y, {});
+            currentTargetId = targetId;
+        }
+
+        if (hit.kind === 'frame') {
+            sendToFrame(hit.id, op, hit.x, hit.y, extra);
+        } else if (hit.kind === 'local') {
+            dispatchLocal(op, hit.el, hit.screenX, hit.screenY, extra || {});
+        }
+    }
+
+    const EDGE_ZONE = 0.15;
+    const EDGE_MAX_MULT = 4;
+
+    function edgeAccelFactor(pos, max) {
+        const zone = max * EDGE_ZONE;
+        if (zone <= 0) return 1;
+        if (pos < zone) return 1 + (1 - pos / zone) * (EDGE_MAX_MULT - 1);
+        if (pos > max - zone) return 1 + (1 - (max - pos) / zone) * (EDGE_MAX_MULT - 1);
+        return 1;
+    }
+
+    function sendOverflowWheel(overflowX, overflowY) {
+        if (Math.abs(overflowX) <= 0.1 && Math.abs(overflowY) <= 0.1) return;
+        const mult = Math.max(edgeAccelFactor(cursor.x, stage.clientWidth), edgeAccelFactor(cursor.y, stage.clientHeight));
+        routeOp('wheel', {
+            deltaX: overflowX * zoom / MOVE_SENSITIVITY * mult,
+            deltaY: overflowY * zoom / MOVE_SENSITIVITY * mult
+        });
+    }
+
+    const activePointers = new Map();
+    let moveState = null;
+    let pendingTap = null;
+    let edgeHoldRaf = null;
+
+    function edgeHoldLoop() {
+        edgeHoldRaf = null;
+        if (!moveState || !moveState.moved) return;
+
+        const nearLeft = cursor.x < stage.clientWidth * EDGE_ZONE;
+        const nearRight = cursor.x > stage.clientWidth * (1 - EDGE_ZONE);
+        const nearTop = cursor.y < stage.clientHeight * EDGE_ZONE;
+        const nearBottom = cursor.y > stage.clientHeight * (1 - EDGE_ZONE);
+
+        if (nearLeft || nearRight || nearTop || nearBottom) {
+            const multX = Math.max(edgeAccelFactor(cursor.x, stage.clientWidth), 1);
+            const multY = Math.max(edgeAccelFactor(cursor.y, stage.clientHeight), 1);
+            const BASE_HOLD_SPEED = 6; // logical px per frame at full acceleration
+            const dx = (nearLeft ? -1 : nearRight ? 1 : 0) * BASE_HOLD_SPEED * (multX - 1);
+            const dy = (nearTop ? -1 : nearBottom ? 1 : 0) * BASE_HOLD_SPEED * (multY - 1);
+            if (dx || dy) {
+                routeOp('wheel', { deltaX: dx * zoom, deltaY: dy * zoom });
+            }
+        }
+        edgeHoldRaf = requestAnimationFrame(edgeHoldLoop);
+    }
+
+    colMove.addEventListener('pointerdown', (e) => {
+        colMove.setPointerCapture(e.pointerId);
+        activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+        if (activePointers.size === 1) {
+            moveState = {
+                pointerId: e.pointerId,
+                startX: e.clientX, startY: e.clientY,
+                lastX: e.clientX, lastY: e.clientY,
+                lastTime: performance.now(),
+                moved: false,
+            };
+
+            if (isSelectMode) routeOp('select_start');
+            if (!edgeHoldRaf) edgeHoldRaf = requestAnimationFrame(edgeHoldLoop);
+        }
+    });
+
+    colMove.addEventListener('pointermove', (e) => {
+        e.preventDefault();
+        if (!activePointers.has(e.pointerId)) return;
+        activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+        if (moveState && e.pointerId === moveState.pointerId) {
+            // [新增] 计算时间差
+            const now = performance.now();
+            const dt = Math.max(1, now - moveState.lastTime); // 避免除以 0
+            moveState.lastTime = now;
+
+            const dx = e.clientX - moveState.lastX;
+            const dy = e.clientY - moveState.lastY;
+            moveState.lastX = e.clientX; moveState.lastY = e.clientY;
+
+            const totalMoved = Math.hypot(e.clientX - moveState.startX, e.clientY - moveState.startY);
+            if (totalMoved > TAP_MOVE_THRESHOLD) moveState.moved = true;
+
+            if (moveState.moved) {
+                const velocity = Math.hypot(dx, dy) / dt;
+
+                const BASE_SENSITIVITY = 1.15;
+                const ACCEL_THRESHOLD = 0.5;
+                const ACCEL_FACTOR = 2.0;
+                const MAX_SENSITIVITY = 5.0;
+
+                let dynamicSensitivity = BASE_SENSITIVITY;
+                if (velocity > ACCEL_THRESHOLD) {
+                    dynamicSensitivity += (velocity - ACCEL_THRESHOLD) * ACCEL_FACTOR;
+                }
+                dynamicSensitivity = Math.min(dynamicSensitivity, MAX_SENSITIVITY);
+
+                let logicalDx = (dx / zoom) * dynamicSensitivity;
+                let logicalDy = (dy / zoom) * dynamicSensitivity;
+
+
+                let oldCursorX = cursor.x;
+                let oldCursorY = cursor.y;
+
+                if (Math.abs(logicalDx) >= 0.1) {
+                    let hit = resolveHit(cursor.x, cursor.y);
+                    let target = null;
+                    let win = window;
+
+                    if (hit.kind === 'frame') {
+                        let frameWin = hit.id === 'content' ? contentFrame.contentWindow : (hit.id === 'side' ? sideFrame.contentWindow : null);
+                        if (frameWin) {
+                            win = frameWin;
+                            let safeX = Math.max(0, Math.min(win.document.documentElement.clientWidth - 1, hit.x));
+                            let safeY = Math.max(0, Math.min(win.document.documentElement.clientHeight - 1, hit.y));
+                            target = win.document.elementFromPoint(safeX, safeY);
+                        }
+                    } else if (hit.kind === 'local') {
+                        target = hit.el;
+                    }
+
+                    if (target) {
+                        let unconsumedX = logicalDx;
+                        let scrollTarget = target;
+
+                        while (scrollTarget) {
+                            const isDoc = scrollTarget === win.document.documentElement;
+                            const isBody = scrollTarget === win.document.body;
+                            const isRoot = isDoc || isBody;
+                            const style = win.getComputedStyle(scrollTarget);
+
+                            let canScrollX = false;
+                            if (isDoc || isBody) {
+                                canScrollX = scrollTarget.scrollWidth > scrollTarget.clientWidth;
+                            } else {
+                                canScrollX = (scrollTarget.scrollWidth > scrollTarget.clientWidth) &&
+                                    (style.overflowX === 'auto' || style.overflowX === 'scroll' || style.overflowX === 'overlay');
+                            }
+
+                            if (canScrollX) {
+                                let availableX = unconsumedX > 0
+                                    ? Math.ceil(scrollTarget.scrollWidth - scrollTarget.scrollLeft - scrollTarget.clientWidth)
+                                    : scrollTarget.scrollLeft;
+
+                                if (availableX > 0) {
+                                    let consume = Math.sign(unconsumedX) * Math.min(Math.abs(unconsumedX), availableX);
+                                    const before = scrollTarget.scrollLeft;
+                                    scrollTarget.scrollLeft += consume;
+                                    const actualDelta = scrollTarget.scrollLeft - before;
+                                    unconsumedX -= actualDelta;
+                                }
+                            }
+                            if (Math.abs(unconsumedX) < 0.1) break;
+
+                            if (isBody) { scrollTarget = win.document.documentElement; continue; }
+                            if (isDoc) break;
+                            scrollTarget = scrollTarget.parentElement;
+                        }
+                        logicalDx = unconsumedX;
+                    }
+                }
+
+                cursor.x += logicalDx;
+                cursor.y += logicalDy;
+                clampCursor();
+
+                let overflowX = (oldCursorX + logicalDx) - cursor.x;
+                let overflowY = (oldCursorY + logicalDy) - cursor.y;
+
+                panX = (window.innerWidth / 2) - cursor.x * zoom;
+                panY = (stage.clientHeight / 2) - cursor.y * zoom;
+                clampPan();
+
+                applyTransform();
+                updateCursorVisual();
+                routeOp(isSelectMode ? 'select_move' : 'move');
+
+                sendOverflowWheel(overflowX, overflowY);
+            }
+        }
+    });
+
+    function endPointer(e) {
+        const wasSingle = activePointers.size === 1;
+        activePointers.delete(e.pointerId);
+
+        if (wasSingle && edgeHoldRaf) {
+            cancelAnimationFrame(edgeHoldRaf);
+            edgeHoldRaf = null;
+        }
+
+        if (wasSingle && moveState && e.pointerId === moveState.pointerId) {
+            if (isSelectMode && moveState.moved) {
+                routeOp('select_end');
+            } else if (!moveState.moved) {
+                const now = Date.now();
+                if (pendingTap &&
+                    now - pendingTap.time < DOUBLE_TAP_WINDOW &&
+                    Math.hypot(e.clientX - pendingTap.x, e.clientY - pendingTap.y) < DOUBLE_TAP_DIST) {
+                    clearTimeout(pendingTap.timer);
+                    pendingTap = null;
+                    playCursorClickFeedback();
+                    routeOp('dblclick');
+                } else {
+                    if (pendingTap) clearTimeout(pendingTap.timer);
+                    const tap = { time: now, x: e.clientX, y: e.clientY };
+                    tap.timer = setTimeout(() => {
+                        playCursorClickFeedback();
+                        routeOp('click');
+                        pendingTap = null;
+                    }, DOUBLE_TAP_WINDOW);
+                    pendingTap = tap;
+                }
+            }
+            moveState = null;
+        }
+    }
+    colMove.addEventListener('pointerup', endPointer);
+    colMove.addEventListener('pointercancel', endPointer);
+
+    let isDragMode = false;
+
+    btns.forEach((btn) => {
+        btn.addEventListener('pointerdown', (e) => {
+            e.preventDefault();
+            if (btn.dataset.btn !== 'drag_toggle') btn.classList.add('tp-active');
+        });
+
+        btn.addEventListener('pointerup', () => {
+            const act = btn.dataset.btn;
+
+            if (act === 'drag_toggle') {
+                isDragMode = !isDragMode;
+                btn.classList.toggle('tp-active', isDragMode);
+                routeOp(isDragMode ? 'drag_start' : 'drag_end');
+                return;
+            }
+            if (act === 'zoom_in') {
+                doZoom(0.25);
+                btn.classList.remove('tp-active');
+                return;
+            }
+            if (act === 'zoom_out') {
+                doZoom(-0.25);
+                btn.classList.remove('tp-active');
+                return;
+            }
+            if (act === 'select_toggle') {
+                isSelectMode = !isSelectMode;
+                btn.classList.toggle('tp-active', isSelectMode);
+                cursorEl.classList.toggle('tp-cursor-text', isSelectMode);
+                return;
+            }
+
+            btn.classList.remove('tp-active');
+            if (act === 'dblclick' || act === 'auxclick' || act === 'contextmenu') {
+                playCursorClickFeedback();
+            }
+            routeOp(act);
+        });
+
+        const release = () => {
+            if (btn.dataset.btn !== 'drag_toggle') btn.classList.remove('tp-active');
+        };
+        btn.addEventListener('pointercancel', release);
+    });
+
+    panel.querySelectorAll('.tp-scroll-btn').forEach(btn => {
+        btn.addEventListener('pointerdown', (e) => {
+            e.preventDefault();
+            btn.classList.add('tp-active');
+            routeOp('wheel', { deltaY: parseInt(btn.dataset.scroll, 10) });
+        });
+        const release = () => btn.classList.remove('tp-active');
+        btn.addEventListener('pointerup', release);
+        btn.addEventListener('pointercancel', release);
+    });
+
+    panX = (window.innerWidth / 2) - cursor.x * zoom;
+    panY = (stage.clientHeight / 2) - cursor.y * zoom;
+    clampPan();
+
+    applyTransform();
+    updateCursorVisual();
+
+    // --- 注入移动端控制台 (跨 Iframe 全局增强版) ---
+    const mobileConsole = document.createElement('div');
+    mobileConsole.style.cssText = 'position:fixed; bottom:var(--tp-height); left:0; width:100%; height:25vh; background:rgba(0,0,0,0.85); color:#0f0; font-family:monospace; font-size:11px; overflow-y:auto; z-index:999999; display:none; padding:8px; box-sizing:border-box; word-break:break-all; pointer-events:auto;';
+    document.body.appendChild(mobileConsole);
+
+    // 1. 在顶层窗口挂载全局日志接收器
+    window.top._logToMobile = function (level, args) {
+        const msg = document.createElement('div');
+        msg.style.color = level === 'error' ? '#ff4d4f' : level === 'warn' ? '#faad14' : (level === 'info' ? '#1890ff' : '#52c41a');
+        msg.style.marginBottom = '4px';
+        msg.style.borderBottom = '1px solid rgba(255,255,255,0.1)';
+
+        const msgText = args.map(a => {
+            if (a instanceof Error) return a.stack || a.message;
+            if (typeof a === 'object') {
+                try { return JSON.stringify(a); } catch (e) { return String(a); }
+            }
+            return a;
+        }).join(' ');
+
+        msg.innerText = `[${level.toUpperCase()}] ${msgText}`;
+        mobileConsole.appendChild(msg);
+        mobileConsole.scrollTop = mobileConsole.scrollHeight;
+    };
+
+    // 2. 核心劫持函数，可作用于任意 Window 对象
+    function hijackWindow(win) {
+        // 防止重复注入
+        if (!win || win._consoleHijacked) return;
+        win._consoleHijacked = true;
+
+        const _originals = { log: win.console.log, error: win.console.error, warn: win.console.warn, info: win.console.info };
+
+        // A. 劫持标准打印 (捕获 PDF.js 的标准输出)
+        ['log', 'error', 'warn', 'info'].forEach(method => {
+            if (!win.console[method]) return;
+            win.console[method] = function (...args) {
+                _originals[method].apply(win.console, args);
+                if (window.top && window.top._logToMobile) window.top._logToMobile(method, args);
+            };
+        });
+
+        // B. 劫持 console.time / timeEnd (精准捕获截图中 "loadScripts 总耗时")
+        const _timeMap = new Map();
+        const _origTime = win.console.time;
+        const _origTimeEnd = win.console.timeEnd;
+        if (_origTime && _origTimeEnd) {
+            win.console.time = function (label = 'default') {
+                _origTime.call(win.console, label);
+                _timeMap.set(label, win.performance.now());
+            };
+            win.console.timeEnd = function (label = 'default') {
+                _origTimeEnd.call(win.console, label);
+                if (_timeMap.has(label)) {
+                    const duration = (win.performance.now() - _timeMap.get(label)).toFixed(4);
+                    if (window.top && window.top._logToMobile) window.top._logToMobile('info', [`${label}: ${duration} ms`]);
+                    _timeMap.delete(label);
+                }
+            };
+        }
+
+        // C. 捕获全局运行时错误和静态资源加载失败 (捕获截图中 favicon 404 Not Found)
+        win.addEventListener('error', function (event) {
+            if (event.target && (event.target.tagName === 'IMG' || event.target.tagName === 'SCRIPT' || event.target.tagName === 'LINK')) {
+                if (window.top && window.top._logToMobile) window.top._logToMobile('error', ['Resource 404/Error:', event.target.src || event.target.href]);
+            } else {
+                if (window.top && window.top._logToMobile) window.top._logToMobile('error', ['Uncaught Error:', event.message, 'at', event.filename, ':' + event.lineno]);
+            }
+        }, true); // true 开启捕获阶段，拦截底层资源报错
+
+        // D. 捕获未处理的 Promise 拒绝 (捕获截图中 PDF.js 的 Uncaught in promise Error: Bad end offset)
+        win.addEventListener('unhandledrejection', function (event) {
+            if (window.top && window.top._logToMobile) window.top._logToMobile('error', ['Unhandled Promise Rejection:', event.reason]);
+        });
+
+        // E. 简单劫持 Fetch API (捕获 JS 发起的网络请求 404/500)
+        const _origFetch = win.fetch;
+        if (_origFetch) {
+            win.fetch = function (...args) {
+                return _origFetch.apply(this, args).then(res => {
+                    if (!res.ok && window.top && window.top._logToMobile) {
+                        window.top._logToMobile('error', ['Fetch Error:', res.status, res.url]);
+                    }
+                    return res;
+                }).catch(err => {
+                    if (window.top && window.top._logToMobile) window.top._logToMobile('error', ['Fetch Failed:', args[0], err]);
+                    throw err;
+                });
+            };
+        }
+    }
+
+    // 3. 劫持顶层窗口自身 (index.html)
+    hijackWindow(window);
+
+    // 4. 劫持当前已有的及未来切换内容加载的 Iframe (例如 pdf.html 载入 content Iframe 时)
+    document.querySelectorAll('iframe').forEach(ifr => {
+        // 尝试劫持已加载完成的
+        try { hijackWindow(ifr.contentWindow); } catch (e) { }
+
+        // 监听 navigation 导致的重载，每次载入新的 HTML 都要重新注入
+        ifr.addEventListener('load', () => {
+            try { hijackWindow(ifr.contentWindow); } catch (e) { }
+        });
+    });
+
+    // 5. 绑定 UI 开关
+    const logBtn = panel.querySelector('[data-btn="toggle_log"]');
+    if (logBtn) {
+        logBtn.addEventListener('pointerup', () => {
+            mobileConsole.style.display = mobileConsole.style.display === 'none' ? 'block' : 'none';
+        });
+    }
+})();
