@@ -1,6 +1,10 @@
 @charset "UTF-8";
 @import url("font.css");
 
+/* ==========================================================================
+   基础 / 全局重置
+   ========================================================================== */
+
 html,
 body,
 pre,
@@ -32,10 +36,9 @@ a {
     text-decoration: none;
 }
 
-.bookmark-link {
-    text-decoration: none;
-    color: chocolate;
-}
+/* ==========================================================================
+   目录列表 / 分类树
+   ========================================================================== */
 
 div:not(.history-list) {
     border-top: 1px solid;
@@ -56,21 +59,16 @@ li {
     list-style-type: none;
 }
 
-li:hover,
-li[data-touchpad-hover],
-.current {
-    background-color: azure;
-}
-
-li:hover .mark-btn, 
-li[data-touchpad-hover] .mark-btn {
-    opacity: 1;
-}
-
 li:before {
     padding-right: 6px;
     content: "\205e";
     opacity: .5;
+}
+
+li:hover,
+li[data-touchpad-hover],
+.current {
+    background-color: azure;
 }
 
 .category {
@@ -113,6 +111,62 @@ li:before {
     background: #90ee90;
     content: " new ";
 }
+
+/* ==========================================================================
+   标记系统 (Mark / 已标记)
+   ========================================================================== */
+
+li:hover .mark-btn,
+li[data-touchpad-hover] .mark-btn {
+    opacity: 1;
+}
+
+.mark-btn {
+    opacity: 0;
+    cursor: pointer;
+    flex-shrink: 0;
+    font-size: 12px;
+    color: #aaa !important;
+    margin-left: 8px;
+    user-select: none;
+    transition: color 0.15s;
+    font-family: monospace;
+    text-decoration: none !important;
+}
+
+.mark-btn:hover {
+    color: #ff5722 !important;
+}
+
+.item-marked,
+.item-marked>span {
+    color: #999 !important;
+    text-decoration: line-through !important;
+}
+
+/* ==========================================================================
+   受限 / 锁定内容标记
+   ========================================================================== */
+
+a[data-local-only]::before {
+    margin-right: 4px;
+}
+
+a.locked::before {
+    content: "🔒";
+}
+
+a.locked {
+    opacity: 0.5;
+}
+
+a.unlocked::before {
+    content: "🔓";
+}
+
+/* ==========================================================================
+   顶部工具栏 & 下拉菜单
+   ========================================================================== */
 
 #a {
     border-bottom: 1px solid black;
@@ -190,6 +244,10 @@ a#a3 {
     background-color: #333;
 }
 
+/* ==========================================================================
+   历史记录下拉列表
+   ========================================================================== */
+
 .history-wrapper {
     position: relative;
     display: inline-block;
@@ -236,14 +294,13 @@ a#a3 {
     background-color: #e0fff6 !important;
 }
 
-.history-row .mark-btn,
-.history-row[data-touchpad-hover] {
+.history-row .mark-btn {
     opacity: 0;
     transition: opacity 0.1s;
 }
 
 .history-row:hover .mark-btn,
-.history-row[data-touchpad-hover] {
+.history-row[data-touchpad-hover] .mark-btn {
     opacity: 1;
 }
 
@@ -260,32 +317,39 @@ a#a3 {
     color: #999;
 }
 
-.item-marked,
-.item-marked>span {
-    color: #999 !important;
-    text-decoration: line-through !important;
+/* ==========================================================================
+   杂项状态类
+   ========================================================================== */
+
+.o {
+    color: #d2691e !important;
 }
 
-.mark-btn {
-    opacity: 0;
-    cursor: pointer;
-    flex-shrink: 0;
-    font-size: 12px;
-    color: #aaa !important;
-    margin-left: 8px;
-    user-select: none;
-    transition: color 0.15s;
-    font-family: monospace;
-    text-decoration: none !important;
+.t {
+    color: rgb(169, 169, 169) !important;
 }
 
-.mark-btn:hover {
-    color: #ff5722 !important;
+.t::after {
+    content: "\2197";
+}
+
+.m {
+    cursor: default !important;
+    background-position: center !important;
+}
+
+.bookmark-link {
+    text-decoration: none;
+    color: chocolate;
 }
 
 .admin {
     user-select: none;
 }
+
+/* ==========================================================================
+   返回顶部按钮
+   ========================================================================== */
 
 #gotop {
     border-radius: 1rem;
@@ -298,6 +362,10 @@ a#a3 {
     display: none;
     cursor: pointer;
 }
+
+/* ==========================================================================
+   更新提示横幅
+   ========================================================================== */
 
 #update-banner {
     height: 2rem;
@@ -314,38 +382,9 @@ a#a3 {
     background-color: #e68a00;
 }
 
-.o {
-    color: #d2691e !important;
-}
-
-.m {
-    cursor: default !important;
-    background-position: center !important;
-}
-
-a[data-local-only]::before {
-    margin-right: 4px;
-}
-
-a.locked::before {
-    content: "🔒";
-}
-
-a.locked {
-    opacity: 0.5;
-}
-
-a.unlocked::before {
-    content: "🔓";
-}
-
-.t {
-    color: rgb(169, 169, 169) !important;
-}
-
-.t::after {
-    content: "\2197";
-}
+/* ==========================================================================
+   悬浮预览框 (图片 / 视频 hover 预览)
+   ========================================================================== */
 
 #side-preview-tooltip {
     position: fixed;

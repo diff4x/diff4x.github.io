@@ -1,6 +1,10 @@
 @charset "UTF-8";
 @import url("font.css");
 
+/* ==========================================================================
+   基础 / 全局重置
+   ========================================================================== */
+
 @keyframes elasticBounce {
     0% {
         transform: scale(0.94);
@@ -16,15 +20,15 @@
     }
 }
 
+.elastic-anim {
+    animation: elasticBounce 0.25s ease-out forwards;
+}
+
 html, body {
     -webkit-touch-callout: none;
     -webkit-user-select: none;
     user-select: none;
     overscroll-behavior: none;
-}
-
-.elastic-anim {
-    animation: elasticBounce 0.25s ease-out forwards;
 }
 
 html,
@@ -46,6 +50,38 @@ body.touchpad-active {
     position: fixed;
     width: 100%;
     height: 100%;
+    height: 100dvh;
+    overflow: hidden;
+}
+
+/* ==========================================================================
+   通用工具类
+   ========================================================================== */
+
+.hide {
+    display: none !important;
+}
+
+.mask {
+    background-image: none !important;
+    background-color: #cae4ff;
+}
+
+.mask2 {
+    background-color: #000000 !important;
+}
+
+.current {
+    background-color: #98fda5
+}
+
+/* ==========================================================================
+   主体布局：content / side
+   ========================================================================== */
+
+#stage {
+    display: flex;
+    height: 100%;
 }
 
 #content {
@@ -60,6 +96,10 @@ body.touchpad-active {
     background-color: #cae4ff;
     flex: 25;
 }
+
+/* ==========================================================================
+   搜索
+   ========================================================================== */
 
 #search {
     z-index: 1;
@@ -94,6 +134,34 @@ input#searchInput {
 option:hover {
     background: aliceblue;
 }
+
+#searchResults option[data-type="image"] {
+    color: #00a8ff;
+}
+
+#searchResults option[data-type="audio"] {
+    color: orange;
+}
+
+#searchResults option[data-type="video"] {
+    color: #9c88ff;
+}
+
+#searchResults option[data-type="pdf"] {
+    color: #e84118;
+}
+
+#searchResults option[data-type="epub"] {
+    color: #4cd137;
+}
+
+#searchResults option[data-type="txt"] {
+    color: #7f8fa6;
+}
+
+/* ==========================================================================
+   Giscus 评论弹窗
+   ========================================================================== */
 
 #giscus-popup {
     position: absolute;
@@ -141,129 +209,9 @@ option:hover {
     overflow: auto;
 }
 
-.hide {
-    display: none !important;
-}
-
-.mask {
-    background-image: none !important;
-    background-color: #cae4ff;
-}
-
-.mask2 {
-    background-color: #000000 !important;
-}
-
-.current {
-    background-color: #98fda5
-}
-
-#audio {
-    width: 350px;
-    background-color: #cae4ff;
-    flex-shrink: 0;
-    height: 100%;
-    overflow-y: auto;
-}
-
-#audio .active {
-    font-weight: 700;
-    color: red
-}
-
-#audio .active2 {
-    border: 1px solid #000;
-    background-color: #00ff40
-}
-
-#audio li:hover {
-    cursor: pointer;
-    background: #98fda5
-}
-
-#audio li {
-    list-style: decimal
-}
-
-.audio-progress {
-    float: left;
-    width: 15px;
-    height: 100vh;
-    background-color: #96c0f7;
-    cursor: pointer
-}
-
-.audio-progress-bar {
-    bottom: 0;
-    width: 100%;
-    background-color: pink;
-    height: 23.9913%
-}
-
-.audio_div {
-    margin-left: 30px
-}
-
-audio::-webkit-media-controls-timeline,
-audio::-moz-media-controls-timeline,
-audio::-ms-media-controls-timeline,
-audio::media-controls-timeline {
-    display: none
-}
-
-audio {
-    padding: 2rem 0;
-    display: block
-}
-
-.playlist {
-    overflow-y: scroll;
-    margin-top: 20px;
-    max-height: 60vh
-}
-
-.header {
-    background: #000;
-    color: #fff
-}
-
-.fav {
-    color: red
-}
-
-#audio button:last-child {
-    width: 300px;
-}
-
-#audio_btn {
-    position: fixed;
-    top: 0;
-    right: 0;
-}
-
-#searchResults option[data-type="image"] {
-    color: #00a8ff;
-}
-
-#searchResults option[data-type="audio"] {
-    color: orange;
-}
-
-#searchResults option[data-type="video"] {
-    color: #9c88ff;
-}
-
-#searchResults option[data-type="pdf"] {
-    color: #e84118;
-}
-
-#searchResults option[data-type="epub"] {
-    color: #4cd137;
-}
-
-#searchResults option[data-type="txt"] {
-    color: #7f8fa6;
-}
+/* ==========================================================================
+   更新日志弹窗
+   ========================================================================== */
 
 #changelog-popup {
     position: absolute;
@@ -320,6 +268,10 @@ audio {
     padding: 1px 6px;
 }
 
+/* ==========================================================================
+   摘抄薄按钮
+   ========================================================================== */
+
 #exc-btn-save-and-copy, #exc-btn-save {
     border: 1px solid gray;
     background-color: #f6ead4;
@@ -329,15 +281,9 @@ audio {
     border-radius: 5px;
 }
 
-@keyframes fadeIn {
-    from {
-        opacity: 0;
-    }
-
-    to {
-        opacity: 1;
-    }
-}
+/* ==========================================================================
+   通用确认 / 协议弹窗 (proto-*)
+   ========================================================================== */
 
 .proto-overlay {
     position: fixed;
@@ -467,6 +413,10 @@ audio {
     color: #333;
 }
 
+/* ==========================================================================
+   代码片段预览悬浮框
+   ========================================================================== */
+
 #center-snippet-preview {
     position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
     width: 450px; 
@@ -512,6 +462,10 @@ audio {
     padding: 0;
 }
 
+/* ==========================================================================
+   任务提醒浮窗 (task-pingpong)
+   ========================================================================== */
+
 #task-pingpong-box {
     position: fixed;
     width: 280px;
@@ -540,7 +494,6 @@ audio {
 
 #task-pingpong-box h3 {
     margin: 0 0 8px 0;
-    font-size: 16px;
     border-bottom: 1px solid rgba(255,255,255,.3);
     padding-bottom: 4px;
 }
@@ -557,19 +510,96 @@ audio {
     word-break: break-all;
 }
 
+/* ==========================================================================
+   音频播放器
+   ========================================================================== */
 
-#stage {
-    display: flex;
+#audio {
+    width: 350px;
+    background-color: #cae4ff;
+    flex-shrink: 0;
     height: 100%;
+    overflow-y: auto;
 }
 
-body.touchpad-active {
+#audio .active {
+    font-weight: 700;
+    color: red
+}
+
+#audio .active2 {
+    border: 1px solid #000;
+    background-color: #00ff40
+}
+
+#audio li:hover {
+    cursor: pointer;
+    background: #98fda5
+}
+
+#audio li {
+    list-style: decimal
+}
+
+#audio button:last-child {
+    width: 300px;
+}
+
+#audio_btn {
     position: fixed;
-    width: 100%;
-    height: 100%;
-    height: 100dvh;
-    overflow: hidden;
+    top: 0;
+    right: 0;
 }
+
+.audio-progress {
+    float: left;
+    width: 15px;
+    height: 100vh;
+    background-color: #96c0f7;
+    cursor: pointer
+}
+
+.audio-progress-bar {
+    bottom: 0;
+    width: 100%;
+    background-color: pink;
+    height: 23.9913%
+}
+
+.audio_div {
+    margin-left: 30px
+}
+
+.playlist {
+    overflow-y: scroll;
+    margin-top: 20px;
+    max-height: 60vh
+}
+
+.header {
+    background: #000;
+    color: #fff
+}
+
+.fav {
+    color: red
+}
+
+audio {
+    padding: 2rem 0;
+    display: block
+}
+
+audio::-webkit-media-controls-timeline,
+audio::-moz-media-controls-timeline,
+audio::-ms-media-controls-timeline,
+audio::media-controls-timeline {
+    display: none
+}
+
+/* ==========================================================================
+   触控板 (touchpad)
+   ========================================================================== */
 
 :root {
   --tp-height: 38dvh;
@@ -586,6 +616,11 @@ body.touchpad-active #stage {
     transition: height .18s ease;
     border-bottom: 1px solid rgba(79, 140, 255, 0.35);
     box-sizing: border-box;
+}
+
+body.touchpad-active .proto-overlay {
+    height: calc(100dvh - var(--tp-height));
+    max-height: calc(100dvh - var(--tp-height));
 }
 
 #touchpad-panel {
@@ -611,11 +646,6 @@ body.touchpad-active #touchpad-panel {
   box-shadow: 0 -6px 18px rgba(0, 0, 0, 0.45);
 }
 
-body.touchpad-active .proto-overlay {
-    height: calc(100dvh - var(--tp-height));
-    max-height: calc(100dvh - var(--tp-height));
-}
-
 .tp-col-buttons {
   width: 18%;
   min-width: 64px;
@@ -623,13 +653,17 @@ body.touchpad-active .proto-overlay {
   flex-direction: column;
   border-right: 1px solid var(--tp-line);
 }
+
 .tp-btn {
   flex: 1;
   display: flex;
   align-items: center;
   justify-content: center;
   color: #cfd3dc;
-  font-size: 12px;
+  font-size: 22px !important;
+  -webkit-text-size-adjust: none !important;
+  text-size-adjust: none !important;
+  line-height: 1;
   letter-spacing: .5px;
   border-bottom: 1px solid var(--tp-line);
 }
@@ -651,7 +685,7 @@ body.touchpad-active .proto-overlay {
   position: absolute;
   top: 6px; left: 50%;
   transform: translateX(-50%);
-  font-size: 10px;
+  font-size: 22px!important;
   color: rgba(255,255,255,0.28);
   pointer-events: none;
 }
@@ -663,7 +697,7 @@ body.touchpad-active .proto-overlay {
   align-items: center;
   justify-content: center;
   color: rgba(255,255,255,0.35);
-  font-size: 11px;
+  font-size: 14px;
   writing-mode: vertical-rl;
   letter-spacing: 2px;
 }
@@ -689,22 +723,11 @@ body.touchpad-active .proto-overlay {
   will-change: transform;
 }
 body.touchpad-active #tp-cursor { display: block; }
+
 #tp-cursor.tp-cursor-down {
   transform: scale(0.72);
   background: rgba(255,120,80,0.95);
   box-shadow: 0 0 0 3px rgba(255,120,80,0.35);
-}
-
-.tp-btn { 
-    font-size: 14px !important; 
-    line-height: 1;
-}
-.tp-col-move::before { font-size: 13px !important; }
-.tp-col-wheel { font-size: 14px !important; }
-
-input#searchInput {
-    width: 170px;
-    font-size: 16px !important; 
 }
 
 #tp-cursor.tp-cursor-click {
@@ -717,19 +740,6 @@ input#searchInput {
   100% { transform: scale(1); }
 }
 
-
-#searchHistory, 
-#searchResults {
-    font-size: 16px !important;
-}
-#searchHistory option, 
-#searchResults option {
-    font-size: 16px !important;
-}
-.tp-btn { 
-    font-size: clamp(14px, 4vw, 18px) !important; 
-    line-height: 1;
-}
 #tp-cursor.tp-cursor-text {
     width: 2px;
     height: 22px;

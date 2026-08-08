@@ -119,7 +119,6 @@ window.VirtualCursor = {
                 }
                 return;
             }
-            if (op === 'enter') return;
 
             if (op === 'enter') return;
             const safeX = Math.max(0, Math.min(doc.documentElement.clientWidth - 1, x));
@@ -1646,7 +1645,7 @@ function search_box() {
         scrollWrapper.appendChild(scrollContent);
         previewBox.appendChild(header);
         previewBox.appendChild(scrollWrapper);
-        document.body.appendChild(previewBox);
+        document.getElementById('stage').appendChild(previewBox);
     }
 
     let previewScrollFrame = null;
@@ -2609,7 +2608,8 @@ function generateDoc(type, payload) {
     const commonStyles = `@charset "UTF-8";@import url("../src/css/font.css");html,body,pre,textarea{font-family:'Noto Serif SC'}html{background-color:#000;touch-action:none;}body{margin:0;display:flex;justify-content:center;align-items:center;height:100vh;position:relative;overflow:hidden;touch-action:none;}.span-container{position:absolute;bottom:10px;right:10px;background:plum;z-index:999}.span-container span{margin-bottom:5px;padding:0 10px;cursor:pointer}.hide{opacity:.2!important}#f{display:none}`;
 
     const baseTag = `<base href="${window.location.href}">`;
-    const viewportMeta = `<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"/>`;
+    // const viewportMeta = `<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"/>`;
+    const viewportMeta = `<meta name="viewport" content="width=1024, viewport-fit=cover" />`;
     let htmlStr = '';
 
     if (type === 'image') {
@@ -3433,6 +3433,7 @@ async function showChangelog() {
         content.id = 'changelog-content';
         popup.append(header, content);
         document.body.appendChild(popup);
+        document.getElementById('stage').appendChild(popup);
 
         const autoShowCb = $('#auto-show-changelog-cb');
         if (store.auto_show_changelog === null || store.auto_show_changelog === undefined) {
@@ -3709,7 +3710,7 @@ const ProtocolUIFactory = {
                          <div class="proto-btn-group">${config.buttons}<button class="proto-btn-cancel">返回</button></div>`;
 
         overlay.appendChild(box);
-        document.body.appendChild(overlay);
+        document.getElementById('stage').appendChild(overlay);
 
         const lockButtons = (text) => {
             box.querySelectorAll('button').forEach(btn => {
@@ -4113,7 +4114,7 @@ const ExcerptsUIManager = {
             </div>
         </div>`;
 
-        document.body.insertAdjacentHTML('beforeend', html);
+        document.getElementById('stage').insertAdjacentHTML('beforeend', html);
         this.bindPanelEvents();
     },
 
@@ -4615,12 +4616,12 @@ function initDueTasksPingPong() {
         <div class="tp-btn" data-btn="zoom_out" style="flex:1; font-size:18px!important; font-weight:bold; display:flex; align-items:center; justify-content:center; color:#cfd3dc;">-</div>
     </div>
     <div class="tp-col-buttons" style="width: 20%; min-width: 64px; display: flex; flex-direction: column;">
-        <div class="tp-btn" data-btn="select_toggle" style="flex:1; border-bottom: 1px solid var(--tp-line); display:flex; align-items:center; justify-content:center; color:#cfd3dc; font-size:12px;">框选</div>
-        <div class="tp-btn" data-btn="drag_toggle" style="flex:1; border-bottom: 1px solid var(--tp-line); display:flex; align-items:center; justify-content:center; color:#cfd3dc; font-size:12px;">拖拽</div>
-        <div class="tp-btn" data-btn="dblclick" style="flex:1; border-bottom: 1px solid var(--tp-line); display:flex; align-items:center; justify-content:center; color:#cfd3dc; font-size:12px;">左双击</div>
-        <div class="tp-btn" data-btn="auxclick" style="flex:1; border-bottom: 1px solid var(--tp-line); display:flex; align-items:center; justify-content:center; color:#cfd3dc; font-size:12px;">中击</div>
-        <div class="tp-btn" data-btn="contextmenu" style="flex:1; display:flex; align-items:center; justify-content:center; color:#cfd3dc; font-size:12px;">右击</div>
-        <div class="tp-btn" data-btn="toggle_log" style="flex:1; border-bottom: 1px solid var(--tp-line); display:flex; align-items:center; justify-content:center; color:#cfd3dc; font-size:12px;">日志</div>
+        <div class="tp-btn" data-btn="select_toggle" style="flex:1; border-bottom: 1px solid var(--tp-line); display:flex; align-items:center; justify-content:center; color:#cfd3dc;">框选</div>
+        <div class="tp-btn" data-btn="drag_toggle" style="flex:1; border-bottom: 1px solid var(--tp-line); display:flex; align-items:center; justify-content:center; color:#cfd3dc;">拖拽</div>
+        <div class="tp-btn" data-btn="dblclick" style="flex:1; border-bottom: 1px solid var(--tp-line); display:flex; align-items:center; justify-content:center; color:#cfd3dc;">左双击</div>
+        <div class="tp-btn" data-btn="auxclick" style="flex:1; border-bottom: 1px solid var(--tp-line); display:flex; align-items:center; justify-content:center; color:#cfd3dc;">中击</div>
+        <div class="tp-btn" data-btn="contextmenu" style="flex:1; display:flex; align-items:center; justify-content:center; color:#cfd3dc;">右击</div>
+        <div class="tp-btn" data-btn="toggle_log" style="flex:1; border-bottom: 1px solid var(--tp-line); display:flex; align-items:center; justify-content:center; color:#cfd3dc;">日志</div>
     </div>
     `;
 
