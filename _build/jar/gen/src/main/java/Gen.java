@@ -107,23 +107,47 @@ public class Gen {
     /** 避免 OAuth 等再往控制台写，减少对 CMD 的占用 */
     private static void detachConsoleIo() {
         try {
-            File logDir = new File("logs");
-            if (!logDir.exists()) {
-                logDir.mkdirs();
-            }
-            PrintStream ps = new PrintStream(
-                    new FileOutputStream(new File(logDir, "tray-console.log"), true),
-                    true,
-                    "UTF-8");
-            System.setOut(ps);
-            System.setErr(ps);
+            // 接管 System.out，通过 logger.info 输出
+            PrintStream outStream = new PrintStream(new java.io.OutputStream() {
+                private final java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
+
+                @Override
+                public void write(int b) {
+                    if (b == '\n') {
+                        String line = baos.toString();
+                        baos.reset();
+                        if (!line.trim().isEmpty()) {
+                            logger.info("[STDOUT] {}", line);
+                        }
+                    } else if (b != '\r') {
+                        baos.write(b);
+                    }
+                }
+            }, true, "UTF-8");
+
+            // 接管 System.err，通过 logger.error 输出
+            PrintStream errStream = new PrintStream(new java.io.OutputStream() {
+                private final java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
+
+                @Override
+                public void write(int b) {
+                    if (b == '\n') {
+                        String line = baos.toString();
+                        baos.reset();
+                        if (!line.trim().isEmpty()) {
+                            logger.error("[STDERR] {}", line);
+                        }
+                    } else if (b != '\r') {
+                        baos.write(b);
+                    }
+                }
+            }, true, "UTF-8");
+
+            System.setOut(outStream);
+            System.setErr(errStream);
+            
         } catch (Exception e) {
-            try {
-                PrintStream nul = new PrintStream(new FileOutputStream("NUL"));
-                System.setOut(nul);
-                System.setErr(nul);
-            } catch (Exception ignored) {
-            }
+            logger.warn("配置控制台重定向到 Logger 失败: {}", e.toString());
         }
     }
 }

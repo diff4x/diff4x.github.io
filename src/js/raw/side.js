@@ -481,7 +481,7 @@ function click_func() {
 function copyToClipboard(text) {
     text = text.replace(/\[(?:Mark|UnMark)\]/g, "").trim();
 
-    function fallbackCopy(s) {
+    function legacyCopy(s) {
         const ta = document.createElement("textarea");
         ta.value = s;
         ta.style.position = "fixed";
@@ -492,15 +492,20 @@ function copyToClipboard(text) {
         ta.focus();
         ta.select();
         ta.setSelectionRange(0, s.length);
-        try { document.execCommand("copy"); }
-        catch (err) { console.warn("复制失败", err); }
+
+        let ok = false;
+        try { ok = document.execCommand("copy"); }
+        catch (err) { console.warn("execCommand 复制失败", err); }
         document.body.removeChild(ta);
+        return ok;
     }
 
+    if (legacyCopy(text)) return;
+
     if (navigator.clipboard && window.isSecureContext) {
-        navigator.clipboard.writeText(text).catch(() => fallbackCopy(text));
-    } else {
-        fallbackCopy(text);
+        navigator.clipboard.writeText(text).catch(err => {
+            console.warn("复制失败", err);
+        });
     }
 }
 

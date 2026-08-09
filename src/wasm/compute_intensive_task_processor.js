@@ -38,6 +38,19 @@ export function find_content_matches(global_text, keyword, noise_level) {
 }
 
 /**
+ * @param {string} global_text
+ * @param {any} keywords_val
+ * @param {number} noise_level
+ * @returns {any}
+ */
+export function find_content_matches_multi(global_text, keywords_val, noise_level) {
+    const ptr0 = passStringToWasm0(global_text, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.find_content_matches_multi(ptr0, len0, addHeapObject(keywords_val), noise_level);
+    return takeObject(ret);
+}
+
+/**
  * @param {string} text
  * @returns {string}
  */
@@ -69,6 +82,16 @@ export function search(keyword, noise_level) {
     const ptr0 = passStringToWasm0(keyword, wasm.__wbindgen_export, wasm.__wbindgen_export2);
     const len0 = WASM_VECTOR_LEN;
     const ret = wasm.search(ptr0, len0, noise_level);
+    return takeObject(ret);
+}
+
+/**
+ * @param {any} keywords_val
+ * @param {number} noise_level
+ * @returns {any}
+ */
+export function search_multi(keywords_val, noise_level) {
+    const ret = wasm.search_multi(addHeapObject(keywords_val), noise_level);
     return takeObject(ret);
 }
 

@@ -55,10 +55,18 @@ let comments_first_flag = false;
 let records = [];
 let totalCount = 0;
 
+
+import('./synonyms.js').then(module => {
+    window.top.expandQuery = module.expandQuery;
+}).catch(err => {
+    console.warn("⚠️ 近义词扩展模块加载失败，将降级为无近义词模式:", err);
+});
+
 import('../wasm/compute_intensive_task_processor.min.js').then(async (wasmModule) => {
     await wasmModule.default();
     window.sharedWasm.format_markdown = wasmModule.format_markdown;
     window.sharedWasm.find_content_matches = wasmModule.find_content_matches;
+    window.sharedWasm.find_content_matches_multi = wasmModule.find_content_matches_multi; // 新增注入
     window.sharedWasm.compute_lcs_diff = wasmModule.compute_lcs_diff;
     window.sharedWasm.ready = true;
 }).catch(err => {
@@ -686,53 +694,41 @@ function createStore(defaults = {}) {
                         try {
                             const meta = await store.SearchCache.getMeta(kw);
                             return (meta && meta.exact) ? meta.results : null;
-                        } catch (e) {
-                            return null;
-                        }
+                        } catch (e) { return null; }
                     },
-
                     getMeta: async (kw) => {
                         try {
                             const normKw = normalizeKeyword(kw);
                             if (!normKw) return null;
-
                             let res = await dbProxy.get('search_cache', normKw);
-                            if (res) return { results: res, exact: true, sourceKey: normKw };
-
+                            if (res) {
+                                return { results: res, exact: true, sourceKey: normKw };
+                            }
+                            
                             const keys = await dbProxy.getAllKeys('search_cache');
                             const matchingKeys = keys.filter(k => typeof k === 'string' && normKw.startsWith(k) && k.length > 2);
-
                             if (matchingKeys.length > 0) {
                                 matchingKeys.sort((a, b) => b.length - a.length);
                                 const bestKey = matchingKeys[0];
                                 const broaderResults = await dbProxy.get('search_cache', bestKey);
-                                if (broaderResults && broaderResults.length > 0) {
-                                    return { results: broaderResults, exact: false, sourceKey: bestKey };
+                                if (broaderResults && broaderResults.results.length > 0) {
+                                    return { results: broaderResults.results, exact: false, sourceKey: bestKey };
                                 }
                             }
-
                             return null;
-                        } catch (e) {
-                            return null;
-                        }
+                        } catch (e) { return null; }
                     },
-
                     set: async (kw, results) => {
                         try {
                             const normKw = normalizeKeyword(kw);
                             if (!normKw) return;
-
                             await dbProxy.put('search_cache', normKw, results);
                             const keys = await dbProxy.getAllKeys('search_cache');
                             if (keys.length > 500) {
                                 const keysToDelete = keys.slice(0, keys.length - 500);
-                                for (let k of keysToDelete) {
-                                    await dbProxy.delete('search_cache', k);
-                                }
+                                for (let k of keysToDelete) await dbProxy.delete('search_cache', k);
                             }
-                        } catch (e) {
-                            console.warn("IDB 缓存写入失败", e);
-                        }
+                        } catch (e) { }
                     },
 
                     remove: async (kw) => {
@@ -1563,11 +1559,6 @@ function search_box() {
 
             await store.SearchCache.remove(keywordToDelete);
 
-            searchWorker.postMessage({
-                type: 'SEARCH',
-                payload: { keyword: kw, token: currentToken, noise: Number(store.noise_level ?? 5) }
-            });
-
             const currentVal = $("#searchInput").value.trim();
             if (currentVal !== "") {
                 await updateAutocompleteSuggestions(currentVal);
@@ -1739,38 +1730,44 @@ function search_box() {
             const keyword = window._currentRenderedKeyword || elSearchInput.value.trim();
 
             const escapeRegExp = (string) => string.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-            const buildSnippetRegex = (kw) => {
-                const cleanKw = kw.replace(/\s+/g, "");
-                const kwLen = cleanKw.length;
-                const tokens = cleanKw.split("").map(c => escapeRegExp(c));
+            
+            const expandQueryFn = window.top.expandQuery || ((kw) => ({ variants: [] }));
+            const { variants } = expandQueryFn(keyword);
+            const allKeywords = [keyword, ...variants];
 
-                const baseNoise = Number(store.noise_level ?? 5);
-                const effectiveNoise = kwLen > 25 ? 0 : baseNoise;
+            const buildSnippetRegexMulti = (kws) => {
+                const parts = kws.map(kw => {
+                    const cleanKw = kw.replace(/\s+/g, "");
+                    const kwLen = cleanKw.length;
+                    const tokens = cleanKw.split("").map(c => escapeRegExp(c));
+                    const baseNoise = Number(store.noise_level ?? 5);
+                    const effectiveNoise = kwLen > 25 ? 0 : baseNoise;
+                    
+                    return effectiveNoise === 0 
+                        ? tokens.join("\\s*") 
+                        : tokens.join(`\\s*(?:\\S\\s*){0,${effectiveNoise}}?`);
+                });
+                return new RegExp(`(${parts.join('|')})`, 'gi');
+            };
 
-                if (effectiveNoise === 0) {
-                    return new RegExp(`(${tokens.join("\\s*")})`, 'gi');
-                } else {
-                    return new RegExp(`(${tokens.join(`\\s*(?:\\S\\s*){0,${effectiveNoise}}?`)})`, 'gi');
+            const getMatchNoise = (rawMatchText) => {
+                const cleanMatchLen = rawMatchText.replace(/\s+/g, "").length;
+                let bestNoise = 999;
+                for (const kw of allKeywords) {
+                    const cleanKwLen = kw.replace(/\s+/g, "").length;
+                    const noise = cleanMatchLen - cleanKwLen;
+                    if (noise >= 0 && noise < bestNoise) {
+                        bestNoise = noise;
+                    }
                 }
+                return bestNoise === 999 ? 0 : bestNoise;
             };
 
             if (resultData && resultData.snippets && resultData.snippets.length > 0) {
                 previewBox.style.display = 'flex';
                 header.style.color = '#abb2bf';
 
-                let displayCount = resultData.snippets.length;
-                let countStr = displayCount == 1 ? `1 snippet` : `${displayCount} snippets`;
-
-                header.innerHTML = `
-                    <div style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
-                        <span style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 75%;">${resultData.title}</span>
-                        <span style="color: #61afef; font-size: 11px; white-space: nowrap;">${countStr}</span>
-                    </div>
-                `;
-
-                const hlRegex = buildSnippetRegex(keyword, true);
-                const cleanKwLen = keyword.replace(/\s+/g, "").length;
-                const maxNoise = Number(store.noise_level ?? 5);
+                const hlRegex = buildSnippetRegexMulti(allKeywords);
 
                 let snipsWithNoise = resultData.snippets.map(snip => {
                     const text = typeof snip === 'string' ? snip : (snip && (snip.text || snip.snip)) || '';
@@ -1778,8 +1775,7 @@ function search_box() {
                     let match;
                     hlRegex.lastIndex = 0;
                     while ((match = hlRegex.exec(text)) !== null) {
-                        const cleanMatchLen = match[0].replace(/\s+/g, "").length;
-                        const noise = Math.max(0, cleanMatchLen - cleanKwLen);
+                        const noise = getMatchNoise(match[0]);
                         if (noise < minNoise) minNoise = noise;
                     }
                     return { text, noise: minNoise };
@@ -1792,8 +1788,8 @@ function search_box() {
 
                 snipsWithNoise.sort((a, b) => a.noise - b.noise);
 
-                displayCount = snipsWithNoise.length;
-                countStr = displayCount == 1 ? `1 snippet` : `${displayCount} snippets`;
+                let displayCount = snipsWithNoise.length;
+                let countStr = displayCount == 1 ? `1 snippet` : `${displayCount} snippets`;
                 header.innerHTML = `
                     <div style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
                         <span style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 75%;">${resultData.title}</span>
@@ -1823,7 +1819,7 @@ function search_box() {
                         }
                         let last = merged[merged.length - 1];
                         if (iv.start <= last.end) {
-                            last.end = Math.max(last.end, iv.end); // 区间融合
+                            last.end = Math.max(last.end, iv.end); 
                         } else {
                             merged.push(iv);
                         }
@@ -1838,8 +1834,7 @@ function search_box() {
                         let rawMatch = item.text.substring(m.start, m.end);
                         let safeMatch = rawMatch.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
-                        let cleanMatchLen = rawMatch.replace(/\s+/g, "").length;
-                        let noise = Math.max(0, cleanMatchLen - cleanKwLen);
+                        let noise = getMatchNoise(rawMatch);
                         let alpha = noise === 0 ? 0.80 : Math.max(0.3, 0.80 - noise * 0.1);
                         let textColor = '#111111';
                         let fontWeight = noise <= 1 ? 'bold' : 'normal';
@@ -2049,10 +2044,20 @@ async function search(rawKeyword) {
             console.warn("搜索引擎尚未就绪");
             return;
         }
+
+        const expandQueryFn = window.top.expandQuery || ((kw) => ({ variants: [] }));
+        const { variants } = expandQueryFn(kw);
+
         searchWorker.postMessage({
             type: 'SEARCH',
-            payload: { keyword: kw, token: currentToken, noise: Number(store.noise_level ?? 5) }
+            payload: { 
+                keyword: kw, 
+                noise: Number(store.noise_level ?? 5),
+                token: currentToken, 
+                searchKeywords: [kw, ...variants]
+            }
         });
+
     } catch (err) {
         console.error("web worker 通信失败", err);
     }
@@ -4672,10 +4677,6 @@ function initDueTasksPingPong() {
     }
 
     function clampCursor() {
-        // NOTE: elementFromPoint uses a half-open range [0, size). Clamping to the
-        // exact edge (stage.clientWidth / clientHeight) produces a screen point that is
-        // technically out-of-bounds, so resolveHit() gets null and the wheel/hover event
-        // is silently dropped -> "只能向上跟随不能向下跟随". Keep a 1px safety margin.
         cursor.x = Math.max(0, Math.min(stage.clientWidth - 1, cursor.x));
         cursor.y = Math.max(0, Math.min(stage.clientHeight - 1, cursor.y));
     }
@@ -4952,9 +4953,8 @@ function initDueTasksPingPong() {
         activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
 
         if (moveState && e.pointerId === moveState.pointerId) {
-            // [新增] 计算时间差
             const now = performance.now();
-            const dt = Math.max(1, now - moveState.lastTime); // 避免除以 0
+            const dt = Math.max(1, now - moveState.lastTime);
             moveState.lastTime = now;
 
             const dx = e.clientX - moveState.lastX;
@@ -5166,12 +5166,10 @@ function initDueTasksPingPong() {
     applyTransform();
     updateCursorVisual();
 
-    // --- 注入移动端控制台 (跨 Iframe 全局增强版) ---
     const mobileConsole = document.createElement('div');
     mobileConsole.style.cssText = 'position:fixed; bottom:var(--tp-height); left:0; width:100%; height:25vh; background:rgba(0,0,0,0.85); color:#0f0; font-family:monospace; font-size:11px; overflow-y:auto; z-index:999999; display:none; padding:8px; box-sizing:border-box; word-break:break-all; pointer-events:auto;';
     document.body.appendChild(mobileConsole);
 
-    // 1. 在顶层窗口挂载全局日志接收器
     window.top._logToMobile = function (level, args) {
         const msg = document.createElement('div');
         msg.style.color = level === 'error' ? '#ff4d4f' : level === 'warn' ? '#faad14' : (level === 'info' ? '#1890ff' : '#52c41a');
@@ -5191,15 +5189,12 @@ function initDueTasksPingPong() {
         mobileConsole.scrollTop = mobileConsole.scrollHeight;
     };
 
-    // 2. 核心劫持函数，可作用于任意 Window 对象
     function hijackWindow(win) {
-        // 防止重复注入
         if (!win || win._consoleHijacked) return;
         win._consoleHijacked = true;
 
         const _originals = { log: win.console.log, error: win.console.error, warn: win.console.warn, info: win.console.info };
 
-        // A. 劫持标准打印 (捕获 PDF.js 的标准输出)
         ['log', 'error', 'warn', 'info'].forEach(method => {
             if (!win.console[method]) return;
             win.console[method] = function (...args) {
@@ -5208,7 +5203,6 @@ function initDueTasksPingPong() {
             };
         });
 
-        // B. 劫持 console.time / timeEnd (精准捕获截图中 "loadScripts 总耗时")
         const _timeMap = new Map();
         const _origTime = win.console.time;
         const _origTimeEnd = win.console.timeEnd;
@@ -5227,21 +5221,18 @@ function initDueTasksPingPong() {
             };
         }
 
-        // C. 捕获全局运行时错误和静态资源加载失败 (捕获截图中 favicon 404 Not Found)
         win.addEventListener('error', function (event) {
             if (event.target && (event.target.tagName === 'IMG' || event.target.tagName === 'SCRIPT' || event.target.tagName === 'LINK')) {
                 if (window.top && window.top._logToMobile) window.top._logToMobile('error', ['Resource 404/Error:', event.target.src || event.target.href]);
             } else {
                 if (window.top && window.top._logToMobile) window.top._logToMobile('error', ['Uncaught Error:', event.message, 'at', event.filename, ':' + event.lineno]);
             }
-        }, true); // true 开启捕获阶段，拦截底层资源报错
+        }, true);
 
-        // D. 捕获未处理的 Promise 拒绝 (捕获截图中 PDF.js 的 Uncaught in promise Error: Bad end offset)
         win.addEventListener('unhandledrejection', function (event) {
             if (window.top && window.top._logToMobile) window.top._logToMobile('error', ['Unhandled Promise Rejection:', event.reason]);
         });
 
-        // E. 简单劫持 Fetch API (捕获 JS 发起的网络请求 404/500)
         const _origFetch = win.fetch;
         if (_origFetch) {
             win.fetch = function (...args) {
@@ -5258,21 +5249,16 @@ function initDueTasksPingPong() {
         }
     }
 
-    // 3. 劫持顶层窗口自身 (index.html)
     hijackWindow(window);
 
-    // 4. 劫持当前已有的及未来切换内容加载的 Iframe (例如 pdf.html 载入 content Iframe 时)
     document.querySelectorAll('iframe').forEach(ifr => {
-        // 尝试劫持已加载完成的
         try { hijackWindow(ifr.contentWindow); } catch (e) { }
 
-        // 监听 navigation 导致的重载，每次载入新的 HTML 都要重新注入
         ifr.addEventListener('load', () => {
             try { hijackWindow(ifr.contentWindow); } catch (e) { }
         });
     });
 
-    // 5. 绑定 UI 开关
     const logBtn = panel.querySelector('[data-btn="toggle_log"]');
     if (logBtn) {
         logBtn.addEventListener('pointerup', () => {

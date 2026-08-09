@@ -1,4 +1,4 @@
-import init, { set_data, search, build_flat_data } from '../wasm/compute_intensive_task_processor.min.js';
+import init, { set_data, search_multi, build_flat_data } from '../wasm/compute_intensive_task_processor.min.js';
 
 let wasmReady = false;
 let messageQueue = [];
@@ -58,7 +58,10 @@ function processMessage(data) {
         case 'SEARCH':
             const kw = payload.keyword;
             const noise = payload.noise !== undefined ? payload.noise : 5;
-            const results = search(kw, noise);
+            
+            const searchKeywords = payload.searchKeywords || [kw]; 
+            
+            const results = search_multi(searchKeywords, noise);
             
             let inheritFrom = null;
             if (lastSavedKw && kw.startsWith(lastSavedKw)) {
@@ -73,6 +76,7 @@ function processMessage(data) {
                 inheritFrom
             });
             break;
+
 
         case 'COMMIT_CURSOR':
             const newKw = payload.keyword;

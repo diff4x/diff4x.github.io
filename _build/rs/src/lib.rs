@@ -217,8 +217,8 @@ fn count_sliding_matches(text: &str, kw_chars: &[char], noise_level: usize) -> (
     }).collect();
 
     let text_len = text_chars.len();
-    let mut count = 0;
-    let mut raw_hits = Vec::new();
+    
+    let mut all_hits = Vec::new(); 
     let mut i = 0;
 
     while i < text_len {
@@ -258,17 +258,32 @@ fn count_sliding_matches(text: &str, kw_chars: &[char], noise_level: usize) -> (
         if valid_match {
             if let Some(start_byte) = match_start_byte {
                 if start_byte != end_byte {
-                    count += 1;
-                    raw_hits.push((start_byte, end_byte));
+                    all_hits.push((start_byte, end_byte));
                 }
             }
-            i = j;
+            i += 1; // Removed greedy jump
         } else {
             i += 1;
         }
     }
 
-    (count, kw_len, raw_hits)
+    let mut merged: Vec<(usize, usize)> = Vec::new(); 
+    
+    for hit in all_hits {
+        if let Some(last) = merged.last_mut() {
+            if hit.0 < last.1 {
+                let last_len = last.1 - last.0;
+                let hit_len = hit.1 - hit.0;
+                if hit_len < last_len {
+                    *last = hit; 
+                }
+                continue;
+            }
+        }
+        merged.push(hit);
+    }
+
+    (merged.len(), kw_len, merged)
 }
 
 fn execute_scan<'a>(pool: &'a [String], kw_chars: &[char], noise_level: usize, _kw_len: usize) -> Vec<SearchResult<'a>> {
@@ -658,4 +673,203 @@ fn expand_diff_ops(ops: &[DiffOp], offset: usize, out: &mut Vec<DiffLineOp>) {
             }
         }
     }
+}
+
+
+// 新增：多关键词底层合并与去重逻辑
+fn get_multi_matches(_text: &str, text_chars: &[(usize, usize, char)], keywords: &[Vec<char>], noise_level: usize) -> Vec<(usize, usize, usize)> {
+    let mut all_hits = Vec::new();
+    
+    for kw_chars in keywords {
+        let eff_noise = if kw_chars.len() > 25 { 0 } else { noise_level };
+        let kw_len = kw_chars.len();
+        if kw_len == 0 { continue; }
+        
+        let mut i = 0;
+        let text_len = text_chars.len();
+        
+        while i < text_len {
+            let mut k_idx = 0;
+            let mut j = i;
+            let mut current_gap = 0;
+            let mut total_noise = 0;
+            let mut match_start_byte: Option<usize> = None;
+            let mut end_byte = text_chars[i].0;
+
+            while j < text_len && k_idx < kw_len {
+                let (byte_idx, char_len, ch) = text_chars[j];
+                if ch == kw_chars[k_idx] {
+                    if k_idx == 0 { match_start_byte = Some(byte_idx); }
+                    k_idx += 1;
+                    current_gap = 0;
+                    end_byte = byte_idx + char_len;
+                } else if !ch.is_whitespace() {
+                    current_gap += 1;
+                    total_noise += 1;
+                    if current_gap > eff_noise { break; }
+                }
+                j += 1;
+                if k_idx == kw_len { break; }
+            }
+
+            if k_idx == kw_len {
+                if let Some(start_byte) = match_start_byte {
+                    if start_byte != end_byte {
+                        all_hits.push((start_byte, end_byte, total_noise));
+                    }
+                }
+                i += 1; 
+            } else {
+                i += 1;
+            }
+        }
+    }
+
+    all_hits.sort_by_key(|h| h.0);
+    let mut merged = Vec::<(usize, usize, usize)>::new();
+    for hit in all_hits {
+        if let Some(last) = merged.last_mut() {
+            if hit.0 < last.1 { 
+                let last_len = last.1 - last.0;
+                let hit_len = hit.1 - hit.0;
+                if hit.2 < last.2 || (hit.2 == last.2 && hit_len < last_len) {
+                    *last = hit; 
+                }
+                continue;
+            }
+        }
+        merged.push(hit);
+    }
+    merged
+}
+
+#[wasm_bindgen]
+pub fn search_multi(keywords_val: JsValue, noise_level: usize) -> JsValue {
+    let keywords: Vec<String> = serde_wasm_bindgen::from_value(keywords_val).unwrap_or_default();
+    if keywords.is_empty() {
+        return serde_wasm_bindgen::to_value(&Vec::<SearchResult>::new()).unwrap();
+    }
+    
+    let kw_chars_list: Vec<Vec<char>> = keywords.iter()
+        .map(|k| k.chars().filter(|c| !c.is_whitespace()).collect())
+        .filter(|v: &Vec<char>| !v.is_empty())
+        .collect();
+
+    if kw_chars_list.is_empty() {
+        return serde_wasm_bindgen::to_value(&Vec::<SearchResult>::new()).unwrap();
+    }
+
+    GLOBAL_DATA.with(|data| {
+        let pool = data.borrow();
+        if pool.is_empty() {
+            return serde_wasm_bindgen::to_value(&Vec::<SearchResult>::new()).unwrap();
+        }
+
+        let mut results = Vec::new();
+        
+        for i in (0..pool.len()).step_by(4) {
+            if i + 3 >= pool.len() { break; }
+            let raw_content = &pool[i + 1];
+            let path = &pool[i + 2];
+            let res_type = &pool[i + 3];
+            
+            let title_start = path.rfind('/').map(|idx| idx + 1).unwrap_or(0);
+            let title = &path[title_start..]; 
+            
+            let mut is_local_only = false;
+            let searchable_content = if raw_content.starts_with("localOnly") {
+                is_local_only = true;
+                &raw_content[9..] 
+            } else { raw_content };
+
+            let title_chars: Vec<_> = title.char_indices().map(|(b, c)| (b, c.len_utf8(), c)).collect();
+            let title_merged = get_multi_matches(title, &title_chars, &kw_chars_list, noise_level);
+            
+            let content_chars: Vec<_> = searchable_content.char_indices().map(|(b, c)| (b, c.len_utf8(), c)).collect();
+            let content_merged = get_multi_matches(searchable_content, &content_chars, &kw_chars_list, noise_level);
+            
+            let mut count = title_merged.len() + content_merged.len();
+            let score = (title_merged.len() * 5000) + (content_merged.len() * 100);
+
+            if count == 0 && res_type != &"html" && res_type != &"image" {
+                let path_chars: Vec<_> = path.char_indices().map(|(b, c)| (b, c.len_utf8(), c)).collect();
+                count = get_multi_matches(path, &path_chars, &kw_chars_list, noise_level).len();
+            }
+
+            if count == 0 { continue; }
+
+            let raw_hits_for_snippets: Vec<(usize, usize)> = content_merged.iter().map(|h| (h.0, h.1)).collect();
+            let snippets = if !content_merged.is_empty() {
+                extract_snippets_optimized(searchable_content, &raw_hits_for_snippets)
+            } else { Vec::new() };
+
+            results.push(SearchResult {
+                title, count, score, res_type, path, local_only: is_local_only, snippets, is_tolerant_match: noise_level > 0,
+            });
+        }
+
+        results.sort_by(|a, b| b.score.cmp(&a.score).then(b.count.cmp(&a.count)).then(a.title.cmp(&b.title)));
+        serde_wasm_bindgen::to_value(&results).unwrap()
+    })
+}
+
+#[wasm_bindgen]
+pub fn find_content_matches_multi(global_text: &str, keywords_val: JsValue, noise_level: usize) -> JsValue {
+    let keywords: Vec<String> = serde_wasm_bindgen::from_value(keywords_val).unwrap_or_default();
+    
+    let empty_result = || {
+        let res = Object::new();
+        let _ = js_sys::Reflect::set(&res, &JsValue::from_str("count"), &JsValue::from_f64(0.0));
+        let _ = js_sys::Reflect::set(&res, &JsValue::from_str("matches"), &Uint32Array::new_with_length(0));
+        let _ = js_sys::Reflect::set(&res, &JsValue::from_str("snippets"), &serde_wasm_bindgen::to_value(&Vec::<String>::new()).unwrap());
+        let _ = js_sys::Reflect::set(&res, &JsValue::from_str("isTolerantMatch"), &JsValue::from_bool(false));
+        res.into()
+    };
+
+    if keywords.is_empty() || global_text.is_empty() { return empty_result(); }
+
+    let kw_chars_list: Vec<Vec<char>> = keywords.iter()
+        .map(|k| k.chars().filter(|c| !c.is_whitespace()).collect())
+        .filter(|v: &Vec<char>| !v.is_empty())
+        .collect();
+
+    if kw_chars_list.is_empty() { return empty_result(); }
+
+    let mut utf16_mapping = vec![0; global_text.len() + 1];
+    let mut utf16_len = 0;
+    for (byte_idx, ch) in global_text.char_indices() {
+        utf16_mapping[byte_idx] = utf16_len;
+        utf16_len += ch.len_utf16();
+    }
+    utf16_mapping[global_text.len()] = utf16_len;
+
+    let text_chars: Vec<(usize, usize, char)> = global_text.char_indices().map(|(byte_idx, ch)| (byte_idx, ch.len_utf8(), ch)).collect();
+    
+    let merged_hits = get_multi_matches(global_text, &text_chars, &kw_chars_list, noise_level);
+    
+    let mut raw_match_data = Vec::new();
+    let mut raw_hits_for_snippets = Vec::new();
+
+    for &(start_byte, end_byte, noise) in &merged_hits {
+        let utf16_start = utf16_mapping.get(start_byte).copied().unwrap_or(0);
+        let utf16_end = utf16_mapping.get(end_byte).copied().unwrap_or(utf16_len);
+        raw_match_data.push(utf16_start as u32);
+        raw_match_data.push(utf16_end as u32);
+        raw_match_data.push(noise as u32);
+        raw_hits_for_snippets.push((start_byte, end_byte));
+    }
+
+    let count = merged_hits.len();
+    if count == 0 { return empty_result(); }
+
+    let matches_typed_array = Uint32Array::new_with_length(raw_match_data.len() as u32);
+    matches_typed_array.copy_from(&raw_match_data);
+    let snippets = extract_snippets_optimized(global_text, &raw_hits_for_snippets);
+
+    let res = Object::new();
+    let _ = js_sys::Reflect::set(&res, &JsValue::from_str("count"), &JsValue::from_f64(count as f64));
+    let _ = js_sys::Reflect::set(&res, &JsValue::from_str("matches"), &matches_typed_array);
+    let _ = js_sys::Reflect::set(&res, &JsValue::from_str("snippets"), &serde_wasm_bindgen::to_value(&snippets).unwrap());
+    let _ = js_sys::Reflect::set(&res, &JsValue::from_str("isTolerantMatch"), &JsValue::from_bool(noise_level > 0));
+    res.into()
 }

@@ -6,7 +6,7 @@
   <title>操作系统</title>
  </head>
  <body>
-  <span id="anchor">20260807180715-21.技巧</span>
+  <span id="anchor">20260808105000-21.技巧</span>
   <pre>
 # pixel在中国地区的IMS注册
 2G,3G时代,手机里有两套网络
@@ -621,6 +621,18 @@ API & Services
         Data Access
             scope 增加
                 https://www.googleapis.com/auth/tasks.readonly
+
+# git
+## 已push的commit尖端合并
+--soft 不会丢代码，它只是把这几个 commit 撤掉，同时把所有改动放到暂存区
+<code sh>
+# 截止于
+git reset --soft c51665f^
+git commit -m "sth"
+# 检查
+git log --oneline -20
+git push --force-with-lease
+</code>
 </pre>
  </body>
 </html>

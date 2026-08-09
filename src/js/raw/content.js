@@ -68,13 +68,24 @@ let _diffMinimapResizeBound = false;
 let _diffMinimapResizeTimer = null;
 let _diffMinimapActivePre = null;
 
+let _searchMinimapEl = null;
+let _searchMinimapResizeBound = false;
+let _searchMinimapResizeTimer = null;
+let _searchMinimapResizeHandler = null;
+
+let find_content_matches_multi = null;
+
 const wasmInitPromise = (async () => {
-    if (window.top && window.top.sharedWasm && window.top.sharedWasm.ready) {
-        const sw = window.top.sharedWasm;
+    const resolveWasm = (sw) => {
         format_markdown = sw.format_markdown;
         find_content_matches = sw.find_content_matches;
+        find_content_matches_multi = sw.find_content_matches_multi; // 挂载 multi 接口
         compute_lcs_diff = sw.compute_lcs_diff;
         wasmEngineReady = true;
+    };
+
+    if (window.top && window.top.sharedWasm && window.top.sharedWasm.ready) {
+        resolveWasm(window.top.sharedWasm);
         return;
     }
 
@@ -82,11 +93,7 @@ const wasmInitPromise = (async () => {
         const check = setInterval(() => {
             if (window.top && window.top.sharedWasm && window.top.sharedWasm.ready) {
                 clearInterval(check);
-                const sw = window.top.sharedWasm;
-                format_markdown = sw.format_markdown;
-                find_content_matches = sw.find_content_matches;
-                compute_lcs_diff = sw.compute_lcs_diff;
-                wasmEngineReady = true;
+                resolveWasm(window.top.sharedWasm);
                 resolve();
             }
         }, 20);
@@ -171,6 +178,7 @@ BUS.addEventListener('message', (e) => {
                 window._searchMatchRanges.clear();
             }
             clearActiveSearchBorders();
+            hideSearchMinimap();
 
             const destroyBtn = document.getElementById("destroy");
             if (destroyBtn) {
@@ -372,7 +380,7 @@ function search() {
                 const cls = el.className || '';
                 if (
                     id === 'bar' || id === 'toc' || id === 'toc-list' || id === 's_nav' ||
-                    id === 'gotop' || id === 'diff-minimap' || id === 'diff-controls-wrapper' ||
+                    id === 'gotop' || id === 'diff-minimap' || id === 'search-minimap' || id === 'diff-controls-wrapper' ||
                     id === 'excerpt-pop-btn' ||
                     (typeof cls === 'string' && (
                         cls.includes('active-search-border') ||
@@ -403,7 +411,12 @@ function search() {
     }
 
     const noise = Number(store.noise_level ?? 5);
-    const resultObj = find_content_matches(globalText, rawKeyword, noise);
+
+    const expandQueryFn = window.top.expandQuery || ((kw) => ({ variants: [] }));
+    const { variants } = expandQueryFn(rawKeyword);
+    const allKeywords = [rawKeyword, ...variants];
+
+    const resultObj = find_content_matches_multi(globalText, allKeywords, noise);
 
     const totalMatches = resultObj.count || 0;
     const matchBuffer = resultObj.matches;
@@ -424,6 +437,7 @@ function search() {
     }
 
     if (matches.length === 0) {
+        hideSearchMinimap();
         emitEvent("LOCAL_SEARCH_RESULT", { keyword: rawKeyword, count: 0, title: document.title }, "index");
         return;
     }
@@ -542,6 +556,12 @@ function search() {
 
     let currentIndex = 0;
 
+    window._jumpToSearchIndex = (idx) => {
+        if (idx < 0 || idx >= totalMatches) return;
+        currentIndex = idx;
+        updateIndexDisplay();
+    };
+
     function updateIndexDisplay() {
         let indexDisplay = $("#indexDisplay");
         if (!indexDisplay) {
@@ -554,6 +574,7 @@ function search() {
             destroyButton.onclick = function () {
                 if (CSS.highlights) CSS.highlights.clear();
                 clearActiveSearchBorders();
+                hideSearchMinimap();
                 const nav = $("#s_nav");
                 if (nav) nav.innerHTML = "";
                 store.jump_from_search = "0";
@@ -577,7 +598,6 @@ function search() {
         if (currentGroupRanges.length > 0) {
             const fragment = document.createDocumentFragment();
 
-            // 新增：边框坐标消融处理（合并属于同一匹配索引的所有 DOM Rect）
             let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
             currentGroupRanges.forEach(range => {
                 const rect = range.getBoundingClientRect();
@@ -643,6 +663,7 @@ function search() {
     if (totalMatches > 0) {
         createNavigationButtons();
         updateIndexDisplay();
+        updateSearchMinimap();
     }
 }
 
@@ -663,7 +684,7 @@ function countMatchesEnhanced(kw) {
                 const cls = el.className || '';
                 if (
                     id === 'bar' || id === 'toc' || id === 'toc-list' || id === 's_nav' ||
-                    id === 'gotop' || id === 'diff-minimap' || id === 'diff-controls-wrapper' ||
+                    id === 'gotop' || id === 'diff-minimap' || id === 'search-minimap' || id === 'diff-controls-wrapper' ||
                     id === 'excerpt-pop-btn' ||
                     (typeof cls === 'string' && (
                         cls.includes('active-search-border') ||
@@ -685,7 +706,11 @@ function countMatchesEnhanced(kw) {
     }
 
     const noise = Number(store.noise_level ?? 5);
-    const resultObj = find_content_matches(globalText, kw, noise);
+    const expandQueryFn = window.top.expandQuery || ((keyword) => ({ variants: [] }));
+    const { variants } = expandQueryFn(kw);
+    const allKeywords = [kw, ...variants];
+
+    const resultObj = find_content_matches_multi(globalText, allKeywords, noise);
 
     return {
         count: resultObj.count,
@@ -1823,6 +1848,112 @@ function hideDiffMinimap() {
         window.removeEventListener('resize', _diffMinimapResizeHandler);
         _diffMinimapResizeBound = false;
     }
+}
+
+// ===== 搜索高亮 minimap（参考 diff minimap 的滚动条定位跳转实现）=====
+
+function ensureSearchMinimapEl() {
+    if (_searchMinimapEl && document.body.contains(_searchMinimapEl)) return _searchMinimapEl;
+
+    const el = document.createElement('div');
+    el.id = 'search-minimap';
+    el.style.cssText = `
+        position: fixed;
+        top: 0;
+        right: 0;
+        width: 20px;
+        height: 100vh;
+        z-index: 999;
+        pointer-events: none;
+        background: rgba(127, 127, 127, 0.08);
+        display: none;
+    `;
+    document.body.appendChild(el);
+    _searchMinimapEl = el;
+    return el;
+}
+
+function renderSearchMinimapMarks() {
+    const container = ensureSearchMinimapEl();
+    container.innerHTML = '';
+
+    if (!window._searchMatchRanges || window._searchMatchRanges.size === 0) {
+        container.style.display = 'none';
+        return;
+    }
+
+    const totalHeight = Math.max(document.documentElement.scrollHeight, document.body.scrollHeight, 1);
+    let markCount = 0;
+
+    window._searchMatchRanges.forEach((ranges, matchIndex) => {
+        let minTop = Infinity, maxBottom = -Infinity;
+
+        ranges.forEach(range => {
+            const rect = range.getBoundingClientRect();
+            if (rect.width === 0 && rect.height === 0) return; // 忽略不可见区间
+            const top = window.scrollY + rect.top;
+            const bottom = window.scrollY + rect.bottom;
+            minTop = Math.min(minTop, top);
+            maxBottom = Math.max(maxBottom, bottom);
+        });
+
+        if (minTop === Infinity) return;
+
+        const topRatio = minTop / totalHeight;
+        const heightRatio = (maxBottom - minTop) / totalHeight;
+
+        const mark = document.createElement('div');
+        mark.title = `匹配 ${matchIndex + 1}`;
+        mark.style.cssText = `
+            position: absolute;
+            left: 1px;
+            right: 1px;
+            top: ${topRatio * 100}%;
+            height: max(3px, ${heightRatio * 100}%);
+            background: rgba(255, 200, 0, 0.9);
+            border-radius: 2px;
+            pointer-events: auto;
+            cursor: pointer;
+            box-shadow: 0 0 0 1px rgba(0,0,0,0.15);
+        `;
+        mark.onclick = () => {
+            if (typeof window._jumpToSearchIndex === 'function') {
+                window._jumpToSearchIndex(matchIndex);
+            }
+        };
+        container.appendChild(mark);
+        markCount++;
+    });
+
+    container.style.display = markCount > 0 ? 'block' : 'none';
+}
+
+function updateSearchMinimap() {
+    renderSearchMinimapMarks();
+
+    if (!_searchMinimapResizeBound) {
+        _searchMinimapResizeHandler = () => {
+            if (!window._searchMatchRanges || window._searchMatchRanges.size === 0) return;
+            clearTimeout(_searchMinimapResizeTimer);
+            _searchMinimapResizeTimer = setTimeout(() => {
+                renderSearchMinimapMarks();
+            }, 150);
+        };
+        window.addEventListener('resize', _searchMinimapResizeHandler);
+        _searchMinimapResizeBound = true;
+    }
+}
+
+function hideSearchMinimap() {
+    if (_searchMinimapEl) {
+        _searchMinimapEl.innerHTML = '';
+        _searchMinimapEl.style.display = 'none';
+    }
+    if (_searchMinimapResizeBound) {
+        window.removeEventListener('resize', _searchMinimapResizeHandler);
+        _searchMinimapResizeBound = false;
+    }
+    window._jumpToSearchIndex = null;
 }
 
 function buildRenderedTokens(rawHtml) {

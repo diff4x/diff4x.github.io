@@ -1,6 +1,6 @@
-importScripts('/src/js/core-list.js?v=1786156665044');
+importScripts('/src/js/core-list.js?v=1786255089798');
 
-self.SW_VERSION = '1786156665044';
+self.SW_VERSION = '1786255089798';
 self.EMERGENCY = 'repair_command_id=2';
 
 const CACHE_NAME_CORE = 'core-cache-' + BUILD_VERSION;
@@ -116,6 +116,28 @@ self.addEventListener('install', event => {
             const meta = FILE_MANIFEST[url];
             const oldMeta = oldManifest[url];
 
+            if (url.endsWith('synonyms.js')) {
+                if (!oldMeta || oldMeta.hash !== meta.hash) {
+                    (async () => {
+                        try {
+                            const db = await new Promise((res, rej) => {
+                                const req = indexedDB.open('MainDB', 2);
+                                req.onsuccess = e => res(e.target.result);
+                                req.onerror = e => rej(e.target.error);
+                            });
+                            if (db.objectStoreNames.contains('search_cache')) {
+                                const tx = db.transaction('search_cache', 'readwrite');
+                                tx.objectStore('search_cache').clear();
+                                console.warn(`🧹 [SW] 检测到 ${url} 变更，已清空旧的 search_cache`);
+                            }
+                            db.close();
+                        } catch (err) {
+                            console.warn("⚠️ [SW] 清理 search_cache 失败:", err);
+                        }
+                    })();
+                }
+            }
+
             if (oldMeta && oldMeta.hash !== meta.hash && url.startsWith('/html/')) {
                 (async () => {
                     try {
@@ -227,7 +249,7 @@ self.addEventListener('install', event => {
 
             if (networkType === 'slow-2g' || networkType === '2g') {
                 dynamicConcurrency = 1;
-            } else if (networkType === '3g' || standaloneUpdates.length > 20) {
+            } else if (networkType === '3g' || standaloneUpdates.length > 21) {
                 dynamicConcurrency = 2;
             }
 
