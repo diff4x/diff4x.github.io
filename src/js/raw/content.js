@@ -1473,9 +1473,13 @@ async function initDiffUI() {
         ];
 
         const idb = await new Promise((resolve, reject) => {
-            const req = indexedDB.open('MainDB', 2);
+            const req = indexedDB.open('MainDB', 3);
             req.onupgradeneeded = (e) => {
                 const db = e.target.result;
+                if (!db.objectStoreNames.contains('chunks')) db.createObjectStore('chunks');
+                if (!db.objectStoreNames.contains('update_logs')) db.createObjectStore('update_logs', { autoIncrement: true });
+                if (!db.objectStoreNames.contains('search_cache')) db.createObjectStore('search_cache');
+                if (!db.objectStoreNames.contains('sys_state')) db.createObjectStore('sys_state');
                 if (!db.objectStoreNames.contains('html_snapshots')) db.createObjectStore('html_snapshots');
             };
             req.onsuccess = (e) => resolve(e.target.result);

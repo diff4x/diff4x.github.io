@@ -14,7 +14,7 @@
   - 摘抄管理
   - 状态快照
 - 工具链
-  - HTTP Server、Custom URL Protocol、Batch、Java、Rust、Git
+  - HTTP Server、Custom URL Protocol、Batch、Java、Rust、Git、Python、LLM
 - Web 平台
   - Vanilla JS、iframe、BroadcastChannel、postMessage、Proxy、localStorage、Service Worker、IndexedDB、Web Worker、WebAssembly、CSS Custom Highlight
 > Workflow designed by diff4x | Optimized or implemented by Gemini & ChatGPT & Claude & Grok

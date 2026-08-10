@@ -793,7 +793,7 @@ function createDBProxy(dbName, storeName) {
         if (initPromise) return initPromise;
 
         initPromise = new Promise((resolve, reject) => {
-            const request = indexedDB.open(dbName, 2);
+            const request = indexedDB.open(dbName, 3);
 
             request.onupgradeneeded = (e) => {
                 const db = e.target.result;

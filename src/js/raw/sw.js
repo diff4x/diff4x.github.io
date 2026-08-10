@@ -1,6 +1,6 @@
-importScripts('/src/js/core-list.js?v=1786255089798');
+importScripts('/src/js/core-list.js?v=1786340653076');
 
-self.SW_VERSION = '1786255089798';
+self.SW_VERSION = '1786340653076';
 self.EMERGENCY = 'repair_command_id=2';
 
 const CACHE_NAME_CORE = 'core-cache-' + BUILD_VERSION;
@@ -19,23 +19,53 @@ const getConnectionType = () => {
     return conn.effectiveType;
 };
 
-const writeLog = async (msg) => {
-    const dbName = 'MainDB';
-    try {
-        const db = await new Promise((resolve, reject) => {
-            const req = indexedDB.open(dbName, 2);
-            req.onupgradeneeded = (e) => {
-                const db = e.target.result;
-                if (!db.objectStoreNames.contains('chunks')) db.createObjectStore('chunks');
-                if (!db.objectStoreNames.contains('update_logs')) db.createObjectStore('update_logs', { autoIncrement: true });
-                if (!db.objectStoreNames.contains('search_cache')) db.createObjectStore('search_cache');
-                if (!db.objectStoreNames.contains('sys_state')) db.createObjectStore('sys_state');
-                if (!db.objectStoreNames.contains('html_snapshots')) db.createObjectStore('html_snapshots');
-            };
-            req.onsuccess = () => resolve(req.result);
-            req.onerror = () => reject();
-        });
+// 统一的 MainDB 打开入口 —— schema 只在这一处定义，
+// 避免出现某个调用点漏写 onupgradeneeded 导致 store 缺失/库被锁死的问题。
+const MAINDB_NAME = 'MainDB';
+const MAINDB_VERSION = 3;
+let mainDbOpenPromise = null;
 
+function openMainDB() {
+    if (mainDbOpenPromise) return mainDbOpenPromise;
+
+    mainDbOpenPromise = new Promise((resolve, reject) => {
+        const req = indexedDB.open(MAINDB_NAME, MAINDB_VERSION);
+
+        req.onupgradeneeded = (e) => {
+            const db = e.target.result;
+            if (!db.objectStoreNames.contains('chunks')) db.createObjectStore('chunks');
+            if (!db.objectStoreNames.contains('update_logs')) db.createObjectStore('update_logs', { autoIncrement: true });
+            if (!db.objectStoreNames.contains('search_cache')) db.createObjectStore('search_cache');
+            if (!db.objectStoreNames.contains('sys_state')) db.createObjectStore('sys_state');
+            if (!db.objectStoreNames.contains('html_snapshots')) db.createObjectStore('html_snapshots');
+        };
+
+        req.onsuccess = (e) => {
+            const db = e.target.result;
+            // 连接被其他 tab 的版本升级顶掉时，及时释放，避免占用僵死连接
+            db.onversionchange = () => {
+                db.close();
+                mainDbOpenPromise = null;
+            };
+            resolve(db);
+        };
+
+        req.onerror = (e) => {
+            mainDbOpenPromise = null;
+            reject(e.target.error);
+        };
+
+        req.onblocked = () => {
+            console.warn('⚠️ [SW] MainDB 升级被其他连接阻塞');
+        };
+    });
+
+    return mainDbOpenPromise;
+}
+
+const writeLog = async (msg) => {
+    try {
+        const db = await openMainDB();
         if (!db.objectStoreNames.contains('update_logs')) return;
         const tx = db.transaction('update_logs', 'readwrite');
         tx.objectStore('update_logs').add({ msg, ts: Date.now() });
@@ -120,17 +150,14 @@ self.addEventListener('install', event => {
                 if (!oldMeta || oldMeta.hash !== meta.hash) {
                     (async () => {
                         try {
-                            const db = await new Promise((res, rej) => {
-                                const req = indexedDB.open('MainDB', 2);
-                                req.onsuccess = e => res(e.target.result);
-                                req.onerror = e => rej(e.target.error);
-                            });
+                            const db = await openMainDB();
                             if (db.objectStoreNames.contains('search_cache')) {
                                 const tx = db.transaction('search_cache', 'readwrite');
                                 tx.objectStore('search_cache').clear();
                                 console.warn(`🧹 [SW] 检测到 ${url} 变更，已清空旧的 search_cache`);
                             }
-                            db.close();
+                            // 注意：db 是共享单例连接，这里不再手动 close()，
+                            // 否则会影响其他正在使用同一连接的调用方。
                         } catch (err) {
                             console.warn("⚠️ [SW] 清理 search_cache 失败:", err);
                         }
@@ -147,10 +174,7 @@ self.addEventListener('install', event => {
                             const oldText = await oldRes.text();
                             const compressedData = await compressText(oldText);
 
-                            const db = await new Promise((res, rej) => {
-                                const req = indexedDB.open('MainDB', 2);
-                                req.onsuccess = e => res(e.target.result);
-                            });
+                            const db = await openMainDB();
 
                             const tx = db.transaction('html_snapshots', 'readwrite');
                             const store = tx.objectStore('html_snapshots');

@@ -68,6 +68,157 @@ SFT（指令微调）
 
 # MCP
 联网、读文件等能力
+
+# py调用本地模型
+LM Studio 开启本地 API
+<code batch>
+pip install openai pillow tqdm
+</code>
+## 图片批量解析重命名
+01_analyze_images.py
+<code c>
+from openai import OpenAI
+from pathlib import Path
+from tqdm import tqdm
+import base64
+import json
+import re
+import time
+
+client = OpenAI(base_url="http://localhost:1234/v1", api_key="lm-studio")
+MODEL = "Huihui-Qwen3-VL-30B-A3B-Instruct-abliterated-GGUF"
+IMAGE_DIR = Path(r"D:\Dropbox\diff4x.github.io\gallery\娱乐调侃")
+OUTPUT = "gallery_analysis.json"
+
+def encode_image(path):
+    with open(path, "rb") as f:
+        return base64.b64encode(f.read()).decode()
+
+def analyze(path):
+    img64 = encode_image(path)
+    prompt = """
+你是一名互联网文化研究专家。
+分析图片，不要只描述看到的内容。
+请理解：
+1. 图片类别：娱乐搞笑、网络梗图、政治讽刺、社会讽刺、动漫二创、新闻事件、普通图片
+2. 图片表面内容：人物、物体、文字、场景。
+3. 深层含义：笑点在哪里？为什么有趣？是否存在反差？是否讽刺某个人、群体、现象？是否包含网络梗？
+4. 如果图片有文字：提取文字。
+输出严格JSON：
+{"category":"","ocr":"","subject":"","surface":"","hidden_meaning":"","humor_type":"","target":"","keywords":[]}
+不要输出解释。
+"""
+    r = client.chat.completions.create(
+        model=MODEL,
+        messages=[
+            {"role": "system", "content": prompt},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "分析图片"},
+                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img64}"}}
+                ]
+            }
+        ],
+        temperature=0.2,
+        max_tokens=2000
+    )
+    text = re.sub(r"```json|```", "", r.choices[0].message.content).strip()
+    try:
+        return json.loads(text)
+    except:
+        return {"error": text}
+
+def main():
+    images = [p for p in IMAGE_DIR.iterdir() if p.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp", ".gif"}]
+    print("图片数量:", len(images))
+    result = []
+    for img in tqdm(images):
+        try:
+            data = analyze(img)
+            data["filename"] = img.name
+            result.append(data)
+            time.sleep(2)
+        except Exception as e:
+            print("错误:", img, e)
+    with open(OUTPUT, "w", encoding="utf-8") as f:
+        json.dump(result, f, ensure_ascii=False, indent=2)
+    print("完成:", OUTPUT)
+
+if __name__ == "__main__":
+    main()
+</code>
+02_generate_filename.py
+<code c>
+from openai import OpenAI
+from pathlib import Path
+import json
+import re
+import csv
+
+client = OpenAI(base_url="http://localhost:1234/v1", api_key="lm-studio")
+MODEL = "Huihui-Qwen3-30B-A3B-Instruct-2507-abliterated-GGUF"
+IMAGE_DIR = Path(r"D:\Dropbox\diff4x.github.io\gallery\娱乐调侃")
+ANALYSIS = "gallery_analysis.json"
+LOG = "rename_log.csv"
+
+def clean_name(name):
+    return re.sub(r'[\\/:*?"<>|]', "", name).strip()[:50]
+
+def unique(path):
+    if not path.exists():
+        return path
+    i = 1
+    while True:
+        new = path.parent / f"{path.stem}_{i}{path.suffix}"
+        if not new.exists():
+            return new
+        i += 1
+
+def make_name(info):
+    prompt = f"""
+根据图片分析生成文件名。
+要求：
+- 中文
+- 15~30字
+- 一眼知道内容
+- 表达核心笑点或讽刺
+- 不使用标点
+分析：
+{json.dumps(info, ensure_ascii=False)}
+只输出文件名。
+"""
+    r = client.chat.completions.create(
+        model=MODEL,
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.3,
+        max_tokens=60
+    )
+    return clean_name(r.choices[0].message.content)
+
+def main():
+    with open(ANALYSIS, encoding="utf-8") as f:
+        data = json.load(f)
+    logs = []
+    for item in data:
+        old = item["filename"]
+        src = IMAGE_DIR / old
+        if not src.exists():
+            continue
+        newname = make_name(item)
+        dst = unique(IMAGE_DIR / (newname + src.suffix.lower()))
+        src.rename(dst)
+        logs.append([old, dst.name])
+        print(old, "→", dst.name)
+    with open(LOG, "w", encoding="utf-8", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["old", "new"])
+        writer.writerows(logs)
+    print("全部完成")
+
+if __name__ == "__main__":
+    main()
+</code>
 </pre>
  </body>
 </html>
