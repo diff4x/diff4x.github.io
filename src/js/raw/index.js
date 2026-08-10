@@ -55,13 +55,6 @@ let comments_first_flag = false;
 let records = [];
 let totalCount = 0;
 
-
-import('./synonyms.js').then(module => {
-    window.top.expandQuery = module.expandQuery;
-}).catch(err => {
-    console.warn("⚠️ 近义词扩展模块加载失败，将降级为无近义词模式:", err);
-});
-
 import('../wasm/compute_intensive_task_processor.min.js').then(async (wasmModule) => {
     await wasmModule.default();
     window.sharedWasm.format_markdown = wasmModule.format_markdown;
@@ -657,6 +650,7 @@ window.onload = () => {
     cmt_mapper();
     comments();
     loadPinyinData();
+    loadSynonymsData();
 
     updateTitle();
     setTimeout(() => {
@@ -1424,6 +1418,36 @@ function search_box() {
 
     elSearchInput.addEventListener("input", async function () {
         const val = this.value;
+
+        if (val.startsWith('@noise=')) {
+            const n = parseInt(val.split('=')[1]);
+            if (!isNaN(n) && n >= 0 && n <= 5) {
+                store.noise_level = n;
+                elSearchInput.value = "";
+                elSearchInput.placeholder = `已将搜索宽容度设为: ${n}`;
+                setTimeout(() => elSearchInput.placeholder = "Search...", 2000);
+                store.SearchCache.clear();
+                if (searchWorker) searchWorker.postMessage({ type: 'CLEAR_CURSOR', payload: { keyword: "" } });
+            }
+            return;
+        }
+
+        if (val.startsWith('@synonyms=')) {
+            const n = parseInt(val.split('=')[1], 10);
+            if (n === 0 || n === 1) {
+                store.synonyms_enabled = n;
+                elSearchInput.value = "";
+                elSearchInput.placeholder = n === 1 ? "已开启近义搜索" : "已停用近义搜索";
+                setTimeout(() => elSearchInput.placeholder = "Search...", 2000);
+                store.SearchCache.clear();
+                if (searchWorker) searchWorker.postMessage({ type: 'CLEAR_CURSOR', payload: { keyword: "" } });
+            } else {
+                elSearchInput.placeholder = "@synonyms 只能是 0 或 1";
+                setTimeout(() => elSearchInput.placeholder = "Search...", 2000);
+                elSearchInput.value = "";
+            }
+            return;
+        }
 
         if (val.trim() === "") {
             clearTimeout(searchDebounceTimer);
@@ -3373,6 +3397,35 @@ function loadPinyinData(maxRetries = 300) {
                 setTimeout(checkAndLoad, 2000);
             } else {
                 console.error("❌ pinyinData.js 等待 SW 下载超时");
+            }
+        }
+    };
+    idleRun(checkAndLoad);
+}
+
+function loadSynonymsData(maxRetries = 300) {
+    let attempts = 0;
+    const checkAndLoad = async () => {
+        try {
+            const targetUrl = new URL('/src/js/synonyms.js', window.location.origin).href;
+            const cachedRes = await caches.match(targetUrl, { ignoreSearch: true });
+            if (cachedRes && cachedRes.ok) {
+                const scriptText = await cachedRes.text();
+                const synonymsScript = document.createElement("script");
+                synonymsScript.type = "text/javascript";
+                synonymsScript.charset = "UTF-8";
+                synonymsScript.textContent = scriptText;
+                document.body.appendChild(synonymsScript);
+                synonymsScript.remove();
+            } else {
+                throw new Error("Cache Miss");
+            }
+        } catch (e) {
+            attempts++;
+            if (attempts < maxRetries) {
+                setTimeout(checkAndLoad, 2000);
+            } else {
+                console.error("❌ synonyms.js 等待 SW 下载超时，近义搜索将保持停用状态");
             }
         }
     };

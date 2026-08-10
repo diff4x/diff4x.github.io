@@ -1,6 +1,6 @@
-importScripts('/src/js/core-list.js?v=1786351060742');
+importScripts('/src/js/core-list.js?v=1786360936334');
 
-self.SW_VERSION = '1786351060742';
+self.SW_VERSION = '1786360936334';
 self.EMERGENCY = 'repair_command_id=2';
 
 const CACHE_NAME_CORE = 'core-cache-' + BUILD_VERSION;
@@ -19,8 +19,6 @@ const getConnectionType = () => {
     return conn.effectiveType;
 };
 
-// 统一的 MainDB 打开入口 —— schema 只在这一处定义，
-// 避免出现某个调用点漏写 onupgradeneeded 导致 store 缺失/库被锁死的问题。
 const MAINDB_NAME = 'MainDB';
 const MAINDB_VERSION = 3;
 let mainDbOpenPromise = null;
@@ -42,7 +40,6 @@ function openMainDB() {
 
         req.onsuccess = (e) => {
             const db = e.target.result;
-            // 连接被其他 tab 的版本升级顶掉时，及时释放，避免占用僵死连接
             db.onversionchange = () => {
                 db.close();
                 mainDbOpenPromise = null;
@@ -156,8 +153,6 @@ self.addEventListener('install', event => {
                                 tx.objectStore('search_cache').clear();
                                 console.warn(`🧹 [SW] 检测到 ${url} 变更，已清空旧的 search_cache`);
                             }
-                            // 注意：db 是共享单例连接，这里不再手动 close()，
-                            // 否则会影响其他正在使用同一连接的调用方。
                         } catch (err) {
                             console.warn("⚠️ [SW] 清理 search_cache 失败:", err);
                         }
