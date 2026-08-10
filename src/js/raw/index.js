@@ -1438,6 +1438,25 @@ function search_box() {
             return;
         }
 
+        if (val.startsWith('@synonyms=')) {
+            const n = parseInt(val.split('=')[1], 10);
+            if (n === 0 || n === 1) {
+                store.synonyms_enabled = n;
+                elSearchInput.value = "";
+                elSearchInput.placeholder = n === 1 ? "已开启近义搜索" : "已停用近义搜索";
+                setTimeout(() => elSearchInput.placeholder = "Search...", 2000);
+                // 近义词是否参与匹配会改变结果集，必须让旧缓存全部失效，
+                // 否则会出现"设置已切换，但看到的还是旧结果"的问题。
+                store.SearchCache.clear();
+                if (searchWorker) searchWorker.postMessage({ type: 'CLEAR_CURSOR', payload: { keyword: "" } });
+            } else {
+                elSearchInput.placeholder = "@synonyms 只能是 0 或 1";
+                setTimeout(() => elSearchInput.placeholder = "Search...", 2000);
+                elSearchInput.value = "";
+            }
+            return;
+        }
+
         if (val.trim() === "") {
             clearTimeout(searchDebounceTimer);
             updateSearchResults([]);
@@ -1490,6 +1509,22 @@ function search_box() {
                     if (searchWorker) searchWorker.postMessage({ type: "CLEAR_CURSOR", payload: { keyword: "" } });
                 } else {
                     this.placeholder = "宽容度只能是 0~5（当前输入无效）";
+                    setTimeout(() => this.placeholder = "Search...", 2500);
+                    this.value = "";
+                }
+                return;
+            }
+            if (val.startsWith("@synonyms=")) {
+                const n = parseInt(val.split("=")[1], 10);
+                if (n === 0 || n === 1) {
+                    store.synonyms_enabled = n;
+                    this.value = "";
+                    this.placeholder = n === 1 ? "已开启近义搜索" : "已停用近义搜索";
+                    setTimeout(() => this.placeholder = "Search...", 2000);
+                    store.SearchCache.clear();
+                    if (searchWorker) searchWorker.postMessage({ type: "CLEAR_CURSOR", payload: { keyword: "" } });
+                } else {
+                    this.placeholder = "@synonyms 只能是 0 或 1（当前输入无效）";
                     setTimeout(() => this.placeholder = "Search...", 2500);
                     this.value = "";
                 }
@@ -1731,8 +1766,9 @@ function search_box() {
 
             const escapeRegExp = (string) => string.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
             
+            const synonymsEnabled = (store.synonyms_enabled ?? 1) === 1;
             const expandQueryFn = window.top.expandQuery || ((kw) => ({ variants: [] }));
-            const { variants } = expandQueryFn(keyword);
+            const { variants } = synonymsEnabled ? expandQueryFn(keyword) : { variants: [] };
             const allKeywords = [keyword, ...variants];
 
             const buildSnippetRegexMulti = (kws) => {
@@ -2045,8 +2081,9 @@ async function search(rawKeyword) {
             return;
         }
 
+        const synonymsEnabled = (store.synonyms_enabled ?? 1) === 1;
         const expandQueryFn = window.top.expandQuery || ((kw) => ({ variants: [] }));
-        const { variants } = expandQueryFn(kw);
+        const { variants } = synonymsEnabled ? expandQueryFn(kw) : { variants: [] };
 
         searchWorker.postMessage({
             type: 'SEARCH',
@@ -4591,7 +4628,7 @@ function initDueTasksPingPong() {
     const TAP_MOVE_THRESHOLD = 8;
     const DOUBLE_TAP_WINDOW = 300;
     const DOUBLE_TAP_DIST = 30;
-    const MOVE_SENSITIVITY = 1.15;
+    const MOVE_SENSITIVITY = 1.1;
     const MIN_ZOOM = 1, MAX_ZOOM = 3;
 
     document.body.classList.add('touchpad-active');
