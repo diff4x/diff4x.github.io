@@ -1434,36 +1434,6 @@ function search_box() {
     elSearchInput.addEventListener("input", async function () {
         const val = this.value;
 
-        if (val.startsWith('@noise=')) {
-            const n = parseInt(val.split('=')[1]);
-            if (!isNaN(n) && n >= 0 && n <= 5) {
-                store.noise_level = n;
-                elSearchInput.value = "";
-                elSearchInput.placeholder = `已将搜索宽容度设为: ${n}`;
-                setTimeout(() => elSearchInput.placeholder = "Search...", 2000);
-                store.SearchCache.clear();
-                if (searchWorker) searchWorker.postMessage({ type: 'CLEAR_CURSOR', payload: { keyword: "" } });
-            }
-            return;
-        }
-
-        if (val.startsWith('@synonyms=')) {
-            const n = parseInt(val.split('=')[1], 10);
-            if (n === 0 || n === 1) {
-                store.synonyms_enabled = n;
-                elSearchInput.value = "";
-                elSearchInput.placeholder = n === 1 ? "已开启近义搜索" : "已停用近义搜索";
-                setTimeout(() => elSearchInput.placeholder = "Search...", 2000);
-                store.SearchCache.clear();
-                if (searchWorker) searchWorker.postMessage({ type: 'CLEAR_CURSOR', payload: { keyword: "" } });
-            } else {
-                elSearchInput.placeholder = "@synonyms 只能是 0 或 1";
-                setTimeout(() => elSearchInput.placeholder = "Search...", 2000);
-                elSearchInput.value = "";
-            }
-            return;
-        }
-
         if (val.trim() === "") {
             clearTimeout(searchDebounceTimer);
             updateSearchResults([]);

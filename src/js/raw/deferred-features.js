@@ -230,8 +230,33 @@ export async function showChangelog(ctx) {
 
 
 // ---- playConfetti() / bomb() / rebirth(ctx): ctx = { iframes } ----
+let _confettiCanvas = null;
+let _confettiFire = null;
+
+function getConfettiFire() {
+    if (_confettiCanvas && document.body.contains(_confettiCanvas)) return _confettiFire;
+
+    const stage = document.getElementById('stage') || document.body;
+
+    _confettiCanvas = document.createElement('canvas');
+    _confettiCanvas.id = 'confetti-canvas';
+    _confettiCanvas.style.cssText = `
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        z-index: 999999;
+        pointer-events: none;
+    `;
+    stage.appendChild(_confettiCanvas);
+    _confettiFire = confetti.create(_confettiCanvas, { resize: true });
+    return _confettiFire;
+}
+
 export function playConfetti() {
     const startAnimation = () => {
+        const fire = getConfettiFire();
+
         var defaults = {
             spread: 360,
             ticks: 50,
@@ -242,14 +267,14 @@ export function playConfetti() {
         };
 
         function shoot() {
-            confetti({
+            fire({
                 ...defaults,
                 particleCount: 40,
                 scalar: 1.2,
                 shapes: ['star']
             });
 
-            confetti({
+            fire({
                 ...defaults,
                 particleCount: 10,
                 scalar: 0.75,
@@ -806,4 +831,3 @@ export function initDueTasksPingPong() {
     setInterval(checkTasks, CHECK_INTERVAL);
     checkTasks();
 }
-
