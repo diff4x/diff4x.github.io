@@ -15,7 +15,7 @@ html {
 body {
     height: 100vh;
     margin: 0;
-    background-color: #003b14;
+    background-color: darkblue;
 }
 
 ::-webkit-scrollbar {
@@ -48,11 +48,11 @@ div>a {
 }
 
 div#a a {
-    color: #b06cef;
+    color: cadetblue;
 }
 
 div>a:hover, div>a[data-touchpad-hover] {
-    color: #98fda5!important;
+    color: red!important;
 }
 
 div:not(#del).dragover {
@@ -68,7 +68,7 @@ div#del.dragover {
     position: fixed;
     bottom: 5px;
     left: 5px;
-    color: red;
+    color: cadetblue;
 }
 
 #wallpaper-bg {

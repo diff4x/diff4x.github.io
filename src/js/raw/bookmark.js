@@ -50,35 +50,45 @@ window.addEventListener('DOMContentLoaded', () => {
     loadFaviconsWhenIdle();
     initWallpaperModule();
 
-    const footer_links = document.querySelectorAll('#copyright a');
-    let usageLink = null;
-    for (let link of footer_links) {
-        if (link.textContent.trim() === '[使用说明]') {
-            usageLink = link;
-            break;
-        }
+    const githubApi = 'https://api.github.com/repos/diff4x/diff4x.github.io';
+    const CACHE_TIME = 60 * 1000;
+    let cache = null;
+    let pendingRequest = null;
+    document.querySelector('#copyright')?.addEventListener('mouseenter', async function () {
+    if (cache && Date.now() - cache.time < CACHE_TIME) {
+        this.title = cache.title;
+        return;
     }
-    if (usageLink) {
-        usageLink.addEventListener('mouseenter', function () {
-            if (!this.title) {
-                this.title = "正在获取项目体积...";
-                fetch('https://api.github.com/repos/diff4x/diff4x.github.io')
-                    .then(response => response.json())
-                    .then(data => {
-                        if (data && data.size) {
-                            const sizeInMb = (data.size / 1024).toFixed(2);
-                            this.title = `当前项目体积: ${sizeInMb}Mb`;
-                        } else {
-                            this.title = "获取体积失败";
-                        }
-                    })
-                    .catch(error => {
-                        console.error('Error fetching repo data:', error);
-                        this.title = "获取体积失败";
-                    });
-            }
+    if (pendingRequest) {
+        this.title = await pendingRequest;
+        return;
+    }
+    pendingRequest = fetch(githubApi)
+        .then(res => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.json();
+        })
+        .then(data => {
+        const sizeMB = data.size / 1024;
+        const title = `当前项目体积：${sizeMB.toFixed(2)} MB`;
+
+        cache = {
+            title,
+            time: Date.now()
+        };
+
+        return title;
+        })
+        .finally(() => {
+        pendingRequest = null;
         });
+
+    try {
+        this.title = await pendingRequest;
+    } catch (err) {
+        console.error('项目体积获取失败:', err);
     }
+    });
 });
 
 document.addEventListener('keydown', (e) => {
@@ -350,7 +360,7 @@ function createWallpaperPanel(config) {
 
     const triggerBtn = document.createElement('button');
     triggerBtn.id = 'wallpaper-trigger-btn';
-    triggerBtn.innerHTML = '🖼️';
+    triggerBtn.innerHTML = '🎨';
     triggerBtn.title = '壁纸设置面板';
     document.body.appendChild(triggerBtn);
 
@@ -373,7 +383,7 @@ function createWallpaperPanel(config) {
 function renderPanelInnerContent(panel, config, tooltip) {
     panel.innerHTML = `
         <span style="font-weight:bold; border-bottom:1px solid #444; padding-bottom:4px; display:flex; justify-content:space-between;">
-            <span>🖼️ 壁纸管理器</span>
+            <span>🎨 壁纸管理器</span>
             <span style="cursor:pointer; color:#aaa;" onclick="document.getElementById('wallpaper-panel').classList.remove('active')">✕</span>
         </span>
         <span style="font-size:11px; color:#aaa;">已添加壁纸 (${config.list.length}张)</span>
@@ -522,5 +532,5 @@ function updateWallpaperPanelUI(config) {
     if (!panelDomRef) return;
     const tooltip = document.querySelector('.wp-preview-tooltip');
     fillWallpaperListItems(config, tooltip);
-    bindPanelEvents(config); // 直接重新绑定状态即可
+    bindPanelEvents(config);
 }
