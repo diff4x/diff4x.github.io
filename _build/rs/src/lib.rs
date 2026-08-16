@@ -29,7 +29,7 @@ pub struct SearchResult<'a> {
 
 #[wasm_bindgen]
 pub fn find_content_matches(global_text: &str, keyword: &str, noise_level: usize) -> JsValue {
-    let kw_chars: Vec<char> = keyword.chars().filter(|c| !c.is_whitespace()).collect();
+    let kw_chars: Vec<char> = keyword.chars().filter(|c| !c.is_whitespace()).map(|c| c.to_ascii_lowercase()).collect();
     let kw_len = kw_chars.len();
 
     let empty_result = || {
@@ -76,7 +76,7 @@ pub fn find_content_matches(global_text: &str, keyword: &str, noise_level: usize
         while j < text_len && k_idx < kw_len {
             let (byte_idx, char_len, ch) = text_chars[j];
             
-            if ch == kw_chars[k_idx] {
+            if ch.to_ascii_lowercase() == kw_chars[k_idx] {
                 if k_idx == 0 {
                     match_start_byte = Some(byte_idx);
                 }
@@ -180,7 +180,7 @@ pub fn search(keyword: &str, noise_level: usize) -> JsValue {
         return serde_wasm_bindgen::to_value(&Vec::<SearchResult>::new()).unwrap();
     }
     
-    let kw_chars: Vec<char> = keyword.chars().filter(|c| !c.is_whitespace()).collect();
+    let kw_chars: Vec<char> = keyword.chars().filter(|c| !c.is_whitespace()).map(|c| c.to_ascii_lowercase()).collect();
     let kw_len = kw_chars.len();
     if kw_len == 0 {
         return serde_wasm_bindgen::to_value(&Vec::<SearchResult>::new()).unwrap();
@@ -233,7 +233,7 @@ fn count_sliding_matches(text: &str, kw_chars: &[char], noise_level: usize) -> (
         while j < text_len && k_idx < kw_len {
             let (byte_idx, char_len, ch) = text_chars[j];
             
-            if ch == kw_chars[k_idx] {
+            if ch.to_ascii_lowercase() == kw_chars[k_idx] {
                 if k_idx == 0 {
                     match_start_byte = Some(byte_idx);
                 }
@@ -698,7 +698,7 @@ fn get_multi_matches(_text: &str, text_chars: &[(usize, usize, char)], keywords:
 
             while j < text_len && k_idx < kw_len {
                 let (byte_idx, char_len, ch) = text_chars[j];
-                if ch == kw_chars[k_idx] {
+                if ch.to_ascii_lowercase() == kw_chars[k_idx] {
                     if k_idx == 0 { match_start_byte = Some(byte_idx); }
                     k_idx += 1;
                     current_gap = 0;
@@ -751,7 +751,7 @@ pub fn search_multi(keywords_val: JsValue, noise_level: usize) -> JsValue {
     }
     
     let kw_chars_list: Vec<Vec<char>> = keywords.iter()
-        .map(|k| k.chars().filter(|c| !c.is_whitespace()).collect())
+        .map(|k| k.chars().filter(|c| !c.is_whitespace()).map(|c| c.to_ascii_lowercase()).collect())
         .filter(|v: &Vec<char>| !v.is_empty())
         .collect();
 
@@ -829,7 +829,7 @@ pub fn find_content_matches_multi(global_text: &str, keywords_val: JsValue, nois
     if keywords.is_empty() || global_text.is_empty() { return empty_result(); }
 
     let kw_chars_list: Vec<Vec<char>> = keywords.iter()
-        .map(|k| k.chars().filter(|c| !c.is_whitespace()).collect())
+        .map(|k| k.chars().filter(|c| !c.is_whitespace()).map(|c| c.to_ascii_lowercase()).collect())
         .filter(|v: &Vec<char>| !v.is_empty())
         .collect();
 
