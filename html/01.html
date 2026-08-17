@@ -6,7 +6,7 @@
   <title>01</title>
  </head>
  <body>
-  <span id="anchor">20251123092723-21.技巧|C|C Primer Plus</span>
+  <span id="anchor">20260817222459-21.技巧|C|C Primer Plus</span>
   <pre>
 # 1.5 编译器
 在计算机看来，高级指令就是一堆无法理解的无用数 据。编译器是把高级语言程序翻译成计算机能理解的机器语言指令集的程序
@@ -376,6 +376,63 @@ void pound();
         f → double
             调用时 pound(f) 传入的是一个 double 类型，编译器不会自动转换, 因此函数内部拿到的“int n”其实是从函数栈帧里 double 的前4个字节错误解释而来的二进制内容，造成了不可预测的值。
 始终为函数提供完整的原型声明。否则会导致参数类型不匹配、栈破坏或未定义行为。
+
+# 3.4.6 浮点数
+2.0e20是 2后面有20个0。如果把该数加1，那么发生变化的是第21位。 要正确运算，程序至少要储存21位数字。而float类型的数字通常只能储存按 指数比例缩小或放大的6或7位有效数字。在这种情况下，计算结果一定是错 误的。另一方面，如果把2.0e20改成2.0e4，计算结果就没问题。因为2.0e4 加1只需改变第5位上的数字，float类型的精度足够进行这样的计算
+
+C只保证了float类型前6位的精度
+
+# 3.4.9 类型大小
+sizeof是C语言的内置运算符，以字节为单位给出指定类型的大小。C99 和C11提供%zd转换说明匹配sizeof的返回类型
+<code c>
+#include <stdio.h>
+int main(void)
+{
+    float salary;
+    printf("\aEnter your desired monthly salary:");
+    // 模拟输入框
+    // 先打印 _ → 用 \b 把光标退回去 → 输入数字覆盖 _
+    printf(" $_______\b\b\b\b\b\b\b");
+    scanf("%f", &salary);
+    printf("\n\t$%.2f a month is $%.2f a year.", salary, salary * 12.0);
+    printf("\rGee!\n");
+    return 0;
+}
+</code>
+
+# 4.1 
+在scanf()中， name没有&前缀，而weight有, 因为&weight和name都是地址
+
+C语言没有专门用于储存字符串的变量类型，字符串都被储存在char类型的数组中。数组由连续的存储单元组成
+数组末尾位置的字符\0。这是空字符（null character），C 语言用它标记字符串的结束。空字符不是数字0，它是非打印字符，其ASCII 码值是（或等价于）0。C中的字符串一定以空字符结束，这意味着数组的容量必须至少比待存储字符串中的字符数多1
+
+你不用亲自把空字符放入字符串末尾，scanf()在读取输入时就已完成这项工作。也不用在字符串常量PRAISE末尾添加空字符
+
+# 4.2.1 char类型数组和null字符
+字符串常量"x"和字符常量'x'不同。区别之一在于'x'是基本类型 （char），而"x"是派生类型（char数组）；区别之二是"x"实际上由两个字符 组成：'x'和空字符\0
+
+# 4.2.3 strlen()函数
+sizeof 运算符，它以字节为单位给出对象的大小。strlen() 函数给出字符串中的字符长度
+
+C99 和 C11 标准专门为 sizeof 运算符的返回类型添加 了%zd 转换说明，这对于strlen()同样适用
+<code c>
+printf("Your name of %zd letters occupies %zd memory cells.\n", strlen(name), sizeof name);
+</code>
+
+对于 PRAISE，用 strlen()得出的也是字符串中的字符数（包括空格和标 点符号）。然而，sizeof运算符给出的数更大，因为它把字符串末尾不可见 的空字符也计算在内
+<code c>
+// 对于字符串数组通常成立，因为多出来的 1 个字节就是 '\0'
+strlen(array) = sizeof(array) - 1
+
+char a[] = "Hello";
+char *p = "Hello";
+
+sizeof a   // 6
+sizeof p   // 通常是 8（64位系统）
+strlen(a)  // 5
+strlen(p)  // 5
+</code>
+
 
 </pre>
  </body>

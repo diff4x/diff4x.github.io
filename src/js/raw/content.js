@@ -1734,20 +1734,17 @@ function ensureDiffMinimapEl() {
     return el;
 }
 
-// 从渲染好的 diff-pre 中提取所有被标记为增/删的行，合并成相邻的「变更块」(hunk)
 function collectDiffHunks(diffPre) {
     const marked = diffPre.querySelectorAll('[style*="border-left"]');
     if (marked.length === 0) return [];
-
-    // 🚀 优化：批量读取 offsetTop 替代 getBoundingClientRect，且直接按 DOM 顺序遍历，无需 sort()
     const items = Array.from(marked).map(el => {
-        // 直接读取 style 对象属性，比字符串 includes 快
         const isInsert = el.style.borderLeftColor === 'rgb(16, 185, 129)' || el.style.borderLeftColor === '#10b981';
         const type = isInsert ? 'insert' : 'delete';
 
+        const rect = el.getBoundingClientRect();
         return {
-            top: el.offsetTop,
-            bottom: el.offsetTop + el.offsetHeight,
+            top: rect.top + window.scrollY,
+            bottom: rect.bottom + window.scrollY,
             type
         };
     });
