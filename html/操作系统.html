@@ -228,8 +228,13 @@ if [ -z "$NAME" ]; then
 fi
 
 SAFE_NAME=$(printf "%s" "$NAME" | tr -c 'a-zA-Z0-9' '-')
-echo "=========================== VLESS LINK ==========================="
+
 VLESS_LINK="vless://${UUID}@${SERVER_IP}:443?type=tcp&security=reality&flow=xtls-rprx-vision&sni=${SNI}&pbk=${PUBLIC_KEY}&sid=${SHORT_ID}#${SAFE_NAME}"
+
+echo "$VLESS_LINK" > "vless.txt"
+chmod 600 "vless.txt"
+
+echo "=========================== VLESS LINK ==========================="
 echo "$VLESS_LINK"
 echo "=================================================================="
 </code>
