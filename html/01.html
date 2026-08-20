@@ -96,6 +96,249 @@ printf("me16 = %" "d" "\n", me16);
 printf("me16 = %d\n", me16);
 </code>
 
+# 3.4.6 浮点数
+2.0e20是 2后面有20个0。如果把该数加1，那么发生变化的是第21位。 要正确运算，程序至少要储存21位数字。而float类型的数字通常只能储存按 指数比例缩小或放大的6或7位有效数字。在这种情况下，计算结果一定是错 误的。另一方面，如果把2.0e20改成2.0e4，计算结果就没问题。因为2.0e4 加1只需改变第5位上的数字，float类型的精度足够进行这样的计算
+
+C只保证了float类型前6位的精度
+
+# 3.4.9 类型大小
+sizeof是C语言的内置运算符，以字节为单位给出指定类型的大小。C99 和C11提供%zd转换说明匹配sizeof的返回类型
+<code c>
+#include <stdio.h>
+int main(void)
+{
+    float salary;
+    printf("\aEnter your desired monthly salary:");
+    // 模拟输入框
+    // 先打印 _ → 用 \b 把光标退回去 → 输入数字覆盖 _
+    printf(" $_______\b\b\b\b\b\b\b");
+    scanf("%f", &salary);
+    printf("\n\t$%.2f a month is $%.2f a year.", salary, salary * 12.0);
+    printf("\rGee!\n");
+    return 0;
+}
+</code>
+
+# 4.1 
+在scanf()中， name没有&前缀，而weight有, 因为&weight和name都是地址
+
+C语言没有专门用于储存字符串的变量类型，字符串都被储存在char类型的数组中。数组由连续的存储单元组成
+数组末尾位置的字符\0。这是空字符（null character），C 语言用它标记字符串的结束。空字符不是数字0，它是非打印字符，其ASCII 码值是（或等价于）0。C中的字符串一定以空字符结束，这意味着数组的容量必须至少比待存储字符串中的字符数多1
+
+你不用亲自把空字符放入字符串末尾，scanf()在读取输入时就已完成这项工作。也不用在字符串常量PRAISE末尾添加空字符
+
+# 4.2.1 char类型数组和null字符
+字符串常量"x"和字符常量'x'不同。区别之一在于'x'是基本类型 （char），而"x"是派生类型（char数组）；区别之二是"x"实际上由两个字符 组成：'x'和空字符\0
+
+# 4.2.3 strlen()函数
+sizeof 运算符，它以字节为单位给出对象的大小。strlen() 函数给出字符串中的字符长度
+
+C99 和 C11 标准专门为 sizeof 运算符的返回类型添加 了%zd 转换说明，这对于strlen()同样适用
+<code c>
+printf("Your name of %zd letters occupies %zd memory cells.\n", strlen(name), sizeof name);
+</code>
+
+对于 PRAISE，用 strlen()得出的也是字符串中的字符数（包括空格和标 点符号）。然而，sizeof运算符给出的数更大，因为它把字符串末尾不可见 的空字符也计算在内
+<code c>
+// 对于字符串数组通常成立，因为多出来的 1 个字节就是 '\0'
+strlen(array) = sizeof(array) - 1
+
+char a[] = "Hello";
+char *p = "Hello";
+
+sizeof a   // 6
+sizeof p   // 通常是 8（64位系统）
+strlen(a)  // 5
+strlen(p)  // 5
+</code>
+
+# 4.4 printf和scan
+转换符
+%% 百分号
+%p 指针
+%g 自选e或f
+%d 有符号整数
+%u 数量、长度、大小等不会出现负数的整数, 0 ~ UINT_MAX
+%i 根据前缀自动判断进制
+<code c>
+int a, b, c;
+scanf("%i", &a);
+scanf("%i", &b);
+scanf("%i", &c);
+// 输入：10 010 0x10
+// 得到：a = 10, b = 8, c = 16
+
+scanf("%d", &a);  // 始终按十进制
+scanf("%i", &a);  // 根据前缀自动判断进制
+scanf("%u", &a);  // 按无符号整数读取
+
+// 对于 printf 来说, %d 和 %i 基本没有区别，都是以十进制形式输出有符号整数。
+printf("%d", a);
+printf("%i", a);
+</code>
+
+# 4.4.3
+<code c>
+printf("*%d*\n", PAGES);
+printf("*%2d*\n", PAGES);
+printf("*%4d*\n", PAGES);
+printf("*%-4d*\n", PAGES);
+/*
+*959*
+*959*
+* 959*
+*959 *
+*/
+
+const double RENT = 3852.99;
+printf("*%f*\n", RENT);
+printf("*%e*\n", RENT);
+printf("*%4.2f*\n", RENT);
+printf("*%3.1f*\n", RENT);
+printf("*%10.3f*\n", RENT);
+printf("*%10.3E*\n", RENT);
+printf("*%+4.2f*\n", RENT);
+printf("*%010.2f*\n", RENT);
+/*
+*3852.990000*
+*3.852990e+03*
+*3852.99*
+*3853.0*
+*  3852.990*
+* 3.853E+03*
+*+3852.99*
+*0003852.99*
+*/
+
+printf("%x %X %#x\n", 31, 31, 31);
+printf("**%d**% d**% d**\n", 42, 42, -42);
+printf("**%5d**%5.3d**%05d**%05.3d**\n", 6, 6, 6, 6);
+/*
+1f 1F 0x1f
+**42** 42**-42**
+**     6**  006**00006**  006**
+*/
+
+#define BLURB "Authentic imitation!"
+printf("[%2s]\n", BLURB);
+printf("[%24s]\n", BLURB);
+printf("[%24.5s]\n", BLURB); // 精度限制了待打印字符的个数。.5告诉printf()只打 印5个字符
+printf("[%-24.5s]\n", BLURB);
+/*
+[Authentic imitation!]
+[    Authentic imitation!]
+[                   Authe]
+[Authe                   ]
+*/
+</code>
+
+scanf()函数使用空白（换行符、制表符和空格）把输入分成多个字段。 在依次把转换说明和字段匹配时跳过空白, 唯一例外的是%c转换说明。根据%c，scanf()会读取每个字符，包括空白
+
+scanf()函数所用的转换说明与printf()函数几乎相同。主要的区别是，对 于float类型和double类型，printf()都使用%f、%e、%E、%g和%G转换说 明。而scanf()只把它们用于float类型，对于double类型时要使用l修饰符, 另外l和L大小写是有区别的
+%d      → int
+%ld     → long
+%lld    → long long
+%u      → unsigned int
+%lu     → unsigned long
+%llu    → unsigned long long
+%f      → float
+%lf     → double
+%Lf     → long double
+%jd     → intmax_t, C 标准提供的“能够表示最大范围有符号整数”的类型
+%zu     → size_t
+%td     → ptrdiff_t, 主要用来表示两个指针相减得到的结果
+<code c>
+int a[10];
+int *p = &a[8];
+int *q = &a[3];
+ptrdiff_t d = p - q;
+printf("%td\n", d); // 5
+</code>
+
+以读取%d为例, scanf()不断地读取和保存字符，直至遇到非数字字符。如果遇到一个非数字字符，它便认为读到了整数的末尾。然后， scanf()把非数字字符放回输入。这意味着程序在下一次读取输入时，首先读 到的是上一次读取丢弃的非数字字符。最后，scanf()计算已读取数字（可能 还有符号）相应的数值，并将计算后的值放入指定的变量中。
+
+如果使用%s 转换说明，scanf()会读取除空白以外的所有字符。scanf()跳 过空白开始读取第 1 个非空白字符，并保存非空白字符直到再次遇到空白。 这意味着 scanf()根据%s 转换说明读取一个单词，即不包含空白字符的字符 串。如果使用字段宽度，scanf()在字段末尾或第1个空白字符处停止读取。 无法利用字段宽度让只有一个%s的scanf()读取多个单词。最后要注意一点： 当scanf()把字符串放进指定数组中时，它会在字符序列的末尾加上'\0'，让数 组中的内容成为一个C字符串。
+
+<code c>
+// scanf()函数将其解释成：用户将输入一个数字、一个逗号，然后再输入一个数字
+scanf("%d,%d", &n, &m);
+// 除了%c，其他转换说明都会自动跳过待输入值前面所有的空白。因此，scanf("%d%d", &n, &m)与scanf("%d %d", &n, &m)的行为相同。
+</code>
+
+scanf()函数返回成功读取的项数。如果没有读取任何项，且需要读取一 个数字而用户却输入一个非数值字符串，scanf()便返回0。当scanf()检测 到“文件结尾”时，会返回EOF（EOF是stdio.h中定义的特殊值，通常用 #define指令把EOF定义为-1）。
+
+# 4.4.6 printf()和scanf()的*修饰符
+如果不想预先指定字段宽度，希望通过程序来指定，那么可以用*修 饰符代替字段宽度。如果转换说明是%*d，那么参数列表中应包含*和 d对应的值。这个技巧也可用于浮点值指定精度和字段宽度
+<code c>
+#include <stdio.h>
+int main(void)
+{
+    // unsigned int可简写为unsigned
+    // unsigned 只能用于整数类型，它和浮点数的存储规则是两套完全不同的体系, 浮点数的 + 和 - 是通过符号位处理的，而不是像整数那样通过“有符号/无符号整数”来划分取值范围。
+    unsigned width, precision;
+    int number = 256;
+    double weight = 242.5;
+    
+    printf("Enter a field width:\n");
+    scanf("%d", &width);
+    printf("The number is :%*d\n", width, number);
+
+    printf("Enter a width and a precision:\n");
+    scanf("%d %d", &width, &precision);
+    printf("Weight = %*.*f\n", width, precision, weight);
+
+    return 0;
+}
+</code>
+
+scanf()中*的用法与此不同。把*放在%和转换字符之间时会使得 scanf()跳过相应的输出项
+<code c>
+// 跳过两个整数，把第3个整数拷贝给n
+scanf("%*d %*d %d", &n);
+</code>
+
+<code c>
+// 使用足够大的固定字段宽度可以让输出整齐美观
+// 在两个转换说明中间插入一个空白字符，可以确保即使一个数字溢出了 自己的字段，下一个数字也不会紧跟该数字一起输出
+printf("%9d %9d %9d\n", val1, val2, val3);
+</code>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -376,201 +619,6 @@ void pound();
         f → double
             调用时 pound(f) 传入的是一个 double 类型，编译器不会自动转换, 因此函数内部拿到的“int n”其实是从函数栈帧里 double 的前4个字节错误解释而来的二进制内容，造成了不可预测的值。
 始终为函数提供完整的原型声明。否则会导致参数类型不匹配、栈破坏或未定义行为。
-
-# 3.4.6 浮点数
-2.0e20是 2后面有20个0。如果把该数加1，那么发生变化的是第21位。 要正确运算，程序至少要储存21位数字。而float类型的数字通常只能储存按 指数比例缩小或放大的6或7位有效数字。在这种情况下，计算结果一定是错 误的。另一方面，如果把2.0e20改成2.0e4，计算结果就没问题。因为2.0e4 加1只需改变第5位上的数字，float类型的精度足够进行这样的计算
-
-C只保证了float类型前6位的精度
-
-# 3.4.9 类型大小
-sizeof是C语言的内置运算符，以字节为单位给出指定类型的大小。C99 和C11提供%zd转换说明匹配sizeof的返回类型
-<code c>
-#include <stdio.h>
-int main(void)
-{
-    float salary;
-    printf("\aEnter your desired monthly salary:");
-    // 模拟输入框
-    // 先打印 _ → 用 \b 把光标退回去 → 输入数字覆盖 _
-    printf(" $_______\b\b\b\b\b\b\b");
-    scanf("%f", &salary);
-    printf("\n\t$%.2f a month is $%.2f a year.", salary, salary * 12.0);
-    printf("\rGee!\n");
-    return 0;
-}
-</code>
-
-# 4.1 
-在scanf()中， name没有&前缀，而weight有, 因为&weight和name都是地址
-
-C语言没有专门用于储存字符串的变量类型，字符串都被储存在char类型的数组中。数组由连续的存储单元组成
-数组末尾位置的字符\0。这是空字符（null character），C 语言用它标记字符串的结束。空字符不是数字0，它是非打印字符，其ASCII 码值是（或等价于）0。C中的字符串一定以空字符结束，这意味着数组的容量必须至少比待存储字符串中的字符数多1
-
-你不用亲自把空字符放入字符串末尾，scanf()在读取输入时就已完成这项工作。也不用在字符串常量PRAISE末尾添加空字符
-
-# 4.2.1 char类型数组和null字符
-字符串常量"x"和字符常量'x'不同。区别之一在于'x'是基本类型 （char），而"x"是派生类型（char数组）；区别之二是"x"实际上由两个字符 组成：'x'和空字符\0
-
-# 4.2.3 strlen()函数
-sizeof 运算符，它以字节为单位给出对象的大小。strlen() 函数给出字符串中的字符长度
-
-C99 和 C11 标准专门为 sizeof 运算符的返回类型添加 了%zd 转换说明，这对于strlen()同样适用
-<code c>
-printf("Your name of %zd letters occupies %zd memory cells.\n", strlen(name), sizeof name);
-</code>
-
-对于 PRAISE，用 strlen()得出的也是字符串中的字符数（包括空格和标 点符号）。然而，sizeof运算符给出的数更大，因为它把字符串末尾不可见 的空字符也计算在内
-<code c>
-// 对于字符串数组通常成立，因为多出来的 1 个字节就是 '\0'
-strlen(array) = sizeof(array) - 1
-
-char a[] = "Hello";
-char *p = "Hello";
-
-sizeof a   // 6
-sizeof p   // 通常是 8（64位系统）
-strlen(a)  // 5
-strlen(p)  // 5
-</code>
-
-# 4.4 printf和scan
-转换符
-%% 百分号
-%p 指针
-%g 自选e或f
-%d 有符号整数
-%u 数量、长度、大小等不会出现负数的整数, 0 ~ UINT_MAX
-%i 根据前缀自动判断进制
-<code c>
-int a, b, c;
-scanf("%i", &a);
-scanf("%i", &b);
-scanf("%i", &c);
-// 输入：10 010 0x10
-// 得到：a = 10, b = 8, c = 16
-
-scanf("%d", &a);  // 始终按十进制
-scanf("%i", &a);  // 根据前缀自动判断进制
-scanf("%u", &a);  // 按无符号整数读取
-
-// 对于 printf 来说, %d 和 %i 基本没有区别，都是以十进制形式输出有符号整数。
-printf("%d", a);
-printf("%i", a);
-</code>
-
-# 4.4.3
-<code c>
-printf("*%d*\n", PAGES);
-printf("*%2d*\n", PAGES);
-printf("*%4d*\n", PAGES);
-printf("*%-4d*\n", PAGES);
-/*
-*959*
-*959*
-* 959*
-*959 *
-*/
-
-const double RENT = 3852.99;
-printf("*%f*\n", RENT);
-printf("*%e*\n", RENT);
-printf("*%4.2f*\n", RENT);
-printf("*%3.1f*\n", RENT);
-printf("*%10.3f*\n", RENT);
-printf("*%10.3E*\n", RENT);
-printf("*%+4.2f*\n", RENT);
-printf("*%010.2f*\n", RENT);
-/*
-*3852.990000*
-*3.852990e+03*
-*3852.99*
-*3853.0*
-*  3852.990*
-* 3.853E+03*
-*+3852.99*
-*0003852.99*
-*/
-
-printf("%x %X %#x\n", 31, 31, 31);
-printf("**%d**% d**% d**\n", 42, 42, -42);
-printf("**%5d**%5.3d**%05d**%05.3d**\n", 6, 6, 6, 6);
-/*
-1f 1F 0x1f
-**42** 42**-42**
-**     6**  006**00006**  006**
-*/
-
-#define BLURB "Authentic imitation!"
-printf("[%2s]\n", BLURB);
-printf("[%24s]\n", BLURB);
-printf("[%24.5s]\n", BLURB); // 精度限制了待打印字符的个数。.5告诉printf()只打 印5个字符
-printf("[%-24.5s]\n", BLURB);
-/*
-[Authentic imitation!]
-[    Authentic imitation!]
-[                   Authe]
-[Authe                   ]
-*/
-</code>
-
-scanf()函数使用空白（换行符、制表符和空格）把输入分成多个字段。 在依次把转换说明和字段匹配时跳过空白, 唯一例外的是%c转换说明。根据%c，scanf()会读取每个字符，包括空白
-
-scanf()函数所用的转换说明与printf()函数几乎相同。主要的区别是，对 于float类型和double类型，printf()都使用%f、%e、%E、%g和%G转换说 明。而scanf()只把它们用于float类型，对于double类型时要使用l修饰符, 另外l和L大小写是有区别的
-%d      → int
-%ld     → long
-%lld    → long long
-%u      → unsigned int
-%lu     → unsigned long
-%llu    → unsigned long long
-%f      → float
-%lf     → double
-%Lf     → long double
-%jd     → intmax_t, C 标准提供的“能够表示最大范围有符号整数”的类型
-%zu     → size_t
-%td     → ptrdiff_t, 主要用来表示两个指针相减得到的结果
-<code c>
-int a[10];
-int *p = &a[8];
-int *q = &a[3];
-ptrdiff_t d = p - q;
-printf("%td\n", d); // 5
-</code>
-
-以读取%d为例, scanf()不断地读取和保存字符，直至遇到非数字字符。如果遇到一个非数字字符，它便认为读到了整数的末尾。然后， scanf()把非数字字符放回输入。这意味着程序在下一次读取输入时，首先读 到的是上一次读取丢弃的非数字字符。最后，scanf()计算已读取数字（可能 还有符号）相应的数值，并将计算后的值放入指定的变量中。
-
-如果使用%s 转换说明，scanf()会读取除空白以外的所有字符。scanf()跳 过空白开始读取第 1 个非空白字符，并保存非空白字符直到再次遇到空白。 这意味着 scanf()根据%s 转换说明读取一个单词，即不包含空白字符的字符 串。如果使用字段宽度，scanf()在字段末尾或第1个空白字符处停止读取。 无法利用字段宽度让只有一个%s的scanf()读取多个单词。最后要注意一点： 当scanf()把字符串放进指定数组中时，它会在字符序列的末尾加上'\0'，让数 组中的内容成为一个C字符串。
-
-<code c>
-// scanf()函数将其解释成：用户将输入一个数字、一个逗号，然后再输入一个数字
-scanf("%d,%d", &n, &m);
-// 除了%c，其他转换说明都会自动跳过待输入值前面所有的空白。因此，scanf("%d%d", &n, &m)与scanf("%d %d", &n, &m)的行为相同。
-</code>
-
-scanf()函数返回成功读取的项数。如果没有读取任何项，且需要读取一 个数字而用户却输入一个非数值字符串，scanf()便返回0。当scanf()检测 到“文件结尾”时，会返回EOF（EOF是stdio.h中定义的特殊值，通常用 #define指令把EOF定义为-1）。
-
-# 4.4.6 printf()和scanf()的*修饰符
-如果不想预先指定字段宽度，希望通过程序来指定，那么可以用*修 饰符代替字段宽度。如果转换说明是%*d，那么参数列表中应包含*和 d对应的值。这个技巧也可用于浮点值指定精度和字段宽度
-<code c>
-#include <stdio.h>
-int main(void)
-{
-    // unsigned int可简写为unsigned
-    // unsigned 只能用于整数类型，它和浮点数的存储规则是两套完全不同的体系, 浮点数的 + 和 - 是通过符号位处理的，而不是像整数那样通过“有符号/无符号整数”来划分取值范围。
-    unsigned width, precision;
-    int number = 256;
-    double weight = 242.5;
-    
-    printf("Enter a field width:\n");
-    scanf("%d", &width);
-    printf("The number is :%*d\n", width, number);
-
-    printf("Enter a width and a precision:\n");
-    scanf("%d %d", &width, &precision);
-    printf("Weight = %*.*f\n", width, precision, weight);
-
-    return 0;
-}
-</code>
 </pre>
  </body>
 </html>
