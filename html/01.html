@@ -6,7 +6,7 @@
   <title>01</title>
  </head>
  <body>
-  <span id="anchor">20260817222459-21.技巧|C|C Primer Plus</span>
+  <span id="anchor">20260822191814-21.技巧|C|C Primer Plus</span>
   <pre>
 # 1.5 编译器
 在计算机看来，高级指令就是一堆无法理解的无用数 据。编译器是把高级语言程序翻译成计算机能理解的机器语言指令集的程序
@@ -303,7 +303,56 @@ scanf("%*d %*d %d", &n);
 printf("%9d %9d %9d\n", val1, val2, val3);
 </code>
 
+# 5.2.1 
+<code c>
+int jane, tarzan, cheeta;
+cheeta = tarzan = jane = 68;
+</code>
+许多其他语言都会回避该程序中的三重赋值，但是C完全没问题。赋值 的顺序是从右往左：首先把86赋给jane，然后再赋给tarzan，最后赋给 cheeta
 
+# 5.3.2 求模运算符：%
+求模运算符常用于控制程序流
+<code c>
+#include <stdio.h>
+#define SEC_PER_MIN 60
+int main(void)
+{
+    int sec, min, left;
+    printf("Enter the number of seconds (<=0 to quit):\n");
+    scanf("%d", &sec);
+    while (sec > 0)
+    {
+        min = sec / SEC_PER_MIN;
+        left = sec % SEC_PER_MIN;
+        printf("%d seconds is %d minutes, %d seconds.\n", sec, min, left);
+        printf("Enter next value (<=0 to quit):\n");
+        scanf("%d", &sec);
+    }
+    return 0;
+}
+</code>
+
+负数求模
+如果第1个运算对象是负数，那么求模的结果为负数；如果第1个运算对象是正数，那么求模的结果也是正数
+11 / 5得2，11 % 5得1 
+11 / -5得-2，11 % -2得1 
+-11 / -5得2，-11 % -5得-1 
+-11 / 5得-2，-11 % 5得-1
+只要a和b都是整数值，便可通过a - (a/b)*b来计算a%b
+-11%5
+-11 - (-11/5) * 5 = -11 -(-2)*5 = -11 -(-10) = -1
+
+# 5.3.3
+<code c>
+a_post = a++;   // 后缀：使用a的值后，递增a 
+b_pre= ++b;    // 前缀：使用b的值前，递增b
+</code>
+
+# 5.4.2
+<code c>
+// C 标准没有规定这个顺序，因此这种写法属于未定义行为, 可能先求左边也可能先求右边
+y = (4 + x++) + (6 + x++);
+</code>
 
 
 

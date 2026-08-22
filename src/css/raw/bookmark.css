@@ -52,7 +52,7 @@ div#a a {
 }
 
 div>a:hover, div>a[data-touchpad-hover] {
-    color: red!important;
+    color: #d2691e!important;
 }
 
 div:not(#del).dragover {
