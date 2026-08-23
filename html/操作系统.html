@@ -6,7 +6,7 @@
   <title>操作系统</title>
  </head>
  <body>
-  <span id="anchor">20260817180607-21.技巧</span>
+  <span id="anchor">20260823155856-21.技巧</span>
   <pre>
 # pixel在中国地区的IMS注册
 2G,3G时代,手机里有两套网络
@@ -87,7 +87,7 @@ https://ping.pe/
 
 ## 自建代理(Xray + REALITY)
 单节点自控, 侧重伪装而非匿名
-    再次强调: 伪装而非匿名, 不要用它反CCP
+    注意是伪装, 而非匿名
 客户端先通过 REALITY 建立一个伪装成 HTTPS 的加密通道连接到 Xray，然后在这个通道里使用 VLESS 协议告诉服务器要访问的目标，由 Xray 代为连接目标网站并转发数据。
     Xray负责协议解析和路由
     REALITY模拟TLS行为让代理流量看起来像普通HTTPS
@@ -97,7 +97,7 @@ SNI最好冷门且支持TLS1.3
 
 ### GCP
 https://console.cloud.google.com/compute/instances
-丐版e2-micro
+e2-micro
     vCPU: 2
     RAM: 1 GB
     Disk: Standard persistent disk 10 GB
@@ -109,7 +109,7 @@ vpc network - firewall
         应用到所有实例
         来源 IPv4 范围  0.0.0.0/0
         指定的协议和端口勾选 TCP 端口443
-其中 Create similar 以相同配置开启新空白机器(注意防止计划快照被默认勾选)
+其中 Create similar 以相同配置开启新空白机器, 取消计划快照
 
 ### DO
 https://cloud.digitalocean.com/droplets
@@ -129,6 +129,18 @@ Inbound Rules
 #!/bin/bash
 set -euo pipefail
 
+# === 公开的 Google Form ===
+FORM_URL="https://docs.google.com/forms/d/e/1FAIpQLScR2uk18TnJyaKM05n9Y1CJooXqxRHniHB5qsIS3tQ0lFNBew/formResponse"
+ENTRY_NAME="entry.1488315690"
+ENTRY_LINK="entry.383274740"
+# ==========================================
+
+NAME=""
+while [ -z "$NAME" ]; do
+  read -rp "node name required: " NAME
+done
+SAFE_NAME=$(printf "%s" "$NAME" | tr -c 'a-zA-Z0-9' '-')
+
 echo "========== 交换内存 =========="
 if ! swapon --show | grep -q "/swapfile"; then
   fallocate -l 1G /swapfile || dd if=/dev/zero of=/swapfile bs=1M count=1024
@@ -137,7 +149,7 @@ if ! swapon --show | grep -q "/swapfile"; then
   swapon /swapfile
   grep -q swapfile /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab
 fi
- 
+
 echo "========== 防日志爆盘 =========="
 systemctl stop rsyslog 2>/dev/null || true
 systemctl disable rsyslog 2>/dev/null || true
@@ -147,9 +159,9 @@ if grep -q "Storage=" /etc/systemd/journald.conf; then
 else
   echo "Storage=none" >> /etc/systemd/journald.conf
 fi
- 
+
 systemctl restart systemd-journald
- 
+
 echo "========== 安装防火墙 =========="
 apt update && apt install -y ufw
 ufw default deny incoming
@@ -157,24 +169,24 @@ ufw default allow outgoing
 ufw allow 22/tcp
 ufw allow 443/tcp
 ufw --force enable
- 
+
 echo "========== 安装 Xray =========="
 bash &lt;(curl -Ls https://github.com/XTLS/Xray-install/raw/main/install-release.sh)
- 
+
 echo "========== 生成 UUID =========="
 UUID=$(cat /proc/sys/kernel/random/uuid)
- 
+
 echo "========== 生成 Reality Key =========="
 KEY_OUTPUT=$(xray x25519)
 PRIVATE_KEY=$(echo "$KEY_OUTPUT" | grep -i "privatekey" | awk -F': ' '{print $2}')
 PUBLIC_KEY=$(echo "$KEY_OUTPUT" | grep -i "publickey\|password" | awk -F': ' '{print $2}')
- 
+
 echo "========== 生成 shortId =========="
 SHORT_ID=$(openssl rand -hex 4)
- 
+
 echo "========== 配置 Xray =========="
 SNI="itunes.apple.com"
- 
+
 cat > /usr/local/etc/xray/config.json &lt;&lt;CONF
 {
   "log": {
@@ -214,7 +226,7 @@ cat > /usr/local/etc/xray/config.json &lt;&lt;CONF
   ]
 }
 CONF
- 
+
 echo "========== 启动 Xray =========="
 systemctl restart xray
 systemctl enable xray
@@ -222,21 +234,21 @@ sleep 2
 systemctl status xray --no-pager
 
 SERVER_IP=$(curl -s --max-time 3 ifconfig.me || echo "unknown")
-read -rp "请输入节点名称 (回车默认时间): " NAME
-if [ -z "$NAME" ]; then
-  NAME=$(TZ="Asia/Singapore" date +"%Y%m%d%H%M")
-fi
 
-SAFE_NAME=$(printf "%s" "$NAME" | tr -c 'a-zA-Z0-9' '-')
-
-VLESS_LINK="vless://${UUID}@${SERVER_IP}:443?type=tcp&security=reality&flow=xtls-rprx-vision&sni=${SNI}&pbk=${PUBLIC_KEY}&sid=${SHORT_ID}#${SAFE_NAME}"
-
-echo "$VLESS_LINK" > "vless.txt"
-chmod 600 "vless.txt"
+VLESS_LINK="vless://${UUID}@${SERVER_IP}:443?type=tcp&security=reality&flow=xtls-rprx-vision&sni=${SNI}&fp=chrome&pbk=${PUBLIC_KEY}&sid=${SHORT_ID}#${SAFE_NAME}"
 
 echo "=========================== VLESS LINK ==========================="
 echo "$VLESS_LINK"
 echo "=================================================================="
+
+echo "========== 发送到 Google Form =========="
+if curl -s -X POST "$FORM_URL" \
+  --data-urlencode "$ENTRY_NAME=$SAFE_NAME" \
+  --data-urlencode "$ENTRY_LINK=$VLESS_LINK" > /dev/null; then
+    echo "Google Form submission successed"
+else
+    echo "Google Form submission failure"
+fi
 </code>
 
 <code sh>
@@ -244,7 +256,6 @@ sudo bash install.sh
 </code>
 
 ### 客户端
-指纹不要留空,选chrome或ff
 https://github.com/2dust/v2rayNG/releases
 https://github.com/2dust/v2rayN/releases
 
