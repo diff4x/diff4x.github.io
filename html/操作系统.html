@@ -6,7 +6,7 @@
   <title>操作系统</title>
  </head>
  <body>
-  <span id="anchor">20260823155856-21.技巧</span>
+  <span id="anchor">20260826223346-21.技巧</span>
   <pre>
 # pixel在中国地区的IMS注册
 2G,3G时代,手机里有两套网络
@@ -81,19 +81,33 @@ https://www.nodeseek.com/categories/info
 ## 测试
 https://ipleak.net/
 https://ping.pe/
+https://www.speedtest.net/
 
 ## 现成商业代理
 多用户共享出口ip, 具备群体匿名性
 
-## 自建代理(Xray + REALITY)
+## 自建代理 
+### Xray + REALITY
 单节点自控, 侧重伪装而非匿名
-    注意是伪装, 而非匿名
 客户端先通过 REALITY 建立一个伪装成 HTTPS 的加密通道连接到 Xray，然后在这个通道里使用 VLESS 协议告诉服务器要访问的目标，由 Xray 代为连接目标网站并转发数据。
     Xray负责协议解析和路由
     REALITY模拟TLS行为让代理流量看起来像普通HTTPS
     客户端作为流量入口(代理网关)解析VLESS/REALITY配置、建立连接、提供本地代理端口，把应用流量送入正确的隧道
 浏览器请求 → VLESS封装 → REALITY加密并伪装成TLS → TCP发送到VPS → VPS解密REALITY → Xray解VLESS → 重新发起到目标网站 → 目标网站返回内容 → VPS（Xray）→ REALITY加密 → 客户端 → 解密 → 浏览器
-SNI最好冷门且支持TLS1.3
+SNI选择一个真实存在、TLS 行为正常、与 target 匹配、能够稳定提供 TLS 1.3 的目标站
+Xray 晚高峰期间出现的延迟剧增、甚至断流, 不一定是 IP 被墙, 可能与国际链路拥堵和运营商 QoS（服务质量限制）有关，因为 VLESS-Reality 使用的是 TCP 协议。在网络拥堵、丢包率上升时，TCP 原生的拥塞控制算法（如 BBR 或 CUBIC）会主动降速导致体验恶化
+### Hysteria 2
+基于 QUIC (UDP) 协议，并且使用了非常暴力的 Brutal 拥塞控制算法(用带宽目标换取在拥塞网络中更激进地争夺吞吐), 它不会像传统拥塞控制那样因为丢包/RTT变化主动降低目标发送速率，而是尝试维持设定速率，并根据丢包进行补偿, 因此能极大改善晚高峰的体验
+客户端设置
+    Speedtest 测出当前实际物理速度, 带宽设置为测得值的 70% ~ 80%。带宽设置过高反而会导致连接不稳定、拥塞和浪费流量
+    Core 类型设为 sing_box
+风险
+    虽然使用了 QUIC/TLS 掩盖，但其 Brutal 算法“强行密集发包”的传输行为模式可能被统计分析识别
+    使用自签名证书时，GFW 的探针对你的 UDP 端口发送 QUIC 探测包时，虽然 Hysteria 2 会因密码不匹配而拒绝响应，但这种“特定 UDP 端口只对特定包响应/不响应”的静默行为本身也是一种暴露特征
+    UDP 频繁的高速率发包无法利用手机 SoC 的 TCP 硬件加速模块，这会导致作为热点的手机 CPU 长期高负荷运行，引发严重发热、降频以及电池电量极速消耗
+同一台机器 TCP 和 UDP 端口是相互独立的, 可以同时运行 Xray 和 Hysteria 2
+    普通情况: VLESS + REALITY
+    晚高峰/丢包严重: Hysteria 2
 
 ### GCP
 https://console.cloud.google.com/compute/instances
@@ -109,6 +123,10 @@ vpc network - firewall
         应用到所有实例
         来源 IPv4 范围  0.0.0.0/0
         指定的协议和端口勾选 TCP 端口443
+    allow-udp-443
+        应用到所有实例
+        来源 IPv4 范围  0.0.0.0/0
+        指定的协议和端口勾选 UDP 端口443
 其中 Create similar 以相同配置开启新空白机器, 取消计划快照
 
 ### DO
@@ -120,7 +138,7 @@ https://cloud.digitalocean.com/droplets
 Debian 13, 美国旧金山, 延迟约300ms, 费用约$4/月
 Inbound Rules
     Type: HTTPS
-    Protocol: TCP
+    Protocol: TCP 和 UDP
     Port Range: 443
     Sources: All IPv4 (0.0.0.0/0) 和 All IPv6 (::/0)
 
@@ -129,126 +147,113 @@ Inbound Rules
 #!/bin/bash
 set -euo pipefail
 
-# === 公开的 Google Form ===
+[ "$(id -u)" -eq 0 ] || { echo "请使用 root 运行"; exit 1; }
+
 FORM_URL="https://docs.google.com/forms/d/e/1FAIpQLScR2uk18TnJyaKM05n9Y1CJooXqxRHniHB5qsIS3tQ0lFNBew/formResponse"
 ENTRY_NAME="entry.1488315690"
 ENTRY_LINK="entry.383274740"
-# ==========================================
-
-NAME=""
-while [ -z "$NAME" ]; do
-  read -rp "node name required: " NAME
-done
-SAFE_NAME=$(printf "%s" "$NAME" | tr -c 'a-zA-Z0-9' '-')
-
-echo "========== 交换内存 =========="
-if ! swapon --show | grep -q "/swapfile"; then
-  fallocate -l 1G /swapfile || dd if=/dev/zero of=/swapfile bs=1M count=1024
-  chmod 600 /swapfile
-  mkswap /swapfile
-  swapon /swapfile
-  grep -q swapfile /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab
-fi
-
-echo "========== 防日志爆盘 =========="
-systemctl stop rsyslog 2>/dev/null || true
-systemctl disable rsyslog 2>/dev/null || true
-
-if grep -q "Storage=" /etc/systemd/journald.conf; then
-  sed -i 's/^Storage=.*/Storage=none/' /etc/systemd/journald.conf
-else
-  echo "Storage=none" >> /etc/systemd/journald.conf
-fi
-
-systemctl restart systemd-journald
-
-echo "========== 安装防火墙 =========="
-apt update && apt install -y ufw
-ufw default deny incoming
-ufw default allow outgoing
-ufw allow 22/tcp
-ufw allow 443/tcp
-ufw --force enable
-
-echo "========== 安装 Xray =========="
-bash &lt;(curl -Ls https://github.com/XTLS/Xray-install/raw/main/install-release.sh)
-
-echo "========== 生成 UUID =========="
-UUID=$(cat /proc/sys/kernel/random/uuid)
-
-echo "========== 生成 Reality Key =========="
-KEY_OUTPUT=$(xray x25519)
-PRIVATE_KEY=$(echo "$KEY_OUTPUT" | grep -i "privatekey" | awk -F': ' '{print $2}')
-PUBLIC_KEY=$(echo "$KEY_OUTPUT" | grep -i "publickey\|password" | awk -F': ' '{print $2}')
-
-echo "========== 生成 shortId =========="
-SHORT_ID=$(openssl rand -hex 4)
-
-echo "========== 配置 Xray =========="
 SNI="itunes.apple.com"
 
-cat > /usr/local/etc/xray/config.json &lt;&lt;CONF
+SAFE_NAME=$(hostname -s 2>/dev/null | tr -d '\r\n' | tr -c 'a-zA-Z0-9' '-' || echo "node")
+echo "[*] 开始部署节点: $SAFE_NAME"
+
+# 1. Swap & Journald & 防火墙依赖
+[ -f /swapfile ] || { fallocate -l 1G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile && echo '/swapfile none swap sw 0 0' >> /etc/fstab; }
+
+mkdir -p /etc/systemd/journald.conf.d
+echo -e "[Journal]\nSystemMaxUse=50M" > /etc/systemd/journald.conf.d/limit.conf
+systemctl restart systemd-journald && systemctl disable --now rsyslog 2>/dev/null || true
+
+apt-get update -y && DEBIAN_FRONTEND=noninteractive apt-get install -y curl openssl ufw ca-certificates psmisc
+ufw default deny incoming && ufw default allow outgoing
+ufw allow 22/tcp && ufw allow 443/tcp && ufw allow 443/udp
+ufw --force enable
+
+# 2. Xray (VLESS Reality - TCP 443)
+bash &lt;(curl -4 -Ls https://github.com/XTLS/Xray-install/raw/main/install-release.sh)
+UUID=$(cat /proc/sys/kernel/random/uuid)
+KEY_OUTPUT=$(xray x25519)
+PRIVATE_KEY=$(echo "$KEY_OUTPUT" | awk -F': ' '/Private/ {print $2}' | tr -d '\r\n ')
+PUBLIC_KEY=$(echo "$KEY_OUTPUT" | awk -F': ' '/Public/ {print $2}' | tr -d '\r\n ')
+SHORT_ID=$(openssl rand -hex 4)
+
+cat > /usr/local/etc/xray/config.json &lt;&lt;EOF
 {
-  "log": {
-    "loglevel": "none"
-  },
-  "inbounds": [
-    {
-      "port": 443,
-      "protocol": "vless",
-      "settings": {
-        "clients": [
-          {
-            "id": "$UUID",
-            "flow": "xtls-rprx-vision"
-          }
-        ],
-        "decryption": "none"
-      },
-      "streamSettings": {
-        "network": "tcp",
-        "security": "reality",
-        "realitySettings": {
-          "show": false,
-          "dest": "$SNI:443",
-          "xver": 0,
-          "serverNames": ["$SNI"],
-          "privateKey": "$PRIVATE_KEY",
-          "shortIds": ["$SHORT_ID"]
-        }
+  "log": {"loglevel": "none"},
+  "inbounds": [{
+    "listen": "0.0.0.0", "port": 443, "protocol": "vless",
+    "settings": {"clients": [{"id": "$UUID", "flow": "xtls-rprx-vision"}], "decryption": "none"},
+    "streamSettings": {
+      "network": "tcp", "security": "reality",
+      "realitySettings": {
+        "show": false, "dest": "$SNI:443", "xver": 0, "serverNames": ["$SNI"],
+        "privateKey": "$PRIVATE_KEY", "shortIds": ["$SHORT_ID"]
       }
     }
-  ],
-  "outbounds": [
-    {
-      "protocol": "freedom"
-    }
-  ]
+  }],
+  "outbounds": [{"protocol": "freedom"}]
 }
-CONF
-
-echo "========== 启动 Xray =========="
+EOF
 systemctl restart xray
 systemctl enable xray
 sleep 2
-systemctl status xray --no-pager
 
-SERVER_IP=$(curl -s --max-time 3 ifconfig.me || echo "unknown")
+# 3. Hysteria 2 (UDP 443)
+curl -4 -fsSL https://get.hy2.sh/ | bash
+HY2_PASSWORD=$(openssl rand -hex 16)
 
+mkdir -p /etc/hysteria
+openssl req -x509 -nodes -newkey ec:&lt;(openssl ecparam -name prime256v1) \
+    -keyout /etc/hysteria/server.key -out /etc/hysteria/server.crt \
+    -days 3650 -subj "/CN=$SNI" -addext "subjectAltName=DNS:$SNI" 2>/dev/null
+
+CERT_SHA256=$(openssl x509 -in /etc/hysteria/server.crt -noout -fingerprint -sha256 | cut -d= -f2 | tr -d :)
+
+cat > /etc/hysteria/config.yaml &lt;&lt;EOF
+listen: :443
+tls:
+  cert: /etc/hysteria/server.crt
+  key: /etc/hysteria/server.key
+auth:
+  type: password
+  password: "$HY2_PASSWORD"
+masquerade:
+  type: proxy
+  proxy:
+    url: https://$SNI
+    rewriteHost: true
+EOF
+
+chown -R hysteria:hysteria /etc/hysteria
+chmod 600 /etc/hysteria/server.key
+chmod 644 /etc/hysteria/server.crt /etc/hysteria/config.yaml
+systemctl enable --now hysteria-server
+sleep 2
+
+# 4. 生成链接与提交
+SERVER_IP=$(curl -4 -fsS --max-time 5 https://api.ipify.org || echo "unknown")
 VLESS_LINK="vless://${UUID}@${SERVER_IP}:443?type=tcp&security=reality&flow=xtls-rprx-vision&sni=${SNI}&fp=chrome&pbk=${PUBLIC_KEY}&sid=${SHORT_ID}#${SAFE_NAME}"
+HY2_LINK="hy2://${HY2_PASSWORD}@${SERVER_IP}:443/?insecure=1&sni=${SNI}&pinSHA256=${CERT_SHA256}#${SAFE_NAME}-HY2"
+COMBINED_LINKS=$(printf '%s\n\n%s' "$VLESS_LINK" "$HY2_LINK")
 
-echo "=========================== VLESS LINK ==========================="
-echo "$VLESS_LINK"
-echo "=================================================================="
+curl -4 -fsS --connect-timeout 5 --max-time 15 -X POST "$FORM_URL" \
+    --data-urlencode "$ENTRY_NAME=$SAFE_NAME" \
+    --data-urlencode "$ENTRY_LINK=$COMBINED_LINKS" >/dev/null 2>&1 && echo "[√] 表单提交成功" || echo "[!] 表单提交失败"
 
-echo "========== 发送到 Google Form =========="
-if curl -s -X POST "$FORM_URL" \
-  --data-urlencode "$ENTRY_NAME=$SAFE_NAME" \
-  --data-urlencode "$ENTRY_LINK=$VLESS_LINK" > /dev/null; then
-    echo "Google Form submission successed"
-else
-    echo "Google Form submission failure"
-fi
+# 5. 状态检测与输出结果
+echo -e "\n==================== DEPLOY COMPLETE ===================="
+echo -e "Node: $SAFE_NAME | IP: $SERVER_IP\n"
+
+echo "--- 运行状态检测 ---"
+echo "Xray (TCP) : $(systemctl is-active xray)"
+echo "Hy2  (UDP) : $(systemctl is-active hysteria-server)"
+echo "TCP 443 端口 : $(ss -lntp | grep -q ':443' && echo "Listening [OK]" || echo "Not Listening [FAILED]")"
+echo "UDP 443 端口 : $(ss -lunp | grep -q ':443' && echo "Listening [OK]" || echo "Not Listening [FAILED]")"
+echo "--------------------"
+
+echo -e "\nVLESS Reality:\n$VLESS_LINK\n"
+echo -e "Hysteria 2:\n$HY2_LINK\n"
+echo "=========================================================="
 </code>
 
 <code sh>
