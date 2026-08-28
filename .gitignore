@@ -8,5 +8,6 @@ gallery/diary/
 txn.txt
 src/js/data/shadow*
 big/
+err.log
 
 secrets/
