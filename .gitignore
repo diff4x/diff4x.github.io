@@ -5,7 +5,6 @@ vtt/
 html/__*.html
 gallery/playboy/
 gallery/diary/
-txn.txt
 src/js/data/shadow*
 big/
 err.log

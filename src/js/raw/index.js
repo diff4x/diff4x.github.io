@@ -303,7 +303,7 @@ BUS.addEventListener('message', async (e) => {
                 }
             }
 
-            if (activeKw && !activeKw.startsWith('@')) {
+            if (activeKw && !isReservedSearchCommand(activeKw)) {
                 store.SearchCache.set(activeKw, globalResults);
             }
 
@@ -1114,7 +1114,7 @@ async function loadDataInBatches(files, now, concurrency) {
                     }
                 }
 
-                if (activeKw && !activeKw.startsWith('@')) {
+                if (activeKw && !isReservedSearchCommand(activeKw)) {
                     clearTimeout(window._idbWriteTimer);
                     window._idbWriteTimer = setTimeout(() => {
                         searchWorker.postMessage({ type: 'COMMIT_CURSOR', payload: { keyword: activeKw } });
@@ -1491,7 +1491,7 @@ function search_box() {
                 }
                 return;
             }
-            if (val.startsWith("@synonyms=")) {
+            if (val.startsWith("@like=")) {
                 const n = parseInt(val.split("=")[1], 10);
                 if (n === 0 || n === 1) {
                     store.synonyms_enabled = n;
@@ -1501,7 +1501,7 @@ function search_box() {
                     store.SearchCache.clear();
                     if (searchWorker) searchWorker.postMessage({ type: "CLEAR_CURSOR", payload: { keyword: "" } });
                 } else {
-                    this.placeholder = "@synonyms 只能是 0 或 1（当前输入无效）";
+                    this.placeholder = "@like 只能是 0 或 1（当前输入无效）";
                     setTimeout(() => this.placeholder = "Search...", 2500);
                     this.value = "";
                 }
@@ -2014,13 +2014,13 @@ function processAndShowResults(results, keyword, options = {}) {
         currentIndex = finalResults.findIndex(r => r.path === currentPath || r.path === strippedPath);
     }
 
-    if (!provisional && activeKw !== "" && !activeKw.startsWith('@')) {
+    if (!provisional && activeKw !== "" && !isReservedSearchCommand(activeKw)) {
         store.SearchCache.set(activeKw, finalResults).then(() => {
             if (currentIndex === -1) {
                 emitEvent('LOCAL_SEARCH_COUNT', activeKw, 'content');
             }
         });
-    } else if (provisional && currentIndex === -1 && activeKw && !activeKw.startsWith('@')) {
+    } else if (provisional && currentIndex === -1 && activeKw && !isReservedSearchCommand(activeKw)) {
         emitEvent('LOCAL_SEARCH_COUNT', activeKw, 'content');
     }
 
@@ -2152,6 +2152,10 @@ async function updateAutocompleteSuggestions(val) {
 function normalizeKeyword(kw) {
     if (!kw || typeof kw !== 'string') return '';
     return kw.trim().toLowerCase().replace(/\s+/g, '');
+}
+
+function isReservedSearchCommand(kw) {
+    return typeof kw === 'string' && /^@(noise=|like=|bomb$|rebirth$)/.test(kw);
 }
 
 function updateSearchResults(results, keyword) {
