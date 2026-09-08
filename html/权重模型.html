@@ -6,7 +6,7 @@
   <title>权重模型</title>
  </head>
  <body>
-  <span id="anchor">20260825200802-21.技巧</span>
+  <span id="anchor">20260905091159-21.技巧</span>
   <pre>
 # 权重转化为知识
 本质上是不断根据前面的 Token，预测下一个 Token
@@ -86,7 +86,7 @@ import re
 import time
 
 client = OpenAI(base_url="http://localhost:1234/v1", api_key="lm-studio")
-MODEL = "Huihui-Qwen3-VL-30B-A3B-Instruct-abliterated-GGUF"
+MODEL = "Huihui-Qwen3.8-27B-abliterated-Q4_K.gguf"
 IMAGE_DIR = Path(r"D:\Dropbox\diff4x.github.io\gallery\娱乐调侃")
 OUTPUT = "gallery_analysis.json"
 
@@ -120,7 +120,7 @@ def analyze(path):
                 ]
             }
         ],
-        temperature=0.2,
+        temperature=0.8,
         max_tokens=2000
     )
     text = re.sub(r"```json|```", "", r.choices[0].message.content).strip()
@@ -157,7 +157,7 @@ import re
 import csv
 
 client = OpenAI(base_url="http://localhost:1234/v1", api_key="lm-studio")
-MODEL = "Huihui-Qwen3-30B-A3B-Instruct-2507-abliterated-GGUF"
+MODEL = "Huihui-Qwen3.8-27B-abliterated-Q4_K.gguf"
 IMAGE_DIR = Path(r"D:\Dropbox\diff4x.github.io\gallery\娱乐调侃")
 ANALYSIS = "gallery_analysis.json"
 LOG = "rename_log.csv"
@@ -177,21 +177,17 @@ def unique(path):
 
 def make_name(info):
     prompt = f"""
-根据图片分析生成文件名。
+根据图片分析生成新文件名(不含图片格式后缀)
 要求：
-- 中文
-- 15~30字
-- 一眼知道内容
-- 表达核心笑点或讽刺
-- 不使用标点
+- 2~60字
+- 使一眼便知道其内容或者其要表达的核心意思
 分析：
 {json.dumps(info, ensure_ascii=False)}
-只输出文件名。
 """
     r = client.chat.completions.create(
         model=MODEL,
         messages=[{"role": "user", "content": prompt}],
-        temperature=0.3,
+        temperature=0.8,
         max_tokens=60
     )
     return clean_name(r.choices[0].message.content)

@@ -354,13 +354,17 @@ b_pre= ++b;    // 前缀：使用b的值前，递增b
 y = (4 + x++) + (6 + x++);
 </code>
 
-
-
-
-
-
-
-
+# 5.6
+<code c>
+void pound(int n);
+int times = 5;
+char ch = '!';   // ASCII码是33 
+float f = 6.0f;
+pound(times);
+// 函数原型告诉编译器pound()需要一个int类型的参数。相应地，当编译器执行到pound(ch)表达式时，会把参数ch自动转换成int类型
+pound(ch);      // 和pound((int)ch);相同 
+pound(f);      // 和pound((int)f);相同
+</code>
 
 
 

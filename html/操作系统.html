@@ -655,6 +655,13 @@ git commit -m "sth"
 git log --oneline -20
 git push --force-with-lease
 </code>
+
+## 忽略已跟踪的文件
+如果以前已经执行过add或commit, Git 已经记录了它们, 后来再加 .gitignore 不会自动把它们从 Git 的跟踪列表里移除
+<code bash>
+git rm --cached jar/err.log
+git rm --cached -r video/vtt/
+</code>
 </pre>
  </body>
 </html>
