@@ -15,7 +15,9 @@ html {
 body {
     height: 100vh;
     margin: 0;
-    background-color: darkblue;
+    background-color: #408fc4;
+    background-image: url(../../gallery/拍摄/260906/20260908222042.webp);
+    background-size: cover;
 }
 
 ::-webkit-scrollbar {
