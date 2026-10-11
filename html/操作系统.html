@@ -115,18 +115,19 @@ e2-micro
     vCPU: 2
     RAM: 1 GB
     Disk: Standard persistent disk 10 GB
-Debian 13, 日本东京, 延迟约100ms, 费用约$8.36/月
+Debian 13, 日本东京, 延迟约100ms, 费用约$8.36/月, 出站流量另计, $0.12/GiB
 改为标准永久磁盘
 取消计划快照
-vpc network - firewall
-    allow-xray-443
-        应用到所有实例
-        来源 IPv4 范围  0.0.0.0/0
-        指定的协议和端口勾选 TCP 端口443
-    allow-udp-443
-        应用到所有实例
-        来源 IPv4 范围  0.0.0.0/0
-        指定的协议和端口勾选 UDP 端口443
+云端防火墙端口放行, 服务器内部也要放行
+    vpc network - firewall
+        allow-xray-443
+            应用到所有实例
+            来源 IPv4 范围  0.0.0.0/0
+            指定的协议和端口勾选 TCP 端口443
+        allow-udp-443
+            应用到所有实例
+            来源 IPv4 范围  0.0.0.0/0
+            指定的协议和端口勾选 UDP 端口443
 其中 Create similar 以相同配置开启新空白机器, 取消计划快照
 
 ### DO
@@ -135,12 +136,8 @@ https://cloud.digitalocean.com/droplets
     vCPU: 1
     RAM: 512 MB
     Disk: SSD 10 GB
-Debian 13, 美国旧金山, 延迟约300ms, 费用约$4/月
-Inbound Rules
-    Type: HTTPS
-    Protocol: TCP 和 UDP
-    Port Range: 443
-    Sources: All IPv4 (0.0.0.0/0) 和 All IPv6 (::/0)
+Debian 13, 美国旧金山, 延迟约300ms, 费用约$4/月, 包含500G出站流量
+没有关联云端防火墙时不需要配置端口放行, 服务器内部放行即可
 
 ### install.sh
 <code sh>
