@@ -1343,8 +1343,10 @@ function initExcerptTrigger() {
 
         let lastProcessedText = "";
 
+        const isMac = /Mac|iPhone|iPad/.test(navigator.platform);
         document.addEventListener('mousedown', (e) => {
             if (e.target && e.target.closest && e.target.closest('#excerpt-pop-btn')) return;
+            if (e.button !== 0 || (isMac && e.ctrlKey)) return;
             btn.style.display = 'none';
             const sel = window.getSelection();
             if (sel && !sel.isCollapsed) {

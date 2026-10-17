@@ -222,7 +222,7 @@ document.body.addEventListener("mousedown", (e) => {
 
 document.body.addEventListener("contextmenu", (e) => {
     if (e.target && e.target.closest && e.target.closest('#excerpt-pop-btn')) return;
-    // 右键 / 触控板「右击」：VirtualCursor 只派发 contextmenu，必须在此处理
+    if (e.isTrusted) return;
     e.preventDefault();
     toggleBibiLightbox(e);
 });
