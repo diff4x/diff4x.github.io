@@ -623,6 +623,18 @@ body.touchpad-active .proto-overlay {
     max-height: calc(100dvh - var(--tp-height));
 }
 
+/* 触控板收起:#stage 与覆盖层占满整屏 */
+body.touchpad-active.tp-collapsed #stage {
+    height: 100dvh !important;
+    max-height: 100dvh !important;
+    border-bottom: none;
+}
+
+body.touchpad-active.tp-collapsed .proto-overlay {
+    height: 100dvh;
+    max-height: 100dvh;
+}
+
 #touchpad-panel {
   flex-shrink: 0;
   display: none;
@@ -644,6 +656,15 @@ body.touchpad-active #touchpad-panel {
   box-sizing: border-box;
   border-top: 2px solid var(--tp-accent);
   box-shadow: 0 -6px 18px rgba(0, 0, 0, 0.45);
+  transition: transform .18s ease, visibility 0s linear 0s;
+}
+
+/* 收起:面板滑出屏幕并隐藏(保持布局存在,按钮拖动范围仍可按其高度计算) */
+body.touchpad-active.tp-collapsed #touchpad-panel {
+  transform: translateY(100%);
+  visibility: hidden;
+  pointer-events: none;
+  transition: transform .18s ease, visibility 0s linear .18s;
 }
 
 .tp-col-buttons {
@@ -749,4 +770,47 @@ body.touchpad-active #tp-cursor { display: block; }
     margin-left: -1px;
     margin-top: -11px;
     box-shadow: 0 0 4px rgba(0,0,0,0.5);
+}
+
+/* 收起/展开按钮:悬浮在触控板范围内,按住可拖动并固定位置 */
+#tp-toggle {
+  position: fixed;
+  left: 0; top: 0; /* 实际位置由 touchpad.js 写入 */
+  z-index: 1000000;
+  width: 60px;
+  height: 40px;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font: inherit;
+  font-size: 20px !important;
+  line-height: 1;
+  letter-spacing: .5px;
+  color: #fff;
+  background: rgba(79, 140, 255, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.55);
+  border-radius: 10px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+  box-sizing: border-box;
+  cursor: pointer;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-text-size-adjust: none !important;
+  text-size-adjust: none !important;
+  transition: opacity .15s ease, transform .12s ease;
+}
+
+/* 收起后悬浮在页面内容上,降低存在感 */
+body.tp-collapsed #tp-toggle {
+  opacity: .6;
+}
+
+body #tp-toggle.tp-dragging {
+  opacity: 1;
+  transform: scale(1.08);
 }

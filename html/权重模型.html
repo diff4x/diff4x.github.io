@@ -6,7 +6,7 @@
   <title>权重模型</title>
  </head>
  <body>
-  <span id="anchor">20260807180736-21.技巧</span>
+  <span id="anchor">20261009003238-21.技巧</span>
   <pre>
 # 权重转化为知识
 本质上是不断根据前面的 Token，预测下一个 Token
@@ -86,7 +86,7 @@ import re
 import time
 
 client = OpenAI(base_url="http://localhost:1234/v1", api_key="lm-studio")
-MODEL = "Huihui-Qwen3-VL-30B-A3B-Instruct-abliterated-GGUF"
+MODEL = "Huihui-Qwen3.8-27B-abliterated-Q4_K.gguf"
 IMAGE_DIR = Path(r"D:\Dropbox\diff4x.github.io\gallery\娱乐调侃")
 OUTPUT = "gallery_analysis.json"
 
@@ -120,7 +120,7 @@ def analyze(path):
                 ]
             }
         ],
-        temperature=0.2,
+        temperature=0.8,
         max_tokens=2000
     )
     text = re.sub(r"```json|```", "", r.choices[0].message.content).strip()
@@ -157,7 +157,7 @@ import re
 import csv
 
 client = OpenAI(base_url="http://localhost:1234/v1", api_key="lm-studio")
-MODEL = "Huihui-Qwen3-30B-A3B-Instruct-2507-abliterated-GGUF"
+MODEL = "Huihui-Qwen3.8-27B-abliterated-Q4_K.gguf"
 IMAGE_DIR = Path(r"D:\Dropbox\diff4x.github.io\gallery\娱乐调侃")
 ANALYSIS = "gallery_analysis.json"
 LOG = "rename_log.csv"
@@ -177,21 +177,17 @@ def unique(path):
 
 def make_name(info):
     prompt = f"""
-根据图片分析生成文件名。
+根据图片分析生成新文件名(不含图片格式后缀)
 要求：
-- 中文
-- 15~30字
-- 一眼知道内容
-- 表达核心笑点或讽刺
-- 不使用标点
+- 2~60字
+- 使一眼便知道其内容或者其要表达的核心意思
 分析：
 {json.dumps(info, ensure_ascii=False)}
-只输出文件名。
 """
     r = client.chat.completions.create(
         model=MODEL,
         messages=[{"role": "user", "content": prompt}],
-        temperature=0.3,
+        temperature=0.8,
         max_tokens=60
     )
     return clean_name(r.choices[0].message.content)
@@ -219,6 +215,61 @@ def main():
 if __name__ == "__main__":
     main()
 </code>
+
+# 神经算子
+工作原理
+    数据收集：首先，需要收集大量的输入函数和对应的输出函数数据。这些数据可以来自于实验测量、数值模拟等。
+    模型构建：选择合适的神经网络架构来构建神经算子模型。常见的架构有傅里叶神经算子（FNO）、图神经算子等。
+    训练模型：使用收集到的数据对神经算子模型进行训练。在训练过程中，通过调整模型的参数，使得模型的输出尽可能地接近真实的输出。
+    模型评估：使用未参与训练的数据对训练好的模型进行评估，检验模型的性能和泛化能力。
+    应用模型：将训练好的模型应用到实际问题中，进行函数映射的预测和求解。
+
+航空航天领域：在飞行器的设计和优化中，需要对流体力学方程进行求解。神经算子可以快速准确地模拟飞行器周围的气流分布，从而帮助工程师优化飞行器的外形，提高飞行性能。
+能源领域：在石油开采、电力系统等方面，需要对复杂的物理过程进行建模和预测。神经算子可以通过学习历史数据，准确地预测油藏的产量、电力系统的负荷等，为能源的合理开发和利用提供支持。
+生物医学领域：在药物研发、生物成像等方面，需要对生物分子的行为和特性进行研究。神经算子可以通过处理生物分子的结构和动力学数据，帮助科学家更好地理解生物分子的功能，从而加速药物研发的进程。
+
+# 参考已有图片和文字提示生成新图片
+1.以N卡12G独显环境为例,下载解压ComfyUI_windows_portable_nvidia.7z
+
+2.下载合适的去审查量化文件放入ComfyUI对应目录
+    qwen-image-2.1-UC-Q8_0.gguf
+        D:\game\ComfyUI_windows_portable\ComfyUI\models\unet\
+    qwen_image_2.1_vae_bf16.safetensors
+        D:\game\ComfyUI_windows_portable\ComfyUI\models\vae\
+    qwen3-vl-8b-heretic-1.3.0-int8convrot.safetensors
+        D:\game\ComfyUI_windows_portable\ComfyUI\models\text_encoders\
+
+    关于chrome下载huggingface大型资源对方中途报403导致流量吐血的问题, 改用它自家的hf并禁用xet, 外部python安装huggingface_hub 
+<code batch>
+python -m pip install -U huggingface_hub
+set HF_HUB_DISABLE_XET=1
+python -m huggingface_hub.cli.hf download craftingmod/Qwen3-VL-8B-Heretic-INT8 qwen3-vl-8b-heretic-1.3.0-int8convrot.safetensors --local-dir "D:\game\ComfyUI_windows_portable\ComfyUI\models\text_encoders"
+</code>
+set只对当前cmd窗口有效,关掉窗口就失效,下次下载要重新设置
+中途断了重新执行同一条命令即可,已下载的部分会续传,不用从头来
+huggingface现在的大文件基本都存在xet存储上。无论是浏览器还是hf工具,下载时拿到的都是一个带签名会过期的临时链接。网络慢下载时间长中途暂停或断线都会导致链接过期或签名失效从而触发403。Chrome不会重新申请新链接所以每次失败都白费流量
+hf工具遇到失败会重新请求新的下载地址再续传所以更稳
+禁用xet改走传统的LFS通道, xet的高并发下载在不稳定的线路上容易出错
+
+3.git安装支持qwen-image-2.1的gguf节点
+    D:\game\ComfyUI_windows_portable\ComfyUI\custom_nodes目录下, 删除原ComfyUI-GGUF文件夹
+<code sh>
+git clone https://github.com/leejet/ComfyUI-GGUF
+</code>
+
+4.cmd用便携包内自带的python补全依赖
+<code batch>
+D:\game\ComfyUI_windows_portable\python_embeded\python.exe -m pip install -r D:\game\ComfyUI_windows_portable\ComfyUI\custom_nodes\ComfyUI-GGUF\requirements.txt
+</code>
+
+5.ComfyUI基本设置
+运行D:\game\ComfyUI_windows_portable\run_nvidia_gpu.bat调出浏览器本地8188端口
+模板找Qwen-Image 2.1 Image Edit
+进入Image Edit (Qwen Image 2.1)图块子集,node搜索gguf找到Unet Loader (GGUF), 更改连线删除原图块, 搜索Load CLIP,类型qwen_image连线至Generate Text删除原图块
+回到Image Edit (Qwen Image 2.1)主图块, 改选unet_name等等标红位置
+存档为workflow_v0.json再进行后续调校, 位于D:\game\ComfyUI_windows_portable\ComfyUI\user\default\workflows, 每次有效改动后另存为v1、v2..,不要覆盖v0
+
+6.细致调校
 </pre>
  </body>
 </html>

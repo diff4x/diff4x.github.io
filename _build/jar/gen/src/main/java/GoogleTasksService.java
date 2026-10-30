@@ -1,9 +1,12 @@
 import com.google.api.client.auth.oauth2.Credential;
+import com.google.api.client.auth.oauth2.StoredCredential;
+import com.google.api.client.auth.oauth2.TokenResponseException;
 import com.google.api.client.extensions.java6.auth.oauth2.AuthorizationCodeInstalledApp;
 import com.google.api.client.extensions.jetty.auth.oauth2.LocalServerReceiver;
 import com.google.api.client.googleapis.auth.oauth2.GoogleAuthorizationCodeFlow;
 import com.google.api.client.googleapis.auth.oauth2.GoogleClientSecrets;
 import com.google.api.client.googleapis.javanet.GoogleNetHttpTransport;
+import com.google.api.client.http.HttpResponseException;
 import com.google.api.client.http.javanet.NetHttpTransport;
 import com.google.api.client.json.JsonFactory;
 import com.google.api.client.json.gson.GsonFactory;
@@ -20,6 +23,7 @@ import org.slf4j.LoggerFactory;
 
 import java.io.File;
 import java.io.FileInputStream;
+import java.io.IOException;
 import java.io.InputStreamReader;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -31,6 +35,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public class GoogleTasksService {
     private static final Logger logger = LoggerFactory.getLogger(GoogleTasksService.class);
@@ -38,10 +43,78 @@ public class GoogleTasksService {
     private static final JsonFactory JSON_FACTORY = GsonFactory.getDefaultInstance();
     private static final List<String> SCOPES = Collections.singletonList(TasksScopes.TASKS_READONLY);
 
+    private static final String USER_ID = "user";
+    /** 等待用户完成授权页的上限；超时后放弃本次授权并释放 8888 端口，由调用方进入冷却 */
+    private static final long AUTH_WAIT_TIMEOUT_MS = 30L * 60 * 1000;
+
+    /** 失败类型，供调用方（GoogleTasksPoller）分流处理 */
+    public enum FailureKind {
+        /** 网络层失败（超时 / DNS / 连接被重置等），会自愈 */
+        NETWORK,
+        /** 授权失效（刷新令牌被拒，或刷新后仍 401），需要重新授权 */
+        AUTH,
+        /** 其他：API 4xx/5xx、本地写文件失败、代码 bug 等 */
+        OTHER
+    }
+
+    /** 本地写 JSON 失败。单独成类，避免被当成"网络 IO 异常"而被静默 */
+    public static final class LocalWriteException extends RuntimeException {
+        LocalWriteException(Throwable cause) {
+            super("写入任务 JSON 失败: " + cause, cause);
+        }
+    }
+
+    /** 最近一次构造过程中是否真的弹出了授权页（用于授权冷却记账；仅由轮询线程使用） */
+    private static volatile boolean interactiveAuthTriggered;
+
     private final Tasks service;
     private final ObjectMapper mapper = new ObjectMapper().enable(SerializationFeature.INDENT_OUTPUT);
 
+    public static boolean isInteractiveAuthTriggered() {
+        return interactiveAuthTriggered;
+    }
+
+    /**
+     * 把拉取过程中抛出的异常归类（沿 cause 链从外向内，命中即返回）：
+     * - 本地写文件失败                          -> OTHER
+     * - 令牌端点 400/401（刷新令牌被拒）          -> AUTH
+     * - API 返回 401（刷新后仍无效）              -> AUTH
+     * - 其他 HTTP 状态（403 / 429 / 5xx ...）     -> OTHER   （不当作授权失败，避免无谓清 token）
+     * - 其余 IOException（超时 / DNS / 重置 ...）  -> NETWORK
+     * - 都不是                                  -> OTHER
+     * 注意顺序：TokenResponseException 是 HttpResponseException 的子类，HttpResponseException 又是 IOException 的子类，必须先判具体的。
+     */
+    public static FailureKind classify(Throwable t) {
+        Throwable cur = t;
+        for (int depth = 0; cur != null && depth < 8; depth++, cur = cur.getCause()) {
+            if (cur instanceof LocalWriteException) {
+                return FailureKind.OTHER;
+            }
+            if (cur instanceof TokenResponseException) {
+                int code = ((TokenResponseException) cur).getStatusCode();
+                return (code == 400 || code == 401) ? FailureKind.AUTH : FailureKind.OTHER;
+            }
+            if (cur instanceof HttpResponseException) {
+                return ((HttpResponseException) cur).getStatusCode() == 401 ? FailureKind.AUTH : FailureKind.OTHER;
+            }
+            if (cur instanceof IOException) {
+                return FailureKind.NETWORK;
+            }
+        }
+        return FailureKind.OTHER;
+    }
+
+    /**
+     * 只删除这个用户的已存凭证（不动 tokens/ 目录里的其他东西）。
+     * 删除后下一次构造 GoogleTasksService 会走"首次授权"流程，复用原有弹窗。
+     */
+    public static void clearStoredCredential() throws IOException {
+        StoredCredential.getDefaultDataStore(new FileDataStoreFactory(new File(Config.TOKENS_DIR)))
+                .delete(USER_ID);
+    }
+
     public GoogleTasksService() throws Exception {
+        interactiveAuthTriggered = false;
         NetHttpTransport httpTransport = GoogleNetHttpTransport.newTrustedTransport();
         Credential credential = authorize(httpTransport);
         this.service = new Tasks.Builder(httpTransport, JSON_FACTORY, credential)
@@ -74,9 +147,42 @@ public class GoogleTasksService {
                 .setPort(8888)
                 .build();
 
-        // 第一次会弹浏览器；有 token 后直接返回
-        return new AuthorizationCodeInstalledApp(flow, receiver, url -> openBrowser(url))
-                .authorize("user");
+        // 看门狗：授权页无人处理时，超时后主动停掉回环接收器（释放 8888），让本次授权以异常结束。
+        // 没有它，授权页被关掉/忽略后线程会永远卡在等待里，冷却也就没有意义。
+        final AtomicBoolean finished = new AtomicBoolean(false);
+        final AtomicBoolean timedOut = new AtomicBoolean(false);
+        Thread watchdog = new Thread(() -> {
+            try {
+                Thread.sleep(AUTH_WAIT_TIMEOUT_MS);
+            } catch (InterruptedException e) {
+                return;
+            }
+            if (finished.compareAndSet(false, true)) {
+                timedOut.set(true);
+                try {
+                    receiver.stop();
+                } catch (Exception ignored) {
+                }
+            }
+        }, "GoogleTasks-AuthWatchdog");
+        watchdog.setDaemon(true);
+        watchdog.start();
+
+        try {
+            // 第一次会弹浏览器；有 token 后直接返回（此时不会触发下面的 browser 回调）
+            return new AuthorizationCodeInstalledApp(flow, receiver, url -> {
+                interactiveAuthTriggered = true;
+                openBrowser(url);
+            }).authorize(USER_ID);
+        } catch (Exception e) {
+            if (timedOut.get()) {
+                throw new IOException("等待授权超过 " + (AUTH_WAIT_TIMEOUT_MS / 60000) + " 分钟，已放弃本次授权", e);
+            }
+            throw e;
+        } finally {
+            finished.set(true);
+            watchdog.interrupt();
+        }
     }
 
     /**
@@ -148,69 +254,70 @@ public class GoogleTasksService {
     }
 
     /**
-     * 拉取所有任务列表中、截止时间在 [很久以前, 现在+N天] 且未完成的任务，写 JSON
+     * 拉取所有任务列表中、截止时间在 [很久以前, 现在+N天] 且未完成的任务，写 JSON。
+     * 失败不再在这里吞掉/记日志，而是抛给调用方按类型分流，见 {@link #classify(Throwable)}。
      */
-    public void fetchAndWriteUpcomingTasks() {
-        try {
-            Instant now = Instant.now();
-            // due 只有日期，时间部分会被 API 丢弃；用 RFC3339 字符串即可
-            String dueMin = "1970-01-01T00:00:00.000Z"; // 含过期未完成
-            String dueMax = now.plus(Config.DUE_WITHIN_DAYS, ChronoUnit.DAYS)
-                    .toString(); // 例如 2026-08-07T15:34:00.000Z
+    public void fetchAndWriteUpcomingTasks() throws Exception {
+        Instant now = Instant.now();
+        // due 只有日期，时间部分会被 API 丢弃；用 RFC3339 字符串即可
+        String dueMin = "1970-01-01T00:00:00.000Z"; // 含过期未完成
+        String dueMax = now.plus(Config.DUE_WITHIN_DAYS, ChronoUnit.DAYS)
+                .toString(); // 例如 2026-08-07T15:34:00.000Z
 
-            List<Map<String, Object>> result = new ArrayList<>();
+        List<Map<String, Object>> result = new ArrayList<>();
 
-            TaskLists lists = service.tasklists().list().setMaxResults(100).execute();
-            if (lists.getItems() == null) {
-                writeJson(result);
-                return;
-            }
-
-            for (TaskList list : lists.getItems()) {
-                String pageToken = null;
-                do {
-                    com.google.api.services.tasks.model.Tasks tasksPage = service.tasks()
-                            .list(list.getId())
-                            .setShowCompleted(false)
-                            .setShowHidden(false)
-                            .setDueMin(dueMin)
-                            .setDueMax(dueMax)
-                            .setMaxResults(100)
-                            .setPageToken(pageToken)
-                            .execute();
-
-                    if (tasksPage.getItems() != null) {
-                        for (Task t : tasksPage.getItems()) {
-                            Map<String, Object> m = new HashMap<>();
-                            m.put("listId", list.getId());
-                            m.put("listTitle", list.getTitle());
-                            m.put("id", t.getId());
-                            m.put("title", t.getTitle());
-                            m.put("notes", t.getNotes());
-                            m.put("due", t.getDue());
-                            m.put("status", t.getStatus());
-                            m.put("updated", t.getUpdated());
-                            m.put("webViewLink", t.getWebViewLink());
-                            result.add(m);
-                        }
-                    }
-                    pageToken = tasksPage.getNextPageToken();
-                } while (pageToken != null);
-            }
-
+        TaskLists lists = service.tasklists().list().setMaxResults(100).execute();
+        if (lists.getItems() == null) {
             writeJson(result);
-//            logger.info("已写入临期任务 {} 条 -> {}", result.size(), Config.TASKS_JSON_PATH);
-        } catch (Exception e) {
-            logger.error("拉取 Google Tasks 失败", e);
+            return;
         }
+
+        for (TaskList list : lists.getItems()) {
+            String pageToken = null;
+            do {
+                com.google.api.services.tasks.model.Tasks tasksPage = service.tasks()
+                        .list(list.getId())
+                        .setShowCompleted(false)
+                        .setShowHidden(false)
+                        .setDueMin(dueMin)
+                        .setDueMax(dueMax)
+                        .setMaxResults(100)
+                        .setPageToken(pageToken)
+                        .execute();
+
+                if (tasksPage.getItems() != null) {
+                    for (Task t : tasksPage.getItems()) {
+                        Map<String, Object> m = new HashMap<>();
+                        m.put("listId", list.getId());
+                        m.put("listTitle", list.getTitle());
+                        m.put("id", t.getId());
+                        m.put("title", t.getTitle());
+                        m.put("notes", t.getNotes());
+                        m.put("due", t.getDue());
+                        m.put("status", t.getStatus());
+                        m.put("updated", t.getUpdated());
+                        m.put("webViewLink", t.getWebViewLink());
+                        result.add(m);
+                    }
+                }
+                pageToken = tasksPage.getNextPageToken();
+            } while (pageToken != null);
+        }
+
+        writeJson(result);
+//        logger.info("已写入临期任务 {} 条 -> {}", result.size(), Config.TASKS_JSON_PATH);
     }
 
-    private void writeJson(List<Map<String, Object>> data) throws Exception {
-        Path path = Paths.get(Config.TASKS_JSON_PATH);
-        Path parent = path.getParent();
-        if (parent != null) {
-            Files.createDirectories(parent);
+    private void writeJson(List<Map<String, Object>> data) {
+        try {
+            Path path = Paths.get(Config.TASKS_JSON_PATH);
+            Path parent = path.getParent();
+            if (parent != null) {
+                Files.createDirectories(parent);
+            }
+            mapper.writeValue(path.toFile(), data);
+        } catch (Exception e) {
+            throw new LocalWriteException(e);
         }
-        mapper.writeValue(path.toFile(), data);
     }
 }

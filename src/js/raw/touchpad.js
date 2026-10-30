@@ -15,6 +15,10 @@ export function initTouchpad(ctx) {
     const DOUBLE_TAP_DIST = 30;
     const MOVE_SENSITIVITY = 1.1;
     const MIN_ZOOM = 1, MAX_ZOOM = 3;
+    const STAGE_RESIZE_MS = 200;        // 略大于 index.css 中 #stage 高度过渡(.18s)
+    const TOGGLE_POS_KEY = 'tp-toggle-pos';
+    const TOGGLE_DRAG_THRESHOLD = 6;    // 位移超过该值才算"拖动",否则视为点按
+    const TOGGLE_EDGE_GAP = 4;
 
     document.body.classList.add('touchpad-active');
 
@@ -48,7 +52,7 @@ export function initTouchpad(ctx) {
         <div class="tp-btn" data-btn="dblclick" style="flex:1; border-bottom: 1px solid var(--tp-line); display:flex; align-items:center; justify-content:center; color:#cfd3dc;">左双击</div>
         <div class="tp-btn" data-btn="auxclick" style="flex:1; border-bottom: 1px solid var(--tp-line); display:flex; align-items:center; justify-content:center; color:#cfd3dc;">中击</div>
         <div class="tp-btn" data-btn="contextmenu" style="flex:1; display:flex; align-items:center; justify-content:center; color:#cfd3dc;">右击</div>
-        <div class="tp-btn" data-btn="toggle_log" style="flex:1; border-bottom: 1px solid var(--tp-line); display:flex; align-items:center; justify-content:center; color:#cfd3dc;">日志</div>
+        <div class="tp-slot" aria-hidden="true" style="flex:1; border-top: 1px solid var(--tp-line); pointer-events:none;"></div>
     </div>
     `;
 
@@ -588,103 +592,164 @@ export function initTouchpad(ctx) {
     applyTransform();
     updateCursorVisual();
 
-    const mobileConsole = document.createElement('div');
-    mobileConsole.style.cssText = 'position:fixed; bottom:var(--tp-height); left:0; width:100%; height:25vh; background:rgba(0,0,0,0.85); color:#0f0; font-family:monospace; font-size:11px; overflow-y:auto; z-index:999999; display:none; padding:8px; box-sizing:border-box; word-break:break-all; pointer-events:auto;';
-    document.body.appendChild(mobileConsole);
+    /* ==========================================================================
+     * 收起 / 展开按钮
+     * - 点按:收起/展开触控板(收起后 #stage 占满整屏)
+     * - 按住拖动:只能在触控板原本占据的范围内移动,松手后固定并记住位置,
+     *   用来避开右下角的更新条幅
+     * ========================================================================== */
+    const slot = panel.querySelector('.tp-slot');
 
-    window.top._logToMobile = function (level, args) {
-        const msg = document.createElement('div');
-        msg.style.color = level === 'error' ? '#ff4d4f' : level === 'warn' ? '#faad14' : (level === 'info' ? '#1890ff' : '#52c41a');
-        msg.style.marginBottom = '4px';
-        msg.style.borderBottom = '1px solid rgba(255,255,255,0.1)';
+    const toggleBtn = document.createElement('button');
+    toggleBtn.id = 'tp-toggle';
+    toggleBtn.type = 'button';
+    toggleBtn.textContent = '收起';
+    toggleBtn.setAttribute('aria-label', '收起/展开触控板');
+    toggleBtn.setAttribute('aria-expanded', 'true');
+    toggleBtn.addEventListener('contextmenu', (e) => e.preventDefault());
+    document.body.appendChild(toggleBtn);
 
-        const msgText = args.map(a => {
-            if (a instanceof Error) return a.stack || a.message;
-            if (typeof a === 'object') {
-                try { return JSON.stringify(a); } catch (e) { return String(a); }
-            }
-            return a;
-        }).join(' ');
+    let isCollapsed = false;
+    let syncTimer = null;
+    let toggleDrag = null;
 
-        msg.innerText = `[${level.toUpperCase()}] ${msgText}`;
-        mobileConsole.appendChild(msg);
-        mobileConsole.scrollTop = mobileConsole.scrollHeight;
-    };
-
-    function hijackWindow(win) {
-        if (!win || win._consoleHijacked) return;
-        win._consoleHijacked = true;
-
-        const _originals = { log: win.console.log, error: win.console.error, warn: win.console.warn, info: win.console.info };
-
-        ['log', 'error', 'warn', 'info'].forEach(method => {
-            if (!win.console[method]) return;
-            win.console[method] = function (...args) {
-                _originals[method].apply(win.console, args);
-                if (window.top && window.top._logToMobile) window.top._logToMobile(method, args);
-            };
-        });
-
-        const _timeMap = new Map();
-        const _origTime = win.console.time;
-        const _origTimeEnd = win.console.timeEnd;
-        if (_origTime && _origTimeEnd) {
-            win.console.time = function (label = 'default') {
-                _origTime.call(win.console, label);
-                _timeMap.set(label, win.performance.now());
-            };
-            win.console.timeEnd = function (label = 'default') {
-                _origTimeEnd.call(win.console, label);
-                if (_timeMap.has(label)) {
-                    const duration = (win.performance.now() - _timeMap.get(label)).toFixed(4);
-                    if (window.top && window.top._logToMobile) window.top._logToMobile('info', [`${label}: ${duration} ms`]);
-                    _timeMap.delete(label);
-                }
-            };
-        }
-
-        win.addEventListener('error', function (event) {
-            if (event.target && (event.target.tagName === 'IMG' || event.target.tagName === 'SCRIPT' || event.target.tagName === 'LINK')) {
-                if (window.top && window.top._logToMobile) window.top._logToMobile('error', ['Resource 404/Error:', event.target.src || event.target.href]);
-            } else {
-                if (window.top && window.top._logToMobile) window.top._logToMobile('error', ['Uncaught Error:', event.message, 'at', event.filename, ':' + event.lineno]);
-            }
-        }, true);
-
-        win.addEventListener('unhandledrejection', function (event) {
-            if (window.top && window.top._logToMobile) window.top._logToMobile('error', ['Unhandled Promise Rejection:', event.reason]);
-        });
-
-        const _origFetch = win.fetch;
-        if (_origFetch) {
-            win.fetch = function (...args) {
-                return _origFetch.apply(this, args).then(res => {
-                    if (!res.ok && window.top && window.top._logToMobile) {
-                        window.top._logToMobile('error', ['Fetch Error:', res.status, res.url]);
-                    }
-                    return res;
-                }).catch(err => {
-                    if (window.top && window.top._logToMobile) window.top._logToMobile('error', ['Fetch Failed:', args[0], err]);
-                    throw err;
-                });
-            };
-        }
+    // 触控板原本占据的矩形。收起时面板只是移出屏幕(offsetHeight 不受 transform 影响),范围依然有效
+    function getToggleRange() {
+        const vw = window.innerWidth, vh = window.innerHeight;
+        const padBottom = parseFloat(getComputedStyle(panel).paddingBottom) || 0;
+        return { left: 0, top: vh - panel.offsetHeight, right: vw, bottom: vh - padBottom };
     }
 
-    hijackWindow(window);
+    function clampToggle(left, top) {
+        const r = getToggleRange();
+        const w = toggleBtn.offsetWidth, h = toggleBtn.offsetHeight;
+        return {
+            left: Math.max(r.left, Math.min(r.right - w, left)),
+            top: Math.max(r.top, Math.min(r.bottom - h, top)),
+        };
+    }
 
-    document.querySelectorAll('iframe').forEach(ifr => {
-        try { hijackWindow(ifr.contentWindow); } catch (e) { }
+    // 位置以"占可移动范围的比例"保存,横竖屏/窗口尺寸变化后仍落在触控板范围内
+    function toRatio(left, top) {
+        const r = getToggleRange();
+        const spanX = r.right - r.left - toggleBtn.offsetWidth;
+        const spanY = r.bottom - r.top - toggleBtn.offsetHeight;
+        return {
+            fx: spanX > 0 ? Math.max(0, Math.min(1, (left - r.left) / spanX)) : 1,
+            fy: spanY > 0 ? Math.max(0, Math.min(1, (top - r.top) / spanY)) : 1,
+        };
+    }
 
-        ifr.addEventListener('load', () => {
-            try { hijackWindow(ifr.contentWindow); } catch (e) { }
-        });
+    let togglePos = null;
+    try {
+        const saved = JSON.parse(localStorage.getItem(TOGGLE_POS_KEY));
+        if (saved && typeof saved.fx === 'number' && typeof saved.fy === 'number' &&
+            isFinite(saved.fx) && isFinite(saved.fy)) {
+            togglePos = { fx: Math.max(0, Math.min(1, saved.fx)), fy: Math.max(0, Math.min(1, saved.fy)) };
+        }
+    } catch (e) { }
+
+    if (!togglePos) {
+        // 默认停在原"日志"按钮的位置(右列最下方的预留格)
+        const r = getToggleRange();
+        const w = toggleBtn.offsetWidth, h = toggleBtn.offsetHeight;
+        let left = r.right - w - TOGGLE_EDGE_GAP;
+        let top = r.bottom - h - TOGGLE_EDGE_GAP;
+        const s = slot && slot.getBoundingClientRect();
+        if (s && s.width > 0 && s.height > 0) {
+            left = s.left + (s.width - w) / 2;
+            top = s.top + (s.height - h) / 2;
+        }
+        const c = clampToggle(left, top);
+        togglePos = toRatio(c.left, c.top);
+    }
+
+    function placeToggle(left, top) {
+        toggleBtn.style.left = left + 'px';
+        toggleBtn.style.top = top + 'px';
+    }
+
+    function applyTogglePos() {
+        const r = getToggleRange();
+        const spanX = Math.max(0, r.right - r.left - toggleBtn.offsetWidth);
+        const spanY = Math.max(0, r.bottom - r.top - toggleBtn.offsetHeight);
+        placeToggle(r.left + togglePos.fx * spanX, r.top + togglePos.fy * spanY);
+    }
+    applyTogglePos();
+    window.addEventListener('resize', () => { if (!toggleDrag) applyTogglePos(); });
+
+    function setCollapsed(next) {
+        if (next === isCollapsed) return;
+        isCollapsed = next;
+        document.body.classList.toggle('tp-collapsed', next);
+        toggleBtn.textContent = next ? '展开' : '收起';
+        toggleBtn.setAttribute('aria-expanded', String(!next));
+        clearTimeout(syncTimer);
+
+        if (next) {
+            // 收起后触控板无法操作:先隐藏光标,并清掉页面里残留的悬停态
+            cursorEl.style.visibility = 'hidden';
+            if (currentTargetId === 'index') clearLocalHover();
+            else if (currentTargetId) sendToFrame(currentTargetId, 'leave', 0, 0, {});
+            currentTargetId = null;
+        }
+
+        // 等 #stage 的高度过渡结束后,按新的可视高度校正光标与平移,再恢复光标
+        syncTimer = setTimeout(() => {
+            clampCursor();
+            panX = (window.innerWidth / 2) - cursor.x * zoom;
+            panY = (stage.clientHeight / 2) - cursor.y * zoom;
+            clampPan();
+            applyTransform();
+            updateCursorVisual();
+            if (!isCollapsed) {
+                cursorEl.style.visibility = '';
+                routeOp('move');
+            }
+        }, STAGE_RESIZE_MS);
+    }
+
+    toggleBtn.addEventListener('pointerdown', (e) => {
+        if (toggleDrag) return;
+        e.preventDefault();
+        toggleBtn.setPointerCapture(e.pointerId);
+        toggleDrag = {
+            id: e.pointerId,
+            startX: e.clientX, startY: e.clientY,
+            baseLeft: parseFloat(toggleBtn.style.left) || 0,
+            baseTop: parseFloat(toggleBtn.style.top) || 0,
+            dragging: false,
+        };
     });
 
-    const logBtn = panel.querySelector('[data-btn="toggle_log"]');
-    if (logBtn) {
-        logBtn.addEventListener('pointerup', () => {
-            mobileConsole.style.display = mobileConsole.style.display === 'none' ? 'block' : 'none';
-        });
+    toggleBtn.addEventListener('pointermove', (e) => {
+        if (!toggleDrag || e.pointerId !== toggleDrag.id) return;
+        e.preventDefault();
+        const dx = e.clientX - toggleDrag.startX;
+        const dy = e.clientY - toggleDrag.startY;
+        if (!toggleDrag.dragging) {
+            if (Math.hypot(dx, dy) <= TOGGLE_DRAG_THRESHOLD) return;
+            toggleDrag.dragging = true;
+            toggleBtn.classList.add('tp-dragging');
+        }
+        const c = clampToggle(toggleDrag.baseLeft + dx, toggleDrag.baseTop + dy);
+        placeToggle(c.left, c.top);
+    });
+
+    function endToggleDrag(e, cancelled) {
+        if (!toggleDrag || e.pointerId !== toggleDrag.id) return;
+        const wasDragging = toggleDrag.dragging;
+        toggleDrag = null;
+        toggleBtn.classList.remove('tp-dragging');
+
+        if (wasDragging) {
+            // 松手即固定:记住位置
+            togglePos = toRatio(parseFloat(toggleBtn.style.left) || 0, parseFloat(toggleBtn.style.top) || 0);
+            try { localStorage.setItem(TOGGLE_POS_KEY, JSON.stringify(togglePos)); } catch (err) { }
+        } else if (!cancelled) {
+            setCollapsed(!isCollapsed);
+        }
     }
+    toggleBtn.addEventListener('pointerup', (e) => endToggleDrag(e, false));
+    toggleBtn.addEventListener('pointercancel', (e) => endToggleDrag(e, true));
 }

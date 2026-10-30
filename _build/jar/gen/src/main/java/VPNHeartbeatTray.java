@@ -12,6 +12,18 @@ public class VPNHeartbeatTray {
     private static TrayIcon trayIcon;
     private static Image greenIcon, redIcon;
 
+    /** 最近一次心跳探测结果：null=尚无结果，TRUE=通，FALSE=不通。心跳线程写，Tasks 轮询线程只读 */
+    private static volatile Boolean online;
+
+    static boolean hasHeartbeatResult() {
+        return online != null;
+    }
+
+    /** 尚无结果时按"通"处理（fail-open），避免心跳线程异常时 Tasks 永远不拉取 */
+    static boolean isOnline() {
+        return !Boolean.FALSE.equals(online);
+    }
+
     public static void run(String[] args) throws Exception {
         if (!SystemTray.isSupported()) {
             logger.warn("System tray is not supported!");
@@ -36,13 +48,13 @@ public class VPNHeartbeatTray {
                     HttpURLConnection connection = (HttpURLConnection) url.openConnection();
                     connection.setRequestMethod("GET"); connection.setConnectTimeout(3000); connection.setReadTimeout(3000); connection.connect();
                     if (connection.getResponseCode() == 200) {
-                        trayIcon.setImage(greenIcon); trayIcon.setToolTip("VPN Heartbeat: Online");
+                        online = true; trayIcon.setImage(greenIcon); trayIcon.setToolTip("VPN Heartbeat: Online");
                     } else {
-                        trayIcon.setImage(redIcon); trayIcon.setToolTip("VPN Heartbeat: Offline (non-200)");
+                        online = false; trayIcon.setImage(redIcon); trayIcon.setToolTip("VPN Heartbeat: Offline (non-200)");
                     }
                     connection.disconnect();
                 } catch (Exception ex) {
-                    trayIcon.setImage(redIcon); trayIcon.setToolTip("VPN Heartbeat: Offline (fail)");
+                    online = false; trayIcon.setImage(redIcon); trayIcon.setToolTip("VPN Heartbeat: Offline (fail)");
                 }
                 try { Thread.sleep(10000); } catch (InterruptedException ignored) {}
             }
@@ -50,36 +62,11 @@ public class VPNHeartbeatTray {
     }
 
     /**
-     * Google Tasks：OAuth + 定时拉取，全部在后台线程
-     * 失败只打日志，不影响托盘和心跳
+     * Google Tasks：OAuth + 定时拉取，全部在后台线程。
+     * 轮询、失败分流、重新授权的逻辑见 GoogleTasksPoller；失败不影响托盘和心跳。
      */
     private static void startTasksLoop() {
-        Thread t = new Thread(() -> {
-            GoogleTasksService tasksService;
-            try {
-                // 首次会在这里弹浏览器 / 等本地回环；只阻塞本线程
-                try { Thread.sleep(1500); } catch (InterruptedException ignored) {}
-                tasksService = new GoogleTasksService();
-            } catch (Exception e) {
-                logger.error("Google Tasks 授权或初始化失败，托盘继续运行", e);
-                return;
-            }
-
-            while (true) {
-                try {
-                    tasksService.fetchAndWriteUpcomingTasks();
-                } catch (Exception e) {
-                    logger.error("拉取 Google Tasks 失败", e);
-                }
-                try {
-                    Thread.sleep(Config.TASKS_POLL_INTERVAL_MS);
-                } catch (InterruptedException e) {
-                    logger.info("Tasks 轮询线程退出");
-                    break;
-                }
-            }
-        }, "GoogleTasks-Poller");
-        t.start();
+        GoogleTasksPoller.start();
     }
 
     private static void initResources() {

@@ -1,12 +1,12 @@
 MIYUKI/
-Playboy Collection - 1377 Issues/
 SpongeBob SquarePants/
 vtt/
+Playboy Collection - 1377 Issues/
 html/__*.html
 gallery/playboy/
 gallery/diary/
-txn.txt
 src/js/data/shadow*
 big/
+err.log
 
 secrets/

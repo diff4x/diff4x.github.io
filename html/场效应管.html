@@ -1,0 +1,28 @@
+<!doctype html>
+<html>
+ <head>
+  <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+  <script src="../src/js/content.js"></script>
+  <title>场效应管</title>
+ </head>
+ <body>
+  <span id="anchor">20260903211547-21.技巧|元器件</span>
+  <pre>
+https://zhuanlan.zhihu.com/p/459446262
+https://blog.csdn.net/weiaipan1314/article/details/110426234
+https://zhuanlan.zhihu.com/p/2042301065236844714
+https://zhuanlan.zhihu.com/p/526321267
+https://zhuanlan.zhihu.com/p/550544706
+
+
+R1负责把 OUT“拉向 +5V”，NMOS 负责把 OUT“拉向 GND”；GPIO_CTRL 决定 NMOS 是否有能力把 OUT 拉低。
+
+“电压”是两点之间的差；“电流”是流动。电阻只有在有电流流过时，才会产生明显的电压降。
+
+R1 不负责阻止电流，而是负责把“5V → GND”的电流限制到一个安全的小值。所以 MOS 打开时：有电流 ≠ 短路。
+
+
+真正的短路是电流通路的总电阻小到导致电流远超电路允许范围。而 R1 就是故意放进去的“大电阻”，把这个电流限制住。
+</pre>
+ </body>
+</html>

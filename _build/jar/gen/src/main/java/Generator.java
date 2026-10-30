@@ -21,6 +21,7 @@ import java.util.zip.CRC32;
 public class Generator {
     private static final Logger logger = LoggerFactory.getLogger(Generator.class);
     private static final Pattern anchorPattern = Pattern.compile("<span id=\"anchor\">(\\d+)-(.+)</span>");
+    private static final Pattern HEADING_LINE_PATTERN = Pattern.compile("^(#{1,6})\\s+(.*)$");
     private static final Map<String, Object> liteDataTree = new HashMap<>();
     private static final List<Pattern> gitIgnorePatterns = new ArrayList<>();
     private static final Set<String> localOnlySet = new HashSet<>();
@@ -134,6 +135,7 @@ public class Generator {
                     List<String> lines = Files.readAllLines(path, StandardCharsets.UTF_8);
                     List<String> newLines = new ArrayList<>(lines.size());
                     StringBuilder htmlContentBuilder = new StringBuilder();
+                    StringBuilder searchTextBuilder = new StringBuilder();
                     boolean fileModified = false;
 
                     for (String line : lines) {
@@ -154,6 +156,8 @@ public class Generator {
                         if (keepLine) {
                             newLines.add(line);
                             htmlContentBuilder.append(line).append("\n"); 
+                            Matcher mHeading = HEADING_LINE_PATTERN.matcher(line);
+                            searchTextBuilder.append(mHeading.matches() ? mHeading.group(2) : line).append("\n");
                         } else {
                             fileModified = true;
                         }
@@ -165,6 +169,7 @@ public class Generator {
                     if (!isGitIgnored && !isExcludedData) coreBundle.put("/" + Config.PREFIX_HTML + path.getFileName().toString(), htmlContent);
 
                     Document doc = Jsoup.parse(htmlContent);
+                    Document searchDoc = Jsoup.parse(searchTextBuilder.toString());
                     String timeStamp = doc.getElementById("anchor") != null ? Objects.requireNonNull(doc.getElementById("anchor")).text() : "";
                     String title = doc.title().trim();
                     if (title.isEmpty()) title = fileName;
@@ -185,7 +190,7 @@ public class Generator {
                             records.add(newRecord);
                         }
 
-                        String cleanText = doc.body().text().replaceAll("\r\n|\r|\n", " ").replaceAll(" +", " ").replaceAll("\\$\\{", "&#36;{").replaceAll("`", "&#715;");
+                        String cleanText = searchDoc.body().text().replaceAll("\r\n|\r|\n", " ").replaceAll(" +", " ").replaceAll("\\$\\{", "&#36;{").replaceAll("`", "&#715;");
 
                         if (!isGitIgnored && !isExcludedData) {
                             fatDataMap.put(currentRecordId, cleanText);

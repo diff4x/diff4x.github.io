@@ -1,4 +1,4 @@
-/* ================================== txn_parser.js,  design by diff4x ================================== */
+/* ================================== txn_parser.js, 初代 by diff4x | 进化 by Gemini & ChatGPT & Claude ================================== */
 
 if ('serviceWorker' in navigator) {
     navigator.serviceWorker.addEventListener('controllerchange', () => {
@@ -228,10 +228,16 @@ a.download = "sample_txn.txt";
 a.innerText = "📥 下载 sample_txn.txt";
 a.style.cssText = "margin-left: 20px; font-size: 0.9rem; text-decoration: none; color: #2980b9;";
 
+const srcLink = document.createElement("a");
+srcLink.href = "https://github.com/diff4x/txnl";
+srcLink.target = "_blank";
+srcLink.innerText = "[Lang: txln]";
+srcLink.style.cssText = a.style.cssText;
+
 const out = document.createElement("div");
 out.className = "hide";
 out.id = "output";
-document.body.append(fileInput, a, out);
+document.body.append(fileInput, a, srcLink, out);
 
 /*---------------
   监听

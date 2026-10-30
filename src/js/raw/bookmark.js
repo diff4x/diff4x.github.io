@@ -70,7 +70,7 @@ window.addEventListener('DOMContentLoaded', () => {
         })
         .then(data => {
         const sizeMB = data.size / 1024;
-        const title = `当前项目体积：${sizeMB.toFixed(2)} MB`;
+        const title = `线上仓库体积：${sizeMB.toFixed(2)} MB`;
 
         cache = {
             title,
@@ -86,7 +86,7 @@ window.addEventListener('DOMContentLoaded', () => {
     try {
         this.title = await pendingRequest;
     } catch (err) {
-        console.error('项目体积获取失败:', err);
+        console.error(err);
     }
     });
 });
