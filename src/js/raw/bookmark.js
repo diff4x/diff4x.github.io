@@ -19,7 +19,8 @@ const BUS = window.__LITE_BUS__;
 
 const ctxId = window.top === window.self ? 'index' : window.childId;
 
-window.addEventListener('unload', () => {
+window.addEventListener('pagehide', (e) => {
+    if (e.persisted) return;
     if (window.__LITE_BUS__) {
         window.__LITE_BUS__.close();
         window.__LITE_BUS__ = null;

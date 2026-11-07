@@ -1,0 +1,322 @@
+<!doctype html>
+<html>
+ <head>
+  <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+  <script src="../src/js/content.js"></script>
+  <title>asrpro</title>
+ </head>
+ <body>
+  <span id="anchor">20261107032016-21.技巧|嵌入式开发|语音识别</span>
+  <pre>
+
+每次播报入队成功后立即调用 pause_asr()——播报期间识别引擎是暂停的，播完再恢复。
+所以提示语里哪怕含有"开灯""修改时长"等命令词，也不会被自己捕捉触发。
+需要注意的一点：播报中识别是停的，所以设备"说话时"喊它也没反应，这是正常现象，等播完再说即可。
+
+唤醒词的核心意义是**把设备从"休眠监听"切进"识别窗口"**：
+省电/省算力：休眠状态下只跑低耗能的唤醒检测（DNN 小模型），不做完整命令词识别；听到唤醒词后才启动完整 ASR，开始听命令词。
+界定会话边界：唤醒后芯片才开始收音、断句、匹配命令词；没唤醒时你说的"开灯"不会被执行。你的程序里 set_wakeup_forever() 就是绕过这一点、保持常驻识别。
+抗误触发：命令词靠固定模板匹配，环境噪音、闲聊容易误命中；唤醒词需要连续命中一个专门训练的词，相当于"开门钥匙"，降低误动作概率。
+
+每个命令词槽位（10 条中的一条）可以反复录入多种说法（不同音色、语速、方言），这些模板全部映射到同一个 cmd_id，识别时任意一个模板匹配成功即触发该条命令。
+总限制：全机学习模板总数上限由 SDK 定义 CWSL_MAX_TPL_NUM = 32（含唤醒词），不区分每条命令词各有多少，用完即"超上限"（对应 ID 10412 的提示）。
+另外每条词单次学习可要求说 1~3 遍（sg_reg_times 参数），多遍只算同一个槽位的样本一致性校验，不额外占多个名额——实际上每遍都会生成模板帧，说 3 遍会消耗更多模板空间。
+
+自学习模板存在 flash 的独立学习数据区，一键生成/烧录只更新模型和代码区，不会清除学习区。
+而"全部删除"在固件里的实现（cwsl_app_sample1.c:601）是 case CWSL_DELETE_ALL: cwsl_app_delete_word(-1,-1,ALL_WORD)，它被锁在删除模式里才能触发。
+现在"我要删除"被学习词条抢占，永远进不了删除模式，形成死锁。
+代码加个直接清除全部模板的通道, 例如 PA2 导通 GND（板子内部已开上拉，无需外接电阻） → 上电 → 听到"学习数据已清除" → 松手，全部已学指令（包括被抢占的"我要删除"）一次性清空。
+已学数据不受影响，其他功能照旧。
+
+<code c>
+#define cwsl_pro
+
+#include "asr.h"
+extern "C"{ void * __dso_handle = 0 ;}
+#include "setup.h"
+#include "myLib/asr_event.h"
+#include "myLib/asr_hwtimer.h"
+/* 自学习管理接口：库为C编译，必须用 extern "C" 声明，
+   否则C++名称改编会导致链接时找不到符号 */
+extern "C" {
+int cwsl_delete_word(uint32_t cmd_id, uint16_t group_id, int word_type);
+/* 撤销固件刚进入的学习/删除模式（cwsl_app_sample1.c） */
+int cwsl_app_reset();
+/* 固件学习模块状态：0空闲 1识别 2学习中 3删除中 */
+int cwsl_get_status();
+}
+
+uint32_t snid;
+void ASR_CODE();
+QueueHandle_t asr_code_handler_msg = NULL;
+void asr_code_handler_app();
+
+/***************** 语音配置区：speak / playid / ID 全部集中在此，不得分散 *****************/
+//{speak:小爱-活泼女声,vol:5,speed:10,platform:haohaodada,version:V3}
+//{playid:10001,voice:}
+//{playid:10002,voice:}
+//{playid:10500,voice:已开}
+//{playid:10501,voice:请选择时长}
+//{playid:10502,voice:修改完成}
+//{playid:10503,voice:已关}
+//{playid:10504,voice:学习数据已清除}
+//{playid:10507,voice:好，需要配置什么}
+//{playid:10508,voice:请先唤醒}
+//{playid:10506,voice:开机}
+//{ID:10300,keyword:"唤醒词",ASR:"度水红蜻蜓",ASRTO:""}
+//{ID:10302,keyword:"命令词",ASR:"佛光普照",ASRTO:""}
+//{ID:10303,keyword:"命令词",ASR:"修改时长",ASRTO:"当前第二条"}
+//{ID:10304,keyword:"命令词",ASR:"执行第三条指令",ASRTO:"当前第三条"}
+//{ID:10305,keyword:"命令词",ASR:"执行第四条指令",ASRTO:"当前第四条"}
+//{ID:10306,keyword:"命令词",ASR:"执行第五条指令",ASRTO:"当前第五条"}
+//{ID:10307,keyword:"命令词",ASR:"执行第六条指令",ASRTO:"当前第六条"}
+//{ID:10308,keyword:"命令词",ASR:"执行第七条指令",ASRTO:"当前第七条"}
+//{ID:10309,keyword:"命令词",ASR:"执行第八条指令",ASRTO:"当前第八条"}
+//{ID:10310,keyword:"命令词",ASR:"执行第九条指令",ASRTO:"当前第九条"}
+//{ID:10311,keyword:"命令词",ASR:"执行第十条指令",ASRTO:"当前第十条"}
+//{ID:10400,keyword:"命令词",ASR:"学习唤醒词",ASRTO:"学习状态中，保持安静"}
+//{ID:10401,keyword:"命令词",ASR:"学习命令词",ASRTO:"学习状态中，保持安静"}
+//{ID:10402,keyword:"命令词",ASR:"重新学习",ASRTO:"学习状态中，保持安静"}
+//{ID:10403,keyword:"命令词",ASR:"退出学习",ASRTO:"好的"}
+//{ID:10404,keyword:"命令词",ASR:"我要删除",ASRTO:"删除唤醒词还是命令词"}
+//{ID:10405,keyword:"命令词",ASR:"删除唤醒词",ASRTO:"删除成功"}
+//{ID:10406,keyword:"命令词",ASR:"删除命令词",ASRTO:"删除成功"}
+//{ID:10407,keyword:"命令词",ASR:"退出删除",ASRTO:"马上退出"}
+//{ID:10408,keyword:"命令词",ASR:"全部删除",ASRTO:"好的"}
+//{ID:10409,keyword:"命令词",ASR:"指令学习成功",ASRTO:"学习成功，请再说一次"}
+//{ID:10410,keyword:"命令词",ASR:"学习失败",ASRTO:"学习失败，再说一次"}
+//{ID:10411,keyword:"命令词",ASR:"注册成功",ASRTO:"指令学习成功"}
+//{ID:10412,keyword:"命令词",ASR:"超上限",ASRTO:"学习数量超上限"}
+//{ID:10413,keyword:"命令词",ASR:"删除成功",ASRTO:"删除成功"}
+//{ID:10414,keyword:"命令词",ASR:"删除失败",ASRTO:"删除失败"}
+//{ID:10415,keyword:"命令词",ASR:"正在删除",ASRTO:"正在删除"}
+//{ID:10416,keyword:"命令词",ASR:"未找到命令词",ASRTO:"找不到要删除的命令词"}
+//{ID:10417,keyword:"命令词",ASR:"学习成功",ASRTO:"学习完成"}
+//{ID:10418,keyword:"命令词",ASR:"失败",ASRTO:"学习失败，退出学习模式"}
+//{ID:10419,keyword:"命令词",ASR:"请再说一次",ASRTO:"请再说一次"}
+//{ID:10420,keyword:"命令词",ASR:"语音太短",ASRTO:"语音太短了"}
+//{ID:10421,keyword:"命令词",ASR:"指令重复",ASRTO:"命令词和默认有相同，请换命令词"}
+//{ID:11001,keyword:"命令词",ASR:"开始学习第一条指令",ASRTO:"请说第一条要学习的指令"}
+//{ID:11002,keyword:"命令词",ASR:"开始学习第二条指令",ASRTO:"请说第二条要学习的指令"}
+//{ID:11003,keyword:"命令词",ASR:"开始学习第三条指令",ASRTO:"请说第三条要学习的指令"}
+//{ID:11004,keyword:"命令词",ASR:"开始学习第四条指令",ASRTO:"请说第四条要学习的指令"}
+//{ID:11005,keyword:"命令词",ASR:"开始学习第五条指令",ASRTO:"请说第五条要学习的指令"}
+//{ID:11006,keyword:"命令词",ASR:"开始学习第六条指令",ASRTO:"请说第六条要学习的指令"}
+//{ID:11007,keyword:"命令词",ASR:"开始学习第七条指令",ASRTO:"请说第七条要学习的指令"}
+//{ID:11008,keyword:"命令词",ASR:"开始学习第八条指令",ASRTO:"请说第八条要学习的指令"}
+//{ID:11009,keyword:"命令词",ASR:"开始学习第九条指令",ASRTO:"请说第九条要学习的指令"}
+//{ID:11010,keyword:"命令词",ASR:"开始学习第十条指令",ASRTO:"请说第十条要学习的指令"}
+//{ID:12001,keyword:"命令词",ASR:"第一条指令学习成功",ASRTO:"第一条指令学习成功"}
+//{ID:12002,keyword:"命令词",ASR:"第二条指令学习成功",ASRTO:"第二条指令学习成功"}
+//{ID:12003,keyword:"命令词",ASR:"第三条指令学习成功",ASRTO:"第三条指令学习成功"}
+//{ID:12004,keyword:"命令词",ASR:"第四条指令学习成功",ASRTO:"第四条指令学习成功"}
+//{ID:12005,keyword:"命令词",ASR:"第五条指令学习成功",ASRTO:"第五条指令学习成功"}
+//{ID:12006,keyword:"命令词",ASR:"第六条指令学习成功",ASRTO:"第六条指令学习成功"}
+//{ID:12007,keyword:"命令词",ASR:"第七条指令学习成功",ASRTO:"第七条指令学习成功"}
+//{ID:12008,keyword:"命令词",ASR:"第八条指令学习成功",ASRTO:"第八条指令学习成功"}
+//{ID:12009,keyword:"命令词",ASR:"第九条指令学习成功",ASRTO:"第九条指令学习成功"}
+//{ID:12010,keyword:"命令词",ASR:"第十条指令学习成功",ASRTO:"第十条指令学习成功"}
+//{ID:1,keyword:"命令词",ASR:"三十",ASRTO:""}
+//{ID:2,keyword:"命令词",ASR:"六十",ASRTO:""}
+//{ID:3,keyword:"命令词",ASR:"三百",ASRTO:""}
+/*************************************************************************/
+
+/* 系统状态（三者互斥：mode 与 light_on） */
+volatile uint32_t sys_tick_sec = 0;  // 定时器0中断累加的秒数
+uint32_t light_start_tick = 0;       // 本次开灯时刻
+uint32_t state_start_tick = 0;       // 进入选择/学习状态的时刻
+uint16_t sec = 10;                   // 定时时长（秒）
+
+#define MODE_IDLE   0   // 空闲
+#define MODE_SELECT 1   // 时长修改中
+#define MODE_LEARN  2   // 指令学习中
+uint8_t mode = MODE_IDLE;
+bool light_on = false;  // 灯是否点亮
+
+/* 配置门控：唤醒词解锁"修改时长/指令学习"入口，限时15秒；开灯不受门控限制 */
+bool config_unlocked = false;      // 配置入口是否已解锁
+uint32_t unlock_tick = 0;          // 解锁时刻（秒）
+#define CONFIG_UNLOCK_SEC 15       // 解锁有效时长（秒）
+
+/* 定时器0中断：1秒一次，中断里只允许累加计数 */
+void TIM_attachInterrupt_0() {
+  sys_tick_sec++;
+}
+
+/* 判断是否为学习/删除流程相关事件ID */
+bool is_learn_event(uint32_t cmd) {
+  return ((cmd >= 10400 && cmd &lt;= 10421) ||
+          (cmd >= 11001 && cmd &lt;= 11010) ||
+          (cmd >= 12001 && cmd &lt;= 12010));
+}
+
+/* 业务处理任务：所有 GPIO 动作与语音播报都在任务中执行 */
+void asr_code_handler_app(){
+  uint32_t cmd;
+  while (1) {
+    if (xQueueReceive(asr_code_handler_msg, &cmd, 0)) {
+      uint32_t now = sys_tick_sec;
+      if (cmd == 10300) {
+        /* 唤醒词作为配置门控钥匙，解锁"修改时长/指令学习"入口，限时有效 */
+        config_unlocked = true;
+        unlock_tick = now;
+        play_audio(10507);              // 好，需要配置什么
+      } else if (cmd == 10403 || cmd == 10407 || cmd == 10418) {
+        /* 明确的退出学习/退出删除/失败退出事件 */
+        if (mode == MODE_LEARN) {
+          mode = MODE_IDLE;
+        }
+      } else if (is_learn_event(cmd)) {
+        if (mode == MODE_IDLE && !light_on && config_unlocked &&
+            (now - unlock_tick &lt;= CONFIG_UNLOCK_SEC)) {
+          /* 已解锁且空闲未亮灯，才允许进入学习状态 */
+          mode = MODE_LEARN;
+          state_start_tick = now;
+          unlock_tick = now;            // 学习流程中续期，防止中途锁回
+        } else if (mode == MODE_LEARN) {
+          /* 学习过程中有活动，刷新超时基准并续期解锁 */
+          state_start_tick = now;
+          unlock_tick = now;
+        }
+        /* 未解锁/亮灯中/时长修改中：忽略学习事件 */
+      } else if (cmd == 10302) {
+        /* 开灯：门控之外，随时可执行（仅忙/已亮时忽略） */
+        if (mode == MODE_IDLE && !light_on) {
+          light_on = true;
+          digitalWrite(4, 1);
+          light_start_tick = now;
+          play_audio(10500);          // 已打开
+        }
+      } else if (cmd == 10303) {
+        /* 修改时长：受门控限制，需先用唤醒词解锁 */
+        if (mode == MODE_IDLE && !light_on && config_unlocked &&
+            (now - unlock_tick &lt;= CONFIG_UNLOCK_SEC)) {
+          mode = MODE_SELECT;
+          state_start_tick = now;
+          play_audio(10501);          // 请选择时长
+        }
+      } else if (cmd == 1 || cmd == 2 || cmd == 3) {
+        /* 时长选择：仅时长修改状态响应 */
+        if (mode == MODE_SELECT) {
+          if (cmd == 1) {
+            sec = 30;
+          } else if (cmd == 2) {
+            sec = 60;
+          } else {
+            sec = 300;
+          }
+          mode = MODE_IDLE;
+          play_audio(10502);          // 修改完成
+        }
+      }
+    }
+
+    uint32_t now = sys_tick_sec;
+    /* 解锁窗口过期自动上锁 */
+    if (config_unlocked && mode == MODE_IDLE &&
+        !light_on && (now - unlock_tick > CONFIG_UNLOCK_SEC)) {
+      config_unlocked = false;
+    }
+    /* 时长修改 10 秒未选择自动退出 */
+    if (mode == MODE_SELECT && (now - state_start_tick > 10)) {
+      mode = MODE_IDLE;
+    }
+    /* 学习流程 20 秒无活动自动退出（兜底，防止状态卡死） */
+    if (mode == MODE_LEARN && (now - state_start_tick > 20)) {
+      mode = MODE_IDLE;
+    }
+    /* 到点关灯 */
+    if (light_on && (now - light_start_tick >= sec)) {
+      light_on = false;
+      digitalWrite(4, 0);
+      play_audio(10503);              // 已关闭
+    }
+
+    delay(10);
+  }
+  vTaskDelete(NULL);
+}
+
+/* 播报完成空回调（prompt_play_by_cmd_id 不允许传 nullptr） */
+void play_end_noop() {
+}
+
+/* 判断配置门控当前是否处于解锁状态（唤醒词解锁后限时有效） */
+bool gate_open() {
+  if (!config_unlocked) return false;
+  if (sys_tick_sec - unlock_tick > CONFIG_UNLOCK_SEC &&
+      mode == MODE_IDLE && !light_on) {
+    return false;   // 无进行中流程且解锁窗口已过期
+  }
+  return true;
+}
+
+/* 语音识别成功钩子：只做分发，不做耗时操作
+   注意：固件的 cwsl_app_process_asr_msg 在本回调之前执行，
+   学习/删除模式已被固件抢先开启，未解锁时必须在这里调用 cwsl_app_reset() 撤销 */
+void ASR_CODE()
+{
+  /* 10400-10408 是固件内置学习/删除入口词（10403/10407为退出词，任何时候放行） */
+  bool entry_cmd = (snid == 10400 || snid == 10401 || snid == 10402 ||
+                    snid == 10404 || snid == 10405 || snid == 10406 ||
+                    snid == 10408);
+  if (entry_cmd && !gate_open()) {
+    cwsl_app_reset();                   // 撤销固件刚进入的学习/删除模式
+    prompt_play_by_cmd_id(10508, -1, play_end_noop, true);  // 请先说唤醒词解锁
+    return;
+  }
+  if (snid == 10300 || snid == 10302 || snid == 10303 || snid == 1 || snid == 2 || snid == 3 ||
+      (snid >= 10400 && snid &lt;= 10421) ||
+      (snid >= 11001 && snid &lt;= 11010) ||
+      (snid >= 12001 && snid &lt;= 12010)) {
+    xQueueSend(asr_code_handler_msg, &snid, 0);
+  }
+}
+
+void hardware_init(){
+  asr_code_handler_msg = xQueueCreate(5, sizeof(uint32_t));
+  /* 开机复位清除通道：上电时按住接在PA2(引脚2)的对地按键，
+     开机时检测到该键按下即清除全部已学习模板（学习数据存flash独立区，
+     重新生成模型/烧录不会清除，只能调用 cwsl_delete_word 全通配清空） */
+  if (digitalRead(2) == 0) {
+    cwsl_delete_word((uint32_t)-1, (uint16_t)-1, 2);   //2=ALL_WORD 删除所有已学词
+    play_audio(10504);                // 学习数据已清除
+  }
+  set_wakeup_forever();
+  play_audio(10506);                  // 开机
+  xTaskCreate(asr_code_handler_app, "asr_code_handler_app", 256, NULL, 4, NULL);
+  vTaskDelete(NULL);
+}
+
+void setup()
+{
+  setPinFun(4,FIRST_FUNCTION);
+  digitalWrite(4,0);
+  pinMode(4,output);
+  /* 定时器0配置为1秒周期，仅作秒计数使用；TIM_attachInterrupt只配置不启动，必须TIM_Enable启动 */
+  TIM_attachInterrupt(TIMER0, 1000000, TIM_attachInterrupt_0);
+  TIM_Enable(TIMER0);
+  /* PA2(引脚2)配置为数字输入+内部上拉，用作开机清除学习数据的检测键，按键接GND */
+  setPinFun(2,FIRST_FUNCTION);
+  pinMode(2,input);
+  dpmu_set_io_pull(pinToFun[2],DPMU_IO_PULL_UP);
+}
+</code>
+
+20261107114338.webp
+
+MCU 刚上电、复位时，PA4 暂时没有输出高低电平，相当于断开, 即高阻状态, 导致b极悬空, 电位不确定, 可能误导通
+增加10kΩ下拉电阻的作用：即使 PA4 高阻, 由于b极被明确拉到gnd, 形成默认电位，所以能确保 SS8050 默认关闭
+
+PA4 输出 HIGH：通过 1kΩ 给 B 极提供驱动电流，SS8050 导通
+PA4 输出 LOW：B 极处于低电位，SS8050 截止
+PA4 高阻：10kΩ 将 B 极拉到 GND，SS8050 保持截止
+
+GPIO 高阻态不等于输出低电平
+输出 HIGH 主动输出高电平
+输出 LOW 主动输出低电平
+高阻输入态 输出驱动器关闭，引脚近似悬空
+
+</pre>
+ </body>
+</html>

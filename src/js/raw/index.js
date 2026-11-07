@@ -13,6 +13,7 @@ if (window.__LITE_BUS__) {
 window.__LITE_BUS__ = new BroadcastChannel('bus');
 window.sharedWasm = {
     ready: false,
+    failed: false,
     format_markdown: null,
     find_content_matches: null,
     compute_lcs_diff: null
@@ -24,9 +25,10 @@ const ctxId = window.top === window.self ? 'index' : window.childId;
 const isLocalEnv = (location.hostname === 'localhost' || location.hostname === '127.0.0.1' || location.protocol === 'file:') && location.port !== '9000';
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => document.querySelectorAll(selector);
-const idleRun = (fn) => window.requestIdleCallback ? requestIdleCallback(fn) : setTimeout(50);
+const idleRun = (fn) => window.requestIdleCallback ? requestIdleCallback(fn) : setTimeout(fn, 50);
 const AsyncUtils = createAsyncUtils();
 const dbProxy = createDBProxy('MainDB', 'chunks');
+const searchCacheLRU = createSearchCacheLRU(dbProxy);
 const popup = $("#giscus-popup");
 const header = $("#popup-header");
 const doc_title = document.title;
@@ -50,6 +52,8 @@ store.jump_from_search = "0";
 
 
 let searchWorker = null;
+let _pendingWorker = null;      // A2：预热但尚未"交付"的 Worker
+let _autocompleteSeq = 0;       // C4：联想渲染的序号，丢弃过期调用
 let audioInitialized = false;
 let comments_first_flag = false;
 let records = [];
@@ -64,6 +68,8 @@ import('../wasm/compute_intensive_task_processor.min.js').then(async (wasmModule
     window.sharedWasm.ready = true;
 }).catch(err => {
     console.error("[Main] Wasm 模块加载失败:", err);
+    // 通知内容页：不用再等了，降级渲染
+    window.sharedWasm.failed = true;
 });
 
 const executeSelfHealing = async (reason, commandId = null) => {
@@ -234,7 +240,8 @@ window._globalWatchdog = setTimeout(() => {
     executeSelfHealing("核心数据组装严重超时 (疑似 IDB/Wasm 崩溃)");
 }, 60000);
 
-window.addEventListener('unload', () => {
+window.addEventListener('pagehide', (e) => {
+    if (e.persisted) return;
     if (window.__LITE_BUS__) {
         window.__LITE_BUS__.close();
         window.__LITE_BUS__ = null;
@@ -707,20 +714,28 @@ function createStore(defaults = {}) {
                         try {
                             const normKw = normalizeKeyword(kw);
                             if (!normKw) return null;
-                            let res = await dbProxy.get('search_cache', normKw);
+                            const res = await dbProxy.get('search_cache', normKw);
                             if (res) {
+                                searchCacheLRU.touch(normKw);
                                 return { results: res, exact: true, sourceKey: normKw };
                             }
-                            
-                            const keys = await dbProxy.getAllKeys('search_cache');
-                            const matchingKeys = keys.filter(k => typeof k === 'string' && normKw.startsWith(k) && k.length > 2);
-                            if (matchingKeys.length > 0) {
-                                matchingKeys.sort((a, b) => b.length - a.length);
-                                const bestKey = matchingKeys[0];
-                                const broaderResults = await dbProxy.get('search_cache', bestKey);
-                                if (broaderResults && broaderResults.results.length > 0) {
-                                    return { results: broaderResults.results, exact: false, sourceKey: bestKey };
+
+                            // 前缀回退：扩展关键词的命中集合是前缀命中集合的子集，
+                            // 可先用最长的已缓存前缀结果做"临时展示"。
+                            // 键列表来自内存里的 LRU 记录，不再每次按键都 getAllKeys。
+                            const candidates = (await searchCacheLRU.keys())
+                                .filter(k => k.length > 2 && k !== normKw && normKw.startsWith(k))
+                                .sort((a, b) => b.length - a.length)
+                                .slice(0, 3);
+                            for (const key of candidates) {
+                                // search_cache 里存的值本身就是结果数组（不是 {results: [...]}）
+                                const broader = await dbProxy.get('search_cache', key);
+                                if (Array.isArray(broader) && broader.length > 0) {
+                                    searchCacheLRU.touch(key);
+                                    return { results: broader, exact: false, sourceKey: key };
                                 }
+                                // 记录里有、库里没有（例如被 SW 在 synonyms 变更时清空）
+                                if (broader === undefined) searchCacheLRU.forget(key);
                             }
                             return null;
                         } catch (e) { return null; }
@@ -730,11 +745,7 @@ function createStore(defaults = {}) {
                             const normKw = normalizeKeyword(kw);
                             if (!normKw) return;
                             await dbProxy.put('search_cache', normKw, results);
-                            const keys = await dbProxy.getAllKeys('search_cache');
-                            if (keys.length > 500) {
-                                const keysToDelete = keys.slice(0, keys.length - 500);
-                                for (let k of keysToDelete) await dbProxy.delete('search_cache', k);
-                            }
+                            await searchCacheLRU.touchAndEvict(normKw);
                         } catch (e) { }
                     },
 
@@ -743,12 +754,16 @@ function createStore(defaults = {}) {
                             const normKw = normalizeKeyword(kw);
                             if (normKw) {
                                 await dbProxy.delete('search_cache', normKw);
+                                searchCacheLRU.forget(normKw);
                             }
                         } catch (e) { }
                     },
 
                     clear: async () => {
-                        try { await dbProxy.clear('search_cache'); } catch (e) { }
+                        try {
+                            await dbProxy.clear('search_cache');
+                            searchCacheLRU.reset();
+                        } catch (e) { }
                     }
                 };
             }
@@ -789,6 +804,79 @@ function createStore(defaults = {}) {
             return true;
         }
     });
+}
+
+// search_cache 的 LRU 记录。
+// IDB 的 getAllKeys 按键升序返回，不代表"最近使用"，所以另存一份访问顺序（最旧在前）。
+// 记录放在 sys_state，不改变 search_cache 里已有数据的格式；
+// IDB 里有、记录里没有的键（旧版本遗留 / 其他标签页写入）视为最旧，优先淘汰。
+function createSearchCacheLRU(db, max = 500) {
+    let order = null;      // string[]，最旧在前；null 表示尚未加载
+    let loading = null;
+    let persistTimer = null;
+    let gen = 0;           // reset() 之后丢弃仍在途中的旧加载结果
+
+    const schedulePersist = () => {
+        clearTimeout(persistTimer);
+        persistTimer = setTimeout(() => {
+            if (order) db.put('sys_state', 'search_cache_lru', order.slice()).catch(() => { });
+        }, 1000);
+    };
+
+    const load = () => {
+        if (order) return Promise.resolve(order);
+        if (!loading) {
+            const myGen = gen;
+            loading = (async () => {
+                let saved = [];
+                let keys = [];
+                try { saved = await db.get('sys_state', 'search_cache_lru'); } catch (e) { }
+                try { keys = await db.getAllKeys('search_cache'); } catch (e) { }
+                if (!Array.isArray(saved)) saved = [];
+                const existing = new Set(keys.filter(k => typeof k === 'string'));
+                const savedSet = new Set(saved);
+                const unknown = [...existing].filter(k => !savedSet.has(k));
+                const known = saved.filter(k => existing.has(k));
+                if (myGen === gen) order = unknown.concat(known);
+                return order || [];
+            })();
+        }
+        return loading;
+    };
+
+    const touch = async (key) => {
+        const list = await load();
+        const i = list.lastIndexOf(key);
+        if (i !== -1) list.splice(i, 1);
+        list.push(key);
+        schedulePersist();
+    };
+
+    const touchAndEvict = async (key) => {
+        await touch(key);
+        const list = order;
+        if (!list || list.length <= max) return;
+        const victims = list.splice(0, list.length - max);
+        schedulePersist();
+        await Promise.all(victims.map(k => db.delete('search_cache', k).catch(() => { })));
+    };
+
+    const forget = (key) => {
+        if (!order) return;
+        const i = order.lastIndexOf(key);
+        if (i !== -1) { order.splice(i, 1); schedulePersist(); }
+    };
+
+    const reset = () => {
+        gen++;
+        order = [];
+        loading = null;
+        clearTimeout(persistTimer);
+        db.put('sys_state', 'search_cache_lru', []).catch(() => { });
+    };
+
+    // keys() 返回内部数组本身，调用方只读（filter 等会产生新数组）
+    return { keys: () => load(), touch, touchAndEvict, forget, reset };
 }
 
 function createDBProxy(dbName, storeName) {
@@ -957,6 +1045,13 @@ async function loadScripts(concurrency) {
     console.time("⏱️ loadScripts 总耗时");
 
     window.isDataSyncing = true;
+
+    // A2：与下面 core-list → lite_data → side iframe 加载这条串行链并行：
+    // Worker 预热（含 Wasm 下载与编译）、IDB 全量读取。原来这两件事要等整条链结束后才开始。
+    prewarmSearchWorker();
+    window._chunksPrefetch = dbProxy.getAll();
+    window._chunksPrefetch.catch(() => { });      // 错误仍由 loadDataInBatches 里的 await 抛出
+
     const injectScript = (src) => new Promise((resolve, reject) => {
         const script = document.createElement("script");
         script.src = src; script.type = "text/javascript"; script.charset = "UTF-8";
@@ -1031,8 +1126,95 @@ async function loadScripts(concurrency) {
     console.timeEnd("⏱️ loadScripts 总耗时");
 }
 
+// A2：Worker（含 Wasm 下载与编译）可以在 loadScripts 之前就开始预热，与 core-list / lite_data / IDB 读取并行。
+// 但 search() 把 searchWorker 当作"数据已就绪"的闸门，所以预热的实例先放在 _pendingWorker，
+// 等 loadDataInBatches 里才赋给 searchWorker。
+function createSearchWorker() {
+    const worker = new Worker('src/js/worker.js', { type: 'module' });
+    worker.onmessage = async (e) => {
+        const { type, results, keyword, token, inheritFrom, payload } = e.data;
+
+        if (type === 'DELETE_CACHE') {
+            store.SearchCache.remove(keyword);
+            return;
+        }
+
+        if (type === 'SEARCH_RESULTS') {
+            if (token !== window._searchToken) {
+                console.log(`[Search] 拦截到滞后结果 "${keyword}"，已丢弃。`);
+                return;
+            }
+
+            const activeKw = keyword || store.keyword;
+
+            if (activeKw) {
+                let sourceCache = await store.SearchCache.get(activeKw);
+                let isExactMatch = true;
+
+                if ((!sourceCache || sourceCache.length === 0) && inheritFrom) {
+                    sourceCache = await store.SearchCache.get(inheritFrom);
+                    isExactMatch = false;
+                }
+
+                if (token !== window._searchToken) return;
+
+                if (sourceCache && sourceCache.length > 0) {
+                    results.forEach(newItem => {
+                        const oldItem = sourceCache.find(o => o.path === newItem.path);
+                        if (oldItem) {
+                            if (isExactMatch) {
+                                if (oldItem.count > newItem.count) {
+                                    newItem.count = oldItem.count;
+                                }
+                                if (oldItem.snippets) {
+                                    newItem.snippets = oldItem.snippets;
+                                    newItem.isTolerantMatch = oldItem.isTolerantMatch;
+                                }
+                            }
+                        }
+                    });
+
+                    if (isExactMatch) {
+                        sourceCache.forEach(oldItem => {
+                            if (oldItem.snippets && !results.some(r => r.path === oldItem.path)) {
+                                results.push(JSON.parse(JSON.stringify(oldItem)));
+                            }
+                        });
+                    }
+                }
+            }
+
+            if (activeKw && !isReservedSearchCommand(activeKw)) {
+                clearTimeout(window._idbWriteTimer);
+                window._idbWriteTimer = setTimeout(() => {
+                    searchWorker.postMessage({ type: 'COMMIT_CURSOR', payload: { keyword: activeKw } });
+                }, 600);
+            }
+
+            processAndShowResults(results, activeKw);
+        }
+
+        else if (type === 'DATA_READY') {
+            window.data = payload;
+            await finalizeDataLoad();
+        }
+    };
+    return worker;
+}
+
+function prewarmSearchWorker() {
+    if (searchWorker || _pendingWorker) return;
+    try {
+        _pendingWorker = createSearchWorker();
+    } catch (e) {
+        console.warn("[Worker] 预热失败，将在数据加载阶段重试:", e);
+    }
+}
+
 async function loadDataInBatches(files, now, concurrency) {
-    const cachedChunks = await dbProxy.getAll();
+    // A2：getAll 在 loadScripts 开头已提前发起，与 core-list / lite_data / side iframe 的等待重叠
+    const cachedChunks = await (window._chunksPrefetch || dbProxy.getAll());
+    window._chunksPrefetch = null;
     const cachedMap = new Map(cachedChunks.map(c => [c.id, c.fingerprint]));
     const chunkDataMap = new Map(cachedChunks.map(c => [c.id, c.data]));
 
@@ -1060,75 +1242,10 @@ async function loadDataInBatches(files, now, concurrency) {
     });
 
     if (!searchWorker) {
-        searchWorker = new Worker('src/js/worker.js', { type: 'module' });
-        searchWorker.onmessage = async (e) => {
-            const { type, results, keyword, token, inheritFrom, payload } = e.data;
-
-            if (type === 'DELETE_CACHE') {
-                store.SearchCache.remove(keyword);
-                return;
-            }
-
-            if (type === 'SEARCH_RESULTS') {
-                if (token !== window._searchToken) {
-                    console.log(`[Search] 拦截到滞后结果 "${keyword}"，已丢弃。`);
-                    return;
-                }
-
-                const activeKw = keyword || store.keyword;
-
-                if (activeKw) {
-                    let sourceCache = await store.SearchCache.get(activeKw);
-                    let isExactMatch = true;
-
-                    if ((!sourceCache || sourceCache.length === 0) && inheritFrom) {
-                        sourceCache = await store.SearchCache.get(inheritFrom);
-                        isExactMatch = false;
-                    }
-
-                    if (token !== window._searchToken) return;
-
-                    if (sourceCache && sourceCache.length > 0) {
-                        results.forEach(newItem => {
-                            const oldItem = sourceCache.find(o => o.path === newItem.path);
-                            if (oldItem) {
-                                if (isExactMatch) {
-                                    if (oldItem.count > newItem.count) {
-                                        newItem.count = oldItem.count;
-                                    }
-                                    if (oldItem.snippets) {
-                                        newItem.snippets = oldItem.snippets;
-                                        newItem.isTolerantMatch = oldItem.isTolerantMatch;
-                                    }
-                                }
-                            }
-                        });
-
-                        if (isExactMatch) {
-                            sourceCache.forEach(oldItem => {
-                                if (oldItem.snippets && !results.some(r => r.path === oldItem.path)) {
-                                    results.push(JSON.parse(JSON.stringify(oldItem)));
-                                }
-                            });
-                        }
-                    }
-                }
-
-                if (activeKw && !isReservedSearchCommand(activeKw)) {
-                    clearTimeout(window._idbWriteTimer);
-                    window._idbWriteTimer = setTimeout(() => {
-                        searchWorker.postMessage({ type: 'COMMIT_CURSOR', payload: { keyword: activeKw } });
-                    }, 600);
-                }
-
-                processAndShowResults(results, activeKw);
-            }
-
-            else if (type === 'DATA_READY') {
-                window.data = payload;
-                await finalizeDataLoad();
-            }
-        };
+        // A2：优先使用预热好的 Worker。"数据已就绪"的语义仍由这里对 searchWorker 的赋值体现
+        // （search() 以 searchWorker 非空作为闸门），时机与原来一致。
+        searchWorker = _pendingWorker || createSearchWorker();
+        _pendingWorker = null;
     }
 
     const buildAndPushData = async () => {
@@ -1431,28 +1548,28 @@ function search_box() {
 
     let searchDebounceTimer = null;
 
-    elSearchInput.addEventListener("input", async function () {
+    elSearchInput.addEventListener("input", function () {
         const val = this.value;
 
         if (val.trim() === "") {
             clearTimeout(searchDebounceTimer);
+            _autocompleteSeq++;            // 作废仍在途中的联想渲染，避免它们稍后又往已清空的列表里追加
             updateSearchResults([]);
             showSearchHistoryByTime();
             return;
         }
 
-        const history = store.searchHistory || [];
-        const matchingHistory = history.filter(item =>
-            item.keyword.startsWith(val) || item.keyword.includes(val)
-        );
-        initHistoryBox(1);
-        await updateAutocompleteSuggestions(val);
-
+        // C4：先同步安排防抖搜索，再渲染联想。
+        // 原先是先 await 联想（含 IDB 读取）再设定时器：打字较快时，较早事件的联想可能更晚完成，
+        // 它随后会清掉并重设较新事件的定时器，最终搜索的是旧关键词。
         clearTimeout(searchDebounceTimer);
         searchDebounceTimer = setTimeout(() => {
             search(val.trim());
             store.keyword = val;
         }, 150);
+
+        initHistoryBox(1);
+        updateAutocompleteSuggestions(val).catch(err => console.warn("联想渲染失败", err));
     });
 
     elSearchInput.addEventListener("focus", function () {
@@ -2078,6 +2195,7 @@ async function search(rawKeyword) {
 }
 
 async function updateAutocompleteSuggestions(val) {
+    const seq = ++_autocompleteSeq;
     const elSearchHistory = $("#searchHistory");
     elSearchHistory.innerHTML = "";
 
@@ -2097,7 +2215,10 @@ async function updateAutocompleteSuggestions(val) {
     });
 
     try {
-        const cacheKeys = await dbProxy.getAllKeys('search_cache');
+        // 键列表来自内存里的 LRU 记录，不再每次按键都 getAllKeys
+        const cacheKeys = await searchCacheLRU.keys();
+        // 打字快时，较早的调用可能更晚恢复：只让最新一次渲染，避免重复追加 <option>
+        if (seq !== _autocompleteSeq) return;
         cacheKeys.forEach(key => {
             if (typeof key === 'string' && key.toLowerCase().includes(query)) {
                 if (!suggestionMap.has(key)) {

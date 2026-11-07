@@ -106,7 +106,9 @@ if (window.__LITE_BUS__) {
 window.__LITE_BUS__ = new BroadcastChannel('bus');
 const BUS = window.__LITE_BUS__;
 
-window.addEventListener('unload', () => {
+window.addEventListener('pagehide', (e) => {
+    if (e.persisted) return;
+    emitEvent("lightbox", { status: "0" }, "index");
     if (window.__LITE_BUS__) {
         window.__LITE_BUS__.close();
         window.__LITE_BUS__ = null;
@@ -200,9 +202,6 @@ BUS.addEventListener('message', (e) => {
     }
 });
 
-window.addEventListener('unload', () => {
-    emitEvent("lightbox", { status: "0" }, "index");
-});
 document.addEventListener('keydown', (e) => {
     if (e.key === '\\') {
         emitEvent("quick_search", "", "index");
@@ -453,11 +452,26 @@ function search() {
 
     const rangesByNoise = new Map();
 
+    // Rust 端按 start 升序返回命中；这里兜底校验，保证下面的指针扫描成立
+    for (let i = 1; i < matches.length; i++) {
+        if (matches[i].start < matches[i - 1].start) {
+            matches.sort((a, b) => a.start - b.start);
+            break;
+        }
+    }
+    let mi = 0;
+
     nodeMap.forEach(item => {
         const node = item.node;
         const nodeText = node.nodeValue;
 
-        const nodeMatches = matches.filter(m => m.start < item.end && m.end > item.start);
+        // nodeMap 按文档顺序递增、matches 按 start 升序：
+        // mi 只前进不回退，整体 O(节点数 + 命中数)，不再是每个节点扫一遍全部命中
+        while (mi < matches.length && matches[mi].end <= item.start) mi++;
+        const nodeMatches = [];
+        for (let k = mi; k < matches.length && matches[k].start < item.end; k++) {
+            if (matches[k].end > item.start) nodeMatches.push(matches[k]);
+        }
         if (nodeMatches.length === 0) return;
 
         let mergedNodeMatches = [];

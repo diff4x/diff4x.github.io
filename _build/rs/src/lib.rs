@@ -136,8 +136,24 @@ pub fn find_content_matches(global_text: &str, keyword: &str, noise_level: usize
     res.into()
 }
 
+/// 单个文档最多回传的 snippet 数。`count` 仍是真实命中总数，不受此限制。
+const MAX_SNIPPETS: usize = 60;
+
+/// 命中数超过上限时，优先保留 noise 小（更接近精确匹配）的命中，
+/// 然后恢复文档顺序。否则"取前 60 条"会让靠前的模糊命中挤掉靠后的精确命中。
+/// 输入为 (start_byte, end_byte, noise)，要求按 start 升序（get_multi_matches 的输出满足）。
+fn pick_snippet_hits(hits: &[(usize, usize, usize)]) -> Vec<(usize, usize)> {
+    if hits.len() <= MAX_SNIPPETS {
+        return hits.iter().map(|h| (h.0, h.1)).collect();
+    }
+    let mut idx: Vec<usize> = (0..hits.len()).collect();
+    idx.sort_by_key(|&i| (hits[i].2, i));
+    idx.truncate(MAX_SNIPPETS);
+    idx.sort_unstable();
+    idx.into_iter().map(|i| (hits[i].0, hits[i].1)).collect()
+}
+
 fn extract_snippets_optimized(text: &str, hits: &[(usize, usize)]) -> Vec<String> {
-    const MAX_SNIPPETS: usize = 30;
     let mut snippets = Vec::new();
     let mut last_match_end = 0usize;
 
@@ -167,7 +183,7 @@ fn extract_snippets_optimized(text: &str, hits: &[(usize, usize)]) -> Vec<String
         last_match_end = end;
 
         if snippets.len() >= MAX_SNIPPETS {
-            // break;
+            break;
         }
     }
 
@@ -684,11 +700,19 @@ fn get_multi_matches(_text: &str, text_chars: &[(usize, usize, char)], keywords:
         let eff_noise = if kw_chars.len() > 25 { 0 } else { noise_level };
         let kw_len = kw_chars.len();
         if kw_len == 0 { continue; }
+        let first = kw_chars[0];
         
         let mut i = 0;
         let text_len = text_chars.len();
         
         while i < text_len {
+            // 匹配的起点一定是某个"首字符命中"的位置：从更靠前的位置起扫，
+            // 只会把前导噪声算进 total_noise，得到同一区间但 noise 更高的重复命中，
+            // 最终被下面的 merge 丢弃。直接跳过这些起点，结果等价，内层扫描减少约 (noise+1) 倍。
+            if text_chars[i].2.to_ascii_lowercase() != first {
+                i += 1;
+                continue;
+            }
             let mut k_idx = 0;
             let mut j = i;
             let mut current_gap = 0;
@@ -798,7 +822,7 @@ pub fn search_multi(keywords_val: JsValue, noise_level: usize) -> JsValue {
 
             if count == 0 { continue; }
 
-            let raw_hits_for_snippets: Vec<(usize, usize)> = content_merged.iter().map(|h| (h.0, h.1)).collect();
+            let raw_hits_for_snippets = pick_snippet_hits(&content_merged);
             let snippets = if !content_merged.is_empty() {
                 extract_snippets_optimized(searchable_content, &raw_hits_for_snippets)
             } else { Vec::new() };
@@ -848,7 +872,6 @@ pub fn find_content_matches_multi(global_text: &str, keywords_val: JsValue, nois
     let merged_hits = get_multi_matches(global_text, &text_chars, &kw_chars_list, noise_level);
     
     let mut raw_match_data = Vec::new();
-    let mut raw_hits_for_snippets = Vec::new();
 
     for &(start_byte, end_byte, noise) in &merged_hits {
         let utf16_start = utf16_mapping.get(start_byte).copied().unwrap_or(0);
@@ -856,7 +879,6 @@ pub fn find_content_matches_multi(global_text: &str, keywords_val: JsValue, nois
         raw_match_data.push(utf16_start as u32);
         raw_match_data.push(utf16_end as u32);
         raw_match_data.push(noise as u32);
-        raw_hits_for_snippets.push((start_byte, end_byte));
     }
 
     let count = merged_hits.len();
@@ -864,7 +886,7 @@ pub fn find_content_matches_multi(global_text: &str, keywords_val: JsValue, nois
 
     let matches_typed_array = Uint32Array::new_with_length(raw_match_data.len() as u32);
     matches_typed_array.copy_from(&raw_match_data);
-    let snippets = extract_snippets_optimized(global_text, &raw_hits_for_snippets);
+    let snippets = extract_snippets_optimized(global_text, &pick_snippet_hits(&merged_hits));
 
     let res = Object::new();
     let _ = js_sys::Reflect::set(&res, &JsValue::from_str("count"), &JsValue::from_f64(count as f64));

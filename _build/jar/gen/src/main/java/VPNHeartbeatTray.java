@@ -77,7 +77,6 @@ public class VPNHeartbeatTray {
         addMenuItem(popup, "Event Viewer", "Start-Process mmc.exe eventvwr.msc -Verb runAs");
         addMenuItem(popup, "Device Manager", "Start-Process mmc.exe devmgmt.msc -Verb runAs");
         addMenuItem(popup, "Services", "Start-Process mmc.exe services.msc -Verb runAs");
-        addMenuItem(popup, "Static Web Server", "static-web-server.exe -d . -p 8000 -g info");
         popup.add(exitItem);
 
         greenIcon = createIcon(Color.GREEN);

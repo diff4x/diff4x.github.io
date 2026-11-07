@@ -1,11 +1,11 @@
 bilingual.js|08/02/2026 12:12 PM_7743
-bookmark.js|08/20/2026 01:13 PM_18332
-content.js|10/17/2026 03:26 PM_75600
+bookmark.js|11/07/2026 12:13 PM_18365
+content.js|11/07/2026 12:09 PM_76277
 deferred-features.js|08/14/2026 05:56 PM_36211
 excerpts.js|08/11/2026 09:06 AM_20170
-index.js|08/29/2026 09:24 PM_126307
-lightbox-logic.js|08/11/2026 09:06 AM_16652
-side.js|08/09/2026 01:54 PM_28898
+index.js|11/07/2026 12:07 PM_131802
+lightbox-logic.js|11/07/2026 12:12 PM_16696
+side.js|11/07/2026 12:10 PM_28931
 synonyms.js|08/16/2026 02:57 PM_503299
 touchpad.js|10/30/2026 03:26 PM_34159
 txn_parser.js|10/29/2026 09:18 PM_51678
@@ -16,5 +16,5 @@ content.css|08/02/2026 07:44 PM_6408
 index.css|10/30/2026 03:27 PM_17820
 side.css|08/08/2026 10:09 AM_8141
 font.css|05/21/2026 01:29 AM_45616
-core-list.js|10/30/2026 03:32 PM_9178
-sw.js|10/30/2026 03:32 PM_17565
+core-list.js|11/07/2026 12:19 PM_9200
+sw.js|11/07/2026 12:19 PM_18824

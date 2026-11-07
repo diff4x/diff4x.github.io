@@ -1,6 +1,6 @@
-importScripts('/src/js/core-list.js?v=1793345571976');
+importScripts('/src/js/core-list.js?v=1794025153348');
 
-self.SW_VERSION = '1793345571976';
+self.SW_VERSION = '1794025153348';
 self.EMERGENCY = 'repair_command_id=2';
 
 const CACHE_NAME_CORE = 'core-cache-' + BUILD_VERSION;
@@ -138,6 +138,10 @@ self.addEventListener('install', event => {
         const CORE_BUNDLE_THRESHOLD = 15;
         let bundleUpdates = [];
         let standaloneUpdates = [];
+        // 需要在 install 结束前完成的副作用任务（旧 HTML 快照、清 search_cache）。
+        // 之前是 fire-and-forget：SW 可能在它们完成前被终止，
+        // 而 activate 会删除它们要读取的旧缓存，存在竞态。
+        const deferredJobs = [];
 
         for (const url of allFilesToCache) {
             const meta = FILE_MANIFEST[url];
@@ -145,23 +149,27 @@ self.addEventListener('install', event => {
 
             if (url.endsWith('synonyms.js')) {
                 if (!oldMeta || oldMeta.hash !== meta.hash) {
-                    (async () => {
+                    deferredJobs.push(async () => {
                         try {
                             const db = await openMainDB();
                             if (db.objectStoreNames.contains('search_cache')) {
                                 const tx = db.transaction('search_cache', 'readwrite');
+                                const done = new Promise(resolve => {
+                                    tx.oncomplete = tx.onerror = tx.onabort = () => resolve();
+                                });
                                 tx.objectStore('search_cache').clear();
+                                await done;
                                 console.warn(`🧹 [SW] 检测到 ${url} 变更，已清空旧的 search_cache`);
                             }
                         } catch (err) {
                             console.warn("⚠️ [SW] 清理 search_cache 失败:", err);
                         }
-                    })();
+                    });
                 }
             }
 
             if (oldMeta && oldMeta.hash !== meta.hash && url.startsWith('/html/')) {
-                (async () => {
+                deferredJobs.push(async () => {
                     try {
                         const lastCache = await caches.open(lastCacheName);
                         const oldRes = await lastCache.match(url);
@@ -195,11 +203,14 @@ self.addEventListener('install', event => {
                             }
 
                             store.put({ history }, url);
+                            await new Promise(resolve => {
+                                tx.oncomplete = tx.onerror = tx.onabort = () => resolve();
+                            });
                         }
                     } catch (e) {
                         console.warn(`[SW] 快照生成失败: ${url}`);
                     }
-                })();
+                });
             }
 
             if (oldMeta && oldMeta.hash === meta.hash) {
@@ -281,6 +292,17 @@ self.addEventListener('install', event => {
             for (const url of deletedFiles) {
                 if (url !== '/') await writeLog(`⛔ [SW] 删除文件: ${url}`);
             }
+        }
+
+        // 等副作用任务做完（并发 4）；每个任务内部已 try/catch，不会让 install 失败
+        if (deferredJobs.length > 0) {
+            const queue = deferredJobs.slice();
+            await Promise.all(Array.from({ length: Math.min(4, queue.length) }, async () => {
+                while (queue.length > 0) {
+                    const job = queue.shift();
+                    try { await job(); } catch (e) { }
+                }
+            }));
         }
 
         const manifestSaveUrl = new URL('/sw-manifest.json', self.location.origin).href;
