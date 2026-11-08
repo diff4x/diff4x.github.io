@@ -1097,6 +1097,117 @@ function bindCodeEditHandlers(root) {
     });
 }
 
+// ---- 代码框右上角：目标语种 + 一键复制 ----
+// 每个 <code> 各自有一个工具条：插在该 <code> 之前的同级块，贴在代码框上沿之外、右边缘对齐；
+// 文字全部由 CSS 伪元素渲染，DOM 里没有文本节点，不会被页内搜索/diff 当成正文。
+
+// 这些属性即使值为空也不是语种(例如编辑后残留的 class="")
+const NON_LANG_ATTRS = new Set([
+    'class', 'style', 'id', 'title', 'hidden', 'contenteditable', 'spellcheck',
+    'draggable', 'tabindex', 'dir', 'lang', 'translate', 'autofocus'
+]);
+
+// 语种 = <code> 上第一个无值属性的名字，如 <code cpp> -> "cpp"；没有则默认 "java"(与高亮的默认语言一致)
+function getCodeLang(codeEl) {
+    for (const attr of codeEl.attributes) {
+        const name = attr.name;
+        if (attr.value !== '') continue;
+        if (NON_LANG_ATTRS.has(name) || name.startsWith('data-') || name.startsWith('aria-') || /^on[a-z]+$/.test(name)) continue;
+        return name;
+    }
+    return 'java';
+}
+
+// 与 side.js 的 copyToClipboard 同一思路：先用同步的 execCommand(处于用户手势内)，不行再用 Clipboard API
+function copyTextToClipboard(text) {
+    function legacyCopy() {
+        const active = document.activeElement;
+        const sel = window.getSelection();
+        const savedRanges = [];
+        for (let i = 0; i < sel.rangeCount; i++) savedRanges.push(sel.getRangeAt(i));
+
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.readOnly = true;
+        ta.style.cssText = 'position:fixed;top:-9999px;left:-9999px;opacity:0;';
+        document.body.appendChild(ta);
+        ta.focus();
+        ta.select();
+        ta.setSelectionRange(0, text.length);
+
+        let ok = false;
+        try { ok = document.execCommand('copy'); } catch (e) { }
+        document.body.removeChild(ta);
+
+        sel.removeAllRanges();
+        savedRanges.forEach(r => sel.addRange(r));
+        if (active && active.focus) active.focus({ preventScroll: true });
+        return ok;
+    }
+
+    if (legacyCopy()) return Promise.resolve(true);
+    if (navigator.clipboard && window.isSecureContext) {
+        return navigator.clipboard.writeText(text).then(() => true, () => false);
+    }
+    return Promise.resolve(false);
+}
+
+// <code> 是 width:100% + padding，右边缘会超出 <pre>，还可能被 resize 拖动，
+// 所以不能靠 margin-left:auto，而是按代码框的实际右边缘算出左边距。
+const codeToolsObserver = typeof ResizeObserver === 'function'
+    ? new ResizeObserver(entries => entries.forEach(({ target }) => target._alignCodeTools && target._alignCodeTools()))
+    : null;
+
+function initCodeTools(root = document) {
+    root.querySelectorAll('code').forEach((codeEl) => {
+        const prev = codeEl.previousSibling;
+        if (prev && prev.nodeType === Node.ELEMENT_NODE && prev.classList.contains('code-tools')) return;   // 已挂载过
+
+        const tools = document.createElement('div');
+        tools.className = 'code-tools';
+
+        const langEl = document.createElement('span');
+        langEl.className = 'code-lang';
+        langEl.dataset.lang = getCodeLang(codeEl).toUpperCase();
+
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'code-copy';
+        btn.title = '复制代码';
+        btn.setAttribute('aria-label', '复制代码');
+
+        let resetTimer = null;
+        btn.onclick = async (e) => {
+            e.stopPropagation();
+            const ok = await copyTextToClipboard(codeEl.innerText.replace(/\n+$/, ''));
+            btn.dataset.state = ok ? 'ok' : 'fail';
+            btn.setAttribute('aria-label', ok ? 'Copied' : 'Copy failed');
+            clearTimeout(resetTimer);
+            resetTimer = setTimeout(() => {
+                delete btn.dataset.state;
+                btn.setAttribute('aria-label', '复制代码');
+            }, 1500);
+        };
+
+        tools.append(btn, langEl);
+        codeEl.before(tools);
+
+        const align = () => {
+            const c = codeEl.getBoundingClientRect();
+            if (!c.width) return;              // 被隐藏(如 diff 时原文 display:none)，重新显示时 ResizeObserver 会再触发
+            tools.style.marginLeft = '0px';
+            const t = tools.getBoundingClientRect();
+            tools.style.marginLeft = Math.max(0, c.right - t.right) + 'px';
+        };
+        codeEl._alignCodeTools = tools._alignCodeTools = align;
+        align();
+        if (codeToolsObserver) {
+            codeToolsObserver.observe(codeEl);   // 窗口缩放 / 拖动 resize
+            codeToolsObserver.observe(tools);    // 「复制」→「已复制」导致工具条变宽
+        }
+    });
+}
+
 async function code() {
     const codeElements = $$('code');
     if (codeElements.length === 0) return;
@@ -1106,13 +1217,14 @@ async function code() {
     return new Promise((resolve) => {
         const highlightAll = () => {
             $$("code").forEach((e) => {
-                const lang = e.attributes.length > 1 ? e.attributes[0].name : "java";
+                const lang = e.attributes.length > 0 ? e.attributes[0].name : "java";
 
                 const rawContent = e.textContent.trim();
                 e.innerHTML = highlightCode(rawContent, lang);
                 updateLineNumbers(e);
             });
             bindCodeEditHandlers(document);
+            initCodeTools(document);
             resolve();
         };
 
@@ -1680,6 +1792,17 @@ function renderDiffView(oldTokens, newTokens, preTag) {
             .trim() === '';
     };
 
+    // <code> 是 white-space:pre：<code> 之后、</code> 之前的 "\n" 都会被渲染成空行。
+    // 所以代码行之间用 "\n" 分隔(放在行首)，而不是每行末尾都补一个。
+    let codeLineIdx = 0;
+    const emit = (html, tType) => {
+        if (tType === 'code_line') {
+            mergedHtml += (codeLineIdx++ > 0 ? '\n' : '') + html;
+        } else {
+            mergedHtml += `${html}\n`;
+        }
+    };
+
     diffOps.forEach(op => {
         const isInsert = op.type === 'insert';
         const isDelete = op.type === 'delete';
@@ -1689,18 +1812,28 @@ function renderDiffView(oldTokens, newTokens, preTag) {
         const tType = token.type;
         const content = token.content;
 
-        if (isEqual) {
+        if (tType === 'code_start') {
+            mergedHtml += content;
+            codeLineIdx = 0;
+            return;
+        }
+        if (tType === 'code_end') {
             mergedHtml += `${content}\n`;
             return;
         }
 
-        if (tType === 'table_start' || tType === 'table_end' || tType === 'code_start' || tType === 'code_end') {
+        if (isEqual) {
+            emit(content, tType);
+            return;
+        }
+
+        if (tType === 'table_start' || tType === 'table_end') {
             mergedHtml += `${content}\n`;
             return;
         }
 
         if (isBlank(token)) {
-            mergedHtml += `${content}\n`;
+            emit(content, tType);
             return;
         }
 
@@ -1715,7 +1848,7 @@ function renderDiffView(oldTokens, newTokens, preTag) {
             mergedHtml += `${styledTr}\n`;
 
         } else if (tType === 'code_line') {
-            mergedHtml += `<span style="background-color: ${bg}; display: inline-block; width: 100%; box-sizing: border-box; border-left: 5px solid ${border}; margin-left: -5px; opacity: ${opacity};">${content}</span>\n`;
+            emit(`<span style="background-color: ${bg}; display: inline-block; width: 100%; box-sizing: border-box; border-left: 5px solid ${border}; margin-left: -5px; opacity: ${opacity};">${content}</span>`, tType);
 
         } else {
             mergedHtml += `<span style="background-color: ${bg}; display: inline-block; width: 100%; box-sizing: border-box; border-left: 5px solid ${border}; margin-left: -5px; opacity: ${opacity};">${content}</span>\n`;

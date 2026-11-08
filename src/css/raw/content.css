@@ -159,6 +159,88 @@ code+code {
     margin-top: -0.5rem !important;
 }
 
+/* 代码框右上角外侧：语种标签 + 一键复制，每个代码块各一个，作为"标签页"贴在框的上沿；
+   精确的右对齐由 content.js 的 initCodeTools 按代码框实际右边缘计算 margin-left，这里的 auto 只是兜底 */
+.code-tools {
+    position: relative;
+    z-index: 2;
+    display: flex;
+    width: fit-content;
+    margin: 0.5rem 0 -1px auto;
+    border: 1px solid #a7a7a7;
+    border-bottom: 0;
+    border-radius: 5px 5px 0 0;
+    background-color: #000;
+    font-size: 0.7rem;
+    line-height: 1;
+    letter-spacing: normal;
+    text-indent: 0;
+    white-space: nowrap;
+    user-select: none;
+}
+
+.code-tools+code {
+    margin-top: 0 !important;
+    border-top-right-radius: 0;
+}
+
+.code-lang {
+    font-weight: bold;
+    background-color: darkred;
+    padding: .3rem .6rem;
+    color: lightblue;
+    font-family: Consolas,SFMono-Regular,Menlo,monospace;
+}
+
+.code-lang::before {
+    content: attr(data-lang);
+}
+
+.code-copy {
+    appearance: none;
+    margin: 0;
+    padding: 0.3rem 0.6rem;
+    min-width: 3.2rem;
+    border: 0;
+    border-left: 1px solid #6e6e6e;
+    border-radius: 0 4px 0 0;
+    background: transparent;
+    color: #4ccb00;
+    font: inherit;
+    line-height: 1;
+    text-align: center;
+    cursor: pointer;
+}
+
+.code-copy::before {
+    content: "Copy";
+}
+
+.code-copy:hover {
+    background-color: #4a4a4a;
+}
+
+.code-copy:focus-visible {
+    outline: 2px solid #3593ff;
+    outline-offset: -2px;
+}
+
+.code-copy[data-state="ok"] {
+    color: #4ccb00;
+}
+
+.code-copy[data-state="ok"]::before {
+    content: "Copied";
+}
+
+.code-copy[data-state="fail"] {
+    color: #ff7b7b;
+}
+
+.code-copy[data-state="fail"]::before {
+    content: "Copy failed";
+}
+
 code div,
 code p {
     display: inline;

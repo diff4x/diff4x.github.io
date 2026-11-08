@@ -90,6 +90,8 @@ window.addEventListener('DOMContentLoaded', () => {
         console.error(err);
     }
     });
+    
+    createCalendar();
 });
 
 document.addEventListener('keydown', (e) => {
@@ -534,4 +536,82 @@ function updateWallpaperPanelUI(config) {
     const tooltip = document.querySelector('.wp-preview-tooltip');
     fillWallpaperListItems(config, tooltip);
     bindPanelEvents(config);
+}
+
+function createCalendar(container = document.body) {
+  const d = new Date(), y = d.getFullYear(), m = d.getMonth();
+  const daysInMonth = new Date(y, m + 1, 0).getDate();
+  const firstDay = new Date(y, m, 1).getDay();
+  const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+
+  const host = document.createElement('div');
+  host.id = 'glass-calendar-host';
+  const shadow = host.attachShadow({ mode: 'open' });
+
+  shadow.innerHTML = `
+    <style>
+      :host {
+        display: inline-block;
+        all: initial;
+      }
+      .calendar-box {
+        top: 100px;
+        right: 30px;
+        position: absolute;
+        box-sizing: border-box;
+        padding: 14px; 
+        border-radius: 14px;
+        background: rgba(255, 255, 255, 0.05); 
+        backdrop-filter: blur(10px);
+        -webkit-backdrop-filter: blur(10px); 
+        border: 1px solid rgba(255, 255, 255, 0.25);
+        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1); 
+        color: #fff;
+        font-family: system-ui, -apple-system, sans-serif; 
+        font-size: 12px; 
+        text-align: center;
+        margin: 0;
+      }
+      .hdr { 
+        font-weight: bold; 
+        margin-bottom: 10px; 
+        letter-spacing: 1px; 
+      }
+      .grid { 
+        display: grid; 
+        grid-template-columns: repeat(7, 1fr); 
+        gap: 4px; 
+      }
+      .cell {
+        aspect-ratio: 1; 
+        display: flex; 
+        align-items: center; 
+        justify-content: center;
+        border-radius: 4px; 
+        background: rgba(255, 255, 255, 0.1); 
+        transition: 0.2s;
+      }
+      .wkd { background: transparent; opacity: 0.6; font-size: 10px; }
+      .empty { background: transparent; }
+      .today { background: rgb(0 255 49 / 30%); font-weight: bold; }
+      .past { background: rgba(255, 255, 255, 0.03); color: #a8a8a8 }
+    </style>
+    <div class="calendar-box">
+      <div class="hdr">${months[m]} ${y}</div>
+      <div class="grid">
+        ${['S','M','T','W','T','F','S'].map(w => `<div class="cell wkd">${w}</div>`).join('')}
+        ${'<div class="cell empty"></div>'.repeat(firstDay)}
+        ${Array.from({ length: daysInMonth }, (_, i) => i + 1).map(day => {
+          let cls = 'cell';
+          if (day === d.getDate()) {
+            cls += ' today';
+          } else if (day < d.getDate()) {
+            cls += ' past';
+          }
+          return `<div class="${cls}">${day}</div>`;
+        }).join('')}
+      </div>
+    </div>
+  `;
+  container.appendChild(host);
 }
