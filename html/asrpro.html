@@ -36,6 +36,9 @@ extern "C"{ void * __dso_handle = 0 ;}
 #include "setup.h"
 #include "myLib/asr_event.h"
 #include "myLib/asr_hwtimer.h"
+#include "myLib/pro_nvdata.h"
+/* 定时时长断电保存：使用用户 nvdata 区（flash 独立存储区，固件已自动初始化） */
+#define NVDATA_ID_SEC 0x60000010 // 用户自定义ID，须 >= NVDATA_ID_USER_START(0x60000001)
 /* 自学习管理接口：库为C编译，必须用 extern "C" 声明，
    否则C++名称改编会导致链接时找不到符号 */
 extern "C" {
@@ -50,6 +53,11 @@ uint32_t snid;
 void ASR_CODE();
 QueueHandle_t asr_code_handler_msg = NULL;
 void asr_code_handler_app();
+void play_end_noop();  // 前向声明
+
+/* 白龙马音乐播放状态：完成回调置位，防歌曲回采误触发循环 */
+volatile bool blm_playing = false;
+void blm_play_done();
 
 /***************** 语音配置区：speak / playid / ID 全部集中在此，不得分散 *****************/
 //{speak:小爱-活泼女声,vol:5,speed:10,platform:haohaodada,version:V3}
@@ -60,7 +68,7 @@ void asr_code_handler_app();
 //{playid:10502,voice:修改完成}
 //{playid:10503,voice:已关}
 //{playid:10504,voice:学习数据已清除}
-//{playid:10507,voice:好，需要配置什么}
+//{playid:10507,voice:好，需要设置什么}
 //{playid:10508,voice:请先唤醒}
 //{playid:10506,voice:开机}
 //{ID:10300,keyword:"唤醒词",ASR:"度水红蜻蜓",ASRTO:""}
@@ -119,13 +127,15 @@ void asr_code_handler_app();
 //{ID:1,keyword:"命令词",ASR:"三十",ASRTO:""}
 //{ID:2,keyword:"命令词",ASR:"六十",ASRTO:""}
 //{ID:3,keyword:"命令词",ASR:"三百",ASRTO:""}
+//{ID:4,keyword:"命令词",ASR:"白龙马",ASRTO:""}
+//{playid:10509,voice:白龙马}
 /*************************************************************************/
 
 /* 系统状态（三者互斥：mode 与 light_on） */
 volatile uint32_t sys_tick_sec = 0;  // 定时器0中断累加的秒数
 uint32_t light_start_tick = 0;       // 本次开灯时刻
 uint32_t state_start_tick = 0;       // 进入选择/学习状态的时刻
-uint16_t sec = 10;                   // 定时时长（秒）
+uint16_t sec = 30;                   // 定时时长（秒）
 
 #define MODE_IDLE   0   // 空闲
 #define MODE_SELECT 1   // 时长修改中
@@ -183,7 +193,7 @@ void asr_code_handler_app(){
         /* 开灯：门控之外，随时可执行（仅忙/已亮时忽略） */
         if (mode == MODE_IDLE && !light_on) {
           light_on = true;
-          digitalWrite(4, 1);
+          digitalWrite(3, 1);
           light_start_tick = now;
           play_audio(10500);          // 已打开
         }
@@ -194,6 +204,15 @@ void asr_code_handler_app(){
           mode = MODE_SELECT;
           state_start_tick = now;
           play_audio(10501);          // 请选择时长
+        }
+      } else if (cmd == 4) {
+        /* 白龙马：播放音乐。用完成回调标志防误触发循环（prompt_is_playing() 在本工程
+           实测不可靠：它读 combination_number，可能长期残留 >0 而误判"正在播放"跳过） */
+        if (!blm_playing) {
+          blm_playing = true;
+          if (prompt_play_by_cmd_id(10509, -1, blm_play_done, true) != 0) {
+            blm_playing = false;  // 请求失败复位标志，避免卡死
+          }
         }
       } else if (cmd == 1 || cmd == 2 || cmd == 3) {
         /* 时长选择：仅时长修改状态响应 */
@@ -206,6 +225,7 @@ void asr_code_handler_app(){
             sec = 300;
           }
           mode = MODE_IDLE;
+          asrpro_nvdata_write(&sec, sizeof(sec), NVDATA_ID_SEC); // 断电保存时长
           play_audio(10502);          // 修改完成
         }
       }
@@ -228,7 +248,7 @@ void asr_code_handler_app(){
     /* 到点关灯 */
     if (light_on && (now - light_start_tick >= sec)) {
       light_on = false;
-      digitalWrite(4, 0);
+      digitalWrite(3, 0);
       play_audio(10503);              // 已关闭
     }
 
@@ -239,6 +259,11 @@ void asr_code_handler_app(){
 
 /* 播报完成空回调（prompt_play_by_cmd_id 不允许传 nullptr） */
 void play_end_noop() {
+}
+
+/* 白龙马音乐播放完成回调：复位标志，允许再次触发 */
+void blm_play_done() {
+  blm_playing = false;
 }
 
 /* 判断配置门控当前是否处于解锁状态（唤醒词解锁后限时有效） */
@@ -265,7 +290,7 @@ void ASR_CODE()
     prompt_play_by_cmd_id(10508, -1, play_end_noop, true);  // 请先说唤醒词解锁
     return;
   }
-  if (snid == 10300 || snid == 10302 || snid == 10303 || snid == 1 || snid == 2 || snid == 3 ||
+  if (snid == 10300 || snid == 10302 || snid == 10303 || snid == 4 || snid == 1 || snid == 2 || snid == 3 ||
       (snid >= 10400 && snid &lt;= 10421) ||
       (snid >= 11001 && snid &lt;= 11010) ||
       (snid >= 12001 && snid &lt;= 12010)) {
@@ -274,6 +299,13 @@ void ASR_CODE()
 }
 
 void hardware_init(){
+  /* 开机恢复断电保存的定时时长：init 仅在 ID 不存在时创建（写入当前默认值），
+     已存在则不动；随后 read 取出上次保存值，数据非法时回退默认10秒 */
+  asrpro_nvdata_init(&sec, sizeof(sec), NVDATA_ID_SEC);
+  asrpro_nvdata_read(NVDATA_ID_SEC, sizeof(sec), &sec);
+  if (sec != 30 && sec != 60 && sec != 300 && sec != 10) {
+    sec = 10;
+  }
   asr_code_handler_msg = xQueueCreate(5, sizeof(uint32_t));
   /* 开机复位清除通道：上电时按住接在PA2(引脚2)的对地按键，
      开机时检测到该键按下即清除全部已学习模板（学习数据存flash独立区，
@@ -290,9 +322,9 @@ void hardware_init(){
 
 void setup()
 {
-  setPinFun(4,FIRST_FUNCTION);
-  digitalWrite(4,0);
-  pinMode(4,output);
+  setPinFun(3,FIRST_FUNCTION);
+  digitalWrite(3,0);
+  pinMode(3,output);
   /* 定时器0配置为1秒周期，仅作秒计数使用；TIM_attachInterrupt只配置不启动，必须TIM_Enable启动 */
   TIM_attachInterrupt(TIMER0, 1000000, TIM_attachInterrupt_0);
   TIM_Enable(TIMER0);
@@ -305,18 +337,20 @@ void setup()
 
 20261107114338.webp
 
-MCU 刚上电、复位时，PA4 暂时没有输出高低电平，相当于断开, 即高阻状态, 导致b极悬空, 电位不确定, 可能误导通
-增加10kΩ下拉电阻的作用：即使 PA4 高阻, 由于b极被明确拉到gnd, 形成默认电位，所以能确保 SS8050 默认关闭
+板子刚上电、复位时，PA4 暂时没有输出高低电平，相当于断开, 即高阻状态(高阻态不等于输出低电平), 导致b极悬空, 电位不确定, 可能误导通
+增加10kΩ下拉电阻的作用是即使 PA4 高阻, 由于b极被明确拉到gnd形成默认电位，所以能确保 SS8050 默认关闭
 
-PA4 输出 HIGH：通过 1kΩ 给 B 极提供驱动电流，SS8050 导通
-PA4 输出 LOW：B 极处于低电位，SS8050 截止
-PA4 高阻：10kΩ 将 B 极拉到 GND，SS8050 保持截止
+PA4 输出 HIGH：主动输出高电平, 通过 1kΩ 给 B 极提供驱动电流，SS8050 导通
+PA4 输出 LOW：主动输出低电平, B 极处于低电位，SS8050 截止
+PA4 高阻：输出驱动器关闭，引脚近似悬空, 10kΩ 将 B 极拉到 GND，SS8050 保持截止
 
-GPIO 高阻态不等于输出低电平
-输出 HIGH 主动输出高电平
-输出 LOW 主动输出低电平
-高阻输入态 输出驱动器关闭，引脚近似悬空
+pa4上电默认：`IN, T+U`, pa3上电默认：`IN, T+D`, 改选pa3
+    根据 ASRPRO 官方硬件开发数据手册：
+        内部默认上拉 / 升级模式检测： ASRPRO 芯片的 PA4（PG_EN）引脚内部带有上拉电阻。
+        开机延迟与检测： 芯片上电时，默认会进入约 850ms 的“升级模式检测期”。在此期间，PA4 会保持为高电平，并检测外部 UART0 是否有升级信号。直到初始化完成并执行你的用户代码（将其配置为低电平）前，该引脚会有持续接近 1 秒的高电平输出。如果外设（如继电器、MOS管）是高电平触发的，上电时就会直接被误触发
 
+要播放自定义的音频文件, 先写占位//{playid:10509,voice:白龙马}, 这样在生成模型时会产生一个很小的[10509]白龙马.mp3, 用实际音频替换它然后再编译下载
+    所有 mp3 和 voice.bin 的时间戳都是同一次"生成模型"的时刻。生成模型时工具会按代码里的语音配置区重新生成整个 voice\mp3 目录, 如果在模型生成之前去替换, 会被重建流程清掉
 </pre>
  </body>
 </html>
