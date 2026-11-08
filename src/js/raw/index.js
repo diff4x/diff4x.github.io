@@ -59,6 +59,19 @@ let comments_first_flag = false;
 let records = [];
 let totalCount = 0;
 
+// ---- 评论同步 / 评论搜索 的共享状态 ----
+const COMMENTS_SYNC_INTERVAL = 10 * 60 * 1000;
+const commentHitCache = new Map();     // normKw -> { ver, hits: [{path, count}], sig }
+const commentModel = {
+    ready: false,
+    ver: 0,                            // 每次评论数据变化 +1，用来判定 commentHitCache 是否过期
+    sig: "",
+    counts: {},                        // path -> 评论数（含回复）
+    meta: new Map(),                   // path -> { title, fileName, localOnly }
+    index: null                        // 发给 Worker 的评论索引 [{ path, texts }]
+};
+window.commentCounts = {};
+
 import('../wasm/compute_intensive_task_processor.min.js').then(async (wasmModule) => {
     await wasmModule.default();
     window.sharedWasm.format_markdown = wasmModule.format_markdown;
@@ -588,6 +601,7 @@ window.addEventListener('message', async (e) => {
             emitEvent("cm_count", totalCount, "content");
         }
         if (data.post) {
+            window._suppressCommentPopupUntil = Date.now() + 30 * 60 * 1000;
             totalCount++;
             emitEvent("cm_count", totalCount, "content");
             console.log("新增评论:", data.post);
@@ -660,6 +674,7 @@ window.onload = () => {
 
     cmt_mapper();
     comments();
+    startCommentSync();
     loadPinyinData();
     loadSynonymsData();
 
@@ -1132,10 +1147,17 @@ async function loadScripts(concurrency) {
 function createSearchWorker() {
     const worker = new Worker('src/js/worker.js', { type: 'module' });
     worker.onmessage = async (e) => {
-        const { type, results, keyword, token, inheritFrom, payload } = e.data;
+        const { type, results, keyword, token, inheritFrom, payload, commentHits } = e.data;
 
         if (type === 'DELETE_CACHE') {
             store.SearchCache.remove(keyword);
+            return;
+        }
+
+        // 缓存命中（没走 SEARCH）时单独请求的评论命中
+        if (type === 'COMMENT_HITS') {
+            if (token !== window._searchToken) return;
+            if (setCommentHits(keyword, commentHits || [])) rerenderSearchOverlay();
             return;
         }
 
@@ -1144,6 +1166,9 @@ function createSearchWorker() {
                 console.log(`[Search] 拦截到滞后结果 "${keyword}"，已丢弃。`);
                 return;
             }
+
+            // Worker 在正文结果之后从评论里找补的命中，渲染时叠加（不写入搜索缓存）
+            if (Array.isArray(commentHits)) setCommentHits(keyword, commentHits);
 
             const activeKw = keyword || store.keyword;
 
@@ -1199,6 +1224,7 @@ function createSearchWorker() {
             await finalizeDataLoad();
         }
     };
+    if (commentModel.index) worker.postMessage({ type: 'SET_COMMENTS', payload: commentModel.index });
     return worker;
 }
 
@@ -2163,6 +2189,7 @@ async function search(rawKeyword) {
 
     if (meta && meta.results && currentToken === window._searchToken) {
         if (meta.exact) {
+            requestCommentHits(kw, currentToken);
             processAndShowResults(meta.results, kw, { provisional: false });
             return;
         }
@@ -2175,23 +2202,27 @@ async function search(rawKeyword) {
             return;
         }
 
-        const synonymsEnabled = (store.synonyms_enabled ?? 1) === 1;
-        const expandQueryFn = window.top.expandQuery || ((kw) => ({ variants: [] }));
-        const { variants } = synonymsEnabled ? expandQueryFn(kw) : { variants: [] };
-
         searchWorker.postMessage({
             type: 'SEARCH',
             payload: { 
                 keyword: kw, 
                 noise: Number(store.noise_level ?? 5),
                 token: currentToken, 
-                searchKeywords: [kw, ...variants]
+                searchKeywords: getSearchKeywords(kw)
             }
         });
 
     } catch (err) {
         console.error("web worker 通信失败", err);
     }
+}
+
+// 关键词 + 近义词变体（正文搜索与评论搜索共用）
+function getSearchKeywords(kw) {
+    const synonymsEnabled = (store.synonyms_enabled ?? 1) === 1;
+    const expandQueryFn = window.top.expandQuery || ((kw) => ({ variants: [] }));
+    const { variants } = synonymsEnabled ? expandQueryFn(kw) : { variants: [] };
+    return [kw, ...variants];
 }
 
 async function updateAutocompleteSuggestions(val) {
@@ -2280,6 +2311,10 @@ function isReservedSearchCommand(kw) {
 }
 
 function updateSearchResults(results, keyword) {
+    // 搜索缓存里保存的始终是纯正文结果；评论命中只在渲染时叠加
+    window._baseRenderedResults = results;
+    results = applyCommentOverlay(results, keyword);
+
     window._currentRenderedResults = results;
     window._currentRenderedKeyword = keyword || "";
 
@@ -2305,7 +2340,10 @@ function updateSearchResults(results, keyword) {
             const isPrivate = (result.localOnly === true || result.info === "localOnly");
             const title = result.type === "html" ? result.title.replace(/\.html$/, '') : result.title;
 
-            option.text = (isPrivate ? (store.online_flag === "1" ? "🔒 " : "🔓 ") : "") + `${title} [${result.count}]`;
+            // 仅评论命中的文章没有正文命中数，只显示 [💬 N]
+            const countStr = result.commentOnly ? "" : ` [${result.count}]`;
+            const commentStr = result.commentHits ? ` [💬 ${result.commentHits}]` : "";
+            option.text = (isPrivate ? (store.online_flag === "1" ? "🔒 " : "🔓 ") : "") + `${title}${countStr}${commentStr}`;
 
             option.style.opacity = (isPrivate ? (store.online_flag === "1" ? 0.5 : 1) : 1);
             option.dataset.path = result.path;
@@ -2930,6 +2968,322 @@ async function comments() {
         }
     }
 }
+// =====================================================================
+// 评论同步：每 10 分钟拉取 comments.json，与 cmt_mapper 匹配后
+//   1) 汇总各文章评论数 -> 推给 side，追加到目录项 title
+//   2) 最新 10 条评论 -> IDB(sys_state.comments_latest)，供 What's new 悬浮窗读取
+//   3) 评论纯文本索引 -> 搜索 Worker，搜索时对正文结果做评论找补
+// 匹配规则：giscus 用 data-mapping="specific"，Discussion 标题 = cmt_mapper 的 record.id，
+//           record.title = 文章文件名(不含 .html)
+// =====================================================================
+
+// 评论正文是 Markdown：去掉图片/链接地址/HTML 标签/引用与标题记号，只留可读文本
+function commentToPlainText(md) {
+    return String(md || "")
+        .replace(/^```.*$/gm, "")
+        .replace(/!\[[^\]]*\]\([^)]*\)/g, " ")
+        .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
+        .replace(/<[^>]+>/g, " ")
+        .replace(/^\s{0,3}>+\s?/gm, "")
+        .replace(/^\s{0,3}#{1,6}\s+/gm, "")
+        .replace(/[*~`]+/g, "")
+        .replace(/\s+/g, " ")
+        .trim();
+}
+
+function truncateText(text, max) {
+    const chars = Array.from(text || "");
+    return chars.length > max ? chars.slice(0, max).join("") + "…" : (text || "");
+}
+
+// 遍历 lite_data.html 目录树 -> Map(标题 -> { title, fileName, path, localOnly })
+// 与 side.js 的目录渲染、worker 的 build_flat_data 保持同一套路径规则: "html/" + 文件名
+function collectHtmlFiles(node, out = new Map()) {
+    if (!node || typeof node !== "object") return out;
+    if (Array.isArray(node._f)) {
+        for (const item of node._f) {
+            if (!Array.isArray(item) || typeof item[0] !== "string") continue;
+            const fileName = item[0];
+            const info = typeof item[3] === "string" ? item[3] : "";
+            const title = fileName.replace(/\.html$/, "");
+            out.set(title, { title, fileName, path: "html/" + fileName, localOnly: info.includes("localOnly") });
+        }
+    }
+    for (const key of Object.keys(node)) {
+        if (key !== "_f") collectHtmlFiles(node[key], out);
+    }
+    return out;
+}
+
+async function getCommentMapperRecords() {
+    if (records && records.length > 0) return records;
+    // cmt_mapper() 只在线上环境加载映射表；本地环境/尚未就绪时直接拉取
+    try {
+        const res = await fetch('/src/cmt_mapper.json', { cache: 'no-cache' });
+        if (res.ok) {
+            const data = await res.json();
+            return data.records || [];
+        }
+    } catch (e) { }
+    return [];
+}
+
+// comments.json 的原始评论 -> 只保留能对应到现存文章的评论
+async function mapRawComments(raw) {
+    const recs = await getCommentMapperRecords();
+    await AsyncUtils.waitFor(() => window.lite_data, 90000, 200);
+    const files = collectHtmlFiles(window.lite_data.html);
+    const titleById = new Map(recs.map(r => [String(r.id), r.title]));
+
+    const mapped = [];
+    for (const c of raw) {
+        const term = c && c.discussion ? String(c.discussion.title ?? "").trim() : "";
+        const articleTitle = titleById.get(term);
+        if (!articleTitle) continue;               // 映射表里没有 / orphan
+        const file = files.get(articleTitle);
+        if (!file) continue;                       // 文章已不存在
+        mapped.push({
+            id: c.id,
+            path: file.path,
+            author: (c.author && c.author.login) || "ghost",
+            createdAt: c.createdAt,
+            updatedAt: c.updatedAt || c.createdAt,
+            text: commentToPlainText(c.body),
+            url: c.url
+        });
+    }
+    return mapped;
+}
+
+function pushCommentIndexToWorker() {
+    const worker = searchWorker || _pendingWorker;
+    if (worker && commentModel.index) {
+        worker.postMessage({ type: 'SET_COMMENTS', payload: commentModel.index });
+    }
+}
+
+// 把一份 { sig, comments } 快照应用到运行时：评论数 / 搜索索引 / 搜索结果叠加
+async function applyCommentSnapshot(snap) {
+    await AsyncUtils.waitFor(() => window.lite_data, 90000, 200);
+    const files = collectHtmlFiles(window.lite_data.html);
+    const meta = new Map();
+    for (const f of files.values()) meta.set(f.path, f);
+
+    const counts = {};
+    const grouped = new Map();
+    for (const c of snap.comments) {
+        if (!meta.has(c.path)) continue;
+        counts[c.path] = (counts[c.path] || 0) + 1;
+        let g = grouped.get(c.path);
+        if (!g) grouped.set(c.path, g = { path: c.path, texts: [] });
+        g.texts.push(c.text);
+    }
+
+    commentModel.meta = meta;
+    commentModel.counts = counts;
+    commentModel.index = Array.from(grouped.values());
+    commentModel.sig = snap.sig || "";
+    commentModel.ready = true;
+    commentModel.ver++;
+
+    window.commentCounts = counts;
+    emitEvent('COMMENT_COUNTS', counts, 'side');
+    pushCommentIndexToWorker();
+    refreshCommentOverlayForCurrentKeyword();
+}
+
+function pickLatestComments(comments, limit) {
+    return comments
+        .filter(c => commentModel.meta.has(c.path))
+        .map(c => ({ c, ts: Date.parse(c.createdAt) || 0 }))
+        .sort((a, b) => b.ts - a.ts)
+        .slice(0, limit)
+        .map(({ c }) => ({
+            id: c.id,
+            path: c.path,
+            title: commentModel.meta.get(c.path).title,
+            author: c.author,
+            createdAt: c.createdAt,
+            text: truncateText(c.text, 200) || "[无文本内容]",
+            url: c.url
+        }));
+}
+
+async function syncComments() {
+    if (window._commentSyncing || !navigator.onLine) return;
+    window._commentSyncing = true;
+    window._lastCommentSyncAt = Date.now();
+    try {
+        const res = await fetch(`https://raw.githubusercontent.com/${data_repo}/main/comments.json`, { cache: 'no-cache' });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const json = await res.json();
+        const raw = Array.isArray(json && json.comments) ? json.comments : [];
+
+        const mapped = await mapRawComments(raw);
+        // 签名包含映射结果：评论被编辑、或文章/映射表变化导致归属变化，都会触发重建
+        const sig = mapped.map(c => `${c.id}@${c.updatedAt}@${c.path}`).sort().join("|");
+        if (commentModel.ready && sig === commentModel.sig) return;
+
+        let prevLatest = null;
+        try { prevLatest = await dbProxy.get('sys_state', 'comments_latest'); } catch (e) { }
+
+        const snap = { generatedAt: (json && json.generatedAt) || "", sig, comments: mapped };
+        await applyCommentSnapshot(snap);
+
+        const latest = pickLatestComments(mapped, 10);
+        const curNewest = latest.length ? (Date.parse(latest[0].createdAt) || 0) : 0;
+        const prevNewest = Number(prevLatest && prevLatest.newestTs) || 0;
+        // 删除评论不应让基线倒退；首次运行(没有基线)不弹窗
+        const newestTs = Math.max(prevNewest, curNewest);
+        const hasNew = !!prevLatest && curNewest > prevNewest;
+
+        try {
+            await dbProxy.put('sys_state', 'comments_latest', {
+                fetchedAt: Date.now(),
+                generatedAt: snap.generatedAt,
+                newestTs,
+                items: latest
+            });
+            await dbProxy.put('sys_state', 'comments_cache', snap);
+        } catch (e) {
+            console.warn("[Comments] 写入 IDB 失败:", e);
+        }
+
+        if (hasNew) notifyNewComments();
+    } catch (e) {
+        console.warn("[Comments] 同步失败:", e);
+    } finally {
+        window._commentSyncing = false;
+    }
+}
+
+async function notifyNewComments() {
+    // 悬浮窗已经开着：只刷新当前页，不打断
+    const openedPopup = document.getElementById('changelog-popup');
+    const isOpen = !!openedPopup && openedPopup.style.display !== 'none';
+    if (!isOpen) {
+        if (store.auto_show_comments === "0") return;
+        // 刚在页面里发过评论：自己的评论不弹窗
+        if (Date.now() < (window._suppressCommentPopupUntil || 0)) return;
+    }
+
+    try { await AsyncUtils.waitFor(() => !window.isDataSyncing, 90000, 200); } catch (e) { }
+    if (window.restoreSnapPromise) {
+        try { await window.restoreSnapPromise; } catch (e) { }
+    }
+
+    try {
+        const m = await import('./deferred-features.js');
+        // 不指定 tab：文件更新与评论谁的时间新就显示谁
+        m.showChangelog({ dbProxy, emitEvent }, isOpen ? { keepTab: true } : {});
+    } catch (e) {
+        console.warn("[Comments] 弹出 What's new 失败:", e);
+    }
+}
+
+function startCommentSync() {
+    if (window._commentSyncStarted) return;
+    window._commentSyncStarted = true;
+
+    (async () => {
+        // 先用上次保存的快照：离线时评论数和评论搜索也可用
+        try {
+            const cached = await dbProxy.get('sys_state', 'comments_cache');
+            if (cached && Array.isArray(cached.comments)) await applyCommentSnapshot(cached);
+        } catch (e) {
+            console.warn("[Comments] 读取本地快照失败:", e);
+        }
+        await syncComments();
+    })();
+
+    window.commentSyncTimer = safeInterval(syncComments, COMMENTS_SYNC_INTERVAL);
+
+    // 睡眠唤醒后 safeInterval 会跳过一次，这里补上
+    document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible'
+            && Date.now() - (window._lastCommentSyncAt || 0) > COMMENTS_SYNC_INTERVAL) {
+            syncComments();
+        }
+    });
+}
+
+// ---- 评论搜索：结果叠加 ----
+
+function setCommentHits(kw, hits) {
+    const norm = normalizeKeyword(kw);
+    if (!norm) return false;
+    const sig = JSON.stringify(hits);
+    const prev = commentHitCache.get(norm);
+    commentHitCache.delete(norm);
+    commentHitCache.set(norm, { ver: commentModel.ver, hits, sig });
+    if (commentHitCache.size > 100) commentHitCache.delete(commentHitCache.keys().next().value);
+    return (prev ? prev.sig : "[]") !== sig;
+}
+
+// 命中搜索缓存时不会走 SEARCH，这里单独让 Worker 算一次评论命中
+function requestCommentHits(kw, token) {
+    if (!commentModel.ready || !searchWorker) return;
+    const norm = normalizeKeyword(kw);
+    if (!norm || isReservedSearchCommand(kw)) return;
+    const entry = commentHitCache.get(norm);
+    if (entry && entry.ver === commentModel.ver) return;
+    searchWorker.postMessage({
+        type: 'SEARCH_COMMENTS',
+        payload: {
+            keyword: kw,
+            noise: Number(store.noise_level ?? 5),
+            token,
+            searchKeywords: getSearchKeywords(kw)
+        }
+    });
+}
+
+function refreshCommentOverlayForCurrentKeyword() {
+    const kw = window._currentRenderedKeyword;
+    if (!kw || isReservedSearchCommand(kw)) return;
+    requestCommentHits(kw, window._searchToken);
+}
+
+function rerenderSearchOverlay() {
+    if (!window._baseRenderedResults) return;
+    updateSearchResults(window._baseRenderedResults, window._currentRenderedKeyword);
+}
+
+// 正文与评论都命中：在该条上标记评论命中数；只有评论命中：追加该文章
+function applyCommentOverlay(results, keyword) {
+    if (!keyword || isReservedSearchCommand(keyword) || !commentModel.ready) return results;
+    const entry = commentHitCache.get(normalizeKeyword(keyword));
+    const hits = entry && entry.hits;
+    if (!hits || hits.length === 0) return results;
+
+    const hitMap = new Map(hits.map(h => [h.path, h.count]));
+    const matched = new Set();
+    const merged = results.map(r => {
+        if (r.type !== 'html') return r;
+        const p = r.path.startsWith('../') ? r.path.substring(3) : r.path;
+        const count = hitMap.get(p);
+        if (!count) return r;
+        matched.add(p);
+        return Object.assign({}, r, { commentHits: count });
+    });
+
+    for (const h of hits) {
+        if (matched.has(h.path)) continue;
+        const meta = commentModel.meta.get(h.path);
+        if (!meta) continue;
+        merged.push({
+            title: meta.fileName,
+            path: h.path,
+            type: 'html',
+            count: 0,
+            localOnly: meta.localOnly,
+            commentHits: h.count,
+            commentOnly: true
+        });
+    }
+    return merged;
+}
+
 function updatePopupHeaderWithStamp(stampText) {
     const header = document.getElementById("popup-header");
     if (!header) return;

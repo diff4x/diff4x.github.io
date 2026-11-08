@@ -61,6 +61,24 @@ function getFileNameFromPath(path) {
     return path.split("/").pop();
 }
 
+// ---- 文章评论数：由 index 汇总后推送，追加到目录项的 title 属性 ----
+let commentCounts = {};
+
+// title = [日期(点击后写入 data-date-title)] + [💬 N comments]
+function refreshHtmlTitle(a) {
+    const parts = [];
+    if (a.dataset.dateTitle) parts.push(a.dataset.dateTitle);
+    const n = commentCounts[a.dataset.path] || 0;
+    if (n > 0) parts.push(`💬 ${n} ${n > 1 ? "comments" : "comment"}`);
+    if (parts.length) a.setAttribute("title", parts.join("\n"));
+    else a.removeAttribute("title");
+}
+
+function applyCommentCounts(counts) {
+    commentCounts = (counts && typeof counts === "object") ? counts : {};
+    document.querySelectorAll("#html a[data-path]").forEach(refreshHtmlTitle);
+}
+
 window.childId = childId;
 
 const store = createStore({ last_li_a: [] });
@@ -119,6 +137,10 @@ BUS.addEventListener("message", e => {
 
         case "UPDATE_FAV_LIST":
             render_fav_trigger();
+            break;
+
+        case "COMMENT_COUNTS":
+            applyCommentCounts(payload);
             break;
 
         default:
@@ -210,6 +232,10 @@ function buildCatalogFromLiteData(data) {
 
     if (!window._markSystemBound) { mark(); window._markSystemBound = true; }
     if (!window._menuSystemBound) { menu(); window._menuSystemBound = true; }
+
+    try {
+        applyCommentCounts(window.top && window.top.commentCounts);
+    } catch { /* 跨窗口读取失败时等待 index 推送 */ }
 }
 
 function renderStructuredTree(node, container, type, pathPrefix) {
@@ -426,10 +452,11 @@ function click_func() {
 
         const date = parse_date(a.dataset.stamp);
         if (date) {
-            a.setAttribute("title", date.toLocaleDateString("en-US", {
+            a.dataset.dateTitle = date.toLocaleDateString("en-US", {
                 year: "numeric", month: "long", day: "numeric",
                 hour: "2-digit", minute: "2-digit", hour12: false, weekday: "short"
-            }));
+            });
+            refreshHtmlTitle(a);
         }
     });
 

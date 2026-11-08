@@ -67,9 +67,98 @@ function makeDraggable(popupSelector, headerSelector) {
     });
 }
 
-// ---- showChangelog(ctx): ctx = { dbProxy, emitEvent } ----
-export async function showChangelog(ctx) {
+// ---- showChangelog(ctx, opts): ctx = { dbProxy, emitEvent } ----
+// opts.tab      : 'files' | 'comments'，强制指定显示哪一页（缺省按"谁的时间新"决定）
+// opts.keepTab  : 弹窗已打开时只刷新当前页，不切页、不重新居中
+let _clRenderSeq = 0;
+
+function escapeHtml(str) {
+    return String(str ?? '').replace(/[&<>"']/g, ch => (
+        { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]
+    ));
+}
+
+function formatLogTime(ts) {
+    const d = new Date(ts);
+    return `[${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:${String(d.getSeconds()).padStart(2, '0')}]`;
+}
+
+function collectPrivatePaths() {
+    const privatePaths = new Set();
+    if (window.data && window.data.length > 0) {
+        // data 结构循环: [title, info, path, type]
+        for (let i = 0; i < window.data.length; i += 4) {
+            const info = window.data[i + 1];
+            const path = window.data[i + 2];
+            if (typeof info === 'string' && info.includes('localOnly')) {
+                privatePaths.add(path);
+            }
+        }
+    }
+    return privatePaths;
+}
+
+// 文件更新日志 与 最新评论，谁的时间新就先显示谁
+async function pickDefaultChangelogTab(ctx) {
+    let latestLogTs = 0;
+    let latestCommentTs = 0;
+    try {
+        const logs = await ctx.dbProxy.getLogs();
+        for (const log of logs) if (log.ts > latestLogTs) latestLogTs = log.ts;
+    } catch (e) { }
+    try {
+        const data = await ctx.dbProxy.get('sys_state', 'comments_latest');
+        if (data && Array.isArray(data.items)) {
+            for (const it of data.items) {
+                const t = Date.parse(it.createdAt);
+                if (t > latestCommentTs) latestCommentTs = t;
+            }
+        }
+    } catch (e) { }
+    return latestCommentTs > latestLogTs ? 'comments' : 'files';
+}
+
+function applyChangelogTabUI(tab) {
+    const popup = $('#changelog-popup');
+    if (!popup) return;
+    popup.dataset.tab = tab;
+
+    popup.querySelectorAll('.cl-tab').forEach(el => {
+        const active = el.dataset.tab === tab;
+        el.classList.toggle('active', active);
+        el.style.fontWeight = active ? 'bold' : 'normal';
+        el.style.textDecoration = active ? 'underline' : 'none';
+        el.style.color = active ? '#000' : '#888';
+    });
+
+    // 各页只显示自己相关的控件
+    $('#auto-show-changelog-wrap').style.display = tab === 'files' ? 'flex' : 'none';
+    $('#auto-show-comments-wrap').style.display = tab === 'comments' ? 'flex' : 'none';
+    $('#clear-changelog').style.display = tab === 'files' ? '' : 'none';
+}
+
+async function renderChangelogTab(ctx, tab) {
+    const seq = ++_clRenderSeq;
+    applyChangelogTabUI(tab);
+
+    const content = $('#changelog-content');
+    content.innerHTML = '<div style="color: gray;">加载中...</div>';
+
+    try {
+        const html = tab === 'comments'
+            ? await buildCommentsHtml(ctx)
+            : await buildFilesHtml(ctx);
+        if (seq !== _clRenderSeq) return;      // 已被更新的一次渲染取代
+        content.innerHTML = html;
+    } catch (e) {
+        if (seq !== _clRenderSeq) return;
+        content.innerHTML = `<div style="color: red;">${tab === 'comments' ? '读取评论失败' : '读取日志失败'}</div>`;
+    }
+}
+
+export async function showChangelog(ctx, opts = {}) {
     let popup = $('#changelog-popup');
+    const wasVisible = !!popup && popup.style.display !== 'none';
 
     if (!popup) {
         popup = document.createElement('div');
@@ -82,8 +171,16 @@ export async function showChangelog(ctx) {
         header.innerHTML = `
             <span class="cl-title">What's new?</span>
             <div style="display:flex; align-items:center;">
-                <label style="margin-right: 15px; font-size: 12px; color: #555; cursor: pointer; display: flex; align-items: center; white-space: nowrap;">
+                <span id="cl-tabs" style="margin-right: 15px; font-size: 12px; white-space: nowrap; user-select: none;">
+                    <span class="cl-tab" data-tab="files" style="cursor: pointer;" title="文件更新记录">文件</span>
+                    <span style="color: #aaa;"> | </span>
+                    <span class="cl-tab" data-tab="comments" style="cursor: pointer;" title="最新评论">评论</span>
+                </span>
+                <label id="auto-show-changelog-wrap" style="margin-right: 15px; font-size: 12px; color: #555; cursor: pointer; display: flex; align-items: center; white-space: nowrap;">
                     <input type="checkbox" id="auto-show-changelog-cb" style="margin-right: 4px;">更新后自动弹窗
+                </label>
+                <label id="auto-show-comments-wrap" style="margin-right: 15px; font-size: 12px; color: #555; cursor: pointer; display: none; align-items: center; white-space: nowrap;">
+                    <input type="checkbox" id="auto-show-comments-cb" style="margin-right: 4px;">有新评论后自动弹窗
                 </label>
                 <button id="clear-changelog" class="cl-btn">Clear log</button>
                 <button id="close-changelog" class="cl-btn">Close</button>
@@ -104,6 +201,19 @@ export async function showChangelog(ctx) {
         autoShowCb.onchange = (e) => {
             store.auto_show_changelog = e.target.checked ? "1" : "0";
         };
+
+        const autoShowCommentsCb = $('#auto-show-comments-cb');
+        if (store.auto_show_comments === null || store.auto_show_comments === undefined) {
+            store.auto_show_comments = "1";
+        }
+        autoShowCommentsCb.checked = store.auto_show_comments === "1";
+        autoShowCommentsCb.onchange = (e) => {
+            store.auto_show_comments = e.target.checked ? "1" : "0";
+        };
+
+        header.querySelectorAll('.cl-tab').forEach(el => {
+            el.onclick = () => renderChangelogTab(ctx, el.dataset.tab);
+        });
 
         $('#close-changelog').onclick = () => popup.style.display = 'none';
         $('#clear-changelog').onclick = async () => {
@@ -137,95 +247,113 @@ export async function showChangelog(ctx) {
 
     popup.style.display = 'flex';
 
-    popup.style.transform = 'none';
-    const popupWidth = popup.offsetWidth || 600;
-    popup.style.left = (window.innerWidth - popupWidth) / 2 + 'px';
+    const refreshOnly = !!opts.keepTab && wasVisible;
+    if (!refreshOnly) {
+        popup.style.transform = 'none';
+        const popupWidth = popup.offsetWidth || 600;
+        popup.style.left = (window.innerWidth - popupWidth) / 2 + 'px';
+    }
 
-    const content = $('#changelog-content');
-    content.innerHTML = '<div style="color: gray;">加载中...</div>';
+    let tab;
+    if (refreshOnly) tab = popup.dataset.tab || 'files';
+    else tab = opts.tab || await pickDefaultChangelogTab(ctx);
 
-    try {
-        const logs = await ctx.dbProxy.getLogs();
-        if (logs.length === 0) {
-            content.innerHTML = '<div style="color: gray;">暂无记录</div>';
-            return;
+    await renderChangelogTab(ctx, tab);
+}
+
+// 文件页：更新日志
+async function buildFilesHtml(ctx) {
+    const logs = await ctx.dbProxy.getLogs();
+    if (logs.length === 0) {
+        return '<div style="color: gray;">暂无记录</div>';
+    }
+    logs.sort((a, b) => b.ts - a.ts);
+
+    let html = '';
+    let lastTs = null;
+    let seenPaths = new Set();
+
+    const privatePaths = collectPrivatePaths();
+
+    logs.forEach(log => {
+        if (lastTs !== null && (lastTs - log.ts > 60000)) {
+            html += `<div style="margin: 4px 0; color: lightgray;overflow: hidden;">------------------------------------------------------------------------------------------------------------------------</div>`;
         }
-        logs.sort((a, b) => b.ts - a.ts);
+        lastTs = log.ts;
 
-        let html = '';
-        let lastTs = null;
-        let seenPaths = new Set();
+        const dateStr = formatLogTime(log.ts);
 
-        const privatePaths = new Set();
-        if (window.data && window.data.length > 0) {
-            // data 结构循环: [title, info, path, type]
-            for (let i = 0; i < window.data.length; i += 4) {
-                const info = window.data[i + 1];
-                const path = window.data[i + 2];
-                if (typeof info === 'string' && info.includes('localOnly')) {
-                    privatePaths.add(path);
-                }
-            }
+        let textColor = '#333333';
+        let isAddOrUpdate = false;
+
+        if (/删除/.test(log.msg)) {
+            textColor = '#cc0000';
+        } else if (/新增/.test(log.msg)) {
+            textColor = '#008000';
+            isAddOrUpdate = true;
+        } else if (/更新/.test(log.msg)) {
+            textColor = '#0033cc';
+            isAddOrUpdate = true;
         }
 
-        logs.forEach(log => {
-            if (lastTs !== null && (lastTs - log.ts > 60000)) {
-                html += `<div style="margin: 4px 0; color: lightgray;overflow: hidden;">------------------------------------------------------------------------------------------------------------------------</div>`;
-            }
-            lastTs = log.ts;
+        let msgHtml = log.msg;
 
-            const d = new Date(log.ts);
-            const dateStr = `[${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:${String(d.getSeconds()).padStart(2, '0')}]`;
+        const match = log.msg.match(/(\/)?(html|gallery|video|audio|ebook)\/(.+)$/);
 
-            let textColor = '#333333';
-            let isAddOrUpdate = false;
+        if (match) {
+            const fullMatch = match[0];
+            const bucket = match[2];
+            const rawPath = match[3].split('?')[0].trim();
+            const cleanPath = `${bucket}/${rawPath}`;
+            const isPrivate = privatePaths.has(cleanPath);
+            const lockIcon = isPrivate ? (store.online_flag === "1" ? "🔒 " : "🔓 ") : "";
 
-            if (/删除/.test(log.msg)) {
-                textColor = '#cc0000';
-            } else if (/新增/.test(log.msg)) {
-                textColor = '#008000';
-                isAddOrUpdate = true;
-            } else if (/更新/.test(log.msg)) {
-                textColor = '#0033cc';
-                isAddOrUpdate = true;
-            }
+            if (!seenPaths.has(cleanPath)) {
+                seenPaths.add(cleanPath);
 
-            let msgHtml = log.msg;
-
-            const match = log.msg.match(/(\/)?(html|gallery|video|audio|ebook)\/(.+)$/);
-
-            if (match) {
-                const fullMatch = match[0];
-                const bucket = match[2];
-                const rawPath = match[3].split('?')[0].trim();
-                const cleanPath = `${bucket}/${rawPath}`;
-                const isPrivate = privatePaths.has(cleanPath);
-                const lockIcon = isPrivate ? (store.online_flag === "1" ? "🔒 " : "🔓 ") : "";
-
-                if (!seenPaths.has(cleanPath)) {
-                    seenPaths.add(cleanPath);
-
-                    if (isAddOrUpdate) {
-                        const displayHtml = lockIcon + fullMatch;
-                        const linkHtml = `<span class="log-link" data-path="${cleanPath}" data-bucket="${bucket}" style="cursor: pointer; text-decoration: underline; font-weight: bold;" title="在侧栏中定位并打开">${displayHtml}</span>`;
-                        msgHtml = log.msg.replace(fullMatch, linkHtml);
-                    } else {
-                        if (lockIcon) {
-                            msgHtml = log.msg.replace(fullMatch, lockIcon + fullMatch);
-                        }
-                    }
+                if (isAddOrUpdate) {
+                    const displayHtml = lockIcon + fullMatch;
+                    const linkHtml = `<span class="log-link" data-path="${cleanPath}" data-bucket="${bucket}" style="cursor: pointer; text-decoration: underline; font-weight: bold;" title="在侧栏中定位并打开">${displayHtml}</span>`;
+                    msgHtml = log.msg.replace(fullMatch, linkHtml);
                 } else {
                     if (lockIcon) {
                         msgHtml = log.msg.replace(fullMatch, lockIcon + fullMatch);
                     }
                 }
+            } else {
+                if (lockIcon) {
+                    msgHtml = log.msg.replace(fullMatch, lockIcon + fullMatch);
+                }
             }
-            html += `<div style="color: ${textColor}; margin-bottom: 2px;">${dateStr} ${msgHtml}</div>`;
-        });
-        content.innerHTML = html;
-    } catch (e) {
-        content.innerHTML = '<div style="color: red;">读取日志失败</div>';
+        }
+        html += `<div style="color: ${textColor}; margin-bottom: 2px;">${dateStr} ${msgHtml}</div>`;
+    });
+    return html;
+}
+
+// 评论页：index.js 每 10 分钟同步后写入 IDB(sys_state.comments_latest) 的最新 10 条评论
+async function buildCommentsHtml(ctx) {
+    const data = await ctx.dbProxy.get('sys_state', 'comments_latest');
+    const items = data && Array.isArray(data.items) ? data.items : [];
+    if (items.length === 0) {
+        return '<div style="color: gray;">暂无评论</div>';
     }
+
+    const privatePaths = collectPrivatePaths();
+    let html = '';
+    items.forEach(it => {
+        const ts = Date.parse(it.createdAt);
+        const dateStr = Number.isNaN(ts) ? '[----]' : formatLogTime(ts);
+        const lockIcon = privatePaths.has(it.path) ? (store.online_flag === "1" ? "🔒 " : "🔓 ") : "";
+        const linkHtml = `<span class="log-link" data-path="${escapeHtml(it.path)}" data-bucket="html" style="cursor: pointer; text-decoration: underline; font-weight: bold;" title="在侧栏中定位并打开">${lockIcon}${escapeHtml(it.title)}</span>`;
+
+        // 评论内容来自第三方输入，一律转义后再进 innerHTML
+        html += `<div style="margin-bottom: 6px;">`
+            + `<div style="color: #0033cc;">${dateStr} 💬 ${escapeHtml(it.author)} → ${linkHtml}</div>`
+            + `<div style="color: #333333; margin-left: 12px; white-space: pre-wrap; word-break: break-word;">${escapeHtml(it.text)}</div>`
+            + `</div>`;
+    });
+    return html;
 }
 
 
