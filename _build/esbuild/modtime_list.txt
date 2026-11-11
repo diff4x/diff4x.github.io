@@ -8,7 +8,7 @@ lightbox-logic.js|11/07/2026 12:12 PM_16696
 side.js|11/08/2026 06:45 PM_29955
 synonyms.js|08/16/2026 02:57 PM_503299
 touchpad.js|10/30/2026 03:26 PM_34159
-txn_parser.js|10/29/2026 09:18 PM_51678
+txn_parser.js|11/11/2026 08:04 PM_55692
 worker.js|11/08/2026 06:44 PM_4734
 bilingual.css|08/02/2026 12:12 PM_2780
 bookmark.css|09/09/2026 09:30 PM_3020
@@ -16,5 +16,5 @@ content.css|11/09/2026 01:19 AM_8194
 index.css|10/30/2026 03:27 PM_17820
 side.css|08/08/2026 10:09 AM_8141
 font.css|05/21/2026 01:29 AM_45616
-core-list.js|11/09/2026 01:20 AM_9201
-sw.js|11/09/2026 01:20 AM_18824
+core-list.js|11/11/2026 08:04 PM_9201
+sw.js|11/11/2026 08:04 PM_18824

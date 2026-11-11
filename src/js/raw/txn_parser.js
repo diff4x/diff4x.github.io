@@ -223,7 +223,7 @@ fileInput.style = "width: 150px;"
 
 // 创建并挂载纯静态示例下载链接
 const a = document.createElement("a");
-a.href = "data:text/plain;charset=utf-8,%23 ------------------- sample_txn.txt ---------------------%0A%0Aoef-100 外套颜色不对,退款                    %23 如果记成 %22oi100%22 会导致 %22总支%22 和 %22总收%22 双双虚高，财报失真%0Aoef100 外套                                 %23 从储蓄(♀️) 支出100到 服装%0Acew1000 订阅PlayBoy                         %23 从信用(♂️) 支出1000到 网络%0Abp800 替♀️还帐                              %23 从储蓄(♂️) 中转800到 信用(♀️) %0Aci1000 为中情局提供现索得到的赏金             %23 信用(♂️) 收入1000%0A%0A%23 ---------------------------------->  ❤️ 财务高度共享, 谁付钱不重要，重要的是家庭总资产%0Aoew50 给♂️充话费                            %23 从储蓄(♀️) 支出50到 网络%0A%0A%23 ---------------------------------->  🤣 严格AA, ♀️ 给 ♂️ 垫付话费并保留债权%0Abew50 用向♀️借来的钱充话费                   %23 从储蓄(♂️) 支出50到 网络%0Aob50 借给♂️                                 %23 从储蓄(♀️) 中转50到 储蓄(♂️)%0A%0Aab100                                       %23 从现金(♂️) 中转100到 储蓄(♂️)%0Aba300                                       %23 从储蓄(♂️) 中转300到 现金(♂️)%0A1%0A2026%0A%0Aaej20d03 加油                               %23 当月03号 从现金(♂️) 流向 支出20到 交通%0Aob100 转帐给♂️                              %23 从储蓄(♀️)  中转100到 储蓄(♂️)%0Aci-200 初始本金                              %23 ♂️的当前信用账单 (负债登记)%0A12%0Aai500 初始本金                               %23 ♂️的当前现金%0Abi1000 初始本金                              %23 ♂️的当前储蓄%0Api800 初始本金                               %23 ♀️的当前信用溢缴%0Aoi2000 初始本金                              %23 ♀️的当前储蓄%0A11%0A2025";
+a.href = "data:text/plain;charset=utf-8,%23 ------------------- sample_txn.txt ---------------------%0A%0Aoef-100 外套颜色不对,退款                    %23 如果记成 %22oi100%22 会导致 %22总支%22 和 %22总收%22 双双虚高，财报失真%0Aoef100 外套                                 %23 从储蓄(♀️) 支出100到 服装%0Acew1000 订阅PlayBoy                         %23 从信用(♂️) 支出1000到 网络%0Abp800 替♀️还帐                              %23 从储蓄(♂️) 中转800到 信用(♀️) %0Aci1000 为中情局提供现索得到的赏金             %23 信用(♂️) 收入1000%0A%0A%23 ---------------------------------->  ➗ 金额可写四则运算与括号 (先括号, 再乘除, 后加减; 表达式内不留空格; 最终结果一次性四舍五入到分)%0Abes(86.4%2B13.6)/3 三人AA                     %23 从储蓄(♂️) 支出 (86.4%2B13.6)/3 = 33.33 到 食物%0Abew116.3%2B5*(-2)d3 两件退货各冲5              %23 当月03号 从储蓄(♂️) 支出 116.3%2B5*(-2) = 106.3 到 网络%0A%0A%23 ---------------------------------->  ❤️ 财务高度共享, 谁付钱不重要，重要的是家庭总资产%0Aoew50 给♂️充话费                            %23 从储蓄(♀️) 支出50到 网络%0A%0A%23 ---------------------------------->  🤣 严格AA, ♀️ 给 ♂️ 垫付话费并保留债权%0Abew50 用向♀️借来的钱充话费                   %23 从储蓄(♂️) 支出50到 网络%0Aob50 借给♂️                                 %23 从储蓄(♀️) 中转50到 储蓄(♂️)%0A%0Aab100                                       %23 从现金(♂️) 中转100到 储蓄(♂️)%0Aba300                                       %23 从储蓄(♂️) 中转300到 现金(♂️)%0A1%0A2026%0A%0Aaej20d03 加油                               %23 当月03号 从现金(♂️) 流向 支出20到 交通%0Aob100 转帐给♂️                              %23 从储蓄(♀️)  中转100到 储蓄(♂️)%0Aci-200 初始本金                              %23 ♂️的当前信用账单 (负债登记)%0A12%0Aai500 初始本金                               %23 ♂️的当前现金%0Abi1000 初始本金                              %23 ♂️的当前储蓄%0Api800 初始本金                               %23 ♀️的当前信用溢缴%0Aoi2000 初始本金                              %23 ♀️的当前储蓄%0A11%0A2025";
 a.download = "sample_txn.txt";
 a.innerText = "📥 下载 sample_txn.txt";
 a.style.cssText = "margin-left: 20px; font-size: 0.9rem; text-decoration: none; color: #2980b9;";
@@ -301,6 +301,81 @@ document.addEventListener('click', e => {
 });
 
 /*---------------
+  金额表达式
+---------------*/
+// <expr>   ::= ["-"] <term> { ("+" | "-") <term> }
+// <term>   ::= <factor> { ("*" | "/") <factor> }
+// <factor> ::= <number> | "(" <expr> ")"
+// 手写递归下降求值, 不使用 eval; 负号只出现在 <expr> 开头 (整体开头或左括号之后)
+// 取整: 只在最终结果上一次性四舍五入到分; 中间每一步保持全精度, 仅抹掉浮点噪声
+// 返回 { value } 或 { error }
+const MAX_PAREN_DEPTH = 32;
+function evalAmount(src) {
+  const tokens = [];
+  for (const m of src.matchAll(/(\d+(?:\.\d+)?)|([-+*/()])|(.)/g)) {
+    if (m[3] !== undefined) return { error: '数字格式不合法' };
+    tokens.push(m[1] !== undefined ? { num: Number(m[1]) } : { op: m[2] });
+  }
+
+  let pos = 0, depth = 0;
+  const fail = msg => { throw { msg }; };
+  const nextOp = (...set) => (set.includes(tokens[pos]?.op) ? tokens[pos++].op : null);
+
+  const factor = () => {
+    if (nextOp('(')) {
+      if (++depth > MAX_PAREN_DEPTH) fail('括号嵌套过深');
+      const v = expr();
+      if (!nextOp(')')) fail('括号不匹配');
+      depth--;
+      return v;
+    }
+    if (tokens[pos]?.num === undefined) fail('缺少操作数 (负号只能写在表达式开头或左括号之后, 如 5*(-2))');
+    return tokens[pos++].num;
+  };
+  const term = () => {
+    let v = factor(), op;
+    while ((op = nextOp('*', '/'))) {
+      const n = factor();
+      if (op === '/' && n === 0) fail('除数不能为0');
+      v = scrubFloat(op === '*' ? v * n : v / n);
+    }
+    return v;
+  };
+  const expr = () => {
+    const neg = nextOp('-') !== null;
+    let v = term(), op;
+    if (neg) v = -v;
+    while ((op = nextOp('+', '-'))) {
+      const t = term();
+      v = scrubFloat(op === '+' ? v + t : v - t);
+    }
+    return v;
+  };
+
+  try {
+    const v = expr();
+    if (pos < tokens.length) fail(tokens[pos].op === ')' ? '括号不匹配' : '缺少运算符 (不能省略乘号)');
+    if (!Number.isFinite(v)) fail('金额溢出');
+    return { value: roundCent(v) };   // 整个表达式唯一的一次取整 (roundCent 同时把 -0 归一为 0)
+  } catch (e) {
+    if (e && e.msg) return { error: e.msg };
+    throw e;
+  }
+}
+// 四舍五入到分 (远离0); 先 toPrecision 抹掉浮点噪声, 如 1.005*100 = 100.49999999999999
+// |x| >= 1e13 时双精度已无法表示"分", 原样返回 (否则会丢掉整数部分的低位)
+function roundCent(x) {
+  if (Math.abs(x) >= 1e13) return x + 0;
+  const r = Math.round(Number((Math.abs(x) * 100).toPrecision(15))) / 100;
+  return (x < 0 ? -r : r) + 0;   // +0 把 -0 归一为 0
+}
+// 抹掉每步运算的浮点噪声 (0.1+0.2 → 0.3; 保留15位有效数字, 单次运算误差约1e-16), 不按小数位取整
+// 这样 0.1*3-0.3 得到的是 0 而不是 5.55e-17, 除数为0的判断才可靠; >=1e15 的整数量级无噪声可抹, 原样返回
+function scrubFloat(x) {
+  return Math.abs(x) >= 1e15 ? x : Number(x.toPrecision(15));
+}
+
+/*---------------
   文件解析
 ---------------*/
 function parse(text) {
@@ -344,14 +419,17 @@ function parse(text) {
     if (!curMonth) { errors.push({ lineNum, msg: '流水无归属月份' }); continue; }
 
     const ACC = ACCOUNT_KEYS.join('');
+    // 金额段先宽松截取 [\d.+\-*/()]+, 再交给 evalAmount 校验文法并求值, 以便给出具体的表达式报错
     const REG = new RegExp(
-      `^([${ACC}])([ie${ACC}])([szjwyrfq]?)(-?\\d+(?:\\.\\d+)?)(d(0?[1-9]|[12]\\d|3[01]))?(?:\\s+(.+))?$`
+      `^([${ACC}])([ie${ACC}])([szjwyrfq]?)([\\d.+\\-*/()]+)(d(0?[1-9]|[12]\\d|3[01]))?(?:\\s+(.+))?$`
     );
     const m = l.match(REG);
     if (!m) { errors.push({ lineNum, msg: '流水格式错误' }); continue; }
 
     const [, src, dst, cat, amt, dayStr, dayNum, note] = m;
-    const amount = Number(amt);
+    const ev = evalAmount(amt);
+    if (ev.error) { errors.push({ lineNum, msg: `金额表达式错误：${ev.error}` }); continue; }
+    const amount = ev.value;
     if (amount === 0) errors.push({ lineNum, msg: '金额不能为0' });
     if (dst === 'e' && !cat) errors.push({ lineNum, msg: '支出缺少分类' });
     if (dst !== 'e' && cat) errors.push({ lineNum, msg: '非支出不应有分类' });
@@ -362,6 +440,7 @@ function parse(text) {
       src, dst,
       cat: dst === 'e' ? cat || null : null,
       amount,
+      expr: /^-?\d+(?:\.\d+)?$/.test(amt) ? undefined : amt,   // 原算式 (非单个数字时), 仅用于明细悬停提示
       day: dayNum ? Number(dayNum) : undefined,
       note,
       lineNum
@@ -805,7 +884,7 @@ function renderFlowTable(flowList, startIndex = 0) {
       <td>${catDisplay}</td>
       <td>
         <span class="amount ${f.dst === 'e' ? 'expense' : f.dst === 'i' ? 'income' : 'transfer'}">
-          ${fmt(f.amount)}
+          ${fmt(f.amount, f.expr)}
         </span>
       </td>
       <td>${f.note || '-'}</td>
@@ -1352,9 +1431,10 @@ function fxSourceLabel() {
   return '⚠ 使用预设汇率';
 }
 function fmtMain(n) { return n.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
-function fmtTip(n) {
+function fmtTip(n, expr) {
   const approx = fxMeta.approx ? '≈ ' : ''; const header = fxSourceLabel();
   return `
+    ${expr ? `<div class="tip-row" style="margin-bottom:4px"><span class="tip-cur">算式</span><span class="tip-val">${expr}</span></div>` : ''}
     ${header ? `<div style="opacity:.7;margin-bottom:4px">${header}</div>` : ''}
     ${Object.entries(FX).map(([c, rate]) => {
         const value = n * rate;
@@ -1363,7 +1443,7 @@ function fmtTip(n) {
       }).join('')}
   `;
 }
-function fmt(n) { return withTip(fmtMain(n), fmtTip(n)); }
+function fmt(n, expr) { return withTip(fmtMain(n), fmtTip(n, expr)); }
 function withTip(innerHTML, tipHTML) { return `<span class="has-tip">${innerHTML}<span class="tip">${tipHTML}</span></span>`; }
 
 /*---------------
