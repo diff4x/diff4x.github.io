@@ -1,9 +1,9 @@
 bilingual.js|08/02/2026 12:12 PM_7743
 bookmark.js|11/09/2026 12:01 AM_20977
 content.js|11/09/2026 01:15 AM_81813
-deferred-features.js|11/08/2026 06:47 PM_41710
+deferred-features.js|11/13/2026 07:43 AM_50140
 excerpts.js|08/11/2026 09:06 AM_20170
-index.js|11/08/2026 06:44 PM_146013
+index.js|11/13/2026 07:38 AM_146060
 lightbox-logic.js|11/07/2026 12:12 PM_16696
 side.js|11/08/2026 06:45 PM_29955
 synonyms.js|08/16/2026 02:57 PM_503299
@@ -16,5 +16,5 @@ content.css|11/09/2026 01:19 AM_8194
 index.css|10/30/2026 03:27 PM_17820
 side.css|08/08/2026 10:09 AM_8141
 font.css|05/21/2026 01:29 AM_45616
-core-list.js|11/11/2026 08:04 PM_9201
-sw.js|11/11/2026 08:04 PM_18824
+core-list.js|11/13/2026 07:44 AM_9201
+sw.js|11/13/2026 07:44 AM_18824

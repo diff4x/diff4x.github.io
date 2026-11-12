@@ -98,6 +98,195 @@ function collectPrivatePaths() {
     return privatePaths;
 }
 
+// ---- What's new「文件」页：图片 / 视频 / 音乐预览 ----
+// 行为与搜索结果的预览一致：
+//   · 图片(gallery)：鼠标悬停在链接上即显示预览；
+//   · 视频(video) / 音乐(audio)：悬停不显示，右击开始播放，再次右击停止(暂停)；
+//   · 鼠标移开 / 点击 / 切页 / 关闭弹窗 / 窗口失焦：预览销毁，媒体停止。
+// 直接复用 index.js 搜索预览创建的 #center-snippet-preview 浮层，外观与搜索预览完全一致。
+const CL_MEDIA_KIND_BY_BUCKET = { gallery: 'image', video: 'video', audio: 'audio' };
+
+const CL_WAVE_STYLE = `<style>
+  .wave-bars { display: flex; align-items: flex-end; gap: 4px; height: 40px; justify-content: center; }
+  .wave-bar { width: 5px; background: #61afef; border-radius: 2px; animation: waveAnim 0.8s ease-in-out infinite alternate; }
+  .wave-bar.paused { animation-play-state: paused !important; }
+  @keyframes waveAnim { 0% { height: 10px; } 100% { height: 100%; } }
+  .wb-1 { animation-delay: 0s; } .wb-2 { animation-delay: 0.2s; } .wb-3 { animation-delay: 0.4s; } .wb-4 { animation-delay: 0.6s; } .wb-5 { animation-delay: 0.8s; }
+</style>`;
+
+let _clPreviewPath = null;   // 当前悬停的条目路径
+let _clOwnsPreview = false;  // 浮层当前是否由 What's new 占用(避免误关搜索结果的预览)
+
+function getClPreviewParts() {
+    let box = document.getElementById('center-snippet-preview');
+    if (!box) {
+        // 与 index.js 中搜索预览的结构保持一致；谁先创建都可以被对方复用
+        box = document.createElement('div');
+        box.id = 'center-snippet-preview';
+
+        const header = document.createElement('div');
+        header.id = 'preview-header';
+        const wrapper = document.createElement('div');
+        wrapper.id = 'preview-scroll-wrapper';
+        const content = document.createElement('div');
+        content.id = 'preview-scroll-content';
+
+        wrapper.appendChild(content);
+        box.append(header, wrapper);
+        (document.getElementById('stage') || document.body).appendChild(box);
+    }
+    return { box, content: box.querySelector('#preview-scroll-content') };
+}
+
+function clStopMedia(content) {
+    content.querySelectorAll('video, audio').forEach(m => {
+        try {
+            m.pause();
+            m.removeAttribute('src');
+            m.load();   // 释放网络连接
+        } catch (e) { }
+    });
+}
+
+function clSafePlay(mediaEl) {
+    const p = mediaEl.play();
+    if (p !== undefined) {
+        p.catch(err => {
+            if (err.name !== 'AbortError') console.warn('Auto-play prevented', err);
+        });
+    }
+}
+
+function hideChangelogPreview() {
+    _clPreviewPath = null;
+    if (!_clOwnsPreview) return;
+    _clOwnsPreview = false;
+
+    const box = document.getElementById('center-snippet-preview');
+    if (!box) return;
+    const content = box.querySelector('#preview-scroll-content');
+    if (content) {
+        clStopMedia(content);
+        content.innerHTML = '';
+    }
+    box.style.display = 'none';
+}
+
+function showChangelogImagePreview(path) {
+    const { box, content } = getClPreviewParts();
+    clStopMedia(content);
+    _clOwnsPreview = true;
+
+    box.classList.add('image-preview-mode');
+    box.style.borderColor = '#61afef';
+    content.style.transform = '';   // 清掉搜索文本预览自动滚动残留的位移
+
+    const img = document.createElement('img');
+    img.alt = 'Preview';
+    img.style.cssText = 'max-width: 450px; max-height: 350px; object-fit: contain;';
+    img.onerror = () => {
+        // 图片加载失败：只收起浮层；保留 _clPreviewPath，避免鼠标在同一条目上移动时反复重试
+        if (_clPreviewPath === path) {
+            content.innerHTML = '';
+            box.style.display = 'none';
+        }
+    };
+    img.src = path;
+    content.replaceChildren(img);
+    box.style.display = 'flex';
+}
+
+function toggleChangelogMedia(path, kind) {
+    const { box, content } = getClPreviewParts();
+    let mediaEl = content.querySelector('video, audio');
+
+    // 同一条目再次右击：在播放 / 暂停之间切换
+    if (_clOwnsPreview && mediaEl && mediaEl.dataset.path === path) {
+        if (mediaEl.paused) clSafePlay(mediaEl);
+        else mediaEl.pause();
+        return;
+    }
+
+    clStopMedia(content);
+    _clOwnsPreview = true;
+
+    box.classList.add('image-preview-mode');
+    box.style.borderColor = '#61afef';
+    content.style.transform = '';
+
+    if (kind === 'video') {
+        mediaEl = document.createElement('video');
+        mediaEl.style.cssText = 'max-width: 450px; max-height: 350px; width: 100%; outline: none; object-fit: contain;';
+        content.replaceChildren(mediaEl);
+    } else {
+        const filename = path.split('/').pop();
+        content.innerHTML = `${CL_WAVE_STYLE}
+            <div style="display:flex; flex-direction:column; align-items:center; justify-content:center; height:100%; width:100%;">
+               <div style="margin-bottom:20px; color:#abb2bf; font-size:14px; text-align:center; word-break:break-all; padding: 0 15px;">${escapeHtml(filename)}</div>
+               <div class="wave-bars">
+                  <div class="wave-bar wb-1"></div><div class="wave-bar wb-2"></div><div class="wave-bar wb-3"></div><div class="wave-bar wb-4"></div><div class="wave-bar wb-5"></div>
+               </div>
+            </div>`;
+        mediaEl = document.createElement('audio');
+        mediaEl.style.display = 'none';
+        content.appendChild(mediaEl);
+
+        // 波形动画跟随实际的播放 / 暂停状态
+        const bars = content.querySelectorAll('.wave-bar');
+        const syncBars = () => bars.forEach(b => b.classList.toggle('paused', mediaEl.paused));
+        mediaEl.addEventListener('play', syncBars);
+        mediaEl.addEventListener('pause', syncBars);
+        syncBars();
+    }
+
+    mediaEl.dataset.path = path;
+    mediaEl.loop = true;
+    mediaEl.volume = 0.1;
+    mediaEl.src = path;
+    box.style.display = 'flex';
+    clSafePlay(mediaEl);
+}
+
+function bindChangelogMediaPreview(content) {
+    // 该链接是否支持预览；仅本地可见的条目在线上模式下不预览(与搜索一致)
+    const previewKindOf = (link) => {
+        const kind = CL_MEDIA_KIND_BY_BUCKET[link.dataset.bucket];
+        if (!kind) return null;
+        if (link.dataset.localOnly === 'true' && store.online_flag === '1') return null;
+        return kind;
+    };
+
+    content.addEventListener('mousemove', (e) => {
+        const link = e.target.closest && e.target.closest('.log-link');
+        const kind = link ? previewKindOf(link) : null;
+        if (!kind) {
+            hideChangelogPreview();
+            return;
+        }
+
+        const path = link.dataset.path;
+        if (path === _clPreviewPath) return;
+
+        hideChangelogPreview();
+        _clPreviewPath = path;
+        if (kind === 'image') showChangelogImagePreview(path);
+        // 视频 / 音乐：悬停时不显示，右击才开始播放
+    });
+
+    content.addEventListener('contextmenu', (e) => {
+        const link = e.target.closest && e.target.closest('.log-link');
+        if (!link) return;
+        const kind = previewKindOf(link);
+        if (kind !== 'video' && kind !== 'audio') return;   // 其它条目保留浏览器默认右键菜单
+        e.preventDefault();
+        toggleChangelogMedia(link.dataset.path, kind);
+    });
+
+    content.addEventListener('mouseleave', hideChangelogPreview);
+    content.addEventListener('click', hideChangelogPreview);
+    window.addEventListener('blur', hideChangelogPreview);
+}
+
 // 文件更新日志 与 最新评论，谁的时间新就先显示谁
 async function pickDefaultChangelogTab(ctx) {
     let latestLogTs = 0;
@@ -139,6 +328,7 @@ function applyChangelogTabUI(tab) {
 
 async function renderChangelogTab(ctx, tab) {
     const seq = ++_clRenderSeq;
+    hideChangelogPreview();      // 内容即将被替换，悬停的链接会消失
     applyChangelogTabUI(tab);
 
     const content = $('#changelog-content');
@@ -215,7 +405,10 @@ export async function showChangelog(ctx, opts = {}) {
             el.onclick = () => renderChangelogTab(ctx, el.dataset.tab);
         });
 
-        $('#close-changelog').onclick = () => popup.style.display = 'none';
+        $('#close-changelog').onclick = () => {
+            hideChangelogPreview();
+            popup.style.display = 'none';
+        };
         $('#clear-changelog').onclick = async () => {
             if (confirm("确定要清空所有更新记录吗？")) {
                 await ctx.dbProxy.clearLogs();
@@ -243,6 +436,8 @@ export async function showChangelog(ctx, opts = {}) {
                 }
             }
         });
+
+        bindChangelogMediaPreview(content);
     }
 
     popup.style.display = 'flex';
@@ -313,7 +508,13 @@ async function buildFilesHtml(ctx) {
 
                 if (isAddOrUpdate) {
                     const displayHtml = lockIcon + fullMatch;
-                    const linkHtml = `<span class="log-link" data-path="${cleanPath}" data-bucket="${bucket}" style="cursor: pointer; text-decoration: underline; font-weight: bold;" title="在侧栏中定位并打开">${displayHtml}</span>`;
+                    const mediaKind = CL_MEDIA_KIND_BY_BUCKET[bucket];
+                    const previewable = !!mediaKind && !(isPrivate && store.online_flag === "1");
+                    const hint = previewable && mediaKind !== 'image'
+                        ? '在侧栏中定位并打开（右击预览播放或停止）'
+                        : '在侧栏中定位并打开';
+                    const localAttr = isPrivate ? ' data-local-only="true"' : '';
+                    const linkHtml = `<span class="log-link" data-path="${escapeHtml(cleanPath)}" data-bucket="${bucket}"${localAttr} style="cursor: pointer; text-decoration: underline; font-weight: bold;" title="${hint}">${displayHtml}</span>`;
                     msgHtml = log.msg.replace(fullMatch, linkHtml);
                 } else {
                     if (lockIcon) {

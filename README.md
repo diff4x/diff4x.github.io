@@ -8,7 +8,7 @@
     - HTML、PDF、EPUB、TXT、图片、音视频、全景图
   - 菜单式构建及增量热更新
   - 近义搜索和预览
-  - 支持版本比对、隐私挂锁、标记摘抄、离线使用
+  - 支持版本比对、隐私挂锁、标记摘抄、PWA
 - 工具链
   - HTTP Server、Custom URL Protocol、Batch、Java、Rust、Git、Python
 - Web 平台

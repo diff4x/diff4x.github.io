@@ -1868,6 +1868,7 @@ function search_box() {
 
             isPaused = true;
             previewBox.style.borderColor = '#61afef';
+            scrollContent.style.transform = ''
 
             const header = document.getElementById('preview-header');
             const scrollWrapper = document.getElementById('preview-scroll-wrapper');

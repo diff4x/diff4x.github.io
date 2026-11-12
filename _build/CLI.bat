@@ -530,7 +530,7 @@ goto end
 :: [13] 静态服务器启动
 :: =====================================================
 :run_static-web-server
-start "Local" /min "%static-web-server_path%" -d "%root_path%" -p "%port%" -g "%log_level%"
+start "Local" /min "%static-web-server_path%" --host 127.0.0.1 -d "%root_path%" -p "%port%" -g "%log_level%"
 start "" "http://localhost:%port%"
 goto end
 
@@ -613,7 +613,7 @@ goto end
 :: =====================================================
 :run_simulation
 echo Starting Simulation Environment on port 9000...
-start "Simulation" /min "%static-web-server_path%" -d "%root_path%" -p "9000" -g "info"
+start "Simulation" /min "%static-web-server_path%" --host 127.0.0.1 -d "%root_path%" -p "9000" -g "info"
 start chrome --incognito "http://localhost:9000"
 goto end
 
