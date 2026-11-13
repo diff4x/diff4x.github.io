@@ -240,7 +240,7 @@ set "line_num=!params!"
 
 if "!line_num:~-1!"=="/" set "line_num=!line_num:~0,-1!"
 
-set "txn_file=%A%txn.txt"
+set "txn_file=%A%secrets\txn.txt"
 if not exist "!txn_file!" (
     echo [ERROR] 找不到流水文件: !txn_file!
     pause

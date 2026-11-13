@@ -231,7 +231,7 @@ a.style.cssText = "margin-left: 20px; font-size: 0.9rem; text-decoration: none; 
 const srcLink = document.createElement("a");
 srcLink.href = "https://github.com/diff4x/txnl";
 srcLink.target = "_blank";
-srcLink.innerText = "[Lang: txln]";
+srcLink.innerText = "[Lang: txnl]";
 srcLink.style.cssText = a.style.cssText;
 
 const out = document.createElement("div");

@@ -1,6 +1,6 @@
-importScripts('/src/js/core-list.js?v=1794527069922');
+importScripts('/src/js/core-list.js?v=1794566239903');
 
-self.SW_VERSION = '1794527069922';
+self.SW_VERSION = '1794566239903';
 self.EMERGENCY = 'repair_command_id=2';
 
 const CACHE_NAME_CORE = 'core-cache-' + BUILD_VERSION;

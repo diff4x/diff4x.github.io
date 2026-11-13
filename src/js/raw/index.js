@@ -50,6 +50,71 @@ store.bookmarkhtml_modifing = "0";
 store.lightbox_stauts = "0";
 store.jump_from_search = "0";
 
+// [media-pos:begin] 音视频播放位置记录
+// localStorage 键 media_positions = { "video/a.mp4": 123.4, "audio/b.mp3": 56.7 }（单位：秒；最近使用的排在后面）。
+// 在"关闭前"写入（预览销毁/切换、切歌、销毁播放器、灯箱视频离开）；搜索结果 / What's new 的音视频预览启动时读取并从该位置继续。
+// index.js 与 deferred-features.js 各有一份相同的实现；lightbox-logic.js 的 videoLogic 里有一份精简版
+// （它会被序列化进 iframe，无法引用外部函数）。键名与数据格式必须保持一致，修改时请一起改。
+const MEDIA_POS_KEY = 'media_positions';
+const MEDIA_POS_MAX = 500;      // 最多保留的条数，超出时丢弃最旧的
+const MEDIA_POS_MIN = 1;        // 播放不足 1 秒不记录
+const MEDIA_POS_END_GAP = 2;    // 距结尾不足 2 秒视为已播完，清除记录(下次从头开始)
+
+function mediaPosKey(src) {
+    let s = String(src || '').split('#')[0].split('?')[0];
+    try { s = decodeURIComponent(s); } catch (e) { }
+    const m = s.match(/(?:^|\/)((?:video|audio)\/.+)$/);
+    return m ? m[1] : s.replace(/^(?:\.{1,2}\/|\/)+/, '');
+}
+
+function readMediaPositions() {
+    try {
+        const obj = JSON.parse(localStorage.getItem(MEDIA_POS_KEY));
+        return (obj && typeof obj === 'object' && !Array.isArray(obj)) ? obj : {};
+    } catch (e) { return {}; }
+}
+
+function getMediaPosition(src) {
+    const t = readMediaPositions()[mediaPosKey(src)];
+    return (typeof t === 'number' && Number.isFinite(t) && t > 0) ? t : 0;
+}
+
+// 关闭 / 销毁 / 切换媒体元素之前调用。没有时长(未加载元数据、直播流)的媒体不记录。
+function saveMediaPosition(el) {
+    try {
+        if (!el) return;
+        const dur = el.duration;
+        if (!Number.isFinite(dur) || dur <= 0) return;
+        const key = mediaPosKey((el.dataset && el.dataset.path) || el.getAttribute('src'));
+        if (!key) return;
+        const t = el.currentTime;
+        const map = readMediaPositions();
+        delete map[key];    // 先删再写，让最近使用的排在后面
+        if (Number.isFinite(t) && t >= MEDIA_POS_MIN && dur - t > MEDIA_POS_END_GAP) {
+            map[key] = Math.round(t * 10) / 10;
+        }
+        const keys = Object.keys(map);
+        if (keys.length > MEDIA_POS_MAX) keys.slice(0, keys.length - MEDIA_POS_MAX).forEach(k => delete map[k]);
+        localStorage.setItem(MEDIA_POS_KEY, JSON.stringify(map));
+    } catch (e) { }
+}
+
+function saveMediaPositionsIn(root) {
+    if (root) root.querySelectorAll('video, audio').forEach(el => saveMediaPosition(el));
+}
+
+// 预览元素创建后(设置 src 之后)调用：从上一次的位置继续
+function resumeMediaPosition(el, src) {
+    const saved = getMediaPosition(src);
+    if (!saved) return;
+    try { el.currentTime = saved; } catch (e) { }
+    el.addEventListener('loadedmetadata', () => {
+        // 文件可能被替换得更短：位置越界就从头开始
+        if (Number.isFinite(el.duration) && saved > el.duration - MEDIA_POS_END_GAP) el.currentTime = 0;
+    }, { once: true });
+}
+// [media-pos:end]
+
 
 let searchWorker = null;
 let _pendingWorker = null;      // A2：预热但尚未"交付"的 Worker
@@ -259,6 +324,12 @@ window.addEventListener('pagehide', (e) => {
         window.__LITE_BUS__.close();
         window.__LITE_BUS__ = null;
     }
+});
+
+// 关闭/刷新页面时，记录主音乐播放器的位置
+window.addEventListener('pagehide', () => {
+    const a = document.getElementById('_audio');
+    if (a) saveMediaPosition(a);
 });
 
 BUS.addEventListener('message', async (e) => {
@@ -1809,7 +1880,10 @@ function search_box() {
         if (previewTimeoutId) clearTimeout(previewTimeoutId);
         if (previewScrollFrame) cancelAnimationFrame(previewScrollFrame);
         const scrollContent = document.getElementById('preview-scroll-content');
-        if (scrollContent) scrollContent.innerHTML = '';
+        if (scrollContent) {
+            saveMediaPositionsIn(scrollContent);   // 关闭前记录音视频播放位置
+            scrollContent.innerHTML = '';
+        }
     }
 
     window.addEventListener('blur', destroyMediaPreview);
@@ -1868,7 +1942,6 @@ function search_box() {
 
             isPaused = true;
             previewBox.style.borderColor = '#61afef';
-            scrollContent.style.transform = ''
 
             const header = document.getElementById('preview-header');
             const scrollWrapper = document.getElementById('preview-scroll-wrapper');
@@ -2070,6 +2143,7 @@ function search_box() {
                         scrollContent.querySelectorAll('.wave-bar').forEach(b => b.classList.add('paused'));
                     }
                 } else {
+                    saveMediaPositionsIn(scrollContent);   // 切换到另一个媒体前，记录旧预览的位置
                     previewBox.style.display = 'flex';
                     previewBox.classList.add('image-preview-mode');
 
@@ -2097,6 +2171,7 @@ function search_box() {
 
                     mediaEl = scrollContent.querySelector('video, audio');
                     mediaEl.volume = 0.1;
+                    resumeMediaPosition(mediaEl, path);   // 从上一次的位置继续
                     const playPromise = mediaEl.play();
                     if (playPromise !== undefined) {
                         playPromise.catch(err => {
@@ -2782,6 +2857,7 @@ async function restore_snap() {
 }
 
 function audio(_song, _level) {
+    saveMediaPosition($("#_audio"));   // 旧播放器被替换前记录位置
     const oldAudio = $("#audio"); if (oldAudio) oldAudio.remove();
     const oldBtn = $("#audio_btn"); if (oldBtn) oldBtn.remove();
     audioInitialized = true;
@@ -2870,6 +2946,7 @@ function audio(_song, _level) {
         emitEvent('UPDATE_FAV_LIST', null, 'side');
     };
     closeBtn.onclick = () => {
+        saveMediaPosition(audioPlayer);   // 销毁播放器前记录位置
         playerContainer.remove();
         buttonElement.remove();
         if ($("#search") && $("#side")) $("#search").style.right = ($("#side").offsetWidth + 4) + "px";
@@ -2912,6 +2989,7 @@ function audio(_song, _level) {
     const playSong = () => {
         const targetLi = playlistElement.children[currentSongIndex];
         if (!targetLi) return;
+        saveMediaPosition(audioPlayer);   // 切歌前记录上一首的位置
         audioPlayer.src = targetLi.dataset.path;
         audioPlayer.play().catch(e => { });
         syncUIState();

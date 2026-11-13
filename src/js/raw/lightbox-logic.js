@@ -386,6 +386,29 @@ export const videoLogic = function () {
     };
 
     video.volume = 0.2;
+
+    // 离开(切换到别的资源 / 关闭灯箱 / 关闭页面)前记录播放位置，供搜索结果与 What's new 的预览继续播放。
+    // 与 index.js 中 saveMediaPosition 使用同一个 localStorage 键(media_positions)和数据格式，修改时请一起改。
+    // 注：videoLogic 会被序列化进 iframe，所以这里不能引用外部函数，只能内联。
+    window.addEventListener('pagehide', () => {
+        try {
+            const dur = video.duration, t = video.currentTime;
+            if (!Number.isFinite(dur) || dur <= 0) return;    // 没有时长属性(未加载 / 直播流)不记录
+            const key = String(path).replace(/^(?:\.{1,2}\/|\/)+/, '');
+            if (!key) return;
+            let map = {};
+            try {
+                const o = JSON.parse(localStorage.getItem('media_positions'));
+                if (o && typeof o === 'object' && !Array.isArray(o)) map = o;
+            } catch (e) { }
+            delete map[key];
+            if (Number.isFinite(t) && t >= 1 && dur - t > 2) map[key] = Math.round(t * 10) / 10;
+            const keys = Object.keys(map);
+            if (keys.length > 500) keys.slice(0, keys.length - 500).forEach(k => delete map[k]);
+            localStorage.setItem('media_positions', JSON.stringify(map));
+        } catch (e) { }
+    });
+
     let currentOffset = 0;
     window.adjustDelay = function (seconds) {
         const track = video.textTracks[0];
@@ -419,4 +442,3 @@ export const videoLogic = function () {
         }
     };
 };
-
