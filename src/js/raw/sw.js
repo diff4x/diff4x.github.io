@@ -1,6 +1,6 @@
-importScripts('/src/js/core-list.js?v=1794682192194');
+importScripts('/src/js/core-list.js?v=1794786016312');
 
-self.SW_VERSION = '1794682192194';
+self.SW_VERSION = '1794786016312';
 self.EMERGENCY = 'repair_command_id=2';
 
 const CACHE_NAME_CORE = 'core-cache-' + BUILD_VERSION;
@@ -138,9 +138,6 @@ self.addEventListener('install', event => {
         const CORE_BUNDLE_THRESHOLD = 15;
         let bundleUpdates = [];
         let standaloneUpdates = [];
-        // 需要在 install 结束前完成的副作用任务（旧 HTML 快照、清 search_cache）。
-        // 之前是 fire-and-forget：SW 可能在它们完成前被终止，
-        // 而 activate 会删除它们要读取的旧缓存，存在竞态。
         const deferredJobs = [];
 
         for (const url of allFilesToCache) {
@@ -294,7 +291,6 @@ self.addEventListener('install', event => {
             }
         }
 
-        // 等副作用任务做完（并发 4）；每个任务内部已 try/catch，不会让 install 失败
         if (deferredJobs.length > 0) {
             const queue = deferredJobs.slice();
             await Promise.all(Array.from({ length: Math.min(4, queue.length) }, async () => {

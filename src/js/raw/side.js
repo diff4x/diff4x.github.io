@@ -61,10 +61,8 @@ function getFileNameFromPath(path) {
     return path.split("/").pop();
 }
 
-// ---- 文章评论数：由 index 汇总后推送，追加到目录项的 title 属性 ----
 let commentCounts = {};
 
-// title = [日期(点击后写入 data-date-title)] + [💬 N comments]
 function refreshHtmlTitle(a) {
     const parts = [];
     if (a.dataset.dateTitle) parts.push(a.dataset.dateTitle);

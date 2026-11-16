@@ -1,10 +1,3 @@
-/**
- * lightbox-logic.js
- * 图片/视频灯箱弹出层内的交互逻辑。
- * 仅在用户点开图片或视频时，被 index.js 的 generateDoc() 动态 import，
- * 通过 iframeCommonLogic.toString()/imageLogic.toString()/videoLogic.toString()
- * 注入生成的 <iframe> 文档里执行。三者互不依赖外部闭包变量，可安全序列化。
- */
 export const iframeCommonLogic = function () {
     window.$ = (s) => document.querySelector(s);
     window.$$ = (s) => document.querySelectorAll(s);
@@ -387,9 +380,6 @@ export const videoLogic = function () {
 
     video.volume = 0.2;
 
-    // 离开(切换到别的资源 / 关闭灯箱 / 关闭页面)前记录播放位置，供搜索结果与 What's new 的预览继续播放。
-    // 与 index.js 中 saveMediaPosition 使用同一个 localStorage 键(media_positions)和数据格式，修改时请一起改。
-    // 注：videoLogic 会被序列化进 iframe，所以这里不能引用外部函数，只能内联。
     window.addEventListener('pagehide', () => {
         try {
             const dur = video.duration, t = video.currentTime;

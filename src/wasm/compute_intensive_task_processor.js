@@ -7,6 +7,18 @@
  * @param {boolean} is_offline
  * @returns {any}
  */
+export function build_and_set_data(lite_val, fat_val, shadow_val, is_offline) {
+    const ret = wasm.build_and_set_data(addHeapObject(lite_val), addHeapObject(fat_val), addHeapObject(shadow_val), is_offline);
+    return takeObject(ret);
+}
+
+/**
+ * @param {any} lite_val
+ * @param {any} fat_val
+ * @param {any} shadow_val
+ * @param {boolean} is_offline
+ * @returns {any}
+ */
 export function build_flat_data(lite_val, fat_val, shadow_val, is_offline) {
     const ret = wasm.build_flat_data(addHeapObject(lite_val), addHeapObject(fat_val), addHeapObject(shadow_val), is_offline);
     return takeObject(ret);
@@ -23,18 +35,11 @@ export function compute_lcs_diff(old_lines, new_lines) {
 }
 
 /**
- * @param {string} global_text
- * @param {string} keyword
- * @param {number} noise_level
- * @returns {any}
+ * @returns {number}
  */
-export function find_content_matches(global_text, keyword, noise_level) {
-    const ptr0 = passStringToWasm0(global_text, wasm.__wbindgen_export, wasm.__wbindgen_export2);
-    const len0 = WASM_VECTOR_LEN;
-    const ptr1 = passStringToWasm0(keyword, wasm.__wbindgen_export, wasm.__wbindgen_export2);
-    const len1 = WASM_VECTOR_LEN;
-    const ret = wasm.find_content_matches(ptr0, len0, ptr1, len1, noise_level);
-    return takeObject(ret);
+export function doc_count() {
+    const ret = wasm.doc_count();
+    return ret >>> 0;
 }
 
 /**
@@ -74,14 +79,28 @@ export function format_markdown(text) {
 }
 
 /**
- * @param {string} keyword
+ * @param {string} path
+ * @param {any} keywords_val
  * @param {number} noise_level
+ * @param {number} max_body
+ * @param {number} max_comments
  * @returns {any}
  */
-export function search(keyword, noise_level) {
-    const ptr0 = passStringToWasm0(keyword, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+export function get_snippets(path, keywords_val, noise_level, max_body, max_comments) {
+    const ptr0 = passStringToWasm0(path, wasm.__wbindgen_export, wasm.__wbindgen_export2);
     const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.search(ptr0, len0, noise_level);
+    const ret = wasm.get_snippets(ptr0, len0, addHeapObject(keywords_val), noise_level, max_body, max_comments);
+    return takeObject(ret);
+}
+
+/**
+ * @param {any} plan_val
+ * @param {number} from_doc
+ * @param {number} to_doc
+ * @returns {any}
+ */
+export function search_ads_range(plan_val, from_doc, to_doc) {
+    const ret = wasm.search_ads_range(addHeapObject(plan_val), from_doc, to_doc);
     return takeObject(ret);
 }
 
@@ -90,9 +109,28 @@ export function search(keyword, noise_level) {
  * @param {number} noise_level
  * @returns {any}
  */
-export function search_multi(keywords_val, noise_level) {
-    const ret = wasm.search_multi(addHeapObject(keywords_val), noise_level);
+export function search_comments(keywords_val, noise_level) {
+    const ret = wasm.search_comments(addHeapObject(keywords_val), noise_level);
     return takeObject(ret);
+}
+
+/**
+ * @param {any} keywords_val
+ * @param {number} noise_level
+ * @param {number} from_doc
+ * @param {number} to_doc
+ * @returns {any}
+ */
+export function search_multi_range(keywords_val, noise_level, from_doc, to_doc) {
+    const ret = wasm.search_multi_range(addHeapObject(keywords_val), noise_level, from_doc, to_doc);
+    return takeObject(ret);
+}
+
+/**
+ * @param {any} val
+ */
+export function set_comments(val) {
+    wasm.set_comments(addHeapObject(val));
 }
 
 /**
@@ -107,6 +145,10 @@ function __wbg_get_imports() {
         __wbg_Error_92b29b0548f8b746: function(arg0, arg1) {
             const ret = Error(getStringFromWasm0(arg0, arg1));
             return addHeapObject(ret);
+        },
+        __wbg_Number_9a4e0ecb0fa16705: function(arg0) {
+            const ret = Number(getObject(arg0));
+            return ret;
         },
         __wbg___wbindgen_bigint_get_as_i64_d968e41184ae354f: function(arg0, arg1) {
             const v = getObject(arg1);
@@ -141,6 +183,10 @@ function __wbg_get_imports() {
         __wbg___wbindgen_is_object_a27215656b807791: function(arg0) {
             const val = getObject(arg0);
             const ret = typeof(val) === 'object' && val !== null;
+            return ret;
+        },
+        __wbg___wbindgen_is_undefined_c05833b95a3cf397: function(arg0) {
+            const ret = getObject(arg0) === undefined;
             return ret;
         },
         __wbg___wbindgen_jsval_eq_e659fcf7b0e32763: function(arg0, arg1) {
@@ -190,6 +236,10 @@ function __wbg_get_imports() {
         }, arguments); },
         __wbg_get_unchecked_6e0ad6d2a41b06f6: function(arg0, arg1) {
             const ret = getObject(arg0)[arg1 >>> 0];
+            return addHeapObject(ret);
+        },
+        __wbg_get_with_ref_key_6412cf3094599694: function(arg0, arg1) {
+            const ret = getObject(arg0)[getObject(arg1)];
             return addHeapObject(ret);
         },
         __wbg_instanceof_ArrayBuffer_4480b9e0068a8adb: function(arg0) {

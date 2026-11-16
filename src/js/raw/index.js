@@ -15,7 +15,7 @@ window.sharedWasm = {
     ready: false,
     failed: false,
     format_markdown: null,
-    find_content_matches: null,
+    find_content_matches_multi: null,
     compute_lcs_diff: null
 };
 window._tpZoom = 1;
@@ -29,6 +29,7 @@ const idleRun = (fn) => window.requestIdleCallback ? requestIdleCallback(fn) : s
 const AsyncUtils = createAsyncUtils();
 const dbProxy = createDBProxy('MainDB', 'chunks');
 const searchCacheLRU = createSearchCacheLRU(dbProxy);
+const searchResultCache = createSearchResultCache(dbProxy, searchCacheLRU, { onClear: () => clearSearchOverlays() });
 const popup = $("#giscus-popup");
 const header = $("#popup-header");
 const doc_title = document.title;
@@ -50,15 +51,10 @@ store.bookmarkhtml_modifing = "0";
 store.lightbox_stauts = "0";
 store.jump_from_search = "0";
 
-// [media-pos:begin] 音视频播放位置记录
-// localStorage 键 media_positions = { "video/a.mp4": 123.4, "audio/b.mp3": 56.7 }（单位：秒；最近使用的排在后面）。
-// 在"关闭前"写入（预览销毁/切换、切歌、销毁播放器、灯箱视频离开）；搜索结果 / What's new 的音视频预览启动时读取并从该位置继续。
-// index.js 与 deferred-features.js 各有一份相同的实现；lightbox-logic.js 的 videoLogic 里有一份精简版
-// （它会被序列化进 iframe，无法引用外部函数）。键名与数据格式必须保持一致，修改时请一起改。
 const MEDIA_POS_KEY = 'media_positions';
-const MEDIA_POS_MAX = 500;      // 最多保留的条数，超出时丢弃最旧的
-const MEDIA_POS_MIN = 1;        // 播放不足 1 秒不记录
-const MEDIA_POS_END_GAP = 2;    // 距结尾不足 2 秒视为已播完，清除记录(下次从头开始)
+const MEDIA_POS_MAX = 500;
+const MEDIA_POS_MIN = 1;
+const MEDIA_POS_END_GAP = 2;
 
 function mediaPosKey(src) {
     let s = String(src || '').split('#')[0].split('?')[0];
@@ -79,7 +75,6 @@ function getMediaPosition(src) {
     return (typeof t === 'number' && Number.isFinite(t) && t > 0) ? t : 0;
 }
 
-// 关闭 / 销毁 / 切换媒体元素之前调用。没有时长(未加载元数据、直播流)的媒体不记录。
 function saveMediaPosition(el) {
     try {
         if (!el) return;
@@ -89,7 +84,7 @@ function saveMediaPosition(el) {
         if (!key) return;
         const t = el.currentTime;
         const map = readMediaPositions();
-        delete map[key];    // 先删再写，让最近使用的排在后面
+        delete map[key];
         if (Number.isFinite(t) && t >= MEDIA_POS_MIN && dur - t > MEDIA_POS_END_GAP) {
             map[key] = Math.round(t * 10) / 10;
         }
@@ -103,50 +98,47 @@ function saveMediaPositionsIn(root) {
     if (root) root.querySelectorAll('video, audio').forEach(el => saveMediaPosition(el));
 }
 
-// 预览元素创建后(设置 src 之后)调用：从上一次的位置继续
 function resumeMediaPosition(el, src) {
     const saved = getMediaPosition(src);
     if (!saved) return;
     try { el.currentTime = saved; } catch (e) { }
     el.addEventListener('loadedmetadata', () => {
-        // 文件可能被替换得更短：位置越界就从头开始
         if (Number.isFinite(el.duration) && saved > el.duration - MEDIA_POS_END_GAP) el.currentTime = 0;
     }, { once: true });
 }
-// [media-pos:end]
-
 
 let searchWorker = null;
-let _pendingWorker = null;      // A2：预热但尚未"交付"的 Worker
-let _autocompleteSeq = 0;       // C4：联想渲染的序号，丢弃过期调用
+let _pendingWorker = null;
+let _autocompleteSeq = 0;
 let audioInitialized = false;
 let comments_first_flag = false;
 let records = [];
 let totalCount = 0;
 
-// ---- 评论同步 / 评论搜索 的共享状态 ----
 const COMMENTS_SYNC_INTERVAL = 10 * 60 * 1000;
-const commentHitCache = new Map();     // normKw -> { ver, hits: [{path, count}], sig }
+const commentHitCache = new Map();
+const pageHitCache = new Map();
+const snippetCache = new Map();
+const pendingSnippets = new Map();
+let _snipReqId = 0;
 const commentModel = {
     ready: false,
-    ver: 0,                            // 每次评论数据变化 +1，用来判定 commentHitCache 是否过期
+    ver: 0,
     sig: "",
-    counts: {},                        // path -> 评论数（含回复）
-    meta: new Map(),                   // path -> { title, fileName, localOnly }
-    index: null                        // 发给 Worker 的评论索引 [{ path, texts }]
+    counts: {},
+    meta: new Map(),
+    index: null
 };
 window.commentCounts = {};
 
 import('../wasm/compute_intensive_task_processor.min.js').then(async (wasmModule) => {
     await wasmModule.default();
     window.sharedWasm.format_markdown = wasmModule.format_markdown;
-    window.sharedWasm.find_content_matches = wasmModule.find_content_matches;
-    window.sharedWasm.find_content_matches_multi = wasmModule.find_content_matches_multi; // 新增注入
+    window.sharedWasm.find_content_matches_multi = wasmModule.find_content_matches_multi;
     window.sharedWasm.compute_lcs_diff = wasmModule.compute_lcs_diff;
     window.sharedWasm.ready = true;
 }).catch(err => {
     console.error("[Main] Wasm 模块加载失败:", err);
-    // 通知内容页：不用再等了，降级渲染
     window.sharedWasm.failed = true;
 });
 
@@ -326,7 +318,6 @@ window.addEventListener('pagehide', (e) => {
     }
 });
 
-// 关闭/刷新页面时，记录主音乐播放器的位置
 window.addEventListener('pagehide', () => {
     const a = document.getElementById('_audio');
     if (a) saveMediaPosition(a);
@@ -349,58 +340,26 @@ BUS.addEventListener('message', async (e) => {
             if (activeKw && liveKw && normalizeKeyword(activeKw) !== normalizeKeyword(liveKw)) {
                 break;
             }
+            if (!activeKw || isReservedSearchCommand(activeKw)) break;
 
             let hist = store.last_li_a;
             if (!Array.isArray(hist)) hist = hist ? [hist] : [];
-            let globalResults = (await store.SearchCache.get(activeKw)) || [];
+            if (store.resource_type !== "html" || hist.length === 0) break;
 
-            if (store.resource_type === "html" && hist.length > 0) {
-                const currentPath = hist[0];
-                const strippedPath = currentPath.startsWith('../') ? currentPath.substring(3) : currentPath;
-                const existingIndex = globalResults.findIndex(r => r.path === currentPath || r.path === strippedPath);
-
-                if (existingIndex !== -1) {
-                    const item = globalResults.splice(existingIndex, 1)[0];
-                    if (payload.snippets) {
-                        item.snippets = payload.snippets;
-                        item.isTolerantMatch = payload.isTolerantMatch;
-                    }
-                    if (typeof payload.count === 'number') {
-                        item.count = payload.count;
-                    }
-                    globalResults.unshift(item);
-                } else if (payload.count > 0) {
-                    let isActuallyPrivate = false;
-                    if (window.data && window.data.length > 0) {
-                        for (let i = 2; i < window.data.length; i += 4) {
-                            if (window.data[i] === currentPath || window.data[i] === strippedPath) {
-                                if (typeof window.data[i - 1] === 'string' && window.data[i - 1].startsWith('localOnly')) {
-                                    isActuallyPrivate = true;
-                                }
-                                break;
-                            }
-                        }
-                    }
-
-                    globalResults.unshift({
-                        title: payload.title || currentPath.split('/').pop().replace('.html', ''),
-                        path: currentPath,
-                        type: "html",
-                        count: payload.count,
-                        localOnly: isActuallyPrivate,
-                        snippets: payload.snippets,
-                        isTolerantMatch: payload.isTolerantMatch
-                    });
-                }
-            }
-
-            if (activeKw && !isReservedSearchCommand(activeKw)) {
-                store.SearchCache.set(activeKw, globalResults);
-            }
-
-            updateSearchResults(globalResults, activeKw);
+            const currentPath = hist[0];
+            const path = currentPath.startsWith('../') ? currentPath.substring(3) : currentPath;
+            const changed = setPageHit(activeKw, {
+                path,
+                title: payload.title || path.split('/').pop().replace('.html', ''),
+                count: typeof payload.count === 'number' ? payload.count : 0
+            });
+            if (changed) rerenderSearchOverlay();
             break;
         }
+
+        case "SEARCH_CACHE_CLEARED":
+            searchResultCache.clearMemory();
+            break;
 
         case "reload_bookmark":
             store.bookmarkhtml_modifing = "1";
@@ -767,7 +726,6 @@ window.onload = () => {
         });
     });
 
-    // 移动端触控板模拟层：只有触屏设备才下载这份代码
     if (window.matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window) {
         import('./touchpad.js').then(m => m.initTouchpad({ emitEvent }));
     }
@@ -788,71 +746,7 @@ function emitEvent(type, payload, target = '*') {
 function createStore(defaults = {}) {
     return new Proxy({}, {
         get(_, prop) {
-            if (prop === 'SearchCache') {
-                return {
-                    get: async (kw) => {
-                        try {
-                            const meta = await store.SearchCache.getMeta(kw);
-                            return (meta && meta.exact) ? meta.results : null;
-                        } catch (e) { return null; }
-                    },
-                    getMeta: async (kw) => {
-                        try {
-                            const normKw = normalizeKeyword(kw);
-                            if (!normKw) return null;
-                            const res = await dbProxy.get('search_cache', normKw);
-                            if (res) {
-                                searchCacheLRU.touch(normKw);
-                                return { results: res, exact: true, sourceKey: normKw };
-                            }
-
-                            // 前缀回退：扩展关键词的命中集合是前缀命中集合的子集，
-                            // 可先用最长的已缓存前缀结果做"临时展示"。
-                            // 键列表来自内存里的 LRU 记录，不再每次按键都 getAllKeys。
-                            const candidates = (await searchCacheLRU.keys())
-                                .filter(k => k.length > 2 && k !== normKw && normKw.startsWith(k))
-                                .sort((a, b) => b.length - a.length)
-                                .slice(0, 3);
-                            for (const key of candidates) {
-                                // search_cache 里存的值本身就是结果数组（不是 {results: [...]}）
-                                const broader = await dbProxy.get('search_cache', key);
-                                if (Array.isArray(broader) && broader.length > 0) {
-                                    searchCacheLRU.touch(key);
-                                    return { results: broader, exact: false, sourceKey: key };
-                                }
-                                // 记录里有、库里没有（例如被 SW 在 synonyms 变更时清空）
-                                if (broader === undefined) searchCacheLRU.forget(key);
-                            }
-                            return null;
-                        } catch (e) { return null; }
-                    },
-                    set: async (kw, results) => {
-                        try {
-                            const normKw = normalizeKeyword(kw);
-                            if (!normKw) return;
-                            await dbProxy.put('search_cache', normKw, results);
-                            await searchCacheLRU.touchAndEvict(normKw);
-                        } catch (e) { }
-                    },
-
-                    remove: async (kw) => {
-                        try {
-                            const normKw = normalizeKeyword(kw);
-                            if (normKw) {
-                                await dbProxy.delete('search_cache', normKw);
-                                searchCacheLRU.forget(normKw);
-                            }
-                        } catch (e) { }
-                    },
-
-                    clear: async () => {
-                        try {
-                            await dbProxy.clear('search_cache');
-                            searchCacheLRU.reset();
-                        } catch (e) { }
-                    }
-                };
-            }
+            if (prop === 'SearchCache') return searchResultCache;
 
             if (prop === 'pinyinData') {
                 return window.top.pinyinData || {};
@@ -892,15 +786,11 @@ function createStore(defaults = {}) {
     });
 }
 
-// search_cache 的 LRU 记录。
-// IDB 的 getAllKeys 按键升序返回，不代表"最近使用"，所以另存一份访问顺序（最旧在前）。
-// 记录放在 sys_state，不改变 search_cache 里已有数据的格式；
-// IDB 里有、记录里没有的键（旧版本遗留 / 其他标签页写入）视为最旧，优先淘汰。
 function createSearchCacheLRU(db, max = 500) {
-    let order = null;      // string[]，最旧在前；null 表示尚未加载
+    let order = null;
     let loading = null;
     let persistTimer = null;
-    let gen = 0;           // reset() 之后丢弃仍在途中的旧加载结果
+    let gen = 0;
 
     const schedulePersist = () => {
         clearTimeout(persistTimer);
@@ -963,6 +853,148 @@ function createSearchCacheLRU(db, max = 500) {
 
     // keys() 返回内部数组本身，调用方只读（filter 等会产生新数组）
     return { keys: () => load(), touch, touchAndEvict, forget, reset };
+}
+
+function createSearchResultCache(db, lru, { memMax = 48, flushDelay = 400, onClear = () => { } } = {}) {
+    const mem = new Map();
+    const dirty = new Map();
+    let flushTimer = null;
+    let flushing = false;
+
+    const memGet = (k) => {
+        const v = mem.get(k);
+        if (v === undefined) return undefined;
+        mem.delete(k);
+        mem.set(k, v);
+        return v;
+    };
+    const memSet = (k, v) => {
+        mem.delete(k);
+        mem.set(k, v);
+        if (mem.size > memMax) mem.delete(mem.keys().next().value);
+    };
+
+    const flush = async () => {
+        flushTimer = null;
+        if (flushing) return;
+        flushing = true;
+        try {
+            while (dirty.size > 0) {
+                const [k, v] = dirty.entries().next().value;
+                dirty.delete(k);
+                try {
+                    await db.put('search_cache', k, v);
+                    await lru.touchAndEvict(k);
+                } catch (e) { }
+            }
+        } finally {
+            flushing = false;
+        }
+    };
+
+    const getMeta = async (kw) => {
+        try {
+            const normKw = normalizeKeyword(kw);
+            if (!normKw) return null;
+
+            let exact = memGet(normKw);
+            if (exact === undefined) {
+                if ((await lru.keys()).includes(normKw)) {
+                    exact = await db.get('search_cache', normKw);
+                    if (exact) memSet(normKw, exact);
+                    else lru.forget(normKw);
+                }
+            }
+            if (exact) {
+                lru.touch(normKw);
+                return { results: exact, exact: true, fromCache: true };
+            }
+
+            const isPrefix = (k) => k.length > 2 && k !== normKw && normKw.startsWith(k);
+            const byLenDesc = (a, b) => b.length - a.length;
+
+            for (const key of Array.from(mem.keys()).filter(isPrefix).sort(byLenDesc)) {
+                const broader = memGet(key);
+                if (Array.isArray(broader) && broader.length > 0) {
+                    lru.touch(key);
+                    return { results: broader, exact: false, fromCache: true };
+                }
+            }
+            const candidates = (await lru.keys())
+                .filter(k => isPrefix(k) && !mem.has(k))
+                .sort(byLenDesc)
+                .slice(0, 3);
+            for (const key of candidates) {
+                const broader = await db.get('search_cache', key);
+                if (Array.isArray(broader) && broader.length > 0) {
+                    memSet(key, broader);
+                    lru.touch(key);
+                    return { results: broader, exact: false, fromCache: true };
+                }
+                if (broader === undefined) lru.forget(key);
+            }
+            return null;
+        } catch (e) { return null; }
+    };
+
+    const set = async (kw, results) => {
+        const normKw = normalizeKeyword(kw);
+        if (!normKw || !Array.isArray(results)) return;
+        memSet(normKw, results);
+        dirty.set(normKw, results);
+        clearTimeout(flushTimer);
+        flushTimer = setTimeout(flush, flushDelay);
+    };
+
+    const remove = async (kw) => {
+        try {
+            const normKw = normalizeKeyword(kw);
+            if (!normKw) return;
+            mem.delete(normKw);
+            dirty.delete(normKw);
+            await db.delete('search_cache', normKw);
+            lru.forget(normKw);
+        } catch (e) { }
+    };
+
+    const clearMemory = () => {
+        mem.clear();
+        dirty.clear();
+        clearTimeout(flushTimer);
+        flushTimer = null;
+        onClear();
+    };
+
+    const clear = async () => {
+        clearMemory();
+        try {
+            await db.clear('search_cache');
+            lru.reset();
+            emitEvent('SEARCH_CACHE_CLEARED', null, 'index');
+        } catch (e) { }
+    };
+
+    // 缓存命名空间：把“会改变搜索结果语义的输入”（数据内容、算法版本、noise、同义词词表等）
+    // 折叠成指纹，存进 IDB。指纹与上次不同就整体丢弃缓存，而不是靠各处手动 clear()。
+    // 按 slot 分开记录，互不影响：core（数据/算法/设置）、syn（同义词词表）。
+    const boundNs = new Map();
+    const bindNamespace = async (slot, next) => {
+        if (typeof slot !== 'string' || typeof next !== 'string') return false;
+        if (boundNs.get(slot) === next) return false;
+        boundNs.set(slot, next);
+        const key = 'search_cache_ns:' + slot;
+        let saved;
+        try { saved = await db.get('sys_state', key); } catch (e) { saved = undefined; }
+        if (boundNs.get(slot) !== next) return false;   // await 期间又被更新，交给后一次调用处理
+        if (saved === next) return false;
+        await clear();
+        try { await db.put('sys_state', key, next); } catch (e) { }
+        return true;
+    };
+
+    window.addEventListener('pagehide', () => { if (dirty.size > 0) flush(); });
+
+    return { getMeta, set, remove, clear, clearMemory, bindNamespace };
 }
 
 function createDBProxy(dbName, storeName) {
@@ -1131,12 +1163,9 @@ async function loadScripts(concurrency) {
     console.time("⏱️ loadScripts 总耗时");
 
     window.isDataSyncing = true;
-
-    // A2：与下面 core-list → lite_data → side iframe 加载这条串行链并行：
-    // Worker 预热（含 Wasm 下载与编译）、IDB 全量读取。原来这两件事要等整条链结束后才开始。
     prewarmSearchWorker();
     window._chunksPrefetch = dbProxy.getAll();
-    window._chunksPrefetch.catch(() => { });      // 错误仍由 loadDataInBatches 里的 await 抛出
+    window._chunksPrefetch.catch(() => { });
 
     const injectScript = (src) => new Promise((resolve, reject) => {
         const script = document.createElement("script");
@@ -1212,23 +1241,28 @@ async function loadScripts(concurrency) {
     console.timeEnd("⏱️ loadScripts 总耗时");
 }
 
-// A2：Worker（含 Wasm 下载与编译）可以在 loadScripts 之前就开始预热，与 core-list / lite_data / IDB 读取并行。
-// 但 search() 把 searchWorker 当作"数据已就绪"的闸门，所以预热的实例先放在 _pendingWorker，
-// 等 loadDataInBatches 里才赋给 searchWorker。
 function createSearchWorker() {
     const worker = new Worker('src/js/worker.js', { type: 'module' });
     worker.onmessage = async (e) => {
-        const { type, results, keyword, token, inheritFrom, payload, commentHits } = e.data;
+        const { type, results, keyword, token, payload, commentHits } = e.data;
 
         if (type === 'DELETE_CACHE') {
             store.SearchCache.remove(keyword);
             return;
         }
 
-        // 缓存命中（没走 SEARCH）时单独请求的评论命中
         if (type === 'COMMENT_HITS') {
             if (token !== window._searchToken) return;
             if (setCommentHits(keyword, commentHits || [])) rerenderSearchOverlay();
+            return;
+        }
+
+        if (type === 'SNIPPETS_RESULT') {
+            const cb = pendingSnippets.get(e.data.reqId);
+            if (cb) {
+                pendingSnippets.delete(e.data.reqId);
+                cb(e.data.snippets);
+            }
             return;
         }
 
@@ -1238,47 +1272,10 @@ function createSearchWorker() {
                 return;
             }
 
-            // Worker 在正文结果之后从评论里找补的命中，渲染时叠加（不写入搜索缓存）
             if (Array.isArray(commentHits)) setCommentHits(keyword, commentHits);
+            if (e.data.error) window._adsStatus = { error: e.data.error };
 
             const activeKw = keyword || store.keyword;
-
-            if (activeKw) {
-                let sourceCache = await store.SearchCache.get(activeKw);
-                let isExactMatch = true;
-
-                if ((!sourceCache || sourceCache.length === 0) && inheritFrom) {
-                    sourceCache = await store.SearchCache.get(inheritFrom);
-                    isExactMatch = false;
-                }
-
-                if (token !== window._searchToken) return;
-
-                if (sourceCache && sourceCache.length > 0) {
-                    results.forEach(newItem => {
-                        const oldItem = sourceCache.find(o => o.path === newItem.path);
-                        if (oldItem) {
-                            if (isExactMatch) {
-                                if (oldItem.count > newItem.count) {
-                                    newItem.count = oldItem.count;
-                                }
-                                if (oldItem.snippets) {
-                                    newItem.snippets = oldItem.snippets;
-                                    newItem.isTolerantMatch = oldItem.isTolerantMatch;
-                                }
-                            }
-                        }
-                    });
-
-                    if (isExactMatch) {
-                        sourceCache.forEach(oldItem => {
-                            if (oldItem.snippets && !results.some(r => r.path === oldItem.path)) {
-                                results.push(JSON.parse(JSON.stringify(oldItem)));
-                            }
-                        });
-                    }
-                }
-            }
 
             if (activeKw && !isReservedSearchCommand(activeKw)) {
                 clearTimeout(window._idbWriteTimer);
@@ -1287,12 +1284,22 @@ function createSearchWorker() {
                 }, 600);
             }
 
-            processAndShowResults(results, activeKw);
+            processAndShowResults(results, activeKw, { noCache: window._searchCacheOk === false });
         }
 
         else if (type === 'DATA_READY') {
-            window.data = payload;
+            // worker 只回传瘦身后的数据（html 正文已剥离，仅保留 path/type/localOnly 标记）和数据指纹
+            const slim = Array.isArray(payload) ? payload : ((payload && payload.data) || []);
+            window.data = slim;
+            window._dataFp = (payload && !Array.isArray(payload) && payload.fp) || ('len' + slim.length);
+            snippetCache.clear();
+            // 与 finalizeDataLoad 并行：缓存库卡住时不阻塞界面初始化（bindCoreNamespace 内部已 try/catch，不会 reject）
+            const nsPromise = bindCoreNamespace();
             await finalizeDataLoad();
+            if (await nsPromise) {
+                invalidateSearch();
+                rerunActiveSearch();
+            }
         }
     };
     if (commentModel.index) worker.postMessage({ type: 'SET_COMMENTS', payload: commentModel.index });
@@ -1309,7 +1316,6 @@ function prewarmSearchWorker() {
 }
 
 async function loadDataInBatches(files, now, concurrency) {
-    // A2：getAll 在 loadScripts 开头已提前发起，与 core-list / lite_data / side iframe 的等待重叠
     const cachedChunks = await (window._chunksPrefetch || dbProxy.getAll());
     window._chunksPrefetch = null;
     const cachedMap = new Map(cachedChunks.map(c => [c.id, c.fingerprint]));
@@ -1339,8 +1345,6 @@ async function loadDataInBatches(files, now, concurrency) {
     });
 
     if (!searchWorker) {
-        // A2：优先使用预热好的 Worker。"数据已就绪"的语义仍由这里对 searchWorker 的赋值体现
-        // （search() 以 searchWorker 非空作为闸门），时机与原来一致。
         searchWorker = _pendingWorker || createSearchWorker();
         _pendingWorker = null;
     }
@@ -1582,6 +1586,7 @@ function search_box() {
     const elSearchHistory = $("#searchHistory");
     const elSearchResults = $("#searchResults");
     elSearchInput.setAttribute("autocomplete", "off");
+    elSearchInput.setAttribute("title", "@noise=" + Number(store.noise_level ?? 5) + "; @like=" + Number(store.synonyms_enabled ?? 1));
 
     function showSearchHistoryByTime() {
         const elSearchHistory = $("#searchHistory");
@@ -1644,29 +1649,44 @@ function search_box() {
     }
 
     let searchDebounceTimer = null;
+    let composing = false;
 
-    elSearchInput.addEventListener("input", function () {
-        const val = this.value;
+    const scheduleSearch = (val, delay) => {
+        clearTimeout(searchDebounceTimer);
+        searchDebounceTimer = setTimeout(() => {
+            search(val.trim());
+            store.keyword = val;
+        }, isAdsQuery(val) ? Math.max(delay, 450) : delay);
+    };
 
+    const onValueSettled = (val, delay = 150) => {
         if (val.trim() === "") {
             clearTimeout(searchDebounceTimer);
-            _autocompleteSeq++;            // 作废仍在途中的联想渲染，避免它们稍后又往已清空的列表里追加
+            invalidateSearch();
+            _autocompleteSeq++;
             updateSearchResults([]);
             showSearchHistoryByTime();
             return;
         }
 
-        // C4：先同步安排防抖搜索，再渲染联想。
-        // 原先是先 await 联想（含 IDB 读取）再设定时器：打字较快时，较早事件的联想可能更晚完成，
-        // 它随后会清掉并重设较新事件的定时器，最终搜索的是旧关键词。
-        clearTimeout(searchDebounceTimer);
-        searchDebounceTimer = setTimeout(() => {
-            search(val.trim());
-            store.keyword = val;
-        }, 150);
+        invalidateSearch();
+        scheduleSearch(val, delay);
 
         initHistoryBox(1);
         updateAutocompleteSuggestions(val).catch(err => console.warn("联想渲染失败", err));
+    };
+
+    elSearchInput.addEventListener("compositionstart", function () {
+        composing = true;
+        clearTimeout(searchDebounceTimer);
+    });
+    elSearchInput.addEventListener("compositionend", function () {
+        composing = false;
+        onValueSettled(this.value, 0);
+    });
+    elSearchInput.addEventListener("input", function (e) {
+        if (composing || e.isComposing) return;
+        onValueSettled(this.value);
     });
 
     elSearchInput.addEventListener("focus", function () {
@@ -1686,6 +1706,7 @@ function search_box() {
     });
 
     elSearchInput.addEventListener("keydown", function (e) {
+        if (composing || e.isComposing || e.keyCode === 229) return;
         const val = this.value.trim();
         if (e.keyCode === 40 || e.keyCode === 13 || e.key === "Enter") {
             e.preventDefault();
@@ -1693,10 +1714,11 @@ function search_box() {
                 const n = parseInt(val.split("=")[1], 10);
                 if (!isNaN(n) && n >= 0 && n <= 5) {
                     store.noise_level = n;
+                    sfSyncEngine();
                     this.value = "";
                     this.placeholder = `已将搜索宽容度设为: ${n}`;
                     setTimeout(() => this.placeholder = "Search...", 2000);
-                    store.SearchCache.clear();
+                    bindCoreNamespace({ force: true });
                     if (searchWorker) searchWorker.postMessage({ type: "CLEAR_CURSOR", payload: { keyword: "" } });
                 } else {
                     this.placeholder = "宽容度只能是 0~5（当前输入无效）";
@@ -1709,10 +1731,11 @@ function search_box() {
                 const n = parseInt(val.split("=")[1], 10);
                 if (n === 0 || n === 1) {
                     store.synonyms_enabled = n;
+                    sfSyncEngine();
                     this.value = "";
                     this.placeholder = n === 1 ? "已开启近义搜索" : "已停用近义搜索";
                     setTimeout(() => this.placeholder = "Search...", 2000);
-                    store.SearchCache.clear();
+                    bindCoreNamespace({ force: true });
                     if (searchWorker) searchWorker.postMessage({ type: "CLEAR_CURSOR", payload: { keyword: "" } });
                 } else {
                     this.placeholder = "@like 只能是 0 或 1（当前输入无效）";
@@ -1824,6 +1847,7 @@ function search_box() {
 
     $("#clear").addEventListener("click", function () {
         elSearchInput.value = "";
+        invalidateSearch();
         updateSearchResults([]);
         initHistoryBox(0);
         store.keyword = "";
@@ -1837,6 +1861,7 @@ function search_box() {
         const maxW = Math.max(0, $("#content").clientWidth - $("#search").offsetWidth - 10);
         $("#searchResults").style.maxWidth = maxW + "px";
         $("#searchResults").style.left = (0 - $("#searchResults").offsetWidth) + "px";
+        sfLayout();
     });
     if ($("#content")) {
         layoutObserver.observe($("#content"));
@@ -1869,19 +1894,21 @@ function search_box() {
     let previewTimeoutId = null;
     let currentScrollY = 0;
     let lastHoveredPath = null;
+    let hoverSnippetTimer = null;
     let isPaused = true;
-
-    const escapeRegExp = (string) => string.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
     function destroyMediaPreview() {
         if (previewBox) previewBox.style.display = 'none';
         lastHoveredPath = null;
+        clearTimeout(hoverSnippetTimer);
+        resetSearchHighlights();
+        publishSearchHighlights();
         isPaused = true;
         if (previewTimeoutId) clearTimeout(previewTimeoutId);
         if (previewScrollFrame) cancelAnimationFrame(previewScrollFrame);
         const scrollContent = document.getElementById('preview-scroll-content');
         if (scrollContent) {
-            saveMediaPositionsIn(scrollContent);   // 关闭前记录音视频播放位置
+            saveMediaPositionsIn(scrollContent);
             scrollContent.innerHTML = '';
         }
     }
@@ -1905,6 +1932,98 @@ function search_box() {
     const elSearchInputNode = document.getElementById('searchInput');
     if (elSearchInputNode) elSearchInputNode.addEventListener('mousedown', handleMiddleClick);
 
+    function showSnippetPreview(resultData, data) {
+        const body = (data && data.body) || { hits: 0, more: 0, items: [] };
+        const cm = (data && data.comments) || { hits: 0, docs: 0, more: 0, items: [] };
+        if (body.items.length === 0 && cm.items.length === 0) {
+            previewBox.style.display = 'none';
+            return;
+        }
+
+        const header = document.getElementById('preview-header');
+        const scrollWrapper = document.getElementById('preview-scroll-wrapper');
+        const scrollContent = document.getElementById('preview-scroll-content');
+        previewBox.style.display = 'flex';
+        header.style.color = '#abb2bf';
+
+        const titleSpan = document.createElement('span');
+        titleSpan.style.cssText = 'white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 70%;';
+        titleSpan.textContent = resultData.title;
+        const countSpan = document.createElement('span');
+        countSpan.style.cssText = 'color: #61afef; font-size: 11px; white-space: nowrap;';
+        countSpan.textContent = [
+            body.hits > 0 ? `正文: ${body.hits}` : '',
+            cm.docs > 0 ? `评论: ${cm.docs}` : ''
+        ].filter(Boolean).join('  ');
+        const bar = document.createElement('div');
+        bar.style.cssText = 'display: flex; justify-content: space-between; align-items: center; width: 100%;';
+        bar.append(titleSpan, countSpan);
+        header.replaceChildren(bar);
+
+        const useHL = searchHighlightSupported();
+        resetSearchHighlights();
+
+        const buildBlock = () => {
+            const block = document.createElement('div');
+            block.className = 'loop-block';
+
+            const addSection = (label, items, more, isComment) => {
+                if (items.length === 0) return;
+                const title = document.createElement('div');
+                title.style.cssText = 'color: #e5c07b; font-size: 11px; font-weight: bold; margin: 0 0 6px;';
+                title.textContent = label + (more > 0 ? `（另有 ${more} 条未显示）` : '');
+                block.appendChild(title);
+
+                items.forEach((item, k) => {
+                    const row = document.createElement('div');
+                    row.style.cssText = 'margin-bottom: 12px; border-bottom: 1px dashed #4b5263; padding-bottom: 8px;';
+                    const tag = document.createElement('span');
+                    tag.style.cssText = 'color: #61afef; font-size: 11px;';
+                    tag.textContent = isComment ? `[#${item.c + 1}]` : `[${k + 1}]`;
+                    const text = document.createTextNode(' ' + item.t); 
+                    row.append(tag, text);
+                    block.appendChild(row);
+
+                    if (!useHL) return;
+                    for (const [s, e, n] of item.h) {
+                        const r = new Range();
+                        r.setStart(text, s + 1);
+                        r.setEnd(text, e + 1);
+                        getSearchHighlight(n).add(r);
+                    }
+                });
+            };
+            addSection(`正文: ${body.hits}`, body.items, body.more, false);
+            addSection(`评论: ${cm.docs}`, cm.items, cm.more, true);
+            return block;
+        };
+
+        const first = buildBlock();
+        scrollContent.replaceChildren(first);
+        publishSearchHighlights();
+        currentScrollY = 0;
+        scrollContent.style.transform = `translateY(0px)`;
+
+        previewTimeoutId = setTimeout(() => {
+            const blockHeight = first.offsetHeight;
+            const visibleHeight = scrollWrapper.offsetHeight;
+            if (blockHeight <= visibleHeight) return;
+
+            scrollContent.appendChild(buildBlock());
+            const autoScroll = () => {
+                if (!isPaused) {
+                    currentScrollY += 0.5;
+                    if (currentScrollY >= blockHeight) {
+                        currentScrollY -= blockHeight;
+                    }
+                    scrollContent.style.transform = `translateY(-${currentScrollY}px)`;
+                }
+                previewScrollFrame = requestAnimationFrame(autoScroll);
+            };
+            previewScrollFrame = requestAnimationFrame(autoScroll);
+        }, 10);
+    }
+
     elSearchResults.addEventListener('mousemove', (e) => {
         if (e.target.tagName.toUpperCase() === 'OPTION') {
             const path = e.target.dataset.path;
@@ -1923,8 +2042,9 @@ function search_box() {
             const isMedia = type === 'video' || type === 'audio' || /\.(mp4|webm|ogg|mp3|wav|flac|m4a)$/i.test(path);
             const isImage = type === 'image' || /\.(png|jpg|jpeg|gif|webp|bmp|svg|ico)$/i.test(path);
 
+            const adsMode = isAdsQuery(window._currentRenderedKeyword || elSearchInput.value.trim());
             if (type === 'html') {
-                e.target.title = "右击滚动或停止";
+                e.target.title = adsMode ? "" : "右击滚动或停止";
             } else if (isMedia) {
                 e.target.title = "右击播放或停止";
             } else {
@@ -1955,159 +2075,16 @@ function search_box() {
                 return;
             }
 
-            const resultData = (window._currentRenderedResults || []).find(r => r.path === path);
+            const resultData = window._currentResultMap && window._currentResultMap.get(path);
             const keyword = window._currentRenderedKeyword || elSearchInput.value.trim();
+            if (!resultData || !keyword) return;
+            if (isAdsQuery(keyword)) return;   // @ads：html 条目不创建预览
 
-            const escapeRegExp = (string) => string.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-            
-            const synonymsEnabled = (store.synonyms_enabled ?? 1) === 1;
-            const expandQueryFn = window.top.expandQuery || ((kw) => ({ variants: [] }));
-            const { variants } = synonymsEnabled ? expandQueryFn(keyword) : { variants: [] };
-            const allKeywords = [keyword, ...variants];
-
-            const buildSnippetRegexMulti = (kws) => {
-                const parts = kws.map(kw => {
-                    const cleanKw = kw.replace(/\s+/g, "");
-                    const kwLen = cleanKw.length;
-                    const tokens = cleanKw.split("").map(c => escapeRegExp(c));
-                    const baseNoise = Number(store.noise_level ?? 5);
-                    const effectiveNoise = kwLen > 25 ? 0 : baseNoise;
-                    
-                    return effectiveNoise === 0 
-                        ? tokens.join("\\s*") 
-                        : tokens.join(`\\s*(?:\\S\\s*){0,${effectiveNoise}}?`);
-                });
-                return new RegExp(`(${parts.join('|')})`, 'gi');
-            };
-
-            const getMatchNoise = (rawMatchText) => {
-                const cleanMatchLen = rawMatchText.replace(/\s+/g, "").length;
-                let bestNoise = 999;
-                for (const kw of allKeywords) {
-                    const cleanKwLen = kw.replace(/\s+/g, "").length;
-                    const noise = cleanMatchLen - cleanKwLen;
-                    if (noise >= 0 && noise < bestNoise) {
-                        bestNoise = noise;
-                    }
-                }
-                return bestNoise === 999 ? 0 : bestNoise;
-            };
-
-            if (resultData && resultData.snippets && resultData.snippets.length > 0) {
-                previewBox.style.display = 'flex';
-                header.style.color = '#abb2bf';
-
-                const hlRegex = buildSnippetRegexMulti(allKeywords);
-
-                let snipsWithNoise = resultData.snippets.map(snip => {
-                    const text = typeof snip === 'string' ? snip : (snip && (snip.text || snip.snip)) || '';
-                    let minNoise = 999;
-                    let match;
-                    hlRegex.lastIndex = 0;
-                    while ((match = hlRegex.exec(text)) !== null) {
-                        const noise = getMatchNoise(match[0]);
-                        if (noise < minNoise) minNoise = noise;
-                    }
-                    return { text, noise: minNoise };
-                }).filter(item => item.noise !== 999);
-
-                if (snipsWithNoise.length === 0) {
-                    previewBox.style.display = 'none';
-                    return;
-                }
-
-                snipsWithNoise.sort((a, b) => a.noise - b.noise);
-
-                let displayCount = snipsWithNoise.length;
-                let countStr = displayCount == 1 ? `1 snippet` : `${displayCount} snippets`;
-                header.innerHTML = `
-                    <div style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
-                        <span style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 75%;">${resultData.title}</span>
-                        <span style="color: #61afef; font-size: 11px; white-space: nowrap;">${countStr}</span>
-                    </div>
-                `;
-
-                let singleHtml = snipsWithNoise.map((item, index) => {
-                    let intervals = [];
-                    let match;
-                    hlRegex.lastIndex = 0;
-
-                    while ((match = hlRegex.exec(item.text)) !== null) {
-                        intervals.push({
-                            start: match.index,
-                            end: match.index + match[0].length,
-                            text: match[0]
-                        });
-                        hlRegex.lastIndex = match.index + 1;
-                    }
-
-                    let merged = [];
-                    intervals.sort((a, b) => a.start - b.start).forEach(iv => {
-                        if (merged.length === 0) {
-                            merged.push(iv);
-                            return;
-                        }
-                        let last = merged[merged.length - 1];
-                        if (iv.start <= last.end) {
-                            last.end = Math.max(last.end, iv.end); 
-                        } else {
-                            merged.push(iv);
-                        }
-                    });
-
-                    let parts = [];
-                    let lastIdx = 0;
-                    merged.forEach(m => {
-                        let before = item.text.substring(lastIdx, m.start);
-                        parts.push(before.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"));
-
-                        let rawMatch = item.text.substring(m.start, m.end);
-                        let safeMatch = rawMatch.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-
-                        let noise = getMatchNoise(rawMatch);
-                        let alpha = noise === 0 ? 0.80 : Math.max(0.3, 0.80 - noise * 0.1);
-                        let textColor = '#111111';
-                        let fontWeight = noise <= 1 ? 'bold' : 'normal';
-                        let hlStyle = `background-color: rgba(255, 235, 0, ${alpha.toFixed(2)}); color: ${textColor}; font-weight: ${fontWeight};`;
-
-                        parts.push(`<span style="${hlStyle}">${safeMatch}</span>`);
-                        lastIdx = m.end;
-                    });
-
-                    let after = item.text.substring(lastIdx);
-                    parts.push(after.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"));
-
-                    return `<div style="margin-bottom: 12px; border-bottom: 1px dashed #4b5263; padding-bottom: 8px;"><span style="color: #61afef; font-size: 11px;">[${index + 1}]</span> ${parts.join('')}</div>`;
-                }).join('');
-
-                scrollContent.innerHTML = `<div class="loop-block">${singleHtml}</div><div class="loop-block">${singleHtml}</div>`;
-                currentScrollY = 0;
-                scrollContent.style.transform = `translateY(0px)`;
-
-                previewTimeoutId = setTimeout(() => {
-                    const loopBlock = scrollContent.querySelector('.loop-block');
-                    if (!loopBlock) return;
-
-                    const blockHeight = loopBlock.offsetHeight;
-                    const visibleHeight = scrollWrapper.offsetHeight;
-
-                    if (blockHeight > visibleHeight) {
-                        const autoScroll = () => {
-                            if (!isPaused) {
-                                currentScrollY += 0.5;
-                                if (currentScrollY >= blockHeight) {
-                                    currentScrollY -= blockHeight;
-                                }
-                                scrollContent.style.transform = `translateY(-${currentScrollY}px)`;
-                            }
-                            previewScrollFrame = requestAnimationFrame(autoScroll);
-                        };
-                        previewScrollFrame = requestAnimationFrame(autoScroll);
-                    } else {
-                        scrollContent.innerHTML = `<div class="loop-block">${singleHtml}</div>`;
-                    }
-                }, 10);
-            }
+            hoverSnippetTimer = setTimeout(async () => {
+                const data = await requestSnippets(path, keyword);
+                if (lastHoveredPath !== path || !data) return;
+                showSnippetPreview(resultData, data);
+            }, 30);
         }
     });
 
@@ -2143,7 +2120,7 @@ function search_box() {
                         scrollContent.querySelectorAll('.wave-bar').forEach(b => b.classList.add('paused'));
                     }
                 } else {
-                    saveMediaPositionsIn(scrollContent);   // 切换到另一个媒体前，记录旧预览的位置
+                    saveMediaPositionsIn(scrollContent);
                     previewBox.style.display = 'flex';
                     previewBox.classList.add('image-preview-mode');
 
@@ -2204,16 +2181,9 @@ function search_box() {
 
 function processAndShowResults(results, keyword, options = {}) {
     const provisional = !!options.provisional;
-    let finalResults = [...(results || [])];
-
-    if (provisional) {
-        finalResults = finalResults.map(r => {
-            const copy = Object.assign({}, r);
-            delete copy.snippets;
-            delete copy.isTolerantMatch;
-            return copy;
-        });
-    }
+    const fromCache = !!options.fromCache;
+    const base = results || [];
+    let finalResults = base.slice();
 
     let activeKw = keyword || store.keyword || "";
     if (!activeKw) {
@@ -2233,14 +2203,9 @@ function processAndShowResults(results, keyword, options = {}) {
         currentIndex = finalResults.findIndex(r => r.path === currentPath || r.path === strippedPath);
     }
 
-    if (!provisional && activeKw !== "" && !isReservedSearchCommand(activeKw)) {
-        store.SearchCache.set(activeKw, finalResults).then(() => {
-            if (currentIndex === -1) {
-                emitEvent('LOCAL_SEARCH_COUNT', activeKw, 'content');
-            }
-        });
-    } else if (provisional && currentIndex === -1 && activeKw && !isReservedSearchCommand(activeKw)) {
-        emitEvent('LOCAL_SEARCH_COUNT', activeKw, 'content');
+    if (activeKw !== "" && !isReservedSearchCommand(activeKw)) {
+        if (!provisional && !fromCache && !options.noCache) store.SearchCache.set(activeKw, base);
+        if (currentIndex === -1) emitEvent('LOCAL_SEARCH_COUNT', activeKw, 'content');
     }
 
     if (currentIndex !== -1) {
@@ -2255,21 +2220,30 @@ function processAndShowResults(results, keyword, options = {}) {
 
 async function search(rawKeyword) {
     if (typeof rawKeyword !== "string" || !rawKeyword.trim()) {
+        invalidateSearch();
         updateSearchResults([]);
         return;
     }
     const kw = rawKeyword.trim();
 
+    if (isAdsQuery(kw)) {
+        searchAds(kw);
+        return;
+    }
+
     const currentToken = ++window._searchToken;
     const meta = await store.SearchCache.getMeta(kw);
 
-    if (meta && meta.results && currentToken === window._searchToken) {
-        if (meta.exact) {
-            requestCommentHits(kw, currentToken);
-            processAndShowResults(meta.results, kw, { provisional: false });
-            return;
-        }
-        processAndShowResults(meta.results, kw, { provisional: true });
+    if (currentToken !== window._searchToken) return;
+
+    if (meta && meta.exact) {
+        cancelWorkerSearch(currentToken);
+        requestCommentHits(kw, currentToken);
+        processAndShowResults(meta.results, kw, { fromCache: true });
+        return;
+    }
+    if (meta) {
+        processAndShowResults(meta.results, kw, { provisional: true, fromCache: true });
     }
 
     try {
@@ -2278,12 +2252,17 @@ async function search(rawKeyword) {
             return;
         }
 
+        const synonymsEnabled = (store.synonyms_enabled ?? 1) === 1;
+        const synonymsReady = !synonymsEnabled || typeof window.expandQuery === 'function';
+        window._searchCacheOk = synonymsReady;
+        if (!synonymsReady) window._searchSentWithoutSyn = true;
+
         searchWorker.postMessage({
             type: 'SEARCH',
-            payload: { 
-                keyword: kw, 
+            payload: {
+                keyword: kw,
                 noise: Number(store.noise_level ?? 5),
-                token: currentToken, 
+                token: currentToken,
                 searchKeywords: getSearchKeywords(kw)
             }
         });
@@ -2293,7 +2272,203 @@ async function search(rawKeyword) {
     }
 }
 
-// 关键词 + 近义词变体（正文搜索与评论搜索共用）
+function cancelWorkerSearch(token) {
+    if (searchWorker) searchWorker.postMessage({ type: 'CANCEL', payload: { token } });
+}
+
+function invalidateSearch() {
+    cancelWorkerSearch(++window._searchToken);
+}
+
+function clearSearchOverlays() {
+    commentHitCache.clear();
+    pageHitCache.clear();
+    snippetCache.clear();
+}
+
+// 修改 lib.rs / worker.js 中匹配、评分、边界语义时递增，旧缓存会因指纹变化被整体丢弃
+const SEARCH_ALGO_VER = 3;
+
+function hashText(str) {
+    let h1 = 0x811c9dc5, h2 = 0x1b873593;
+    for (let i = 0; i < str.length; i++) {
+        const c = str.charCodeAt(i);
+        h1 = Math.imul(h1 ^ c, 16777619);
+        h2 = Math.imul(h2 ^ c, 0x85ebca6b) ^ (h2 >>> 15);
+    }
+    return (h1 >>> 0).toString(36) + (h2 >>> 0).toString(36);
+}
+
+function computeCoreNamespace() {
+    return [
+        'v' + SEARCH_ALGO_VER,
+        'd:' + (window._dataFp || 'pending'),
+        'l:' + Number(store.synonyms_enabled ?? 1),
+        'n:' + Number(store.noise_level ?? 5)
+    ].join('|');
+}
+
+// 数据、算法版本、noise、近义开关任一变化 → 缓存整体失效。返回是否发生了失效。
+// 数据尚未就绪时不绑定（避免把上个会话仍然有效的缓存误清掉），设置命令用 force 强制绑定。
+async function bindCoreNamespace({ force = false } = {}) {
+    if (!window._dataFp && !force) return false;
+    try {
+        return await store.SearchCache.bindNamespace('core', computeCoreNamespace());
+    } catch (e) { return false; }
+}
+
+async function bindSynonymsNamespace() {
+    if (typeof window.expandQuery !== 'function' || !window.synonymIndex) return false;
+    try {
+        const fp = 'syn:' + hashText(JSON.stringify(window.synonymIndex.groups));
+        return await store.SearchCache.bindNamespace('syn', fp);
+    } catch (e) { return false; }
+}
+
+function rerunActiveSearch() {
+    const el = document.getElementById("searchInput");
+    const kw = el ? el.value.trim() : "";
+    if (kw && (isAdsQuery(kw) || !isReservedSearchCommand(kw))) search(kw);
+}
+
+// synonyms.js 是异步加载的：之前发出的搜索可能没带同义词，加载完成后要让这些结果失效并重搜
+async function onSynonymsLoaded() {
+    const changed = await bindSynonymsNamespace();
+    const missed = !!window._searchSentWithoutSyn;
+    window._searchSentWithoutSyn = false;
+    clearSearchOverlays();
+    if (changed || missed) {
+        invalidateSearch();
+        rerunActiveSearch();
+    }
+}
+
+let _privateSrc = null;
+let _privateSet = null;
+function isPrivatePath(p) {
+    const data = window.data;
+    if (!Array.isArray(data)) return false;
+    if (_privateSrc !== data) {
+        _privateSet = new Set();
+        for (let i = 2; i < data.length; i += 4) {
+            const info = data[i - 1];
+            if (typeof info === 'string' && info.startsWith('localOnly')) _privateSet.add(data[i]);
+        }
+        _privateSrc = data;
+    }
+    return _privateSet.has(p);
+}
+
+function setPageHit(kw, entry) {
+    const norm = normalizeKeyword(kw);
+    if (!norm) return false;
+    let m = pageHitCache.get(norm);
+    pageHitCache.delete(norm);
+    if (!m) m = new Map();
+    const prev = m.get(entry.path);
+    m.delete(entry.path);
+    m.set(entry.path, entry);
+    pageHitCache.set(norm, m);
+    if (pageHitCache.size > 100) pageHitCache.delete(pageHitCache.keys().next().value);
+    return !prev || prev.count !== entry.count;
+}
+
+function applyPageOverlay(results, keyword) {
+    if (!keyword || isReservedSearchCommand(keyword)) return results;
+    const entries = pageHitCache.get(normalizeKeyword(keyword));
+    if (!entries || entries.size === 0) return results;
+
+    const strip = (p) => (p.startsWith('../') ? p.substring(3) : p);
+    const indexByPath = new Map();
+    results.forEach((r, i) => indexByPath.set(strip(r.path), i));
+
+    const out = results.slice();
+    const added = [];
+    let latest = null;
+    for (const e of entries.values()) {
+        latest = e;
+        const i = indexByPath.get(e.path);
+        if (i !== undefined) {
+            out[i] = Object.assign({}, out[i], { count: e.count });
+        } else if (e.count > 0) {
+            added.push({ title: e.title, path: e.path, type: 'html', count: e.count, localOnly: isPrivatePath(e.path) });
+        }
+    }
+    const li = latest ? indexByPath.get(latest.path) : undefined;
+    if (li !== undefined && li !== 0) out.unshift(out.splice(li, 1)[0]);
+
+    return added.length ? added.reverse().concat(out) : out;
+}
+
+function requestSnippets(path, keyword) {
+    const worker = searchWorker;
+    if (!worker) return Promise.resolve(null);
+    const noise = Number(store.noise_level ?? 5);
+    const key = [normalizeKeyword(keyword), noise, store.synonyms_enabled ?? 1, commentModel.ver, path].join('|');
+
+    const hit = snippetCache.get(key);
+    if (hit) {
+        snippetCache.delete(key);
+        snippetCache.set(key, hit);
+        return Promise.resolve(hit);
+    }
+    return new Promise((resolve) => {
+        const reqId = ++_snipReqId;
+        pendingSnippets.set(reqId, (data) => {
+            if (data) {
+                snippetCache.set(key, data);
+                if (snippetCache.size > 40) snippetCache.delete(snippetCache.keys().next().value);
+            }
+            resolve(data);
+        });
+        worker.postMessage({
+            type: 'SNIPPETS',
+            payload: {
+                reqId, path, keyword, noise,
+                searchKeywords: getSearchKeywords(keyword),
+                maxBody: 40, maxComments: 30
+            }
+        });
+    });
+}
+
+const SEARCH_HL_STYLE = [[0.80, '#000'], [0.65, '#111'], [0.52, '#111'], [0.42, '#333'], [0.34, '#333'], [0.28, '#333']];
+const searchHlName = (b) => (b <= 0 ? 'search-exact' : `search-noise-${b}`);
+const searchHlBucket = (noise) => Math.min(Math.max(noise | 0, 0), SEARCH_HL_STYLE.length - 1);
+const searchHl = [];
+
+function searchHighlightSupported() {
+    if (!(window.CSS && CSS.highlights && typeof Highlight !== 'undefined')) return false;
+    if (!document.getElementById('search-hl-static')) {
+        const st = document.createElement('style');
+        st.id = 'search-hl-static';
+        st.textContent = SEARCH_HL_STYLE
+            .map(([a, c], b) => `::highlight(${searchHlName(b)}) { background-color: rgba(255, 235, 0, ${a}); color: ${c}; }`)
+            .join('\n');
+        document.head.appendChild(st);
+    }
+    return true;
+}
+function getSearchHighlight(noise) {
+    const b = searchHlBucket(noise);
+    if (!searchHl[b]) {
+        const h = new Highlight();
+        h.priority = 100 - b * 10;
+        searchHl[b] = h;
+    }
+    return searchHl[b];
+}
+function resetSearchHighlights() {
+    searchHl.forEach(h => { if (h) h.clear(); });
+}
+function publishSearchHighlights() {
+    if (!(window.CSS && CSS.highlights)) return;
+    searchHl.forEach((h, b) => {
+        if (h && h.size > 0) CSS.highlights.set(searchHlName(b), h);
+        else CSS.highlights.delete(searchHlName(b));
+    });
+}
+
 function getSearchKeywords(kw) {
     const synonymsEnabled = (store.synonyms_enabled ?? 1) === 1;
     const expandQueryFn = window.top.expandQuery || ((kw) => ({ variants: [] }));
@@ -2322,9 +2497,7 @@ async function updateAutocompleteSuggestions(val) {
     });
 
     try {
-        // 键列表来自内存里的 LRU 记录，不再每次按键都 getAllKeys
         const cacheKeys = await searchCacheLRU.keys();
-        // 打字快时，较早的调用可能更晚恢复：只让最新一次渲染，避免重复追加 <option>
         if (seq !== _autocompleteSeq) return;
         cacheKeys.forEach(key => {
             if (typeof key === 'string' && key.toLowerCase().includes(query)) {
@@ -2382,16 +2555,676 @@ function normalizeKeyword(kw) {
     return kw.trim().toLowerCase().replace(/\s+/g, '');
 }
 
+// @ads 也算保留前缀：组合搜索不进结果缓存、不统计页内命中、不叠加页面 / 评论 overlay、不通知 content 高亮
 function isReservedSearchCommand(kw) {
-    return typeof kw === 'string' && /^@(noise=|like=|bomb$|rebirth$)/.test(kw);
+    return typeof kw === 'string' && (/^@(noise=|like=|bomb$|rebirth$)/.test(kw) || isAdsQuery(kw));
 }
 
-function updateSearchResults(results, keyword) {
-    // 搜索缓存里保存的始终是纯正文结果；评论命中只在渲染时叠加
-    window._baseRenderedResults = results;
-    results = applyCommentOverlay(results, keyword);
+// [ads-filter:begin] ───────────────────────────────────────────────────────────
+// 组合搜索（@ads）与结果筛选条
+//
+//  · @ads[+n3l1]飞机[(][+n2l0]大炮[|n3l1]潜艇[)][-n0l0]机枪   = 飞机 且 (大炮 或 潜艇) 且 非 机枪
+//      命令区 [] 内：+ 包含（可省略）/ - 不包含 / | 或 / ( ) 分组，n0~5 噪值，l0/1 近义；顺序不限，
+//      n / l 省略则继承全局值，只作用于当次。词条之间默认"且"，"或"优先级更低，用括号改变结合。
+//      语义是"同一文档内"：包含项可由标题 / 正文 / 评论满足，排除项只看标题 / 正文（不看评论）；
+//      解析和近义展开在主线程，匹配在 wasm 里一遍扫完。
+//  · 筛选分两类：
+//      引擎参数（噪值、近义）→ 改变匹配结果，改后重搜（与 @noise= / @like= 共用同一份 store）；
+//      视图筛选（后缀、日期、命中数）→ 只过滤已算好的结果，不重搜、不进缓存。
+// ──────────────────────────────────────────────────────────────────────────────
+const ADS_PREFIX_RE = /^@ads(?![A-Za-z0-9_])/i;
 
-    window._currentRenderedResults = results;
+function isAdsQuery(kw) {
+    return typeof kw === 'string' && ADS_PREFIX_RE.test(kw.trimStart());
+}
+
+// 命令区 [...]：+ - | ( ) n0~5 l0/1，顺序不限、均可省略
+//   [+n3l1] 包含   [-n0l0] 不包含   [|n3l1] 与前一项"或"   [|] 单独的"或"连接符   [(] 开括号   [)] 闭括号
+function parseAdsCmd(body) {
+    const fail = (error) => ({ error });
+    let s = String(body).replace(/\s+/g, '').toLowerCase();
+    const r = { sign: '', or: false, open: false, close: false, noise: null, like: null };
+    while (s) {
+        const c = s[0];
+        if (c === '+' || c === '-') {
+            if (r.sign) return fail('命令区里 + / - 只能写一个');
+            r.sign = c;
+            s = s.slice(1);
+        } else if (c === '|') {
+            if (r.or) return fail('命令区里 | 只能写一个');
+            r.or = true;
+            s = s.slice(1);
+        } else if (c === '(' || c === ')') {
+            if (r.open || r.close) return fail('一个命令里只能有一个括号');
+            if (c === '(') r.open = true; else r.close = true;
+            s = s.slice(1);
+        } else if (c === 'n') {
+            if (r.noise !== null) return fail('命令区里 n 只能写一次');
+            const m = /^n([0-9])/.exec(s);
+            if (!m) return fail('n 后面要跟 0~5 的数字');
+            if (Number(m[1]) > 5) return fail('噪值 n 只能是 0~5');
+            r.noise = Number(m[1]);
+            s = s.slice(2);
+        } else if (c === 'l') {
+            if (r.like !== null) return fail('命令区里 l 只能写一次');
+            const m = /^l([01])/.exec(s);
+            if (!m) return fail('l 后面要跟 0 或 1');
+            r.like = Number(m[1]);
+            s = s.slice(2);
+        } else {
+            return fail(`命令区无法识别「${c}」（可用 + - | ( ) n0~5 l0/1）`);
+        }
+    }
+    if (r.close && r.or) return fail('| 后面不能直接接 )');
+    if ((r.open || r.close) && (r.sign || r.noise !== null || r.like !== null)) {
+        return fail('括号命令 [(] / [)] 里不能再写 + - n l');
+    }
+    return r;
+}
+
+const ADS_MAX_DEPTH = 8;
+
+class AdsSyntaxError extends Error { }
+
+// 表达式树转成带括号的可读文字（且 优先于 或；不同运算符嵌套时加括号）
+function adsExprText(node, terms, parentOp) {
+    if (node.op === 'term') {
+        const t = terms[node.term];
+        return `${node.neg ? '非 ' : ''}${t.text}（噪${t.noise}${t.like ? '·近义' : ''}）`;
+    }
+    const s = node.args.map(a => adsExprText(a, terms, node.op)).join(node.op === 'and' ? ' 且 ' : ' 或 ');
+    return parentOp && parentOp !== node.op ? `(${s})` : s;
+}
+
+// 表达式在"什么都不含的空文档"上是否成立（成立就会匹配几乎全库，必须拒绝）
+function adsHoldsOnEmpty(n) {
+    if (n.op === 'term') return n.neg;
+    return n.op === 'and' ? n.args.every(adsHoldsOnEmpty) : n.args.some(adsHoldsOnEmpty);
+}
+
+// 把整条 @ads 命令解析成 { terms, expr }。
+// 语法：词条之间默认是"且"；| 表示"或"，优先级低于"且"；( ) 分组；- 只作用于紧跟的一个词条。
+// 输入是边敲边搜的，半截语法返回 { ok:false, error }，不会被当普通关键词去搜。
+function parseAdsQuery(raw) {
+    const fail = (error) => ({ ok: false, error });
+    const src = String(raw).trim().replace(ADS_PREFIX_RE, '')
+        .replace(/[【［]/g, '[').replace(/[】］]/g, ']');   // 中文输入法下的方括号
+    const defNoise = Math.min(5, Math.max(0, Number(store.noise_level ?? 5) || 0));
+    const defLike = (store.synonyms_enabled ?? 1) === 1 ? 1 : 0;
+
+    // 1) 词法：文字 [命令] 文字 [命令] 文字 → 记号流 term / or / open / close
+    const cmds = [];
+    for (const m of src.matchAll(/\[([^\[\]]*)\]/g)) {
+        cmds.push({ body: m[1], start: m.index, end: m.index + m[0].length });
+    }
+    const toks = [];
+    const pushTerm = (neg, noise, like, text) => {
+        if (/[\[\]]/.test(text)) return '方括号 [ ] 没有配对';
+        toks.push({ k: 'term', neg, noise: noise ?? defNoise, like: like ?? defLike, text });
+        return '';
+    };
+    // 第一个 [] 之前的文字视为包含项（默认设置）
+    const lead = (cmds.length ? src.slice(0, cmds[0].start) : src).trim();
+    if (lead) {
+        const err = pushTerm(false, null, null, lead);
+        if (err) return fail(err);
+    }
+    for (let i = 0; i < cmds.length; i++) {
+        const c = cmds[i];
+        const spec = parseAdsCmd(c.body);
+        if (spec.error) return fail(spec.error);
+        const text = src.slice(c.end, i + 1 < cmds.length ? cmds[i + 1].start : src.length).trim();
+        if (spec.open || spec.close) {
+            if (text) return fail(`[${c.body}] 后面不能直接跟关键词，请另起一个 [+] 命令`);
+            if (spec.or) toks.push({ k: 'or' });
+            toks.push({ k: spec.open ? 'open' : 'close' });
+        } else if (text) {
+            if (spec.or) toks.push({ k: 'or' });
+            const err = pushTerm(spec.sign === '-', spec.noise, spec.like, text);
+            if (err) return fail(err);
+        } else if (spec.or && !spec.sign && spec.noise === null && spec.like === null) {
+            toks.push({ k: 'or' });   // 单独的 [|] 连接符
+        } else {
+            return fail(`[${c.body}] 后面缺少关键词`);
+        }
+    }
+    if (toks.length === 0) return fail('用法：@ads[+n3l1]飞机[(][+n2l0]大炮[|n3l1]潜艇[)][-n0l0]机枪');
+
+    // 2) 语法：expr := conj ('|' conj)* ；conj := unit+ ；unit := term | '(' expr ')'
+    const terms = [];
+    let pos = 0;
+    const peek = () => toks[pos];
+    const parseExpr = (depth) => {
+        if (depth > ADS_MAX_DEPTH) throw new AdsSyntaxError(`括号嵌套太深（最多 ${ADS_MAX_DEPTH} 层）`);
+        const alts = [parseConj(depth)];
+        while (peek() && peek().k === 'or') {
+            pos++;
+            alts.push(parseConj(depth));
+        }
+        if (alts.length === 1) return alts[0];
+        return { op: 'or', args: alts.flatMap(a => a.op === 'or' ? a.args : [a]) };
+    };
+    const parseConj = (depth) => {
+        const items = [];
+        while (peek() && (peek().k === 'term' || peek().k === 'open')) items.push(parseUnit(depth));
+        if (items.length === 0) {
+            const p = peek(), prev = toks[pos - 1];
+            if (p && p.k === 'close') {
+                throw new AdsSyntaxError(prev && prev.k === 'open' ? '括号里是空的' : prev && prev.k === 'or' ? '| 后面缺少内容' : '多余的 )');
+            }
+            if (p && p.k === 'or') throw new AdsSyntaxError('| 前面缺少内容');
+            throw new AdsSyntaxError(prev && prev.k === 'or' ? '| 后面缺少内容' : '表达式不完整');
+        }
+        if (items.length === 1) return items[0];
+        return { op: 'and', args: items.flatMap(a => a.op === 'and' ? a.args : [a]) };
+    };
+    const parseUnit = (depth) => {
+        const t = toks[pos++];
+        if (t.k === 'term') {
+            terms.push({ noise: t.noise, like: t.like, text: t.text });
+            return { op: 'term', term: terms.length - 1, neg: t.neg };
+        }
+        const inner = parseExpr(depth + 1);   // t.k === 'open'
+        if (!peek() || peek().k !== 'close') throw new AdsSyntaxError('括号没有闭合，缺少 [)]');
+        pos++;
+        return inner;
+    };
+
+    let expr;
+    try {
+        expr = parseExpr(0);
+        if (pos < toks.length) throw new AdsSyntaxError('多余的 )');
+    } catch (e) {
+        if (e instanceof AdsSyntaxError) return fail(e.message);
+        throw e;
+    }
+
+    if (adsHoldsOnEmpty(expr)) {
+        return fail('至少要有一个必须出现的包含项（只有排除项，或 | 里带 -，会匹配几乎所有文档）');
+    }
+    return { ok: true, terms, expr, summary: adsExprText(expr, terms, null) };
+}
+
+function searchAds(kw) {
+    const token = ++window._searchToken;
+    const plan = parseAdsQuery(kw);
+    if (!plan.ok) {
+        cancelWorkerSearch(token);
+        window._adsStatus = { error: plan.error };
+        updateSearchResults([], kw);
+        return;
+    }
+    if (!searchWorker) {
+        console.warn("搜索引擎尚未就绪");
+        return;
+    }
+
+    // 近义词在主线程按词条展开（expandQuery 挂在 window 上，worker 看不到）
+    const expand = window.top.expandQuery;
+    let synMissed = false;
+    const terms = plan.terms.map(t => {
+        let keywords = [t.text];
+        if (t.like) {
+            if (typeof expand === 'function') keywords = [t.text, ...expand(t.text).variants];
+            else synMissed = true;
+        }
+        return { noise: t.noise, keywords };
+    });
+    // synonyms.js 是异步加载的：没赶上时由 onSynonymsLoaded 负责重跑
+    if (synMissed) window._searchSentWithoutSyn = true;
+
+    window._adsStatus = { summary: plan.summary };
+    sfPaintStatus(kw);
+    searchWorker.postMessage({ type: 'SEARCH_ADS', payload: { keyword: kw, token, plan: { terms, expr: plan.expr } } });
+}
+
+// ── 筛选状态（持久化在 store.search_filter，一经设置一直有效）──────────────────
+// 评论是一个独立的类别：普通搜索里指"只靠评论才出现的条目"，@ads 里指"至少一个包含项只靠评论才满足"。
+const SF_GROUPS = [
+    ['页面', ['html', 'comment']],
+    ['图片', ['webp', 'jpg', 'png', 'gif']],
+    ['文档', ['pdf', 'txt', 'epub']],
+    ['影音', ['mkv', 'mp4', 'mp3']],
+    ['其他', ['other']]
+];
+const SF_LABEL = { comment: '评论', other: '未列出的后缀' };
+const SF_KNOWN = new Set(SF_GROUPS.flatMap(([, ks]) => ks));
+const SF_ALIAS = { jpeg: 'jpg', jpe: 'jpg' };
+// 小圆点颜色：与 index.css 中 #searchResults option[data-type] 的类型色保持一致
+const SF_COLOR = {
+    html: '#4f8cff', comment: '#d98e04',
+    webp: '#00a8ff', jpg: '#00a8ff', png: '#00a8ff', gif: '#00a8ff',
+    pdf: '#e84118', epub: '#4cd137', txt: '#7f8fa6',
+    mkv: '#9c88ff', mp4: '#9c88ff', mp3: 'orange', other: '#7f8fa6'
+};
+const SF_DEFAULT = { off: [], from: '', to: '', undated: false, min: '', max: '', open: true };
+
+function sfNormCount(v) {
+    const n = Number(v);
+    return (v === '' || v === null || v === undefined || !Number.isFinite(n) || n < 0) ? '' : String(Math.floor(n));
+}
+
+function sfState() {
+    if (!window._sfState) {
+        let saved = null;
+        try { saved = store.search_filter; } catch (e) { }
+        const st = Object.assign({}, SF_DEFAULT, saved && typeof saved === 'object' ? saved : {});
+        const okDate = (v) => (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v)) ? v : '';
+        st.off = Array.isArray(st.off) ? st.off.filter(k => SF_KNOWN.has(k)) : [];
+        st.from = okDate(st.from);
+        st.to = okDate(st.to);
+        st.min = sfNormCount(st.min);
+        st.max = sfNormCount(st.max);
+        st.undated = !!st.undated;
+        st.open = st.open !== false;
+        window._sfState = st;
+    }
+    return window._sfState;
+}
+
+function sfSave() {
+    try { store.search_filter = window._sfState; } catch (e) { }
+}
+
+// 日期戳：html 在 lite_data（轻数据第 4 项 "时间戳-localOnly"），图片在文件名，其余类型没有日期
+let _sfStampSrc = null, _sfStampFp = null, _sfStampMap = null;
+function sfStampMap() {
+    const src = window.lite_data, fp = window._dataFp;
+    if (_sfStampMap && _sfStampSrc === src && _sfStampFp === fp) return _sfStampMap;
+    const map = new Map();
+    const walk = (node) => {
+        if (!node || typeof node !== 'object') return;
+        const f = node._f;
+        if (Array.isArray(f)) {
+            for (const it of f) {
+                if (Array.isArray(it) && typeof it[0] === 'string' && typeof it[3] === 'string') {   // 只遍历 lite_data.html 子树，与 collectHtmlFiles 一致
+                    const stamp = it[3].split('-')[0];
+                    if (/^\d{14}$/.test(stamp)) map.set('html/' + it[0], stamp);
+                }
+            }
+        }
+        for (const k in node) if (k !== '_f') walk(node[k]);
+    };
+    walk(src && src.html);
+    _sfStampSrc = src;
+    _sfStampFp = fp;
+    _sfStampMap = map;
+    return map;
+}
+
+function sfStampOf(r) {
+    const p = String(r.path || '').replace(/^\.\.\//, '');
+    if (r.type === 'html') return sfStampMap().get(p) || '';
+    if (r.type === 'image') {
+        const m = /(?:^|\D)(\d{14})(?:\D|$)/.exec(p.split('/').pop() || '');
+        if (m && /^(19|20)\d{2}(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])/.test(m[1])) return m[1];
+    }
+    return '';
+}
+
+function sfExtOf(r) {
+    if (r.commentOnly || r.viaComment) return 'comment';
+    if (r.type === 'html') return 'html';
+    const m = /\.([A-Za-z0-9]+)$/.exec(r.path || '');
+    let e = m ? m[1].toLowerCase() : '';
+    e = SF_ALIAS[e] || e;
+    return (SF_KNOWN.has(e) && e !== 'comment' && e !== 'other' && e !== 'html') ? e : 'other';
+}
+
+function sfActive(ads) {
+    const s = sfState();
+    return s.off.length > 0 || !!s.from || !!s.to || (!ads && (s.min !== '' || s.max !== ''));
+}
+
+// 纯视图过滤：返回 { list, total }。命中数筛选在 @ads 下不适用，评论条目不受命中数筛选。
+function sfApply(results, keyword) {
+    const s = sfState();
+    const ads = isAdsQuery(keyword);
+    const off = new Set(s.off);
+    let from = s.from ? s.from.replace(/-/g, '') + '000000' : '';
+    let to = s.to ? s.to.replace(/-/g, '') + '235959' : '';
+    if (from && to && from > to) {
+        const a = s.to.replace(/-/g, '') + '000000';
+        const b = s.from.replace(/-/g, '') + '235959';
+        from = a; to = b;
+    }
+    const useDate = !!(from || to);
+    const min = (!ads && s.min !== '') ? Number(s.min) : null;
+    const max = (!ads && s.max !== '') ? Number(s.max) : null;
+
+    if (off.size === 0 && !useDate && min === null && max === null) {
+        return { list: results, total: results.length };
+    }
+    const list = results.filter(r => {
+        if (off.has(sfExtOf(r))) return false;
+        if (useDate) {
+            const stamp = sfStampOf(r);
+            if (!stamp) {
+                if (!s.undated) return false;
+            } else if ((from && stamp < from) || (to && stamp > to)) {
+                return false;
+            }
+        }
+        if ((min !== null || max !== null) && !r.commentOnly) {
+            const c = r.count | 0;
+            if (min !== null && c < min) return false;
+            if (max !== null && c > max) return false;
+        }
+        return true;
+    });
+    return { list, total: results.length };
+}
+
+// ── 引擎参数：与 @noise= / @like= 共用 store，改后清缓存命名空间并重搜 ─────────────
+function sfSyncEngine() {
+    const n = Number(store.noise_level ?? 5);
+    const l = Number(store.synonyms_enabled ?? 1);
+    const input = document.getElementById('searchInput');
+    if (input) input.setAttribute('title', "@noise=" + n + "; @like=" + l);
+    const bar = document.getElementById('sf-bar');
+    if (!bar) return;
+    const sel = bar.querySelector('#sf-noise');
+    if (sel) sel.value = String(n);
+    bar.querySelectorAll('input[name="sf-like"]').forEach(r => { r.checked = Number(r.value) === l; });
+}
+
+async function sfApplyEngine(key, value) {
+    store[key] = value;
+    sfSyncEngine();
+    clearSearchOverlays();
+    await bindCoreNamespace({ force: true });
+    if (searchWorker) searchWorker.postMessage({ type: 'CLEAR_CURSOR', payload: { keyword: '' } });
+    invalidateSearch();
+    rerunActiveSearch();
+}
+
+// ── 筛选条 UI ────────────────────────────────────────────────────────────────
+function sfInjectStyle() {
+    if (document.getElementById('sf-style')) return;
+    const st = document.createElement('style');
+    st.id = 'sf-style';
+    st.textContent = `
+#sf-bar{box-sizing:border-box;display:none;margin:0 0 4px;padding:6px 8px;font-size:12px;line-height:1.5;font-family:inherit;color:#2b2f36;background:#f0f8ff;border:1px solid #b8c4d6;border-radius:4px;box-shadow:0 2px 8px rgba(0,0,0,.14);--sf-accent:#4f8cff;--sf-warn:#b26a00;--sf-line:#b8c4d6;--sf-dim:#7f8fa6}
+#sf-bar .sf-row,#sf-bar .sf-line,#sf-bar .sf-group{display:flex;flex-wrap:wrap;align-items:center;gap:4px 8px}
+#sf-bar .sf-group{gap:4px;margin-right:6px}
+#sf-bar .sf-field{display:inline-flex;align-items:center;gap:5px}
+#sf-bar .sf-panel{display:flex;flex-direction:column;gap:6px;margin-top:6px;padding-top:6px;border-top:1px solid var(--sf-line)}
+#sf-bar.sf-closed .sf-panel{display:none}
+#sf-bar select,#sf-bar input[type=date],#sf-bar input[type=number]{box-sizing:border-box;height:22px;padding:0 4px;font:inherit;color:#2b2f36;background:#fff;border:1px solid var(--sf-line);border-radius:3px;color-scheme:light;user-select:text;-webkit-user-select:text}
+#sf-bar input[type=number]{width:64px}
+#sf-bar input[type=date]{width:118px}
+#sf-bar .sf-pair{display:inline-flex;flex-wrap:nowrap;align-items:center;gap:8px}
+#sf-bar .sf-btn,#sf-bar .sf-gbtn{height:22px;padding:0 8px;font:inherit;color:#2b2f36;background:#fff;border:1px solid var(--sf-line);border-radius:3px;cursor:pointer}
+#sf-bar .sf-gbtn{padding:0 4px;color:var(--sf-dim);background:transparent;border-color:transparent}
+#sf-bar .sf-btn:hover,#sf-bar .sf-gbtn:hover{color:var(--sf-accent);border-color:var(--sf-accent)}
+#sf-bar .sf-btn.sf-on{color:#fff;background:var(--sf-accent);border-color:var(--sf-accent)}
+#sf-bar select:focus-visible,#sf-bar input:focus-visible,#sf-bar button:focus-visible{outline:2px solid var(--sf-accent);outline-offset:1px}
+#sf-bar .sf-chip{position:relative;display:inline-flex;cursor:pointer;--c:var(--sf-accent)}
+#sf-bar .sf-chip input{position:absolute;inset:0;width:100%;height:100%;margin:0;opacity:0;cursor:pointer}
+#sf-bar .sf-chip span{display:inline-flex;align-items:center;gap:4px;padding:0 7px 0 6px;line-height:20px;color:var(--sf-dim);border:1px solid #cfd8e6;border-radius:10px;user-select:none;-webkit-user-select:none}
+#sf-bar .sf-chip span::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--c);opacity:.35}
+#sf-bar .sf-chip input:checked+span{color:#2b2f36;background:#fff;border-color:var(--c)}
+#sf-bar .sf-chip input:checked+span::before{opacity:1}
+#sf-bar .sf-chip input:focus-visible+span{outline:2px solid var(--sf-accent);outline-offset:1px}
+#sf-bar .sf-chip input:disabled+span{opacity:.5}
+#sf-bar .sf-lbl{min-width:3.4em;color:var(--sf-dim)}
+#sf-bar .sf-dash{color:var(--sf-dim)}
+#sf-bar .sf-lock{opacity:.45}
+#sf-bar .sf-nodate{opacity:.5}
+#sf-count{margin-left:auto;color:var(--sf-dim)}
+#sf-count.sf-hot{color:var(--sf-warn)}
+#sf-bar .sf-status{margin-top:4px;color:var(--sf-dim);word-break:break-all}
+#sf-bar .sf-status:empty{display:none}
+#sf-bar .sf-status.sf-err{color:var(--sf-warn)}
+@media (pointer:coarse){#sf-bar select,#sf-bar input[type=date],#sf-bar input[type=number],#sf-bar .sf-btn,#sf-bar .sf-gbtn{height:28px}#sf-bar .sf-chip span{line-height:26px}}
+`;
+    document.head.appendChild(st);
+}
+
+function sfFillControls() {
+    const bar = document.getElementById('sf-bar');
+    if (!bar) return;
+    const s = sfState();
+    bar.querySelectorAll('input[data-ext]').forEach(cb => { cb.checked = !s.off.includes(cb.dataset.ext); });
+    bar.querySelector('#sf-from').value = s.from;
+    bar.querySelector('#sf-to').value = s.to;
+    bar.querySelector('#sf-undated').checked = s.undated;
+    bar.querySelector('#sf-cmin').value = s.min;
+    bar.querySelector('#sf-cmax').value = s.max;
+}
+
+function sfReset() {
+    Object.assign(sfState(), { off: [], from: '', to: '', undated: false, min: '', max: '' });
+    sfSave();
+    sfFillControls();
+    rerenderSearchOverlay();
+}
+
+function sfBuildBar() {
+    sfInjectStyle();
+    const s = sfState();
+    const bar = document.createElement('div');
+    bar.id = 'sf-bar';
+    bar.setAttribute('role', 'group');
+    bar.setAttribute('aria-label', '搜索筛选');
+
+    const chip = (k) => `<label class="sf-chip" style="--c:${SF_COLOR[k] || ''}"><input type="checkbox" data-ext="${k}" checked><span>${SF_LABEL[k] || k}</span></label>`;
+    const groups = SF_GROUPS.map(([name, keys]) =>
+        `<span class="sf-group">${name ? `<button type="button" class="sf-gbtn" data-group="${keys.join(',')}" title="整组切换">${name}</button>` : ''}${keys.map(chip).join('')}</span>`
+    ).join('');
+    const noiseOpts = [0, 1, 2, 3, 4, 5].map(n => `<option value="${n}">${n}</option>`).join('');
+
+    bar.innerHTML =
+        `<div class="sf-row">` +
+        `<label class="sf-field" data-lock="1" data-title="字间允许夹杂的无关字数上限，0~5（等同 @noise=）" data-ads-title="组合搜索：在各词条的 [] 里单独设置（n）">噪值 <select id="sf-noise">${noiseOpts}</select></label>` +
+        `<span class="sf-field" data-lock="1" role="radiogroup" aria-label="近义搜索" data-title="近义搜索（等同 @like=）" data-ads-title="组合搜索：在各词条的 [] 里单独设置（l）">近义 ` +
+        `<label class="sf-chip"><input type="radio" name="sf-like" value="1"><span>开</span></label>` +
+        `<label class="sf-chip"><input type="radio" name="sf-like" value="0"><span>关</span></label></span>` +
+        `<button type="button" id="sf-toggle" class="sf-btn" aria-expanded="true"></button>` +
+        `<span id="sf-count" aria-live="polite"></span>` +
+        `<button type="button" id="sf-reset" class="sf-btn" title="恢复默认筛选（不影响噪值和近义）">重置</button>` +
+        `</div>` +
+        `<div class="sf-panel">` +
+        `<div class="sf-line">${groups}</div>` +
+        `<div class="sf-line"><span class="sf-pair"><span class="sf-lbl">日期</span>` +
+        `<input type="date" id="sf-from" aria-label="起始日期"><span class="sf-dash">–</span><input type="date" id="sf-to" aria-label="结束日期"></span>` +
+        `<label class="sf-chip" id="sf-undated-wrap" title="设置日期后，没有日期的条目（pdf / epub / txt / 音视频等）默认隐藏"><input type="checkbox" id="sf-undated"><span>含无日期项</span></label></div>` +
+        `<div class="sf-line" data-lock="1" data-ads-title="组合搜索不按命中数筛选"><span class="sf-lbl">命中数</span>` +
+        `<input type="number" id="sf-cmin" min="0" step="1" placeholder="最少" aria-label="文件内最少命中数"><span class="sf-dash">–</span>` +
+        `<input type="number" id="sf-cmax" min="0" step="1" placeholder="最多" aria-label="文件内最多命中数"></div>` +
+        `</div>` +
+        `<div id="sf-status" class="sf-status"></div>`;
+
+    // 键盘事件留在条内，避免触发页面级快捷键
+    bar.addEventListener('keydown', (e) => e.stopPropagation());
+
+    bar.addEventListener('change', (e) => {
+        const t = e.target;
+        const st = sfState();
+        if (t.dataset && t.dataset.ext) {
+            const k = t.dataset.ext;
+            st.off = st.off.filter(x => x !== k);
+            if (!t.checked) st.off.push(k);
+        } else if (t.id === 'sf-from') {
+            st.from = t.value;
+        } else if (t.id === 'sf-to') {
+            st.to = t.value;
+        } else if (t.id === 'sf-undated') {
+            st.undated = t.checked;
+        } else if (t.id === 'sf-noise') {
+            sfApplyEngine('noise_level', Number(t.value));
+            return;
+        } else if (t.name === 'sf-like') {
+            sfApplyEngine('synonyms_enabled', Number(t.value));
+            return;
+        } else {
+            return;
+        }
+        sfSave();
+        rerenderSearchOverlay();
+    });
+
+    let numTimer = null;
+    bar.addEventListener('input', (e) => {
+        const t = e.target;
+        if (t.id !== 'sf-cmin' && t.id !== 'sf-cmax') return;
+        clearTimeout(numTimer);
+        numTimer = setTimeout(() => {
+            const st = sfState();
+            st.min = sfNormCount(bar.querySelector('#sf-cmin').value);
+            st.max = sfNormCount(bar.querySelector('#sf-cmax').value);
+            sfSave();
+            rerenderSearchOverlay();
+        }, 150);
+    });
+
+    bar.addEventListener('click', (e) => {
+        const b = e.target.closest('button');
+        if (!b) return;
+        const st = sfState();
+        if (b.classList.contains('sf-gbtn')) {
+            const keys = b.dataset.group.split(',');
+            const allOn = keys.every(k => !st.off.includes(k));
+            st.off = st.off.filter(k => !keys.includes(k));
+            if (allOn) st.off.push(...keys);
+            sfFillControls();
+            sfSave();
+            rerenderSearchOverlay();
+        } else if (b.id === 'sf-toggle') {
+            st.open = !st.open;
+            sfSave();
+            sfRefreshBar(window._currentRenderedKeyword, bar._sfTotal | 0, bar._sfShown | 0);
+        } else if (b.id === 'sf-reset') {
+            sfReset();
+        }
+    });
+
+    return bar;
+}
+
+function sfPaintStatus(keyword) {
+    const el = document.getElementById('sf-status');
+    if (!el) return;
+    const ads = isAdsQuery(keyword);
+    const info = ads ? window._adsStatus : null;
+    el.textContent = info ? (info.error || info.summary || '') : '';
+    el.classList.toggle('sf-err', !!(info && info.error));
+}
+
+// 筛选条放在 #searchResults 正上方，宽度与其右缘对齐（结果框靠 left:-宽度 伸向左侧）。
+// 结果框是 position:relative / absolute+top:auto 时，条按文档流插在它前面即可把它顶下去；
+// 若结果框有显式 top，则条改用绝对定位并把结果框的 top 下移一个条高。
+function sfLayout() {
+    const bar = document.getElementById('sf-bar');
+    const box = document.getElementById('searchResults');
+    if (!bar || !box || bar.style.display === 'none') return;
+
+    if (box.offsetWidth) window._sfBoxW = box.offsetWidth;
+    const search = document.getElementById('search');
+    const content = document.getElementById('content');
+    const maxW = (search && content) ? Math.max(0, content.clientWidth - search.offsetWidth - 10) : 0;
+    let w = Math.max(window._sfBoxW || 0, 380);
+    if (maxW) w = Math.min(w, Math.max(maxW, 220));
+    bar.style.width = w + 'px';
+    bar.style.left = (-w) + 'px';
+
+    const cs = getComputedStyle(box);
+    bar.style.zIndex = cs.zIndex !== 'auto' ? cs.zIndex : '';
+    if (cs.position === 'absolute') {
+        // 必须先让条脱离文档流再量结果框的静态位置，否则量到的是被条自己顶下去之后的位置
+        bar.style.position = 'absolute';
+        let base = parseFloat(box.dataset.sfBaseTop);
+        if (!Number.isFinite(base)) {
+            box.style.top = '';
+            base = parseFloat(cs.top);
+            if (!Number.isFinite(base)) {
+                const inp = document.getElementById('searchInput');
+                base = inp ? inp.offsetTop + inp.offsetHeight + 2 : 0;
+            }
+            if (box.offsetWidth) box.dataset.sfBaseTop = String(base);   // 结果框隐藏时的数值不可靠，不缓存
+        }
+        bar.style.top = base + 'px';
+        box.style.top = (base + bar.offsetHeight + 4) + 'px';
+    } else {
+        bar.style.position = 'relative';
+        bar.style.top = '';
+    }
+}
+
+function sfRestoreResultsTop() {
+    const box = document.getElementById('searchResults');
+    if (box && box.dataset.sfBaseTop !== undefined) {
+        box.style.top = '';
+        delete box.dataset.sfBaseTop;
+    }
+}
+
+function sfRefreshBar(keyword, total, shown) {
+    const kw = (keyword || '').trim();
+    let bar = document.getElementById('sf-bar');
+    const want = !!kw && (isAdsQuery(kw) || !isReservedSearchCommand(kw));
+    if (!want) {
+        if (bar) { bar.style.display = 'none'; sfRestoreResultsTop(); }
+        return;
+    }
+    if (!bar) {
+        const box = document.getElementById('searchResults');
+        if (!box || !box.parentNode) return;
+        bar = sfBuildBar();
+        box.parentNode.insertBefore(bar, box);
+        sfFillControls();
+    }
+    bar._sfTotal = total;
+    bar._sfShown = shown;
+    bar.style.display = 'block';
+
+    const ads = isAdsQuery(kw);
+    const s = sfState();
+    const active = sfActive(ads);
+
+    // @ads：噪值 / 近义由各词条的 [] 决定，命中数筛选不适用；控件置灰但仍显示当前全局值（省略 n / l 时继承它）
+    bar.classList.toggle('sf-ads', ads);
+    bar.querySelectorAll('[data-lock]').forEach(el => {
+        el.classList.toggle('sf-lock', ads);
+        el.title = (ads ? el.dataset.adsTitle : el.dataset.title) || '';
+    });
+    bar.querySelectorAll('#sf-noise, input[name="sf-like"], #sf-cmin, #sf-cmax').forEach(el => { el.disabled = ads; });
+    sfSyncEngine();
+
+    bar.classList.toggle('sf-closed', !s.open);
+    const toggle = bar.querySelector('#sf-toggle');
+    toggle.textContent = s.open ? '收起' : (active ? '筛选 ●' : '筛选');
+    toggle.classList.toggle('sf-on', !s.open && active);
+    toggle.setAttribute('aria-expanded', s.open ? 'true' : 'false');
+    bar.querySelector('#sf-reset').hidden = !active;
+    bar.querySelector('#sf-undated-wrap').classList.toggle('sf-nodate', !(s.from || s.to));
+
+    const info = ads ? window._adsStatus : null;
+    const countEl = bar.querySelector('#sf-count');
+    let txt;
+    if (info && info.error) txt = '';
+    else if (total === 0) txt = '无结果';
+    else if (shown === 0) txt = `筛选后无结果（已隐藏 ${total} 条）`;
+    else if (shown < total) txt = `显示 ${shown} / ${total}`;
+    else txt = `共 ${total} 条`;
+    countEl.textContent = txt;
+    countEl.classList.toggle('sf-hot', total > 0 && shown < total);
+    sfPaintStatus(kw);
+
+    sfLayout();
+}
+// [ads-filter:end]
+
+function updateSearchResults(results, keyword) {
+    window._baseRenderedResults = results;
+    results = applyCommentOverlay(applyPageOverlay(results, keyword), keyword);
+
+    // 视图筛选只作用于显示：_baseRenderedResults 和结果缓存始终保持未过滤，改筛选不需要重搜
+    const sf = sfApply(results, keyword);
+    results = sf.list;
+    const adsMode = isAdsQuery(keyword);
+
+    window._currentResultMap = new Map(results.map(r => [r.path, r]));
     window._currentRenderedKeyword = keyword || "";
 
     let resultsBox = $('#searchResults');
@@ -2415,10 +3248,11 @@ function updateSearchResults(results, keyword) {
             let option = document.createElement('option');
             const isPrivate = (result.localOnly === true || result.info === "localOnly");
             const title = result.type === "html" ? result.title.replace(/\.html$/, '') : result.title;
-
-            // 仅评论命中的文章没有正文命中数，只显示 [💬 N]
-            const countStr = result.commentOnly ? "" : ` [${result.count}]`;
-            const commentStr = result.commentHits ? ` [💬 ${result.commentHits}]` : "";
+            // @ads：不显示命中数；评论只用 [💬] 标出"靠评论才满足"的条目，不带数量
+            const countStr = (result.commentOnly || adsMode) ? "" : ` [${result.count}]`;
+            const commentStr = adsMode
+                ? (result.viaComment ? " [💬]" : "")
+                : (result.commentHits ? ` [💬 ${result.commentHits}]` : "");
             option.text = (isPrivate ? (store.online_flag === "1" ? "🔒 " : "🔓 ") : "") + `${title}${countStr}${commentStr}`;
 
             option.style.opacity = (isPrivate ? (store.online_flag === "1" ? 0.5 : 1) : 1);
@@ -2446,6 +3280,8 @@ function updateSearchResults(results, keyword) {
         resultsBox.style.left = `-${resultsBox.offsetWidth}px`;
         resultsBox.selectedIndex = -1;
     }
+
+    sfRefreshBar(keyword, sf.total, results.length);
 }
 
 async function generateDoc(type, payload) {
@@ -2453,7 +3289,6 @@ async function generateDoc(type, payload) {
     const commonStyles = `@charset "UTF-8";@import url("../src/css/font.css");html,body,pre,textarea{font-family:'Noto Serif SC'}html{background-color:#000;touch-action:none;}body{margin:0;display:flex;justify-content:center;align-items:center;height:100vh;position:relative;overflow:hidden;touch-action:none;}.span-container{position:absolute;bottom:10px;right:10px;background:plum;z-index:999}.span-container span{margin-bottom:5px;padding:0 10px;cursor:pointer}.hide{opacity:.2!important}#f{display:none}`;
 
     const baseTag = `<base href="${window.location.href}">`;
-    // const viewportMeta = `<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"/>`;
     const viewportMeta = `<meta name="viewport" content="width=1024, viewport-fit=cover" />`;
     let htmlStr = '';
 
@@ -2857,7 +3692,7 @@ async function restore_snap() {
 }
 
 function audio(_song, _level) {
-    saveMediaPosition($("#_audio"));   // 旧播放器被替换前记录位置
+    saveMediaPosition($("#_audio"));
     const oldAudio = $("#audio"); if (oldAudio) oldAudio.remove();
     const oldBtn = $("#audio_btn"); if (oldBtn) oldBtn.remove();
     audioInitialized = true;
@@ -2946,7 +3781,7 @@ function audio(_song, _level) {
         emitEvent('UPDATE_FAV_LIST', null, 'side');
     };
     closeBtn.onclick = () => {
-        saveMediaPosition(audioPlayer);   // 销毁播放器前记录位置
+        saveMediaPosition(audioPlayer);
         playerContainer.remove();
         buttonElement.remove();
         if ($("#search") && $("#side")) $("#search").style.right = ($("#side").offsetWidth + 4) + "px";
@@ -2989,7 +3824,7 @@ function audio(_song, _level) {
     const playSong = () => {
         const targetLi = playlistElement.children[currentSongIndex];
         if (!targetLi) return;
-        saveMediaPosition(audioPlayer);   // 切歌前记录上一首的位置
+        saveMediaPosition(audioPlayer);
         audioPlayer.src = targetLi.dataset.path;
         audioPlayer.play().catch(e => { });
         syncUIState();
@@ -3047,16 +3882,7 @@ async function comments() {
         }
     }
 }
-// =====================================================================
-// 评论同步：每 10 分钟拉取 comments.json，与 cmt_mapper 匹配后
-//   1) 汇总各文章评论数 -> 推给 side，追加到目录项 title
-//   2) 最新 10 条评论 -> IDB(sys_state.comments_latest)，供 What's new 悬浮窗读取
-//   3) 评论纯文本索引 -> 搜索 Worker，搜索时对正文结果做评论找补
-// 匹配规则：giscus 用 data-mapping="specific"，Discussion 标题 = cmt_mapper 的 record.id，
-//           record.title = 文章文件名(不含 .html)
-// =====================================================================
 
-// 评论正文是 Markdown：去掉图片/链接地址/HTML 标签/引用与标题记号，只留可读文本
 function commentToPlainText(md) {
     return String(md || "")
         .replace(/^```.*$/gm, "")
@@ -3075,8 +3901,6 @@ function truncateText(text, max) {
     return chars.length > max ? chars.slice(0, max).join("") + "…" : (text || "");
 }
 
-// 遍历 lite_data.html 目录树 -> Map(标题 -> { title, fileName, path, localOnly })
-// 与 side.js 的目录渲染、worker 的 build_flat_data 保持同一套路径规则: "html/" + 文件名
 function collectHtmlFiles(node, out = new Map()) {
     if (!node || typeof node !== "object") return out;
     if (Array.isArray(node._f)) {
@@ -3096,7 +3920,6 @@ function collectHtmlFiles(node, out = new Map()) {
 
 async function getCommentMapperRecords() {
     if (records && records.length > 0) return records;
-    // cmt_mapper() 只在线上环境加载映射表；本地环境/尚未就绪时直接拉取
     try {
         const res = await fetch('/src/cmt_mapper.json', { cache: 'no-cache' });
         if (res.ok) {
@@ -3107,7 +3930,6 @@ async function getCommentMapperRecords() {
     return [];
 }
 
-// comments.json 的原始评论 -> 只保留能对应到现存文章的评论
 async function mapRawComments(raw) {
     const recs = await getCommentMapperRecords();
     await AsyncUtils.waitFor(() => window.lite_data, 90000, 200);
@@ -3118,9 +3940,9 @@ async function mapRawComments(raw) {
     for (const c of raw) {
         const term = c && c.discussion ? String(c.discussion.title ?? "").trim() : "";
         const articleTitle = titleById.get(term);
-        if (!articleTitle) continue;               // 映射表里没有 / orphan
+        if (!articleTitle) continue;
         const file = files.get(articleTitle);
-        if (!file) continue;                       // 文章已不存在
+        if (!file) continue;
         mapped.push({
             id: c.id,
             path: file.path,
@@ -3141,7 +3963,6 @@ function pushCommentIndexToWorker() {
     }
 }
 
-// 把一份 { sig, comments } 快照应用到运行时：评论数 / 搜索索引 / 搜索结果叠加
 async function applyCommentSnapshot(snap) {
     await AsyncUtils.waitFor(() => window.lite_data, 90000, 200);
     const files = collectHtmlFiles(window.lite_data.html);
@@ -3199,7 +4020,6 @@ async function syncComments() {
         const raw = Array.isArray(json && json.comments) ? json.comments : [];
 
         const mapped = await mapRawComments(raw);
-        // 签名包含映射结果：评论被编辑、或文章/映射表变化导致归属变化，都会触发重建
         const sig = mapped.map(c => `${c.id}@${c.updatedAt}@${c.path}`).sort().join("|");
         if (commentModel.ready && sig === commentModel.sig) return;
 
@@ -3212,7 +4032,6 @@ async function syncComments() {
         const latest = pickLatestComments(mapped, 10);
         const curNewest = latest.length ? (Date.parse(latest[0].createdAt) || 0) : 0;
         const prevNewest = Number(prevLatest && prevLatest.newestTs) || 0;
-        // 删除评论不应让基线倒退；首次运行(没有基线)不弹窗
         const newestTs = Math.max(prevNewest, curNewest);
         const hasNew = !!prevLatest && curNewest > prevNewest;
 
@@ -3237,12 +4056,10 @@ async function syncComments() {
 }
 
 async function notifyNewComments() {
-    // 悬浮窗已经开着：只刷新当前页，不打断
     const openedPopup = document.getElementById('changelog-popup');
     const isOpen = !!openedPopup && openedPopup.style.display !== 'none';
     if (!isOpen) {
         if (store.auto_show_comments === "0") return;
-        // 刚在页面里发过评论：自己的评论不弹窗
         if (Date.now() < (window._suppressCommentPopupUntil || 0)) return;
     }
 
@@ -3253,7 +4070,6 @@ async function notifyNewComments() {
 
     try {
         const m = await import('./deferred-features.js');
-        // 不指定 tab：文件更新与评论谁的时间新就显示谁
         m.showChangelog({ dbProxy, emitEvent }, isOpen ? { keepTab: true } : {});
     } catch (e) {
         console.warn("[Comments] 弹出 What's new 失败:", e);
@@ -3265,7 +4081,6 @@ function startCommentSync() {
     window._commentSyncStarted = true;
 
     (async () => {
-        // 先用上次保存的快照：离线时评论数和评论搜索也可用
         try {
             const cached = await dbProxy.get('sys_state', 'comments_cache');
             if (cached && Array.isArray(cached.comments)) await applyCommentSnapshot(cached);
@@ -3277,7 +4092,6 @@ function startCommentSync() {
 
     window.commentSyncTimer = safeInterval(syncComments, COMMENTS_SYNC_INTERVAL);
 
-    // 睡眠唤醒后 safeInterval 会跳过一次，这里补上
     document.addEventListener('visibilitychange', () => {
         if (document.visibilityState === 'visible'
             && Date.now() - (window._lastCommentSyncAt || 0) > COMMENTS_SYNC_INTERVAL) {
@@ -3285,8 +4099,6 @@ function startCommentSync() {
         }
     });
 }
-
-// ---- 评论搜索：结果叠加 ----
 
 function setCommentHits(kw, hits) {
     const norm = normalizeKeyword(kw);
@@ -3299,7 +4111,6 @@ function setCommentHits(kw, hits) {
     return (prev ? prev.sig : "[]") !== sig;
 }
 
-// 命中搜索缓存时不会走 SEARCH，这里单独让 Worker 算一次评论命中
 function requestCommentHits(kw, token) {
     if (!commentModel.ready || !searchWorker) return;
     const norm = normalizeKeyword(kw);
@@ -3319,7 +4130,9 @@ function requestCommentHits(kw, token) {
 
 function refreshCommentOverlayForCurrentKeyword() {
     const kw = window._currentRenderedKeyword;
-    if (!kw || isReservedSearchCommand(kw)) return;
+    if (!kw) return;
+    if (isAdsQuery(kw)) { rerunActiveSearch(); return; }   // 评论参与 @ads 的判定
+    if (isReservedSearchCommand(kw)) return;
     requestCommentHits(kw, window._searchToken);
 }
 
@@ -3328,7 +4141,6 @@ function rerenderSearchOverlay() {
     updateSearchResults(window._baseRenderedResults, window._currentRenderedKeyword);
 }
 
-// 正文与评论都命中：在该条上标记评论命中数；只有评论命中：追加该文章
 function applyCommentOverlay(results, keyword) {
     if (!keyword || isReservedSearchCommand(keyword) || !commentModel.ready) return results;
     const entry = commentHitCache.get(normalizeKeyword(keyword));
@@ -3547,6 +4359,7 @@ function loadSynonymsData(maxRetries = 300) {
                 synonymsScript.textContent = scriptText;
                 document.body.appendChild(synonymsScript);
                 synonymsScript.remove();
+                onSynonymsLoaded().catch(() => { });
             } else {
                 throw new Error("Cache Miss");
             }
@@ -3589,9 +4402,6 @@ function ls_alert() {
 
         var totalSizeMB = (totalBytes / (1024 * 1024)).toFixed(2);
         const searchInput = $("#searchInput");
-        if (searchInput) {
-            searchInput.setAttribute("title", totalSizeMB + " MB");
-        }
 
         if (totalBytes > alertSizeB) {
             alert("localStorage > " + totalSizeMB + " MB !");

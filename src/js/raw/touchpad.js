@@ -15,9 +15,9 @@ export function initTouchpad(ctx) {
     const DOUBLE_TAP_DIST = 30;
     const MOVE_SENSITIVITY = 1.1;
     const MIN_ZOOM = 1, MAX_ZOOM = 3;
-    const STAGE_RESIZE_MS = 200;        // 略大于 index.css 中 #stage 高度过渡(.18s)
+    const STAGE_RESIZE_MS = 200;
     const TOGGLE_POS_KEY = 'tp-toggle-pos';
-    const TOGGLE_DRAG_THRESHOLD = 6;    // 位移超过该值才算"拖动",否则视为点按
+    const TOGGLE_DRAG_THRESHOLD = 6;
     const TOGGLE_EDGE_GAP = 4;
 
     document.body.classList.add('touchpad-active');
@@ -72,7 +72,7 @@ export function initTouchpad(ctx) {
     function playCursorClickFeedback() {
         if (!cursorEl) return;
         cursorEl.classList.remove('tp-cursor-click', 'tp-cursor-down');
-        void cursorEl.offsetWidth; // force reflow so animation restarts
+        void cursorEl.offsetWidth;
         cursorEl.classList.add('tp-cursor-down');
         clearTimeout(cursorFeedbackTimer);
         cursorFeedbackTimer = setTimeout(() => {
@@ -130,8 +130,6 @@ export function initTouchpad(ctx) {
 
     function resolveHit(lx, ly) {
         const s = logicalToScreen(lx, ly);
-        // elementFromPoint() returns null for points on/outside the viewport boundary.
-        // Clamp defensively so an edge-pinned cursor still resolves to the element under it.
         const px = Math.max(0, Math.min(window.innerWidth - 1, s.x));
         const py = Math.max(0, Math.min(document.documentElement.clientHeight - 1, s.y));
         const topEl = document.elementFromPoint(px, py);
@@ -592,12 +590,6 @@ export function initTouchpad(ctx) {
     applyTransform();
     updateCursorVisual();
 
-    /* ==========================================================================
-     * 收起 / 展开按钮
-     * - 点按:收起/展开触控板(收起后 #stage 占满整屏)
-     * - 按住拖动:只能在触控板原本占据的范围内移动,松手后固定并记住位置,
-     *   用来避开右下角的更新条幅
-     * ========================================================================== */
     const slot = panel.querySelector('.tp-slot');
 
     const toggleBtn = document.createElement('button');
@@ -613,7 +605,6 @@ export function initTouchpad(ctx) {
     let syncTimer = null;
     let toggleDrag = null;
 
-    // 触控板原本占据的矩形。收起时面板只是移出屏幕(offsetHeight 不受 transform 影响),范围依然有效
     function getToggleRange() {
         const vw = window.innerWidth, vh = window.innerHeight;
         const padBottom = parseFloat(getComputedStyle(panel).paddingBottom) || 0;
@@ -629,7 +620,6 @@ export function initTouchpad(ctx) {
         };
     }
 
-    // 位置以"占可移动范围的比例"保存,横竖屏/窗口尺寸变化后仍落在触控板范围内
     function toRatio(left, top) {
         const r = getToggleRange();
         const spanX = r.right - r.left - toggleBtn.offsetWidth;
@@ -650,7 +640,6 @@ export function initTouchpad(ctx) {
     } catch (e) { }
 
     if (!togglePos) {
-        // 默认停在原"日志"按钮的位置(右列最下方的预留格)
         const r = getToggleRange();
         const w = toggleBtn.offsetWidth, h = toggleBtn.offsetHeight;
         let left = r.right - w - TOGGLE_EDGE_GAP;
@@ -687,14 +676,12 @@ export function initTouchpad(ctx) {
         clearTimeout(syncTimer);
 
         if (next) {
-            // 收起后触控板无法操作:先隐藏光标,并清掉页面里残留的悬停态
             cursorEl.style.visibility = 'hidden';
             if (currentTargetId === 'index') clearLocalHover();
             else if (currentTargetId) sendToFrame(currentTargetId, 'leave', 0, 0, {});
             currentTargetId = null;
         }
 
-        // 等 #stage 的高度过渡结束后,按新的可视高度校正光标与平移,再恢复光标
         syncTimer = setTimeout(() => {
             clampCursor();
             panX = (window.innerWidth / 2) - cursor.x * zoom;
@@ -743,7 +730,6 @@ export function initTouchpad(ctx) {
         toggleBtn.classList.remove('tp-dragging');
 
         if (wasDragging) {
-            // 松手即固定:记住位置
             togglePos = toRatio(parseFloat(toggleBtn.style.left) || 0, parseFloat(toggleBtn.style.top) || 0);
             try { localStorage.setItem(TOGGLE_POS_KEY, JSON.stringify(togglePos)); } catch (err) { }
         } else if (!cancelled) {

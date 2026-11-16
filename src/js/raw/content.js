@@ -59,7 +59,6 @@ let toc_flag = false;
 let isAutoScrolling = false;
 
 let wasmEngineReady = false;
-let find_content_matches = null;
 let format_markdown = null;
 let compute_lcs_diff = null;
 
@@ -75,10 +74,43 @@ let _searchMinimapResizeHandler = null;
 
 let find_content_matches_multi = null;
 
+const SEARCH_HL_STYLE = [[0.80, '#000'], [0.65, '#111'], [0.52, '#111'], [0.42, '#333'], [0.34, '#333'], [0.28, '#333']];
+const searchHlName = (b) => (b <= 0 ? 'search-exact' : `search-noise-${b}`);
+const searchHlBucket = (noise) => Math.min(Math.max(noise | 0, 0), SEARCH_HL_STYLE.length - 1);
+const searchHl = [];   // 稀疏数组：bucket -> Highlight
+
+function ensureSearchHighlightStyle() {
+    if (document.getElementById('search-hl-static')) return;
+    const st = document.createElement('style');
+    st.id = 'search-hl-static';
+    st.textContent = SEARCH_HL_STYLE
+        .map(([a, c], b) => `::highlight(${searchHlName(b)}) { background-color: rgba(255, 235, 0, ${a}); color: ${c}; }`)
+        .join('\n');
+    document.head.appendChild(st);
+}
+function getSearchHighlight(noise) {
+    const b = searchHlBucket(noise);
+    if (!searchHl[b]) {
+        const h = new Highlight();
+        h.priority = 100 - b * 10;
+        searchHl[b] = h;
+    }
+    return searchHl[b];
+}
+function resetSearchHighlights() {
+    searchHl.forEach(h => { if (h) h.clear(); });
+}
+
+function publishSearchHighlights() {
+    searchHl.forEach((h, b) => {
+        if (h && h.size > 0) CSS.highlights.set(searchHlName(b), h);
+        else CSS.highlights.delete(searchHlName(b));
+    });
+}
+
 const wasmInitPromise = (async () => {
     const resolveWasm = (sw) => {
         format_markdown = sw.format_markdown;
-        find_content_matches = sw.find_content_matches;
         find_content_matches_multi = sw.find_content_matches_multi; // 挂载 multi 接口
         compute_lcs_diff = sw.compute_lcs_diff;
         wasmEngineReady = true;
@@ -165,9 +197,7 @@ BUS.addEventListener('message', (e) => {
                 emitEvent("LOCAL_SEARCH_RESULT", {
                     keyword: payload,
                     count: resultObj.count,
-                    title: document.title,
-                    snippets: resultObj.snippets,
-                    isTolerantMatch: resultObj.isTolerantMatch
+                    title: document.title
                 }, "index");
             })();
             break;
@@ -357,12 +387,40 @@ async function format() {
     }
 }
 
+// 块级元素边界：相邻文本节点分属不同块时，在拼接文本里插入 "\n" 作为分隔，
+// 让 wasm 的匹配器把它当作硬边界（try_match_at 遇到换行就终止），避免关键词跨段落/跨标题/跨单元格误命中。
+// 行内元素（b/span/a 等）不算块边界，行内加粗拆开的词仍能正常匹配。
+const PAGE_BLOCK_SEL = 'p,div,li,ul,ol,dl,dt,dd,table,thead,tbody,tfoot,tr,td,th,h1,h2,h3,h4,h5,h6,blockquote,pre,section,article,header,footer,figure,figcaption';
+
+function makeBlockBreakDetector() {
+    const cache = new WeakMap();
+    const blockOf = (node) => {
+        const el = node.parentElement;
+        if (!el) return null;
+        let b = cache.get(el);
+        if (b === undefined) {
+            b = el.closest(PAGE_BLOCK_SEL);
+            cache.set(el, b);
+        }
+        return b;
+    };
+    let prev;
+    return (node) => {
+        const cur = blockOf(node);
+        const isBreak = prev !== undefined && cur !== prev;
+        prev = cur;
+        return isBreak;
+    };
+}
+
 function search() {
     if (store.jump_from_search_ex !== "1") return;
     store.jump_from_search_ex = "0";
 
     const rawKeyword = (store.keyword || "").trim();
     if (!rawKeyword || !wasmEngineReady) return;
+    // @ads 组合搜索：store.keyword 是整条命令而不是关键词，条目不做高亮导航
+    if (/^@ads(?![A-Za-z0-9_])/i.test(rawKeyword)) return;
 
     const contentRoot =
         document.querySelector('pre:not(#diff-pre)') ||
@@ -398,11 +456,16 @@ function search() {
     let globalText = "";
     const nodeMap = [];
     let currentPos = 0;
+    const isBlockBreak = makeBlockBreakDetector();
 
     while (walker.nextNode()) {
         const node = walker.currentNode;
         const val = node.nodeValue;
         if (!val) continue;
+        if (isBlockBreak(node)) {
+            globalText += "\n";
+            currentPos += 1;
+        }
         textNodes.push(node);
         globalText += val;
         nodeMap.push({ node, start: currentPos, end: currentPos + val.length });
@@ -419,8 +482,6 @@ function search() {
 
     const totalMatches = resultObj.count || 0;
     const matchBuffer = resultObj.matches;
-    const snippets = resultObj.snippets || [];
-    const isTolerantMatch = resultObj.isTolerantMatch || false;
 
     const matches = [];
     if (matchBuffer && totalMatches > 0) {
@@ -450,9 +511,9 @@ function search() {
     window._searchMatchRanges.clear();
     clearActiveSearchBorders();
 
-    const rangesByNoise = new Map();
+    ensureSearchHighlightStyle();
+    resetSearchHighlights();
 
-    // Rust 端按 start 升序返回命中；这里兜底校验，保证下面的指针扫描成立
     for (let i = 1; i < matches.length; i++) {
         if (matches[i].start < matches[i - 1].start) {
             matches.sort((a, b) => a.start - b.start);
@@ -465,8 +526,6 @@ function search() {
         const node = item.node;
         const nodeText = node.nodeValue;
 
-        // nodeMap 按文档顺序递增、matches 按 start 升序：
-        // mi 只前进不回退，整体 O(节点数 + 命中数)，不再是每个节点扫一遍全部命中
         while (mi < matches.length && matches[mi].end <= item.start) mi++;
         const nodeMatches = [];
         for (let k = mi; k < matches.length && matches[k].start < item.end; k++) {
@@ -483,7 +542,7 @@ function search() {
             let last = mergedNodeMatches[mergedNodeMatches.length - 1];
             if (m.start <= last.end) {
                 last.end = Math.max(last.end, m.end);
-                last.noise = Math.min(last.noise, m.noise); // 重叠区间保留最小 noise
+                last.noise = Math.min(last.noise, m.noise);
             } else {
                 mergedNodeMatches.push({ ...m });
             }
@@ -498,9 +557,7 @@ function search() {
                 range.setStart(node, localStart);
                 range.setEnd(node, localEnd);
 
-                const noise = m.noise || 0;
-                if (!rangesByNoise.has(noise)) rangesByNoise.set(noise, []);
-                rangesByNoise.get(noise).push(range);
+                getSearchHighlight(m.noise || 0).add(range);
 
                 if (!window._searchMatchRanges.has(m.index)) {
                     window._searchMatchRanges.set(m.index, []);
@@ -510,62 +567,12 @@ function search() {
         });
     });
 
-    const rangesByName = new Map();
-
-    rangesByNoise.forEach((ranges, noise) => {
-        const n = Number(noise) || 0;
-        const highlightName = n === 0 ? 'search-exact' : `search-noise-${n}`;
-
-        if (!rangesByName.has(highlightName)) {
-            rangesByName.set(highlightName, []);
-        }
-        rangesByName.get(highlightName).push(...ranges);
-    });
-
-    let styleEl = document.getElementById('dynamic-search-highlight-styles');
-    if (!styleEl) {
-        styleEl = document.createElement('style');
-        styleEl.id = 'dynamic-search-highlight-styles';
-        document.head.appendChild(styleEl);
-    }
-
-    const cssRules = [];
-    rangesByName.forEach((_, highlightName) => {
-        if (highlightName === 'search-exact') {
-            cssRules.push(`::highlight(search-exact) { background-color: rgba(255, 235, 0, 0.80); color: #000000; }`);
-        } else {
-            const n = parseInt(highlightName.replace('search-noise-', ''), 10) || 1;
-            const alpha = Math.max(0.05, 0.80 - n * 0.07);
-            const textColor = n <= 2 ? '#111' : n <= 5 ? '#333' : '#555';
-            cssRules.push(
-                `::highlight(${highlightName}) { background-color: rgba(255, 235, 0, ${alpha.toFixed(2)}); color: ${textColor}; }`
-            );
-        }
-    });
-    styleEl.textContent = cssRules.join('\n');
-
-    rangesByName.forEach((ranges, highlightName) => {
-        if (ranges.length === 0) return;
-
-        const highlight = new Highlight();
-        ranges.forEach(r => highlight.add(r));
-
-        if (highlightName === 'search-exact') {
-            highlight.priority = 100;
-        } else {
-            const n = parseInt(highlightName.replace('search-noise-', ''), 10) || 5;
-            highlight.priority = Math.max(10, 100 - n * 5);
-        }
-
-        CSS.highlights.set(highlightName, highlight);
-    });
+    publishSearchHighlights();
 
     emitEvent("LOCAL_SEARCH_RESULT", {
         keyword: rawKeyword,
         count: resultObj.count,
-        title: document.title,
-        snippets: snippets,
-        isTolerantMatch: isTolerantMatch
+        title: document.title
     }, "index");
 
     let currentIndex = 0;
@@ -714,9 +721,13 @@ function countMatchesEnhanced(kw) {
     }, false);
 
     let globalText = "";
+    const isBlockBreak = makeBlockBreakDetector();
     while (walker.nextNode()) {
-        const val = walker.currentNode.nodeValue;
-        if (val) globalText += val;
+        const node = walker.currentNode;
+        const val = node.nodeValue;
+        if (!val) continue;
+        if (isBlockBreak(node)) globalText += "\n";
+        globalText += val;
     }
 
     const noise = Number(store.noise_level ?? 5);
@@ -727,9 +738,7 @@ function countMatchesEnhanced(kw) {
     const resultObj = find_content_matches_multi(globalText, allKeywords, noise);
 
     return {
-        count: resultObj.count,
-        snippets: resultObj.snippets,
-        isTolerantMatch: resultObj.isTolerantMatch
+        count: resultObj.count
     };
 }
 
@@ -1097,17 +1106,11 @@ function bindCodeEditHandlers(root) {
     });
 }
 
-// ---- 代码框右上角：目标语种 + 一键复制 ----
-// 每个 <code> 各自有一个工具条：插在该 <code> 之前的同级块，贴在代码框上沿之外、右边缘对齐；
-// 文字全部由 CSS 伪元素渲染，DOM 里没有文本节点，不会被页内搜索/diff 当成正文。
-
-// 这些属性即使值为空也不是语种(例如编辑后残留的 class="")
 const NON_LANG_ATTRS = new Set([
     'class', 'style', 'id', 'title', 'hidden', 'contenteditable', 'spellcheck',
     'draggable', 'tabindex', 'dir', 'lang', 'translate', 'autofocus'
 ]);
 
-// 语种 = <code> 上第一个无值属性的名字，如 <code cpp> -> "cpp"；没有则默认 "java"(与高亮的默认语言一致)
 function getCodeLang(codeEl) {
     for (const attr of codeEl.attributes) {
         const name = attr.name;
@@ -1118,7 +1121,6 @@ function getCodeLang(codeEl) {
     return 'java';
 }
 
-// 与 side.js 的 copyToClipboard 同一思路：先用同步的 execCommand(处于用户手势内)，不行再用 Clipboard API
 function copyTextToClipboard(text) {
     function legacyCopy() {
         const active = document.activeElement;
@@ -1152,8 +1154,6 @@ function copyTextToClipboard(text) {
     return Promise.resolve(false);
 }
 
-// <code> 是 width:100% + padding，右边缘会超出 <pre>，还可能被 resize 拖动，
-// 所以不能靠 margin-left:auto，而是按代码框的实际右边缘算出左边距。
 const codeToolsObserver = typeof ResizeObserver === 'function'
     ? new ResizeObserver(entries => entries.forEach(({ target }) => target._alignCodeTools && target._alignCodeTools()))
     : null;
@@ -1194,7 +1194,7 @@ function initCodeTools(root = document) {
 
         const align = () => {
             const c = codeEl.getBoundingClientRect();
-            if (!c.width) return;              // 被隐藏(如 diff 时原文 display:none)，重新显示时 ResizeObserver 会再触发
+            if (!c.width) return;
             tools.style.marginLeft = '0px';
             const t = tools.getBoundingClientRect();
             tools.style.marginLeft = Math.max(0, c.right - t.right) + 'px';
@@ -1202,8 +1202,8 @@ function initCodeTools(root = document) {
         codeEl._alignCodeTools = tools._alignCodeTools = align;
         align();
         if (codeToolsObserver) {
-            codeToolsObserver.observe(codeEl);   // 窗口缩放 / 拖动 resize
-            codeToolsObserver.observe(tools);    // 「复制」→「已复制」导致工具条变宽
+            codeToolsObserver.observe(codeEl);
+            codeToolsObserver.observe(tools);
         }
     });
 }
@@ -1792,8 +1792,6 @@ function renderDiffView(oldTokens, newTokens, preTag) {
             .trim() === '';
     };
 
-    // <code> 是 white-space:pre：<code> 之后、</code> 之前的 "\n" 都会被渲染成空行。
-    // 所以代码行之间用 "\n" 分隔(放在行首)，而不是每行末尾都补一个。
     let codeLineIdx = 0;
     const emit = (html, tType) => {
         if (tType === 'code_line') {
@@ -1999,8 +1997,6 @@ function hideDiffMinimap() {
         _diffMinimapResizeBound = false;
     }
 }
-
-// ===== 搜索高亮 minimap（参考 diff minimap 的滚动条定位跳转实现）=====
 
 function ensureSearchMinimapEl() {
     if (_searchMinimapEl && document.body.contains(_searchMinimapEl)) return _searchMinimapEl;

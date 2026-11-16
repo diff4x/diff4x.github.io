@@ -1,14 +1,3 @@
-/**
- * deferred-features.js
- * 首屏不需要的低频功能集合：更新日志弹窗 / 彩蛋(@bomb,@rebirth) /
- * 一键清档&恢复 / 每周备份提醒 / 全局书签右键菜单 / 本地开发环境的
- * 到期任务提醒球。全部由 index.js 按需动态 import，不进入首屏 bundle。
- *
- * 与主文档共享的"活对象"(实际的 iframe 引用 / IndexedDB 日志代理 /
- * 跨窗口事件总线发送函数 / 安全定时器)通过调用方传入的 ctx 参数注入，
- * 避免在这里重新创建一份状态不一致的副本。
- */
-
 import { ExcerptsSys } from './excerpts.js';
 
 const $ = (selector) => document.querySelector(selector);
@@ -28,15 +17,10 @@ const store = new Proxy({}, {
     }
 });
 
-// [media-pos:begin] 音视频播放位置记录
-// localStorage 键 media_positions = { "video/a.mp4": 123.4, "audio/b.mp3": 56.7 }（单位：秒；最近使用的排在后面）。
-// 在"关闭前"写入（预览销毁/切换、切歌、销毁播放器、灯箱视频离开）；搜索结果 / What's new 的音视频预览启动时读取并从该位置继续。
-// index.js 与 deferred-features.js 各有一份相同的实现；lightbox-logic.js 的 videoLogic 里有一份精简版
-// （它会被序列化进 iframe，无法引用外部函数）。键名与数据格式必须保持一致，修改时请一起改。
 const MEDIA_POS_KEY = 'media_positions';
-const MEDIA_POS_MAX = 500;      // 最多保留的条数，超出时丢弃最旧的
-const MEDIA_POS_MIN = 1;        // 播放不足 1 秒不记录
-const MEDIA_POS_END_GAP = 2;    // 距结尾不足 2 秒视为已播完，清除记录(下次从头开始)
+const MEDIA_POS_MAX = 500;
+const MEDIA_POS_MIN = 1;
+const MEDIA_POS_END_GAP = 2;
 
 function mediaPosKey(src) {
     let s = String(src || '').split('#')[0].split('?')[0];
@@ -57,7 +41,6 @@ function getMediaPosition(src) {
     return (typeof t === 'number' && Number.isFinite(t) && t > 0) ? t : 0;
 }
 
-// 关闭 / 销毁 / 切换媒体元素之前调用。没有时长(未加载元数据、直播流)的媒体不记录。
 function saveMediaPosition(el) {
     try {
         if (!el) return;
@@ -67,7 +50,7 @@ function saveMediaPosition(el) {
         if (!key) return;
         const t = el.currentTime;
         const map = readMediaPositions();
-        delete map[key];    // 先删再写，让最近使用的排在后面
+        delete map[key];
         if (Number.isFinite(t) && t >= MEDIA_POS_MIN && dur - t > MEDIA_POS_END_GAP) {
             map[key] = Math.round(t * 10) / 10;
         }
@@ -81,13 +64,11 @@ function saveMediaPositionsIn(root) {
     if (root) root.querySelectorAll('video, audio').forEach(el => saveMediaPosition(el));
 }
 
-// 预览元素创建后(设置 src 之后)调用：从上一次的位置继续
 function resumeMediaPosition(el, src) {
     const saved = getMediaPosition(src);
     if (!saved) return;
     try { el.currentTime = saved; } catch (e) { }
     el.addEventListener('loadedmetadata', () => {
-        // 文件可能被替换得更短：位置越界就从头开始
         if (Number.isFinite(el.duration) && saved > el.duration - MEDIA_POS_END_GAP) el.currentTime = 0;
     }, { once: true });
 }
@@ -132,9 +113,6 @@ function makeDraggable(popupSelector, headerSelector) {
     });
 }
 
-// ---- showChangelog(ctx, opts): ctx = { dbProxy, emitEvent } ----
-// opts.tab      : 'files' | 'comments'，强制指定显示哪一页（缺省按"谁的时间新"决定）
-// opts.keepTab  : 弹窗已打开时只刷新当前页，不切页、不重新居中
 let _clRenderSeq = 0;
 
 function escapeHtml(str) {
@@ -151,7 +129,6 @@ function formatLogTime(ts) {
 function collectPrivatePaths() {
     const privatePaths = new Set();
     if (window.data && window.data.length > 0) {
-        // data 结构循环: [title, info, path, type]
         for (let i = 0; i < window.data.length; i += 4) {
             const info = window.data[i + 1];
             const path = window.data[i + 2];
@@ -163,12 +140,6 @@ function collectPrivatePaths() {
     return privatePaths;
 }
 
-// ---- What's new「文件」页：图片 / 视频 / 音乐预览 ----
-// 行为与搜索结果的预览一致：
-//   · 图片(gallery)：鼠标悬停在链接上即显示预览；
-//   · 视频(video) / 音乐(audio)：悬停不显示，右击开始播放，再次右击停止(暂停)；
-//   · 鼠标移开 / 点击 / 切页 / 关闭弹窗 / 窗口失焦：预览销毁，媒体停止。
-// 直接复用 index.js 搜索预览创建的 #center-snippet-preview 浮层，外观与搜索预览完全一致。
 const CL_MEDIA_KIND_BY_BUCKET = { gallery: 'image', video: 'video', audio: 'audio' };
 
 const CL_WAVE_STYLE = `<style>
@@ -179,13 +150,12 @@ const CL_WAVE_STYLE = `<style>
   .wb-1 { animation-delay: 0s; } .wb-2 { animation-delay: 0.2s; } .wb-3 { animation-delay: 0.4s; } .wb-4 { animation-delay: 0.6s; } .wb-5 { animation-delay: 0.8s; }
 </style>`;
 
-let _clPreviewPath = null;   // 当前悬停的条目路径
-let _clOwnsPreview = false;  // 浮层当前是否由 What's new 占用(避免误关搜索结果的预览)
+let _clPreviewPath = null;
+let _clOwnsPreview = false;
 
 function getClPreviewParts() {
     let box = document.getElementById('center-snippet-preview');
     if (!box) {
-        // 与 index.js 中搜索预览的结构保持一致；谁先创建都可以被对方复用
         box = document.createElement('div');
         box.id = 'center-snippet-preview';
 
@@ -205,11 +175,11 @@ function getClPreviewParts() {
 
 function clStopMedia(content) {
     content.querySelectorAll('video, audio').forEach(m => {
-        saveMediaPosition(m);   // 关闭前先记录播放位置
+        saveMediaPosition(m);
         try {
             m.pause();
             m.removeAttribute('src');
-            m.load();   // 释放网络连接
+            m.load();
         } catch (e) { }
     });
 }
@@ -245,13 +215,12 @@ function showChangelogImagePreview(path) {
 
     box.classList.add('image-preview-mode');
     box.style.borderColor = '#61afef';
-    content.style.transform = '';   // 清掉搜索文本预览自动滚动残留的位移
+    content.style.transform = '';
 
     const img = document.createElement('img');
     img.alt = 'Preview';
     img.style.cssText = 'max-width: 450px; max-height: 350px; object-fit: contain;';
     img.onerror = () => {
-        // 图片加载失败：只收起浮层；保留 _clPreviewPath，避免鼠标在同一条目上移动时反复重试
         if (_clPreviewPath === path) {
             content.innerHTML = '';
             box.style.display = 'none';
@@ -266,7 +235,6 @@ function toggleChangelogMedia(path, kind) {
     const { box, content } = getClPreviewParts();
     let mediaEl = content.querySelector('video, audio');
 
-    // 同一条目再次右击：在播放 / 暂停之间切换
     if (_clOwnsPreview && mediaEl && mediaEl.dataset.path === path) {
         if (mediaEl.paused) clSafePlay(mediaEl);
         else mediaEl.pause();
@@ -297,7 +265,6 @@ function toggleChangelogMedia(path, kind) {
         mediaEl.style.display = 'none';
         content.appendChild(mediaEl);
 
-        // 波形动画跟随实际的播放 / 暂停状态
         const bars = content.querySelectorAll('.wave-bar');
         const syncBars = () => bars.forEach(b => b.classList.toggle('paused', mediaEl.paused));
         mediaEl.addEventListener('play', syncBars);
@@ -309,13 +276,12 @@ function toggleChangelogMedia(path, kind) {
     mediaEl.loop = true;
     mediaEl.volume = 0.1;
     mediaEl.src = path;
-    resumeMediaPosition(mediaEl, path);   // 从上一次的位置继续
+    resumeMediaPosition(mediaEl, path);
     box.style.display = 'flex';
     clSafePlay(mediaEl);
 }
 
 function bindChangelogMediaPreview(content) {
-    // 该链接是否支持预览；仅本地可见的条目在线上模式下不预览(与搜索一致)
     const previewKindOf = (link) => {
         const kind = CL_MEDIA_KIND_BY_BUCKET[link.dataset.bucket];
         if (!kind) return null;
@@ -337,14 +303,13 @@ function bindChangelogMediaPreview(content) {
         hideChangelogPreview();
         _clPreviewPath = path;
         if (kind === 'image') showChangelogImagePreview(path);
-        // 视频 / 音乐：悬停时不显示，右击才开始播放
     });
 
     content.addEventListener('contextmenu', (e) => {
         const link = e.target.closest && e.target.closest('.log-link');
         if (!link) return;
         const kind = previewKindOf(link);
-        if (kind !== 'video' && kind !== 'audio') return;   // 其它条目保留浏览器默认右键菜单
+        if (kind !== 'video' && kind !== 'audio') return;
         e.preventDefault();
         toggleChangelogMedia(link.dataset.path, kind);
     });
@@ -354,7 +319,6 @@ function bindChangelogMediaPreview(content) {
     window.addEventListener('blur', hideChangelogPreview);
 }
 
-// 文件更新日志 与 最新评论，谁的时间新就先显示谁
 async function pickDefaultChangelogTab(ctx) {
     let latestLogTs = 0;
     let latestCommentTs = 0;
@@ -387,7 +351,6 @@ function applyChangelogTabUI(tab) {
         el.style.color = active ? '#000' : '#888';
     });
 
-    // 各页只显示自己相关的控件
     $('#auto-show-changelog-wrap').style.display = tab === 'files' ? 'flex' : 'none';
     $('#auto-show-comments-wrap').style.display = tab === 'comments' ? 'flex' : 'none';
     $('#clear-changelog').style.display = tab === 'files' ? '' : 'none';
@@ -395,7 +358,7 @@ function applyChangelogTabUI(tab) {
 
 async function renderChangelogTab(ctx, tab) {
     const seq = ++_clRenderSeq;
-    hideChangelogPreview();      // 内容即将被替换，悬停的链接会消失
+    hideChangelogPreview();
     applyChangelogTabUI(tab);
 
     const content = $('#changelog-content');
@@ -405,7 +368,7 @@ async function renderChangelogTab(ctx, tab) {
         const html = tab === 'comments'
             ? await buildCommentsHtml(ctx)
             : await buildFilesHtml(ctx);
-        if (seq !== _clRenderSeq) return;      // 已被更新的一次渲染取代
+        if (seq !== _clRenderSeq) return;
         content.innerHTML = html;
     } catch (e) {
         if (seq !== _clRenderSeq) return;
@@ -523,7 +486,6 @@ export async function showChangelog(ctx, opts = {}) {
     await renderChangelogTab(ctx, tab);
 }
 
-// 文件页：更新日志
 async function buildFilesHtml(ctx) {
     const logs = await ctx.dbProxy.getLogs();
     if (logs.length === 0) {
@@ -599,7 +561,6 @@ async function buildFilesHtml(ctx) {
     return html;
 }
 
-// 评论页：index.js 每 10 分钟同步后写入 IDB(sys_state.comments_latest) 的最新 10 条评论
 async function buildCommentsHtml(ctx) {
     const data = await ctx.dbProxy.get('sys_state', 'comments_latest');
     const items = data && Array.isArray(data.items) ? data.items : [];
@@ -615,7 +576,6 @@ async function buildCommentsHtml(ctx) {
         const lockIcon = privatePaths.has(it.path) ? (store.online_flag === "1" ? "🔒 " : "🔓 ") : "";
         const linkHtml = `<span class="log-link" data-path="${escapeHtml(it.path)}" data-bucket="html" style="cursor: pointer; text-decoration: underline; font-weight: bold;" title="在侧栏中定位并打开">${lockIcon}${escapeHtml(it.title)}</span>`;
 
-        // 评论内容来自第三方输入，一律转义后再进 innerHTML
         html += `<div style="margin-bottom: 6px;">`
             + `<div style="color: #0033cc;">${dateStr} 💬 ${escapeHtml(it.author)} → ${linkHtml}</div>`
             + `<div style="color: #333333; margin-left: 12px; white-space: pre-wrap; word-break: break-word;">${escapeHtml(it.text)}</div>`
@@ -624,8 +584,6 @@ async function buildCommentsHtml(ctx) {
     return html;
 }
 
-
-// ---- playConfetti() / bomb() / rebirth(ctx): ctx = { iframes } ----
 let _confettiCanvas = null;
 let _confettiFire = null;
 
@@ -913,8 +871,6 @@ export function rebirth(ctx) {
     });
 }
 
-
-// ---- initBackupReminder(ctx): ctx = { iframes, safeInterval } ----
 export function initBackupReminder(ctx) {
     const BACKUP_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -1002,8 +958,6 @@ export function initBackupReminder(ctx) {
     }
 }
 
-
-// ---- showGlobalBookmarkMenu(x, y, source) ----
 export function showGlobalBookmarkMenu(x, y, source) {
     let absoluteX = x;
     let absoluteY = y;
@@ -1105,8 +1059,6 @@ export function showGlobalBookmarkMenu(x, y, source) {
     };
 }
 
-
-// ---- initDueTasksPingPong() ----
 export function initDueTasksPingPong() {
     const JSON_URL = '/_build/secrets/upcoming_tasks.json';
     const CHECK_INTERVAL = 5 * 60 * 1000;
