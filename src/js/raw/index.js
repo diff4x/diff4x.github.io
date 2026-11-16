@@ -2570,7 +2570,7 @@ function isReservedSearchCommand(kw) {
 //      解析和近义展开在主线程，匹配在 wasm 里一遍扫完。
 //  · 筛选分两类：
 //      引擎参数（噪值、近义）→ 改变匹配结果，改后重搜（与 @noise= / @like= 共用同一份 store）；
-//      视图筛选（后缀、日期、命中数）→ 只过滤已算好的结果，不重搜、不进缓存。
+//      视图筛选（后缀、无明确日期、日期范围）→ 只过滤已算好的结果，不重搜、不进缓存。
 // ──────────────────────────────────────────────────────────────────────────────
 const ADS_PREFIX_RE = /^@ads(?![A-Za-z0-9_])/i;
 
@@ -2779,45 +2779,21 @@ function searchAds(kw) {
 }
 
 // ── 筛选状态（持久化在 store.search_filter，一经设置一直有效）──────────────────
-// 评论是一个独立的类别：普通搜索里指"只靠评论才出现的条目"，@ads 里指"至少一个包含项只靠评论才满足"。
-const SF_GROUPS = [
-    ['页面', ['html', 'comment']],
-    ['图片', ['webp', 'jpg', 'png', 'gif']],
-    ['文档', ['pdf', 'txt', 'epub']],
-    ['影音', ['mkv', 'mp4', 'mp3']],
-    ['其他', ['other']]
-];
-const SF_LABEL = { comment: '评论', other: '未列出的后缀' };
-const SF_KNOWN = new Set(SF_GROUPS.flatMap(([, ks]) => ks));
-const SF_ALIAS = { jpeg: 'jpg', jpe: 'jpg' };
-// 小圆点颜色：与 index.css 中 #searchResults option[data-type] 的类型色保持一致
-const SF_COLOR = {
-    html: '#4f8cff', comment: '#d98e04',
-    webp: '#00a8ff', jpg: '#00a8ff', png: '#00a8ff', gif: '#00a8ff',
-    pdf: '#e84118', epub: '#4cd137', txt: '#7f8fa6',
-    mkv: '#9c88ff', mp4: '#9c88ff', mp3: 'orange', other: '#7f8fa6'
-};
-const SF_DEFAULT = { off: [], from: '', to: '', undated: false, min: '', max: '', open: true };
-
-function sfNormCount(v) {
-    const n = Number(v);
-    return (v === '' || v === null || v === undefined || !Number.isFinite(n) || n < 0) ? '' : String(Math.floor(n));
-}
-
+// 后缀下拉的选项从"原始结果列表"（叠加评论之后、筛选之前）统计：页面和评论条目统归 html，其余按文件后缀。
+// "无明确日期"是同一个下拉里的一项，取消勾选即隐藏没有日期的条目；日期范围只约束有明确日期的条目，两者互相独立。
 function sfState() {
     if (!window._sfState) {
         let saved = null;
         try { saved = store.search_filter; } catch (e) { }
-        const st = Object.assign({}, SF_DEFAULT, saved && typeof saved === 'object' ? saved : {});
+        saved = saved && typeof saved === 'object' ? saved : {};
         const okDate = (v) => (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v)) ? v : '';
-        st.off = Array.isArray(st.off) ? st.off.filter(k => SF_KNOWN.has(k)) : [];
-        st.from = okDate(st.from);
-        st.to = okDate(st.to);
-        st.min = sfNormCount(st.min);
-        st.max = sfNormCount(st.max);
-        st.undated = !!st.undated;
-        st.open = st.open !== false;
-        window._sfState = st;
+        window._sfState = {
+            // 旧版本存过的 comment / other 已不再是独立类别，丢弃
+            off: Array.isArray(saved.off) ? saved.off.filter(k => typeof k === 'string' && k && k !== 'comment' && k !== 'other') : [],
+            hideUndated: saved.hideUndated === true,
+            from: okDate(saved.from),
+            to: okDate(saved.to)
+        };
     }
     return window._sfState;
 }
@@ -2826,7 +2802,7 @@ function sfSave() {
     try { store.search_filter = window._sfState; } catch (e) { }
 }
 
-// 日期戳：html 在 lite_data（轻数据第 4 项 "时间戳-localOnly"），图片在文件名，其余类型没有日期
+// 日期戳：html 在 lite_data（轻数据第 4 项 "时间戳-localOnly"），图片在文件名，其余类型没有明确日期
 let _sfStampSrc = null, _sfStampFp = null, _sfStampMap = null;
 function sfStampMap() {
     const src = window.lite_data, fp = window._dataFp;
@@ -2862,24 +2838,34 @@ function sfStampOf(r) {
     return '';
 }
 
+// 页面与评论条目（commentOnly / viaComment 也是 html 页面）统归 html，其余取文件后缀
 function sfExtOf(r) {
-    if (r.commentOnly || r.viaComment) return 'comment';
     if (r.type === 'html') return 'html';
     const m = /\.([A-Za-z0-9]+)$/.exec(r.path || '');
-    let e = m ? m[1].toLowerCase() : '';
-    e = SF_ALIAS[e] || e;
-    return (SF_KNOWN.has(e) && e !== 'comment' && e !== 'other' && e !== 'html') ? e : 'other';
+    return m ? m[1].toLowerCase() : '(无)';
 }
 
-function sfActive(ads) {
-    const s = sfState();
-    return s.off.length > 0 || !!s.from || !!s.to || (!ads && (s.min !== '' || s.max !== ''));
+// 对原始结果列表统计：各后缀的条目数 + 没有明确日期的条目数
+function sfStats(results) {
+    const exts = new Map();
+    let undated = 0;
+    for (const r of results) {
+        const e = sfExtOf(r);
+        exts.set(e, (exts.get(e) || 0) + 1);
+        if (!sfStampOf(r)) undated++;
+    }
+    return { exts, undated };
 }
 
-// 纯视图过滤：返回 { list, total }。命中数筛选在 @ads 下不适用，评论条目不受命中数筛选。
-function sfApply(results, keyword) {
+function sfActive() {
     const s = sfState();
-    const ads = isAdsQuery(keyword);
+    return s.off.length > 0 || s.hideUndated || !!s.from || !!s.to;
+}
+
+// 纯视图过滤：返回 { list, total, stats }（stats 统计的是过滤前的原始列表）
+function sfApply(results) {
+    const s = sfState();
+    const stats = sfStats(results);
     const off = new Set(s.off);
     let from = s.from ? s.from.replace(/-/g, '') + '000000' : '';
     let to = s.to ? s.to.replace(/-/g, '') + '235959' : '';
@@ -2888,31 +2874,21 @@ function sfApply(results, keyword) {
         const b = s.from.replace(/-/g, '') + '235959';
         from = a; to = b;
     }
-    const useDate = !!(from || to);
-    const min = (!ads && s.min !== '') ? Number(s.min) : null;
-    const max = (!ads && s.max !== '') ? Number(s.max) : null;
+    if (off.size === 0 && !s.hideUndated && !from && !to) return { list: results, total: results.length, stats };
 
-    if (off.size === 0 && !useDate && min === null && max === null) {
-        return { list: results, total: results.length };
-    }
     const list = results.filter(r => {
         if (off.has(sfExtOf(r))) return false;
-        if (useDate) {
+        if (s.hideUndated || from || to) {
             const stamp = sfStampOf(r);
             if (!stamp) {
-                if (!s.undated) return false;
+                if (s.hideUndated) return false;
             } else if ((from && stamp < from) || (to && stamp > to)) {
                 return false;
             }
         }
-        if ((min !== null || max !== null) && !r.commentOnly) {
-            const c = r.count | 0;
-            if (min !== null && c < min) return false;
-            if (max !== null && c > max) return false;
-        }
         return true;
     });
-    return { list, total: results.length };
+    return { list, total: results.length, stats };
 }
 
 // ── 引擎参数：与 @noise= / @like= 共用 store，改后清缓存命名空间并重搜 ─────────────
@@ -2923,9 +2899,8 @@ function sfSyncEngine() {
     if (input) input.setAttribute('title', "@noise=" + n + "; @like=" + l);
     const bar = document.getElementById('sf-bar');
     if (!bar) return;
-    const sel = bar.querySelector('#sf-noise');
-    if (sel) sel.value = String(n);
-    bar.querySelectorAll('input[name="sf-like"]').forEach(r => { r.checked = Number(r.value) === l; });
+    bar.querySelector('#sf-noise').value = String(n);
+    bar.querySelector('#sf-like').checked = l === 1;
 }
 
 async function sfApplyEngine(key, value) {
@@ -2938,45 +2913,22 @@ async function sfApplyEngine(key, value) {
     rerunActiveSearch();
 }
 
-// ── 筛选条 UI ────────────────────────────────────────────────────────────────
+// ── 筛选条 UI：单行，原生控件 ─────────────────────────────────────────────────
 function sfInjectStyle() {
     if (document.getElementById('sf-style')) return;
     const st = document.createElement('style');
     st.id = 'sf-style';
     st.textContent = `
-#sf-bar{box-sizing:border-box;display:none;margin:0 0 4px;padding:6px 8px;font-size:12px;line-height:1.5;font-family:inherit;color:#2b2f36;background:#f0f8ff;border:1px solid #b8c4d6;border-radius:4px;box-shadow:0 2px 8px rgba(0,0,0,.14);--sf-accent:#4f8cff;--sf-warn:#b26a00;--sf-line:#b8c4d6;--sf-dim:#7f8fa6}
-#sf-bar .sf-row,#sf-bar .sf-line,#sf-bar .sf-group{display:flex;flex-wrap:wrap;align-items:center;gap:4px 8px}
-#sf-bar .sf-group{gap:4px;margin-right:6px}
-#sf-bar .sf-field{display:inline-flex;align-items:center;gap:5px}
-#sf-bar .sf-panel{display:flex;flex-direction:column;gap:6px;margin-top:6px;padding-top:6px;border-top:1px solid var(--sf-line)}
-#sf-bar.sf-closed .sf-panel{display:none}
-#sf-bar select,#sf-bar input[type=date],#sf-bar input[type=number]{box-sizing:border-box;height:22px;padding:0 4px;font:inherit;color:#2b2f36;background:#fff;border:1px solid var(--sf-line);border-radius:3px;color-scheme:light;user-select:text;-webkit-user-select:text}
-#sf-bar input[type=number]{width:64px}
-#sf-bar input[type=date]{width:118px}
-#sf-bar .sf-pair{display:inline-flex;flex-wrap:nowrap;align-items:center;gap:8px}
-#sf-bar .sf-btn,#sf-bar .sf-gbtn{height:22px;padding:0 8px;font:inherit;color:#2b2f36;background:#fff;border:1px solid var(--sf-line);border-radius:3px;cursor:pointer}
-#sf-bar .sf-gbtn{padding:0 4px;color:var(--sf-dim);background:transparent;border-color:transparent}
-#sf-bar .sf-btn:hover,#sf-bar .sf-gbtn:hover{color:var(--sf-accent);border-color:var(--sf-accent)}
-#sf-bar .sf-btn.sf-on{color:#fff;background:var(--sf-accent);border-color:var(--sf-accent)}
-#sf-bar select:focus-visible,#sf-bar input:focus-visible,#sf-bar button:focus-visible{outline:2px solid var(--sf-accent);outline-offset:1px}
-#sf-bar .sf-chip{position:relative;display:inline-flex;cursor:pointer;--c:var(--sf-accent)}
-#sf-bar .sf-chip input{position:absolute;inset:0;width:100%;height:100%;margin:0;opacity:0;cursor:pointer}
-#sf-bar .sf-chip span{display:inline-flex;align-items:center;gap:4px;padding:0 7px 0 6px;line-height:20px;color:var(--sf-dim);border:1px solid #cfd8e6;border-radius:10px;user-select:none;-webkit-user-select:none}
-#sf-bar .sf-chip span::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--c);opacity:.35}
-#sf-bar .sf-chip input:checked+span{color:#2b2f36;background:#fff;border-color:var(--c)}
-#sf-bar .sf-chip input:checked+span::before{opacity:1}
-#sf-bar .sf-chip input:focus-visible+span{outline:2px solid var(--sf-accent);outline-offset:1px}
-#sf-bar .sf-chip input:disabled+span{opacity:.5}
-#sf-bar .sf-lbl{min-width:3.4em;color:var(--sf-dim)}
-#sf-bar .sf-dash{color:var(--sf-dim)}
-#sf-bar .sf-lock{opacity:.45}
-#sf-bar .sf-nodate{opacity:.5}
-#sf-count{margin-left:auto;color:var(--sf-dim)}
-#sf-count.sf-hot{color:var(--sf-warn)}
-#sf-bar .sf-status{margin-top:4px;color:var(--sf-dim);word-break:break-all}
-#sf-bar .sf-status:empty{display:none}
-#sf-bar .sf-status.sf-err{color:var(--sf-warn)}
-@media (pointer:coarse){#sf-bar select,#sf-bar input[type=date],#sf-bar input[type=number],#sf-bar .sf-btn,#sf-bar .sf-gbtn{height:28px}#sf-bar .sf-chip span{line-height:26px}}
+#sf-bar{box-sizing:border-box;display:none;flex-wrap:wrap;align-items:center;gap:2px 8px;margin:0 0 2px;padding:2px 4px;font-size:12px;white-space:nowrap;background:#fff;border:1px solid #999}
+#sf-bar select,#sf-bar input,#sf-bar button{font-size:12px;user-select:text;-webkit-user-select:text}
+#sf-bar details{position:relative}
+#sf-bar summary{cursor:pointer}
+#sf-bar .sf-pop{position:absolute;z-index:2;top:100%;left:0;margin-top:4px;max-height:260px;overflow:auto;padding:2px 6px;background:#fff;border:1px solid #999}
+#sf-bar .sf-pop label{display:block}
+#sf-bar hr{margin:2px 0}
+#sf-count.sf-hot{font-weight:bold}
+#sf-status{flex-basis:100%;white-space:normal;word-break:break-all}
+#sf-status:empty{display:none}
 `;
     document.head.appendChild(st);
 }
@@ -2985,16 +2937,12 @@ function sfFillControls() {
     const bar = document.getElementById('sf-bar');
     if (!bar) return;
     const s = sfState();
-    bar.querySelectorAll('input[data-ext]').forEach(cb => { cb.checked = !s.off.includes(cb.dataset.ext); });
     bar.querySelector('#sf-from').value = s.from;
     bar.querySelector('#sf-to').value = s.to;
-    bar.querySelector('#sf-undated').checked = s.undated;
-    bar.querySelector('#sf-cmin').value = s.min;
-    bar.querySelector('#sf-cmax').value = s.max;
 }
 
 function sfReset() {
-    Object.assign(sfState(), { off: [], from: '', to: '', undated: false, min: '', max: '' });
+    Object.assign(sfState(), { off: [], hideUndated: false, from: '', to: '' });
     sfSave();
     sfFillControls();
     rerenderSearchOverlay();
@@ -3002,137 +2950,111 @@ function sfReset() {
 
 function sfBuildBar() {
     sfInjectStyle();
-    const s = sfState();
     const bar = document.createElement('div');
     bar.id = 'sf-bar';
-    bar.setAttribute('role', 'group');
-    bar.setAttribute('aria-label', '搜索筛选');
-
-    const chip = (k) => `<label class="sf-chip" style="--c:${SF_COLOR[k] || ''}"><input type="checkbox" data-ext="${k}" checked><span>${SF_LABEL[k] || k}</span></label>`;
-    const groups = SF_GROUPS.map(([name, keys]) =>
-        `<span class="sf-group">${name ? `<button type="button" class="sf-gbtn" data-group="${keys.join(',')}" title="整组切换">${name}</button>` : ''}${keys.map(chip).join('')}</span>`
-    ).join('');
     const noiseOpts = [0, 1, 2, 3, 4, 5].map(n => `<option value="${n}">${n}</option>`).join('');
-
     bar.innerHTML =
-        `<div class="sf-row">` +
-        `<label class="sf-field" data-lock="1" data-title="字间允许夹杂的无关字数上限，0~5（等同 @noise=）" data-ads-title="组合搜索：在各词条的 [] 里单独设置（n）">噪值 <select id="sf-noise">${noiseOpts}</select></label>` +
-        `<span class="sf-field" data-lock="1" role="radiogroup" aria-label="近义搜索" data-title="近义搜索（等同 @like=）" data-ads-title="组合搜索：在各词条的 [] 里单独设置（l）">近义 ` +
-        `<label class="sf-chip"><input type="radio" name="sf-like" value="1"><span>开</span></label>` +
-        `<label class="sf-chip"><input type="radio" name="sf-like" value="0"><span>关</span></label></span>` +
-        `<button type="button" id="sf-toggle" class="sf-btn" aria-expanded="true"></button>` +
+        `<label data-title="字间允许夹杂的无关字数上限，0~5（等同 @noise=）" data-ads-title="组合搜索：在各词条的 [] 里单独设置（n）">噪值 <select id="sf-noise">${noiseOpts}</select></label>` +
+        `<label data-title="近义搜索（等同 @like=）" data-ads-title="组合搜索：在各词条的 [] 里单独设置（l）"><input type="checkbox" id="sf-like">近义</label>` +
+        `<details id="sf-sfx"><summary>后缀</summary><div class="sf-pop"></div></details>` +
+        `<span>日期 <input type="date" id="sf-from" aria-label="起始日期"> – <input type="date" id="sf-to" aria-label="结束日期"></span>` +
         `<span id="sf-count" aria-live="polite"></span>` +
-        `<button type="button" id="sf-reset" class="sf-btn" title="恢复默认筛选（不影响噪值和近义）">重置</button>` +
-        `</div>` +
-        `<div class="sf-panel">` +
-        `<div class="sf-line">${groups}</div>` +
-        `<div class="sf-line"><span class="sf-pair"><span class="sf-lbl">日期</span>` +
-        `<input type="date" id="sf-from" aria-label="起始日期"><span class="sf-dash">–</span><input type="date" id="sf-to" aria-label="结束日期"></span>` +
-        `<label class="sf-chip" id="sf-undated-wrap" title="设置日期后，没有日期的条目（pdf / epub / txt / 音视频等）默认隐藏"><input type="checkbox" id="sf-undated"><span>含无日期项</span></label></div>` +
-        `<div class="sf-line" data-lock="1" data-ads-title="组合搜索不按命中数筛选"><span class="sf-lbl">命中数</span>` +
-        `<input type="number" id="sf-cmin" min="0" step="1" placeholder="最少" aria-label="文件内最少命中数"><span class="sf-dash">–</span>` +
-        `<input type="number" id="sf-cmax" min="0" step="1" placeholder="最多" aria-label="文件内最多命中数"></div>` +
-        `</div>` +
-        `<div id="sf-status" class="sf-status"></div>`;
+        `<button type="button" id="sf-reset" title="恢复默认筛选（不影响噪值和近义）">重置</button>` +
+        `<div id="sf-status"></div>`;
 
-    // 键盘事件留在条内，避免触发页面级快捷键
-    bar.addEventListener('keydown', (e) => e.stopPropagation());
+    // 键盘事件留在条内，避免触发页面级快捷键；Esc 收起下拉
+    bar.addEventListener('keydown', (e) => {
+        e.stopPropagation();
+        if (e.key === 'Escape') bar.querySelector('#sf-sfx').open = false;
+    });
+    // 点到条外收起下拉
+    document.addEventListener('click', (e) => {
+        const d = bar.querySelector('#sf-sfx');
+        if (d.open && !d.contains(e.target)) d.open = false;
+    });
 
     bar.addEventListener('change', (e) => {
         const t = e.target;
-        const st = sfState();
-        if (t.dataset && t.dataset.ext) {
-            const k = t.dataset.ext;
-            st.off = st.off.filter(x => x !== k);
-            if (!t.checked) st.off.push(k);
+        const s = sfState();
+        if (t.id === 'sf-noise') { sfApplyEngine('noise_level', Number(t.value)); return; }
+        if (t.id === 'sf-like') { sfApplyEngine('synonyms_enabled', t.checked ? 1 : 0); return; }
+        if (t.dataset && t.dataset.k !== undefined) {
+            if (t.dataset.k === '@nodate') {
+                s.hideUndated = !t.checked;
+            } else {
+                s.off = s.off.filter(x => x !== t.dataset.k);
+                if (!t.checked) s.off.push(t.dataset.k);
+            }
         } else if (t.id === 'sf-from') {
-            st.from = t.value;
+            s.from = t.value;
         } else if (t.id === 'sf-to') {
-            st.to = t.value;
-        } else if (t.id === 'sf-undated') {
-            st.undated = t.checked;
-        } else if (t.id === 'sf-noise') {
-            sfApplyEngine('noise_level', Number(t.value));
-            return;
-        } else if (t.name === 'sf-like') {
-            sfApplyEngine('synonyms_enabled', Number(t.value));
-            return;
+            s.to = t.value;
         } else {
             return;
         }
         sfSave();
         rerenderSearchOverlay();
     });
-
-    let numTimer = null;
-    bar.addEventListener('input', (e) => {
-        const t = e.target;
-        if (t.id !== 'sf-cmin' && t.id !== 'sf-cmax') return;
-        clearTimeout(numTimer);
-        numTimer = setTimeout(() => {
-            const st = sfState();
-            st.min = sfNormCount(bar.querySelector('#sf-cmin').value);
-            st.max = sfNormCount(bar.querySelector('#sf-cmax').value);
-            sfSave();
-            rerenderSearchOverlay();
-        }, 150);
-    });
-
     bar.addEventListener('click', (e) => {
-        const b = e.target.closest('button');
-        if (!b) return;
-        const st = sfState();
-        if (b.classList.contains('sf-gbtn')) {
-            const keys = b.dataset.group.split(',');
-            const allOn = keys.every(k => !st.off.includes(k));
-            st.off = st.off.filter(k => !keys.includes(k));
-            if (allOn) st.off.push(...keys);
-            sfFillControls();
-            sfSave();
-            rerenderSearchOverlay();
-        } else if (b.id === 'sf-toggle') {
-            st.open = !st.open;
-            sfSave();
-            sfRefreshBar(window._currentRenderedKeyword, bar._sfTotal | 0, bar._sfShown | 0);
-        } else if (b.id === 'sf-reset') {
-            sfReset();
-        }
+        if (e.target.id === 'sf-reset') sfReset();
     });
-
     return bar;
+}
+
+// 下拉内容由原始结果列表统计得出；统计没变时只同步勾选状态，不重建（避免打断正在操作的下拉）
+function sfSyncPanel(bar, stats) {
+    const s = sfState();
+    const exts = [...stats.exts].sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+    const sig = exts.map(e => e.join(':')).join(',') + '|' + stats.undated;
+    const pop = bar.querySelector('.sf-pop');
+    if (bar._sfSig !== sig) {
+        const row = (k, text, n) => `<label><input type="checkbox" data-k="${k}"> ${text} (${n})</label>`;
+        pop.innerHTML = exts.length
+            ? exts.map(([k, n]) => row(k, k === '(无)' ? '无后缀' : '.' + k, n)).join('') +
+              (stats.undated ? '<hr>' + row('@nodate', '无明确日期', stats.undated) : '')
+            : '无条目';
+        bar._sfSig = sig;
+    }
+    let listed = 0, on = 0;
+    pop.querySelectorAll('input[data-k]').forEach(cb => {
+        cb.checked = cb.dataset.k === '@nodate' ? !s.hideUndated : !s.off.includes(cb.dataset.k);
+        listed++;
+        if (cb.checked) on++;
+    });
+    bar.querySelector('summary').textContent = on < listed ? `后缀 ${on}/${listed}` : '后缀';
 }
 
 function sfPaintStatus(keyword) {
     const el = document.getElementById('sf-status');
     if (!el) return;
-    const ads = isAdsQuery(keyword);
-    const info = ads ? window._adsStatus : null;
+    const info = isAdsQuery(keyword) ? window._adsStatus : null;
     el.textContent = info ? (info.error || info.summary || '') : '';
-    el.classList.toggle('sf-err', !!(info && info.error));
 }
 
-// 筛选条放在 #searchResults 正上方，宽度与其右缘对齐（结果框靠 left:-宽度 伸向左侧）。
-// 结果框是 position:relative / absolute+top:auto 时，条按文档流插在它前面即可把它顶下去；
-// 若结果框有显式 top，则条改用绝对定位并把结果框的 top 下移一个条高。
+// 筛选条放在 #searchResults 正上方，右缘与结果框对齐（结果框靠 left:-宽度 伸向左侧），宽度由内容决定，放不下才折行。
+// 结果框是 position:relative 时，条按文档流插在它前面即可把它顶下去；
+// 结果框是 position:absolute（本项目的样式）时，条改用绝对定位，并把结果框的 top 下移一个条高。
 function sfLayout() {
     const bar = document.getElementById('sf-bar');
     const box = document.getElementById('searchResults');
     if (!bar || !box || bar.style.display === 'none') return;
 
-    if (box.offsetWidth) window._sfBoxW = box.offsetWidth;
+    const cs = getComputedStyle(box);
+    const abs = cs.position === 'absolute';
+    // 必须先让条脱离文档流再量任何东西：条在流内会撑大 shrink-to-fit 的 #search，
+    // 也会把结果框的静态位置顶下去，量到的宽度和位置都会被条自己污染
+    bar.style.position = abs ? 'absolute' : 'relative';
+    bar.style.maxWidth = '';
+    bar.style.width = 'max-content';
+
     const search = document.getElementById('search');
     const content = document.getElementById('content');
     const maxW = (search && content) ? Math.max(0, content.clientWidth - search.offsetWidth - 10) : 0;
-    let w = Math.max(window._sfBoxW || 0, 380);
-    if (maxW) w = Math.min(w, Math.max(maxW, 220));
-    bar.style.width = w + 'px';
-    bar.style.left = (-w) + 'px';
-
-    const cs = getComputedStyle(box);
+    if (maxW) bar.style.maxWidth = maxW + 'px';
+    bar.style.left = (-bar.offsetWidth) + 'px';
     bar.style.zIndex = cs.zIndex !== 'auto' ? cs.zIndex : '';
-    if (cs.position === 'absolute') {
-        // 必须先让条脱离文档流再量结果框的静态位置，否则量到的是被条自己顶下去之后的位置
-        bar.style.position = 'absolute';
+
+    if (abs) {
         let base = parseFloat(box.dataset.sfBaseTop);
         if (!Number.isFinite(base)) {
             box.style.top = '';
@@ -3144,9 +3066,8 @@ function sfLayout() {
             if (box.offsetWidth) box.dataset.sfBaseTop = String(base);   // 结果框隐藏时的数值不可靠，不缓存
         }
         bar.style.top = base + 'px';
-        box.style.top = (base + bar.offsetHeight + 4) + 'px';
+        box.style.top = (base + bar.offsetHeight + 2) + 'px';
     } else {
-        bar.style.position = 'relative';
         bar.style.top = '';
     }
 }
@@ -3159,7 +3080,7 @@ function sfRestoreResultsTop() {
     }
 }
 
-function sfRefreshBar(keyword, total, shown) {
+function sfRefreshBar(keyword, sf) {
     const kw = (keyword || '').trim();
     let bar = document.getElementById('sf-bar');
     const want = !!kw && (isAdsQuery(kw) || !isReservedSearchCommand(kw));
@@ -3174,41 +3095,28 @@ function sfRefreshBar(keyword, total, shown) {
         box.parentNode.insertBefore(bar, box);
         sfFillControls();
     }
-    bar._sfTotal = total;
-    bar._sfShown = shown;
-    bar.style.display = 'block';
+    bar.style.display = 'flex';
 
+    // @ads：噪值 / 近义由各词条的 [] 决定，这里置灰（仍显示当前全局值，省略 n / l 时继承它）
     const ads = isAdsQuery(kw);
-    const s = sfState();
-    const active = sfActive(ads);
-
-    // @ads：噪值 / 近义由各词条的 [] 决定，命中数筛选不适用；控件置灰但仍显示当前全局值（省略 n / l 时继承它）
-    bar.classList.toggle('sf-ads', ads);
-    bar.querySelectorAll('[data-lock]').forEach(el => {
-        el.classList.toggle('sf-lock', ads);
-        el.title = (ads ? el.dataset.adsTitle : el.dataset.title) || '';
-    });
-    bar.querySelectorAll('#sf-noise, input[name="sf-like"], #sf-cmin, #sf-cmax').forEach(el => { el.disabled = ads; });
+    bar.querySelectorAll('[data-title]').forEach(el => { el.title = (ads ? el.dataset.adsTitle : el.dataset.title) || ''; });
+    bar.querySelector('#sf-noise').disabled = ads;
+    bar.querySelector('#sf-like').disabled = ads;
     sfSyncEngine();
+    sfSyncPanel(bar, sf.stats);
 
-    bar.classList.toggle('sf-closed', !s.open);
-    const toggle = bar.querySelector('#sf-toggle');
-    toggle.textContent = s.open ? '收起' : (active ? '筛选 ●' : '筛选');
-    toggle.classList.toggle('sf-on', !s.open && active);
-    toggle.setAttribute('aria-expanded', s.open ? 'true' : 'false');
-    bar.querySelector('#sf-reset').hidden = !active;
-    bar.querySelector('#sf-undated-wrap').classList.toggle('sf-nodate', !(s.from || s.to));
-
+    const total = sf.total, shown = sf.list.length;
     const info = ads ? window._adsStatus : null;
     const countEl = bar.querySelector('#sf-count');
     let txt;
     if (info && info.error) txt = '';
     else if (total === 0) txt = '无结果';
-    else if (shown === 0) txt = `筛选后无结果（已隐藏 ${total} 条）`;
-    else if (shown < total) txt = `显示 ${shown} / ${total}`;
+    else if (shown === 0) txt = `全部 ${total} 条被筛选隐藏`;
+    else if (shown < total) txt = `${shown} / ${total}`;
     else txt = `共 ${total} 条`;
     countEl.textContent = txt;
     countEl.classList.toggle('sf-hot', total > 0 && shown < total);
+    bar.querySelector('#sf-reset').hidden = !sfActive();
     sfPaintStatus(kw);
 
     sfLayout();
@@ -3220,7 +3128,7 @@ function updateSearchResults(results, keyword) {
     results = applyCommentOverlay(applyPageOverlay(results, keyword), keyword);
 
     // 视图筛选只作用于显示：_baseRenderedResults 和结果缓存始终保持未过滤，改筛选不需要重搜
-    const sf = sfApply(results, keyword);
+    const sf = sfApply(results);
     results = sf.list;
     const adsMode = isAdsQuery(keyword);
 
@@ -3281,7 +3189,7 @@ function updateSearchResults(results, keyword) {
         resultsBox.selectedIndex = -1;
     }
 
-    sfRefreshBar(keyword, sf.total, results.length);
+    sfRefreshBar(keyword, sf);
 }
 
 async function generateDoc(type, payload) {
