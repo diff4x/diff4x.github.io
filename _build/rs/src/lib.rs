@@ -728,7 +728,7 @@ pub fn search_multi_range(
 }
 
 // ---------------------------------------------------------------------------
-// 组合搜索（@ads）：文档级布尔表达式（且 / 或 / 非）
+// 组合搜索（@[表达式]词[]…）：文档级布尔表达式（且 / 或 / 非）
 //   - plan = { terms, expr }：terms 是词条表（每个词条自带 noise 和已由主线程展开好的近义关键词），
 //     expr 是引用词条的表达式树：{op:"term",term,neg} | {op:"and",args} | {op:"or",args}
 //   - 一个词条"命中"某文档 = 标题 / 正文 / 路径（仅非 html、非图片）中出现；
@@ -891,6 +891,9 @@ fn parse_ads_plan(val: JsValue) -> Option<AdsPlan> {
     ads_optimize(&mut expr, &terms);
     let mut positives: Vec<usize> = Vec::new();
     ads_collect_positives(&expr, &mut positives);
+    // 同一个词条可以在表达式里出现多次（如 (a&b)|(!a&c)），算分时每个词条只算一次
+    positives.sort_unstable();
+    positives.dedup();
     Some(AdsPlan {
         terms,
         expr,

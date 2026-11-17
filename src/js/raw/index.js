@@ -1586,7 +1586,6 @@ function search_box() {
     const elSearchHistory = $("#searchHistory");
     const elSearchResults = $("#searchResults");
     elSearchInput.setAttribute("autocomplete", "off");
-    elSearchInput.setAttribute("title", "@noise=" + Number(store.noise_level ?? 5) + "; @like=" + Number(store.synonyms_enabled ?? 1));
 
     function showSearchHistoryByTime() {
         const elSearchHistory = $("#searchHistory");
@@ -1710,40 +1709,6 @@ function search_box() {
         const val = this.value.trim();
         if (e.keyCode === 40 || e.keyCode === 13 || e.key === "Enter") {
             e.preventDefault();
-            if (val.startsWith("@noise=")) {
-                const n = parseInt(val.split("=")[1], 10);
-                if (!isNaN(n) && n >= 0 && n <= 5) {
-                    store.noise_level = n;
-                    sfSyncEngine();
-                    this.value = "";
-                    this.placeholder = `已将搜索宽容度设为: ${n}`;
-                    setTimeout(() => this.placeholder = "Search...", 2000);
-                    bindCoreNamespace({ force: true });
-                    if (searchWorker) searchWorker.postMessage({ type: "CLEAR_CURSOR", payload: { keyword: "" } });
-                } else {
-                    this.placeholder = "宽容度只能是 0~5（当前输入无效）";
-                    setTimeout(() => this.placeholder = "Search...", 2500);
-                    this.value = "";
-                }
-                return;
-            }
-            if (val.startsWith("@like=")) {
-                const n = parseInt(val.split("=")[1], 10);
-                if (n === 0 || n === 1) {
-                    store.synonyms_enabled = n;
-                    sfSyncEngine();
-                    this.value = "";
-                    this.placeholder = n === 1 ? "已开启近义搜索" : "已停用近义搜索";
-                    setTimeout(() => this.placeholder = "Search...", 2000);
-                    bindCoreNamespace({ force: true });
-                    if (searchWorker) searchWorker.postMessage({ type: "CLEAR_CURSOR", payload: { keyword: "" } });
-                } else {
-                    this.placeholder = "@like 只能是 0 或 1（当前输入无效）";
-                    setTimeout(() => this.placeholder = "Search...", 2500);
-                    this.value = "";
-                }
-                return;
-            }
             if (val === "@bomb") {
                 import('./deferred-features.js').then(m => m.bomb({ iframes }));
                 this.value = "";
@@ -2078,7 +2043,7 @@ function search_box() {
             const resultData = window._currentResultMap && window._currentResultMap.get(path);
             const keyword = window._currentRenderedKeyword || elSearchInput.value.trim();
             if (!resultData || !keyword) return;
-            if (isAdsQuery(keyword)) return;   // @ads：html 条目不创建预览
+            if (isAdsQuery(keyword)) return;   // 组合搜索：html 条目不创建预览
 
             hoverSnippetTimer = setTimeout(async () => {
                 const data = await requestSnippets(path, keyword);
@@ -2555,86 +2520,37 @@ function normalizeKeyword(kw) {
     return kw.trim().toLowerCase().replace(/\s+/g, '');
 }
 
-// @ads 也算保留前缀：组合搜索不进结果缓存、不统计页内命中、不叠加页面 / 评论 overlay、不通知 content 高亮
+// 以 @[ 开头的组合搜索也算保留前缀：不进结果缓存、不统计页内命中、不叠加页面 / 评论 overlay、不通知 content 高亮
 function isReservedSearchCommand(kw) {
-    return typeof kw === 'string' && (/^@(noise=|like=|bomb$|rebirth$)/.test(kw) || isAdsQuery(kw));
+    return typeof kw === 'string' && (/^@(bomb$|rebirth$)/.test(kw) || isAdsQuery(kw));
 }
 
 // [ads-filter:begin] ───────────────────────────────────────────────────────────
-// 组合搜索（@ads）与结果筛选条
+// 组合搜索与结果筛选条
 //
-//  · @ads[+n3l1]飞机[(][+n2l0]大炮[|n3l1]潜艇[)][-n0l0]机枪   = 飞机 且 (大炮 或 潜艇) 且 非 机枪
-//      命令区 [] 内：+ 包含（可省略）/ - 不包含 / | 或 / ( ) 分组，n0~5 噪值，l0/1 近义；顺序不限，
-//      n / l 省略则继承全局值，只作用于当次。词条之间默认"且"，"或"优先级更低，用括号改变结合。
+//  · 组合搜索  @[a&!(b|c)]飞机[31]大炮[]机枪[0]
+//      开头的 @[...] 进入组合搜索。第一个 [] 是表达式：运算符 & | ! ( )（优先级 ! > & > |），字母 a~z 是形参；
+//      第 n 个字母对应后面第 n 个"词[]"——词写在 [] 的左边，[] 里 0~2 位数字：
+//          []   噪值、近义都取全局（筛选条里的噪值 / 近义）
+//          [3]  噪值 3（0~5），近义取全局
+//          [31] 噪值 3，近义 1（0 关 / 1 开）
+//      示例 = 飞机（噪 3、近义） 且 非(大炮（全局）或 机枪（噪 0、近义取全局））。
 //      语义是"同一文档内"：包含项可由标题 / 正文 / 评论满足，排除项只看标题 / 正文（不看评论）；
 //      解析和近义展开在主线程，匹配在 wasm 里一遍扫完。
 //  · 筛选分两类：
-//      引擎参数（噪值、近义）→ 改变匹配结果，改后重搜（与 @noise= / @like= 共用同一份 store）；
+//      引擎参数（噪值、近义）→ 改变匹配结果，改后重搜（存在 store.noise_level / store.synonyms_enabled）；
 //      视图筛选（后缀、无明确日期、日期范围）→ 只过滤已算好的结果，不重搜、不进缓存。
 // ──────────────────────────────────────────────────────────────────────────────
-const ADS_PREFIX_RE = /^@ads(?![A-Za-z0-9_])/i;
+const ADS_PREFIX_RE = /^[@＠][\[［【]/;
 
 function isAdsQuery(kw) {
     return typeof kw === 'string' && ADS_PREFIX_RE.test(kw.trimStart());
 }
 
-// 命令区 [...]：+ - | ( ) n0~5 l0/1，顺序不限、均可省略
-//   [+n3l1] 包含   [-n0l0] 不包含   [|n3l1] 与前一项"或"   [|] 单独的"或"连接符   [(] 开括号   [)] 闭括号
-function parseAdsCmd(body) {
-    const fail = (error) => ({ error });
-    let s = String(body).replace(/\s+/g, '').toLowerCase();
-    const r = { sign: '', or: false, open: false, close: false, noise: null, like: null };
-    while (s) {
-        const c = s[0];
-        if (c === '+' || c === '-') {
-            if (r.sign) return fail('命令区里 + / - 只能写一个');
-            r.sign = c;
-            s = s.slice(1);
-        } else if (c === '|') {
-            if (r.or) return fail('命令区里 | 只能写一个');
-            r.or = true;
-            s = s.slice(1);
-        } else if (c === '(' || c === ')') {
-            if (r.open || r.close) return fail('一个命令里只能有一个括号');
-            if (c === '(') r.open = true; else r.close = true;
-            s = s.slice(1);
-        } else if (c === 'n') {
-            if (r.noise !== null) return fail('命令区里 n 只能写一次');
-            const m = /^n([0-9])/.exec(s);
-            if (!m) return fail('n 后面要跟 0~5 的数字');
-            if (Number(m[1]) > 5) return fail('噪值 n 只能是 0~5');
-            r.noise = Number(m[1]);
-            s = s.slice(2);
-        } else if (c === 'l') {
-            if (r.like !== null) return fail('命令区里 l 只能写一次');
-            const m = /^l([01])/.exec(s);
-            if (!m) return fail('l 后面要跟 0 或 1');
-            r.like = Number(m[1]);
-            s = s.slice(2);
-        } else {
-            return fail(`命令区无法识别「${c}」（可用 + - | ( ) n0~5 l0/1）`);
-        }
-    }
-    if (r.close && r.or) return fail('| 后面不能直接接 )');
-    if ((r.open || r.close) && (r.sign || r.noise !== null || r.like !== null)) {
-        return fail('括号命令 [(] / [)] 里不能再写 + - n l');
-    }
-    return r;
-}
-
 const ADS_MAX_DEPTH = 8;
+const ADS_USAGE = '@[a&!(b|c)]飞机[31]大炮[]机枪[0]';
 
 class AdsSyntaxError extends Error { }
-
-// 表达式树转成带括号的可读文字（且 优先于 或；不同运算符嵌套时加括号）
-function adsExprText(node, terms, parentOp) {
-    if (node.op === 'term') {
-        const t = terms[node.term];
-        return `${node.neg ? '非 ' : ''}${t.text}（噪${t.noise}${t.like ? '·近义' : ''}）`;
-    }
-    const s = node.args.map(a => adsExprText(a, terms, node.op)).join(node.op === 'and' ? ' 且 ' : ' 或 ');
-    return parentOp && parentOp !== node.op ? `(${s})` : s;
-}
 
 // 表达式在"什么都不含的空文档"上是否成立（成立就会匹配几乎全库，必须拒绝）
 function adsHoldsOnEmpty(n) {
@@ -2642,107 +2558,121 @@ function adsHoldsOnEmpty(n) {
     return n.op === 'and' ? n.args.every(adsHoldsOnEmpty) : n.args.some(adsHoldsOnEmpty);
 }
 
-// 把整条 @ads 命令解析成 { terms, expr }。
-// 语法：词条之间默认是"且"；| 表示"或"，优先级低于"且"；( ) 分组；- 只作用于紧跟的一个词条。
-// 输入是边敲边搜的，半截语法返回 { ok:false, error }，不会被当普通关键词去搜。
+// 把整条命令解析成 { terms, expr, summary }；输入是边敲边搜的，半截语法返回 { ok:false, error }，
+// 不会被当普通关键词去搜。expr 是引用词条下标的表达式树（非 已用德摩根定律下推到词条上）。
 function parseAdsQuery(raw) {
     const fail = (error) => ({ ok: false, error });
-    const src = String(raw).trim().replace(ADS_PREFIX_RE, '')
-        .replace(/[【［]/g, '[').replace(/[】］]/g, ']');   // 中文输入法下的方括号
+    const src = String(raw).trim()
+        .replace(/＠/g, '@').replace(/[【［]/g, '[').replace(/[】］]/g, ']');   // 中文输入法下的符号
+    if (!/^@\[/.test(src)) return fail('组合搜索以 @[表达式] 开头，例如 ' + ADS_USAGE);
+
+    // 1) 表达式区：第一个 [ ] 之间
+    const close = src.indexOf(']', 2);
+    if (close < 0) return fail('表达式缺少 ]，例如 ' + ADS_USAGE);
+    const es = src.slice(2, close)
+        .replace(/＆/g, '&').replace(/｜/g, '|').replace(/！/g, '!').replace(/（/g, '(').replace(/）/g, ')')
+        .replace(/\s+/g, '').toLowerCase();
+    if (!es) return fail('表达式为空，例如 ' + ADS_USAGE);
+    const bad = /[^a-z&|!()]/.exec(es);
+    if (bad) return fail(`表达式里不能有「${bad[0]}」（只能用 & | ! ( ) 和字母 a~z）`);
+
+    // 2) 实参区：词[噪值近义] 词[噪值近义] …（词在 [] 的左边）
+    const rest = src.slice(close + 1);
     const defNoise = Math.min(5, Math.max(0, Number(store.noise_level ?? 5) || 0));
     const defLike = (store.synonyms_enabled ?? 1) === 1 ? 1 : 0;
-
-    // 1) 词法：文字 [命令] 文字 [命令] 文字 → 记号流 term / or / open / close
-    const cmds = [];
-    for (const m of src.matchAll(/\[([^\[\]]*)\]/g)) {
-        cmds.push({ body: m[1], start: m.index, end: m.index + m[0].length });
-    }
-    const toks = [];
-    const pushTerm = (neg, noise, like, text) => {
-        if (/[\[\]]/.test(text)) return '方括号 [ ] 没有配对';
-        toks.push({ k: 'term', neg, noise: noise ?? defNoise, like: like ?? defLike, text });
-        return '';
-    };
-    // 第一个 [] 之前的文字视为包含项（默认设置）
-    const lead = (cmds.length ? src.slice(0, cmds[0].start) : src).trim();
-    if (lead) {
-        const err = pushTerm(false, null, null, lead);
-        if (err) return fail(err);
-    }
-    for (let i = 0; i < cmds.length; i++) {
-        const c = cmds[i];
-        const spec = parseAdsCmd(c.body);
-        if (spec.error) return fail(spec.error);
-        const text = src.slice(c.end, i + 1 < cmds.length ? cmds[i + 1].start : src.length).trim();
-        if (spec.open || spec.close) {
-            if (text) return fail(`[${c.body}] 后面不能直接跟关键词，请另起一个 [+] 命令`);
-            if (spec.or) toks.push({ k: 'or' });
-            toks.push({ k: spec.open ? 'open' : 'close' });
-        } else if (text) {
-            if (spec.or) toks.push({ k: 'or' });
-            const err = pushTerm(spec.sign === '-', spec.noise, spec.like, text);
-            if (err) return fail(err);
-        } else if (spec.or && !spec.sign && spec.noise === null && spec.like === null) {
-            toks.push({ k: 'or' });   // 单独的 [|] 连接符
-        } else {
-            return fail(`[${c.body}] 后面缺少关键词`);
-        }
-    }
-    if (toks.length === 0) return fail('用法：@ads[+n3l1]飞机[(][+n2l0]大炮[|n3l1]潜艇[)][-n0l0]机枪');
-
-    // 2) 语法：expr := conj ('|' conj)* ；conj := unit+ ；unit := term | '(' expr ')'
     const terms = [];
-    let pos = 0;
-    const peek = () => toks[pos];
-    const parseExpr = (depth) => {
-        if (depth > ADS_MAX_DEPTH) throw new AdsSyntaxError(`括号嵌套太深（最多 ${ADS_MAX_DEPTH} 层）`);
-        const alts = [parseConj(depth)];
-        while (peek() && peek().k === 'or') {
-            pos++;
-            alts.push(parseConj(depth));
-        }
-        if (alts.length === 1) return alts[0];
-        return { op: 'or', args: alts.flatMap(a => a.op === 'or' ? a.args : [a]) };
-    };
-    const parseConj = (depth) => {
-        const items = [];
-        while (peek() && (peek().k === 'term' || peek().k === 'open')) items.push(parseUnit(depth));
-        if (items.length === 0) {
-            const p = peek(), prev = toks[pos - 1];
-            if (p && p.k === 'close') {
-                throw new AdsSyntaxError(prev && prev.k === 'open' ? '括号里是空的' : prev && prev.k === 'or' ? '| 后面缺少内容' : '多余的 )');
-            }
-            if (p && p.k === 'or') throw new AdsSyntaxError('| 前面缺少内容');
-            throw new AdsSyntaxError(prev && prev.k === 'or' ? '| 后面缺少内容' : '表达式不完整');
-        }
-        if (items.length === 1) return items[0];
-        return { op: 'and', args: items.flatMap(a => a.op === 'and' ? a.args : [a]) };
-    };
-    const parseUnit = (depth) => {
-        const t = toks[pos++];
-        if (t.k === 'term') {
-            terms.push({ noise: t.noise, like: t.like, text: t.text });
-            return { op: 'term', term: terms.length - 1, neg: t.neg };
-        }
-        const inner = parseExpr(depth + 1);   // t.k === 'open'
-        if (!peek() || peek().k !== 'close') throw new AdsSyntaxError('括号没有闭合，缺少 [)]');
-        pos++;
-        return inner;
-    };
+    const re = /([^\[\]]*)\[([^\[\]]*)\]/y;
+    let at = 0, m;
+    while ((m = re.exec(rest)) !== null) {
+        at = re.lastIndex;
+        const n = terms.length + 1;
+        const text = m[1].trim();
+        const digits = m[2].replace(/\s+/g, '');
+        if (!text) return fail(`第 ${n} 个 [] 前面没有词`);
+        if (!/^[0-9]*$/.test(digits)) return fail(`第 ${n} 个 [${m[2]}] 里只能写数字：[] / [噪值] / [噪值近义]`);
+        if (digits.length > 2) return fail(`第 ${n} 个 [${digits}] 最多 2 位：噪值 0~5，近义 0 或 1`);
+        if (digits.length >= 1 && Number(digits[0]) > 5) return fail(`第 ${n} 个 [${digits}] 的噪值只能是 0~5`);
+        if (digits.length === 2 && Number(digits[1]) > 1) return fail(`第 ${n} 个 [${digits}] 的近义只能是 0 或 1`);
+        terms.push({
+            text,
+            noise: digits.length >= 1 ? Number(digits[0]) : defNoise,
+            like: digits.length === 2 ? Number(digits[1]) : defLike
+        });
+    }
+    const tail = rest.slice(at).trim();
+    if (tail) return fail(/[\[\]]/.test(tail) ? '方括号 [ ] 没有配对' : `「${tail}」后面缺少 []（每个词后面都要跟一个 []，留空表示用全局设置）`);
+    if (terms.length === 0) return fail('表达式后面要跟词和 []，例如 ' + ADS_USAGE);
+    if (terms.length > 26) return fail('最多 26 个词（字母 a~z）');
 
-    let expr;
+    // 3) 表达式语法：or := and ('|' and)* ；and := unary ('&' unary)* ；unary := '!' unary | '(' or ')' | 字母
+    let pos = 0;
+    const used = new Set();
+    const parseOr = (depth) => {
+        const xs = [parseAnd(depth)];
+        while (es[pos] === '|') { pos++; xs.push(parseAnd(depth)); }
+        return xs.length === 1 ? xs[0] : { k: 'or', xs };
+    };
+    const parseAnd = (depth) => {
+        const xs = [parseUnary(depth)];
+        while (es[pos] === '&') { pos++; xs.push(parseUnary(depth)); }
+        return xs.length === 1 ? xs[0] : { k: 'and', xs };
+    };
+    const parseUnary = (depth) => {
+        const c = es[pos];
+        if (c === undefined) throw new AdsSyntaxError('表达式不完整：运算符后面缺少内容');
+        if (c === '!') { pos++; return { k: 'not', x: parseUnary(depth) }; }
+        if (c === '(') {
+            if (depth >= ADS_MAX_DEPTH) throw new AdsSyntaxError(`括号嵌套太深（最多 ${ADS_MAX_DEPTH} 层）`);
+            pos++;
+            const e = parseOr(depth + 1);
+            if (es[pos] !== ')') throw new AdsSyntaxError('括号没有闭合，缺少 )');
+            pos++;
+            return e;
+        }
+        if (c >= 'a' && c <= 'z') { pos++; used.add(c); return { k: 'var', ch: c }; }
+        throw new AdsSyntaxError(`「${c}」前面缺少内容`);
+    };
+    let tree;
     try {
-        expr = parseExpr(0);
-        if (pos < toks.length) throw new AdsSyntaxError('多余的 )');
+        tree = parseOr(0);
+        if (pos < es.length) {
+            throw new AdsSyntaxError(es[pos] === ')' ? '多余的 )' : `「${es[pos - 1]}」和「${es[pos]}」之间缺少运算符 & 或 |`);
+        }
     } catch (e) {
         if (e instanceof AdsSyntaxError) return fail(e.message);
         throw e;
     }
 
-    if (adsHoldsOnEmpty(expr)) {
-        return fail('至少要有一个必须出现的包含项（只有排除项，或 | 里带 -，会匹配几乎所有文档）');
+    // 4) 形参与实参一一对应：第 n 个字母 ↔ 第 n 个词；多出来或没用到的都报错，免得手误悄悄改变含义
+    for (const ch of [...used].sort()) {
+        if (ch.charCodeAt(0) - 97 >= terms.length) return fail(`表达式里用到了 ${ch}，但后面只有 ${terms.length} 个词`);
     }
-    return { ok: true, terms, expr, summary: adsExprText(expr, terms, null) };
+    for (let i = 0; i < terms.length; i++) {
+        if (!used.has(String.fromCharCode(97 + i))) {
+            return fail(`第 ${i + 1} 个词「${terms[i].text}」在表达式里没有对应的 ${String.fromCharCode(97 + i)}`);
+        }
+    }
+
+    // 5) 转成引擎用的表达式树：非 只出现在词条上（德摩根：非(与)=或(非)、非(或)=与(非)），同运算符嵌套拍平
+    const wire = (n, neg) => {
+        if (n.k === 'var') return { op: 'term', term: n.ch.charCodeAt(0) - 97, neg };
+        if (n.k === 'not') return wire(n.x, !neg);
+        const op = (n.k === 'and') !== neg ? 'and' : 'or';
+        return { op, args: n.xs.map(x => wire(x, neg)).flatMap(a => a.op === op ? a.args : [a]) };
+    };
+    const expr = wire(tree, false);
+    if (adsHoldsOnEmpty(expr)) {
+        return fail('至少要有一个必须出现的词（只有被 ! 排除的词，或 | 里带 !，会匹配几乎所有文档）');
+    }
+
+    // 6) 摘要：按用户写的结构显示（保留 非(…)），词条后标出实际生效的噪值 / 近义
+    const show = (n, parent) => {
+        if (n.k === 'var') { const t = terms[n.ch.charCodeAt(0) - 97]; return `${t.text}（噪${t.noise}${t.like ? '·近义' : ''}）`; }
+        if (n.k === 'not') return n.x.k === 'var' ? '非 ' + show(n.x) : '非(' + show(n.x, null) + ')';
+        const s = n.xs.map(x => show(x, n.k)).join(n.k === 'and' ? ' 且 ' : ' 或 ');
+        return parent && parent !== n.k ? `(${s})` : s;
+    };
+    return { ok: true, terms, expr, summary: show(tree, null) };
 }
 
 function searchAds(kw) {
@@ -2891,12 +2821,10 @@ function sfApply(results) {
     return { list, total: results.length, stats };
 }
 
-// ── 引擎参数：与 @noise= / @like= 共用 store，改后清缓存命名空间并重搜 ─────────────
+// ── 引擎参数：噪值 / 近义存在 store 里，改后清缓存命名空间并重搜 ──────────────────
 function sfSyncEngine() {
     const n = Number(store.noise_level ?? 5);
     const l = Number(store.synonyms_enabled ?? 1);
-    const input = document.getElementById('searchInput');
-    if (input) input.setAttribute('title', "@noise=" + n + "; @like=" + l);
     const bar = document.getElementById('sf-bar');
     if (!bar) return;
     bar.querySelector('#sf-noise').value = String(n);
@@ -2923,7 +2851,7 @@ function sfInjectStyle() {
 #sf-bar select,#sf-bar input,#sf-bar button{font-size:12px;user-select:text;-webkit-user-select:text}
 #sf-bar details{position:relative}
 #sf-bar summary{cursor:pointer}
-#sf-bar .sf-pop{position:absolute;z-index:2;top:100%;left:0;margin-top:4px;max-height:260px;overflow:auto;padding:2px 6px;background:#fff;border:1px solid #999}
+#sf-bar .sf-pop{position:absolute;z-index:2;top:100%;left:0;margin-top:4px;max-height:320px;overflow:auto;padding:2px 6px;background:#fff;border:1px solid #999}
 #sf-bar .sf-pop label{display:block}
 #sf-bar hr{margin:2px 0}
 #sf-count.sf-hot{font-weight:bold}
@@ -2948,16 +2876,33 @@ function sfReset() {
     rerenderSearchOverlay();
 }
 
+// 反选：只翻转当前下拉里各后缀的勾选状态；"无明确日期"不动
+// （否则"取消 pdf 再反选 = 只看 pdf"时，没有日期的 pdf 会被连带隐藏）
+function sfInvert(bar) {
+    const keys = [...bar.querySelectorAll('.sf-list input[data-k]')].map(i => i.dataset.k).filter(k => k !== '@nodate');
+    if (!keys.length) return;
+    const s = sfState();
+    const off = new Set(s.off);
+    for (const k of keys) { if (off.has(k)) off.delete(k); else off.add(k); }
+    s.off = [...off];
+    sfSave();
+    rerenderSearchOverlay();
+}
+
 function sfBuildBar() {
     sfInjectStyle();
     const bar = document.createElement('div');
     bar.id = 'sf-bar';
     const noiseOpts = [0, 1, 2, 3, 4, 5].map(n => `<option value="${n}">${n}</option>`).join('');
     bar.innerHTML =
-        `<label data-title="字间允许夹杂的无关字数上限，0~5（等同 @noise=）" data-ads-title="组合搜索：在各词条的 [] 里单独设置（n）">噪值 <select id="sf-noise">${noiseOpts}</select></label>` +
-        `<label data-title="近义搜索（等同 @like=）" data-ads-title="组合搜索：在各词条的 [] 里单独设置（l）"><input type="checkbox" id="sf-like">近义</label>` +
-        `<details id="sf-sfx"><summary>后缀</summary><div class="sf-pop"></div></details>` +
-        `<span>日期 <input type="date" id="sf-from" aria-label="起始日期"> – <input type="date" id="sf-to" aria-label="结束日期"></span>` +
+        `<label title="字间允许夹杂的无关字数上限，0~5；组合搜索里 [] 留空或只写噪值的词，近义同理，都取这里的值">噪值 <select id="sf-noise">${noiseOpts}</select></label>` +
+        `<label title="近义搜索；组合搜索里 [] 留空或只写一位的词也用它"><input type="checkbox" id="sf-like">近义</label>` +
+        `<details id="sf-sfx"><summary>筛选</summary><div class="sf-pop">` +
+        `<button type="button" id="sf-inv" title="反选各后缀的勾选状态（不含「无明确日期」）">反选</button>` +
+        `<div class="sf-list"></div><hr>` +
+        `<label>起 <input type="date" id="sf-from" aria-label="起始日期"></label>` +
+        `<label>止 <input type="date" id="sf-to" aria-label="结束日期"></label>` +
+        `</div></details>` +
         `<span id="sf-count" aria-live="polite"></span>` +
         `<button type="button" id="sf-reset" title="恢复默认筛选（不影响噪值和近义）">重置</button>` +
         `<div id="sf-status"></div>`;
@@ -2997,31 +2942,29 @@ function sfBuildBar() {
     });
     bar.addEventListener('click', (e) => {
         if (e.target.id === 'sf-reset') sfReset();
+        else if (e.target.id === 'sf-inv') sfInvert(bar);
     });
     return bar;
 }
 
-// 下拉内容由原始结果列表统计得出；统计没变时只同步勾选状态，不重建（避免打断正在操作的下拉）
+// 下拉里的勾选列表由原始结果列表统计得出；统计没变时只同步勾选状态，不重建（避免打断正在操作的下拉）。
+// 日期输入框在列表之外，重建列表不会动它们。
 function sfSyncPanel(bar, stats) {
     const s = sfState();
     const exts = [...stats.exts].sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
     const sig = exts.map(e => e.join(':')).join(',') + '|' + stats.undated;
-    const pop = bar.querySelector('.sf-pop');
+    const list = bar.querySelector('.sf-list');
     if (bar._sfSig !== sig) {
         const row = (k, text, n) => `<label><input type="checkbox" data-k="${k}"> ${text} (${n})</label>`;
-        pop.innerHTML = exts.length
+        list.innerHTML = exts.length
             ? exts.map(([k, n]) => row(k, k === '(无)' ? '无后缀' : '.' + k, n)).join('') +
               (stats.undated ? '<hr>' + row('@nodate', '无明确日期', stats.undated) : '')
             : '无条目';
         bar._sfSig = sig;
     }
-    let listed = 0, on = 0;
-    pop.querySelectorAll('input[data-k]').forEach(cb => {
+    list.querySelectorAll('input[data-k]').forEach(cb => {
         cb.checked = cb.dataset.k === '@nodate' ? !s.hideUndated : !s.off.includes(cb.dataset.k);
-        listed++;
-        if (cb.checked) on++;
     });
-    bar.querySelector('summary').textContent = on < listed ? `后缀 ${on}/${listed}` : '后缀';
 }
 
 function sfPaintStatus(keyword) {
@@ -3052,7 +2995,9 @@ function sfLayout() {
     const maxW = (search && content) ? Math.max(0, content.clientWidth - search.offsetWidth - 10) : 0;
     if (maxW) bar.style.maxWidth = maxW + 'px';
     bar.style.left = (-bar.offsetWidth) + 'px';
-    bar.style.zIndex = cs.zIndex !== 'auto' ? cs.zIndex : '';
+    // 条（及其下拉面板）要压在结果框之上：结果框有 z-index 时取它加一，否则不设
+    const zi = parseInt(cs.zIndex, 10);
+    bar.style.zIndex = Number.isFinite(zi) ? String(zi + 1) : '';
 
     if (abs) {
         let base = parseFloat(box.dataset.sfBaseTop);
@@ -3097,11 +3042,8 @@ function sfRefreshBar(keyword, sf) {
     }
     bar.style.display = 'flex';
 
-    // @ads：噪值 / 近义由各词条的 [] 决定，这里置灰（仍显示当前全局值，省略 n / l 时继承它）
+    // 组合搜索下噪值 / 近义照常可用：它们是 [] 留空（或只写噪值）的词的默认值，改动后整条重搜
     const ads = isAdsQuery(kw);
-    bar.querySelectorAll('[data-title]').forEach(el => { el.title = (ads ? el.dataset.adsTitle : el.dataset.title) || ''; });
-    bar.querySelector('#sf-noise').disabled = ads;
-    bar.querySelector('#sf-like').disabled = ads;
     sfSyncEngine();
     sfSyncPanel(bar, sf.stats);
 
@@ -3156,7 +3098,7 @@ function updateSearchResults(results, keyword) {
             let option = document.createElement('option');
             const isPrivate = (result.localOnly === true || result.info === "localOnly");
             const title = result.type === "html" ? result.title.replace(/\.html$/, '') : result.title;
-            // @ads：不显示命中数；评论只用 [💬] 标出"靠评论才满足"的条目，不带数量
+            // 组合搜索：不显示命中数；评论只用 [💬] 标出"靠评论才满足"的条目，不带数量
             const countStr = (result.commentOnly || adsMode) ? "" : ` [${result.count}]`;
             const commentStr = adsMode
                 ? (result.viaComment ? " [💬]" : "")
@@ -4039,7 +3981,7 @@ function requestCommentHits(kw, token) {
 function refreshCommentOverlayForCurrentKeyword() {
     const kw = window._currentRenderedKeyword;
     if (!kw) return;
-    if (isAdsQuery(kw)) { rerunActiveSearch(); return; }   // 评论参与 @ads 的判定
+    if (isAdsQuery(kw)) { rerunActiveSearch(); return; }   // 评论参与组合搜索的判定
     if (isReservedSearchCommand(kw)) return;
     requestCommentHits(kw, window._searchToken);
 }

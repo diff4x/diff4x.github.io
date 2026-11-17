@@ -419,8 +419,8 @@ function search() {
 
     const rawKeyword = (store.keyword || "").trim();
     if (!rawKeyword || !wasmEngineReady) return;
-    // @ads 组合搜索：store.keyword 是整条命令而不是关键词，条目不做高亮导航
-    if (/^@ads(?![A-Za-z0-9_])/i.test(rawKeyword)) return;
+    // @[表达式]词[]… 组合搜索：store.keyword 是整条命令而不是关键词，条目不做高亮导航（与 index.js 的 isAdsQuery 保持一致）
+    if (/^[@＠][\[［【]/.test(rawKeyword)) return;
 
     const contentRoot =
         document.querySelector('pre:not(#diff-pre)') ||
