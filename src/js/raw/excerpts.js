@@ -31,21 +31,53 @@ function makeDraggable(popupSelector, headerSelector) {
         e.preventDefault();
     });
 
-    document.addEventListener('mousemove', (e) => {
+    const onMove = (e) => {
         if (!isDragging) return;
+        if (!document.body.contains(popup)) {
+            document.removeEventListener('mousemove', onMove);
+            document.removeEventListener('mouseup', onUp);
+            return;
+        }
         const scale = window._tpZoom || 1;
         const left = initialLeft + (e.clientX - startX) / scale;
         const top = initialTop + (e.clientY - startY) / scale;
         popup.style.left = left + 'px';
         popup.style.top = top + 'px';
-    });
+    };
 
-    document.addEventListener('mouseup', () => {
+    const onUp = () => {
         if (isDragging) {
             isDragging = false;
             header.style.cursor = 'move';
         }
-    });
+    };
+
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+}
+
+function copyTextFallback(text) {
+    const legacyCopy = () => {
+        const active = document.activeElement;
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.readOnly = true;
+        ta.style.cssText = 'position:fixed;top:-9999px;left:-9999px;opacity:0;';
+        document.body.appendChild(ta);
+        ta.focus();
+        ta.select();
+        ta.setSelectionRange(0, text.length);
+        let ok = false;
+        try { ok = document.execCommand('copy'); } catch (e) { }
+        document.body.removeChild(ta);
+        if (active && active.focus) active.focus({ preventScroll: true });
+        return ok;
+    };
+    if (legacyCopy()) return Promise.resolve(true);
+    if (navigator.clipboard && window.isSecureContext) {
+        return navigator.clipboard.writeText(text).then(() => true, () => false);
+    }
+    return Promise.resolve(false);
 }
 
 export const ExcerptsSys = {
@@ -240,11 +272,12 @@ export const ExcerptsUIManager = {
 
             const textToCopy = data.excerpts.map(e => e.text.trim()).join('\n\n\n');
 
-            navigator.clipboard.writeText(textToCopy).then(() => {
+            const ok = await copyTextFallback(textToCopy);
+            if (ok) {
                 this.openAndRefresh();
-            }).catch(() => {
+            } else {
                 alert("写入剪贴板失败，请检查浏览器权限。");
-            });
+            }
         };
     },
 
@@ -346,7 +379,14 @@ export const ExcerptsUIManager = {
 
             const labelZone = document.createElement('div');
             labelZone.style.cssText = "flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; display:flex; justify-content:space-between; align-items:center; gap:6px;";
-            labelZone.innerHTML = `<span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap;padding:6px 8px;" title="${book.name}">${book.name}</span><span style="background:#f1f5f9; padding:1px 5px; border-radius:8px; font-size:10px; color:#64748b; font-weight:normal; flex-shrink:0;">${book.count}</span>`;
+            const nameSpan = document.createElement('span');
+            nameSpan.style.cssText = "overflow:hidden; text-overflow:ellipsis; white-space:nowrap;padding:6px 8px;";
+            nameSpan.title = book.name;
+            nameSpan.textContent = book.name;
+            const countSpan = document.createElement('span');
+            countSpan.style.cssText = "background:#f1f5f9; padding:1px 5px; border-radius:8px; font-size:10px; color:#64748b; font-weight:normal; flex-shrink:0;";
+            countSpan.textContent = String(book.count);
+            labelZone.append(nameSpan, countSpan);
 
             const handleItemSelect = () => {
                 this.currentBook = book.name;
@@ -415,10 +455,16 @@ export const ExcerptsUIManager = {
             };
 
             textarea.addEventListener('input', adjustHeight);
-            setTimeout(() => adjustHeight.call(textarea), 0);
 
             row.append(textarea, idLabel);
             zone.appendChild(row);
+        });
+
+        requestAnimationFrame(() => {
+            zone.querySelectorAll('.exc-item-text').forEach(ta => {
+                ta.style.height = '1px';
+                ta.style.height = ta.scrollHeight + 'px';
+            });
         });
     }
 };

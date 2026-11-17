@@ -410,8 +410,7 @@ export async function showChangelog(ctx, opts = {}) {
         const content = document.createElement('div');
         content.id = 'changelog-content';
         popup.append(header, content);
-        document.body.appendChild(popup);
-        document.getElementById('stage').appendChild(popup);
+        (document.getElementById('stage') || document.body).appendChild(popup);
 
         const autoShowCb = $('#auto-show-changelog-cb');
         if (store.auto_show_changelog === null || store.auto_show_changelog === undefined) {
@@ -1042,24 +1041,27 @@ export function showGlobalBookmarkMenu(x, y, source) {
     menu.style.top = targetTop + 'px';
     menu.style.visibility = 'visible';
 
+    if (window._closeGlobalMenu) {
+        window._closeGlobalMenu();
+    }
+
     const closeMenu = (ev) => {
         if (hoverCloseTimer) {
             clearTimeout(hoverCloseTimer);
             hoverCloseTimer = null;
         }
 
-        if (menu && ev && !menu.contains(ev.target)) {
+        if (menu && (!ev || !menu.contains(ev.target))) {
             menu.remove();
-        } else if (menu && !ev) {
-            menu.remove();
+            document.removeEventListener('click', closeMenu);
+            if (window._closeGlobalMenu === closeMenu) window._closeGlobalMenu = null;
         }
-
-        document.removeEventListener('click', closeMenu);
-        window._closeGlobalMenu = null;
     };
+    window._closeGlobalMenu = closeMenu;
+    setTimeout(() => document.addEventListener('click', closeMenu), 0);
 }
 
-export function initDueTasksPingPong() {
+export function initDueTasksPingPong(ctx = {}) {
     const JSON_URL = '/_build/secrets/upcoming_tasks.json';
     const CHECK_INTERVAL = 5 * 60 * 1000;
     const SNOOZE_KEY = 'task_snooze_until';
@@ -1176,6 +1178,7 @@ export function initDueTasksPingPong() {
         }
     }
 
-    setInterval(checkTasks, CHECK_INTERVAL);
+    const scheduleFn = typeof ctx.safeInterval === 'function' ? ctx.safeInterval : setInterval;
+    scheduleFn(checkTasks, CHECK_INTERVAL);
     checkTasks();
 }

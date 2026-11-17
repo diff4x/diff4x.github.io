@@ -1,5 +1,25 @@
+if (window.top && window.top.VirtualCursor) {
+    window.top.VirtualCursor.attach(window);
+}
+
 (function () {
-    if(store.online_flag === "1") {
+    const store = new Proxy({}, {
+        get(_, prop) {
+            const val = localStorage.getItem(prop);
+            if (val === null) return undefined;
+            try { return JSON.parse(val); } catch { return val; }
+        },
+        set(_, prop, value) {
+            localStorage.setItem(prop, JSON.stringify(value));
+            return true;
+        },
+        deleteProperty(_, prop) {
+            localStorage.removeItem(prop);
+            return true;
+        }
+    });
+
+    if (store.online_flag === "1") {
         document.getElementById('control-panel').classList.add("hidden")
     } else {
         const zhText = document.getElementById('zhText');
@@ -180,12 +200,26 @@
             textarea.style.position = 'fixed';
             textarea.style.opacity = '0';
             document.body.appendChild(textarea);
+            textarea.focus();
             textarea.select();
-            document.execCommand('copy');
+            textarea.setSelectionRange(0, htmlString.length);
+            let copied = false;
+            try { copied = document.execCommand('copy'); } catch (e) { }
             document.body.removeChild(textarea);
 
+            if (!copied) {
+                alert("❌ 写入剪贴板失败，为防止源文档被覆盖已中止固化！");
+                return;
+            }
+
+            const proto = String(store.protocol_name || '').trim();
+            if (!proto) {
+                alert("❌ 未配置自定义协议 protocol_name，无法调用外部固化程序！");
+                return;
+            }
+
             const safeTitle = document.title.trim() || "Unknown";
-            const protocolUrl = localStorage.getItem("protocol_name").replace(/"/g, '') + `://5{` + encodeURIComponent(safeTitle);
+            const protocolUrl = proto + `://5{` + encodeURIComponent(safeTitle);
             window.location.href = protocolUrl;
 
             destroyDraft();

@@ -208,6 +208,54 @@ export function initTouchpad(ctx) {
         localHoverEl = null;
     }
 
+    function activateSyntheticClick(el, base) {
+        const tag = el.tagName ? el.tagName.toUpperCase() : '';
+
+        // 1) 虚拟光标点到 <option> 时（如 #searchHistory）：移动版没有原生 select 弹出层，
+        //    同步 selectedIndex 并直接调用 el.click()（使其触发父级 <select> 的 click / change 代理）
+        if (tag === 'OPTION') {
+            const selectEl = el.closest('select');
+            if (selectEl) {
+                const idx = Array.prototype.indexOf.call(selectEl.options, el);
+                if (idx >= 0) selectEl.selectedIndex = idx;
+                selectEl.value = el.value;
+            }
+            el.click();
+            if (selectEl) {
+                selectEl.dispatchEvent(new Event('change', { bubbles: true }));
+            }
+            return;
+        }
+
+        // 2) 虚拟光标点到 <details>/<summary> 或其内部文字节点时（如筛选按钮）：
+        //    合成 MouseEvent 不会触发浏览器默认切换行为，显式调用 summary.click()
+        const summaryEl = el.closest ? el.closest('summary') : null;
+        if (summaryEl) {
+            summaryEl.click();
+            return;
+        }
+
+        // 3) 虚拟光标点到 <label> 或 <input type="checkbox|radio">（如筛选子项、近义开关）：
+        //    用原生 .click() 触发浏览器默认选中翻转与 change 事件冒泡
+        const labelEl = el.closest ? el.closest('label') : null;
+        if (labelEl) {
+            labelEl.click();
+            return;
+        }
+        if (tag === 'INPUT' && (el.type === 'checkbox' || el.type === 'radio')) {
+            el.click();
+            return;
+        }
+
+        // 4) 虚拟光标点到普通 <button> / <a> / 自定义可点击项（如 .sr-opt）：
+        //    先走原生 .click() 以兼容所有标准与委托监听器，若目标未消耗 click 再补派发合成 click
+        if (typeof el.click === 'function') {
+            el.click();
+        } else {
+            el.dispatchEvent(new MouseEvent('click', Object.assign({}, base, { button: 0 })));
+        }
+    }
+
     function dispatchLocal(op, el, screenX, screenY, extra) {
         const base = { bubbles: true, cancelable: true, view: window, clientX: screenX, clientY: screenY };
         const fire = (type, opts) => el.dispatchEvent(new MouseEvent(type, Object.assign({}, base, opts)));
@@ -216,29 +264,27 @@ export function initTouchpad(ctx) {
                 updateLocalHover(el, base);
                 fire('mousemove', { button: 0 });
                 break;
-            case 'click':
-                fire('mousedown', { button: 0 });
-                maybeFocus(el);
-                fire('mouseup', { button: 0 });
-                fire('click', { button: 0 });
-                setTimeout(() => routeOp('move'), 50);
-                if (el.tagName && el.tagName.toUpperCase() === 'OPTION') {
-                    const selectEl = el.closest('select');
-                    if (selectEl) {
-                        selectEl.value = el.value;
-                        selectEl.dispatchEvent(new Event('change', { bubbles: true }));
-                        selectEl.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-                    }
+            case 'click': {
+                const downEv = new MouseEvent('mousedown', Object.assign({}, base, { button: 0 }));
+                el.dispatchEvent(downEv);
+                if (!downEv.defaultPrevented) {
+                    maybeFocus(el);
                 }
+                fire('mouseup', { button: 0 });
+                activateSyntheticClick(el, base);
+                setTimeout(() => routeOp('move'), 50);
 
                 if (el.tagName === 'VIDEO' || el.tagName === 'AUDIO') {
                     if (el.paused) el.play().catch(() => { });
                     else el.pause();
                 }
                 break;
+            }
             case 'dblclick':
-                fire('mousedown', { button: 0 }); maybeFocus(el); fire('mouseup', { button: 0 }); fire('click', { button: 0 });
-                fire('mousedown', { button: 0 }); fire('mouseup', { button: 0 }); fire('click', { button: 0 });
+                fire('mousedown', { button: 0 }); maybeFocus(el); fire('mouseup', { button: 0 });
+                activateSyntheticClick(el, base);
+                fire('mousedown', { button: 0 }); fire('mouseup', { button: 0 });
+                activateSyntheticClick(el, base);
                 fire('dblclick', { button: 0 });
                 break;
             case 'auxclick':

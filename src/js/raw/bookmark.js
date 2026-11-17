@@ -276,12 +276,7 @@ function getALinksHash() {
 }
 
 function initWallpaperModule() {
-    let config = null;
-    try {
-        config = JSON.parse(localStorage.getItem('wallpaper_config'));
-    } catch (e) {
-        config = null;
-    }
+    const config = store.wallpaper_config;
 
     if (!config || !Array.isArray(config.list) || config.list.length === 0) {
         return;
@@ -297,15 +292,31 @@ function initWallpaperModule() {
 
     window.addEventListener('storage', (e) => {
         if (e.key === 'wallpaper_config') {
-            let newConfig = null;
-            try { newConfig = JSON.parse(e.newValue); } catch (_) { }
-            if (newConfig) {
+            const newConfig = store.wallpaper_config;
+            if (newConfig && Array.isArray(newConfig.list) && newConfig.list.length > 0) {
                 applyWallpaper(newConfig);
                 startWallpaperTimer(newConfig);
                 updateWallpaperPanelUI(newConfig);
+            } else {
+                disableWallpaperUI();
             }
         }
     });
+}
+
+function disableWallpaperUI() {
+    if (wallpaperTimer) {
+        clearInterval(wallpaperTimer);
+        wallpaperTimer = null;
+    }
+    const bgLayer = document.getElementById('wallpaper-bg');
+    if (bgLayer) bgLayer.style.backgroundImage = 'none';
+    document.body.style.background = '';
+    document.documentElement.style.background = '';
+    document.getElementById('wallpaper-panel')?.remove();
+    document.getElementById('wallpaper-trigger-btn')?.remove();
+    document.querySelector('.wp-preview-tooltip')?.remove();
+    panelDomRef = null;
 }
 
 function applyWallpaper(config) {
@@ -339,8 +350,9 @@ function startWallpaperTimer(config) {
     const interval = Number(config.interval) || 3600000; // 默认1小时
 
     wallpaperTimer = setInterval(() => {
-        let curConfig = JSON.parse(localStorage.getItem('wallpaper_config'));
-        if (!curConfig || curConfig.list.length === 0) return;
+        if (document.hidden) return;
+        let curConfig = store.wallpaper_config;
+        if (!curConfig || !Array.isArray(curConfig.list) || curConfig.list.length === 0) return;
 
         if (curConfig.mode === 'sequential') {
             curConfig.currentIndex = (curConfig.currentIndex + 1) % curConfig.list.length;
@@ -352,7 +364,7 @@ function startWallpaperTimer(config) {
             curConfig.currentIndex = nextIdx;
         }
 
-        localStorage.setItem('wallpaper_config', JSON.stringify(curConfig));
+        store.wallpaper_config = curConfig;
         applyWallpaper(curConfig);
         updateWallpaperPanelUI(curConfig);
     }, interval);
@@ -387,9 +399,9 @@ function renderPanelInnerContent(panel, config, tooltip) {
     panel.innerHTML = `
         <span style="font-weight:bold; border-bottom:1px solid #444; padding-bottom:4px; display:flex; justify-content:space-between;">
             <span>🎨 壁纸管理器</span>
-            <span style="cursor:pointer; color:#aaa;" onclick="document.getElementById('wallpaper-panel').classList.remove('active')">✕</span>
+            <span id="wp-close-btn" style="cursor:pointer; color:#aaa;">✕</span>
         </span>
-        <span style="font-size:11px; color:#aaa;">已添加壁纸 (${config.list.length}张)</span>
+        <span id="wp-count-label" style="font-size:11px; color:#aaa;">已添加壁纸 (${config.list.length}张)</span>
         <span class="wp-list" id="wp-list-container"></span>
         
         <div id="b1" style="display:flex; flex-direction:column; gap:4px; margin-top:4px; font-size:12px;">
@@ -398,6 +410,8 @@ function renderPanelInnerContent(panel, config, tooltip) {
             <label>显示布局: <button id="wp-layout-btn" style="background:#2a2a2a; color:#eee; border:1px solid #555; padding:2px 8px; cursor:pointer;">Contain</button></label>
         </div>
     `;
+    const closeSpan = panel.querySelector('#wp-close-btn');
+    if (closeSpan) closeSpan.onclick = () => panel.classList.remove('active');
     fillWallpaperListItems(config, tooltip);
     bindPanelEvents(config);
 }
@@ -437,13 +451,17 @@ function fillWallpaperListItems(config, tooltip) {
         listContainer.appendChild(item);
     });
 
+    const countLabel = document.getElementById('wp-count-label');
+    if (countLabel) countLabel.textContent = `已添加壁纸 (${config.list.length}张)`;
+
     listContainer.querySelectorAll('.wp-set-btn').forEach(btn => {
         btn.onclick = (e) => {
             e.stopPropagation();
             const idx = Number(btn.getAttribute('data-idx'));
-            let cur = JSON.parse(localStorage.getItem('wallpaper_config'));
+            let cur = store.wallpaper_config;
+            if (!cur) return;
             cur.currentIndex = idx;
-            localStorage.setItem('wallpaper_config', JSON.stringify(cur));
+            store.wallpaper_config = cur;
             applyWallpaper(cur);
             updateWallpaperPanelUI(cur);
         };
@@ -453,19 +471,20 @@ function fillWallpaperListItems(config, tooltip) {
         btn.onclick = (e) => {
             e.stopPropagation();
             const idx = Number(btn.getAttribute('data-idx'));
-            let cur = JSON.parse(localStorage.getItem('wallpaper_config'));
+            let cur = store.wallpaper_config;
+            if (!cur) return;
             cur.list.splice(idx, 1);
             if (cur.currentIndex >= cur.list.length) {
                 cur.currentIndex = Math.max(0, cur.list.length - 1);
             }
-            localStorage.setItem('wallpaper_config', JSON.stringify(cur));
 
             if (cur.list.length === 0) {
-                localStorage.removeItem('wallpaper_config');
-                location.reload();
+                delete store.wallpaper_config;
+                disableWallpaperUI();
                 return;
             }
 
+            store.wallpaper_config = cur;
             applyWallpaper(cur);
             startWallpaperTimer(cur);
             updateWallpaperPanelUI(cur);
@@ -500,11 +519,11 @@ function bindPanelEvents(config) {
     ];
 
     const saveChanges = () => {
-        let cur = JSON.parse(localStorage.getItem('wallpaper_config')) || {};
+        let cur = store.wallpaper_config || {};
         cur.mode = document.getElementById('wp-mode-btn').dataset.val;
         cur.interval = Number(document.getElementById('wp-interval-btn').dataset.val);
         cur.layout = document.getElementById('wp-layout-btn').dataset.val;
-        localStorage.setItem('wallpaper_config', JSON.stringify(cur));
+        store.wallpaper_config = cur;
         applyWallpaper(cur);
         startWallpaperTimer(cur);
     };

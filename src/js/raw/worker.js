@@ -8,7 +8,6 @@ const {
 const build_and_set_data = wasm.build_and_set_data;
 // 组合搜索（@ads）同样是新版 wasm 才有的导出；旧版没有时 SEARCH_ADS 会回一个带 error 的空结果
 const search_ads_range = wasm.search_ads_range;
-const get_ads_snippets = wasm.get_ads_snippets;
 
 let wasmReady = false;
 let messageQueue = [];
@@ -142,6 +141,7 @@ async function runSearch(payload) {
         results,
         keyword: kw,
         token,
+        ns: payload.ns || '',
         commentHits
     });
 }
@@ -168,7 +168,7 @@ async function runAdsSearch(payload) {
     const results = await scanAll(token, (from, to) => search_ads_range(plan, from, to));
     if (results === null) return;
 
-    self.postMessage({ type: 'SEARCH_RESULTS', results, keyword: kw, token });
+    self.postMessage({ type: 'SEARCH_RESULTS', results, keyword: kw, token, ns: payload.ns || '' });
 }
 
 function startSearch(payload) {
@@ -194,6 +194,10 @@ async function initWorker() {
         }
     } catch (err) {
         console.error("[Worker] 初始化 Wasm 失败:", err);
+        self.postMessage({
+            type: 'ENGINE_ERROR',
+            error: '搜索引擎 Wasm 初始化失败: ' + (err && err.message ? err.message : String(err))
+        });
     }
 }
 
@@ -241,6 +245,10 @@ function processMessage(data) {
                 flushPendingSearch();
             } catch (err) {
                 console.error("[Worker] 数据编译打包失败:", err);
+                self.postMessage({
+                    type: 'ENGINE_ERROR',
+                    error: '搜索索引构建失败: ' + (err && err.message ? err.message : String(err))
+                });
             }
             break;
         }
@@ -290,26 +298,14 @@ function processMessage(data) {
 
         case 'SNIPPETS': {
             let snippets = null;
-            const maxBody = payload.maxBody !== undefined ? payload.maxBody : 40;
-            const maxComments = payload.maxComments !== undefined ? payload.maxComments : 30;
             try {
-                if (Array.isArray(payload.adsTerms)) {
-                    if (typeof get_ads_snippets === 'function') {
-                        snippets = get_ads_snippets(payload.path, payload.adsTerms, maxBody, maxComments);
-                    } else {
-                        const allKws = payload.adsTerms.flatMap(t => t.keywords || []);
-                        const maxNoise = payload.adsTerms.reduce((m, t) => Math.max(m, t.noise ?? 5), 0);
-                        snippets = get_snippets(payload.path, allKws, maxNoise, maxBody, maxComments);
-                    }
-                } else {
-                    snippets = get_snippets(
-                        payload.path,
-                        payload.searchKeywords || [payload.keyword],
-                        payload.noise !== undefined ? payload.noise : 5,
-                        maxBody,
-                        maxComments
-                    );
-                }
+                snippets = get_snippets(
+                    payload.path,
+                    payload.searchKeywords || [payload.keyword],
+                    payload.noise !== undefined ? payload.noise : 5,
+                    payload.maxBody !== undefined ? payload.maxBody : 40,
+                    payload.maxComments !== undefined ? payload.maxComments : 30
+                );
             } catch (err) {
                 console.error("[Worker] snippet 生成失败:", err);
             }

@@ -158,6 +158,12 @@ let pagedContext = {
 const EDGE_PAGES = 1;   // 左右边缘固定显示的页数
 const WINDOW = 7;      // 当前页附近连续显示多少页
 
+function escapeHtml(str) {
+  return String(str ?? '').replace(/[&<>"']/g, ch => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]
+  ));
+}
+
 // 色彩
 const COLORS = {
   expense: '#c0392b',   // 支出 / 负数 / 左轴
@@ -887,7 +893,7 @@ function renderFlowTable(flowList, startIndex = 0) {
           ${fmt(f.amount, f.expr)}
         </span>
       </td>
-      <td>${f.note || '-'}</td>
+      <td>${f.note ? escapeHtml(f.note) : '-'}</td>
       <td style="opacity:.6">${f.lineNum}</td>
     </tr>`;
   });
@@ -942,7 +948,7 @@ function initTrendSelector() {
     });
   }
 
-  monthInput.addEventListener('change', () => { 
+  monthInput.onchange = () => { 
     if (!monthInput.value) return;
     const [y, m] = monthInput.value.split('-').map(Number);
     trendState.endYear = y; trendState.endMonth = m;
@@ -950,12 +956,12 @@ function initTrendSelector() {
 
     updateCatOptions();
     renderTrendChart();
-  });
-  catSelect.addEventListener('change', () => { 
+  };
+  catSelect.onchange = () => { 
     trendState.activeCat = catSelect.value || null;
     store[getFileKey('trend')] = { endYear: trendState.endYear, endMonth: trendState.endMonth, activeCat: trendState.activeCat };
     renderTrendChart();
-  });
+  };
 
   updateCatOptions();
   catSelect.value = trendState.activeCat; 
@@ -1173,16 +1179,16 @@ function renderTrendChart() {
 ---------------*/
 function renderDefaultView() {
   store[getFileKey('view')] = { type: 'default' }; 
-  out.innerHTML = '';
+  const buf = [];
 
   const netAsset = Object.values(stats.accounts).reduce((sum, v) => sum + v, 0);
   const totalIncome = Object.values(stats.years).reduce((a, y) => a + y.income, 0);
   const totalExpense = Object.values(stats.years).reduce((a, y) => a + y.expense, 0);
 
-  out.innerHTML += `<div class="sep"><b>总览:</b><br>`;
-  out.innerHTML += `总收: <span class="amount positive">${fmt(totalIncome)}</span> `;
-  out.innerHTML += `总支: <span class="amount negative">${fmt(totalExpense)}</span> `;
-  out.innerHTML += `余额: <span class="amount ${netAsset >= 0 ? 'positive' : 'negative'}">${fmt(netAsset)}</span> `;
+  buf.push(`<div class="sep"><b>总览:</b><br>`);
+  buf.push(`总收: <span class="amount positive">${fmt(totalIncome)}</span> `);
+  buf.push(`总支: <span class="amount negative">${fmt(totalExpense)}</span> `);
+  buf.push(`余额: <span class="amount ${netAsset >= 0 ? 'positive' : 'negative'}">${fmt(netAsset)}</span> `);
   
   const debt = calcNetDebt(flows);
   let debtText = ""; let debtColor = "axis";
@@ -1191,38 +1197,37 @@ function renderDefaultView() {
   } else if (debt.netOwe < 0) {
       debtText = `♀️ 欠 ♂️ ${fmtMain(Math.abs(debt.netOwe))}`; debtColor = "income";
   }
-  out.innerHTML += `<span style="color:var(--${debtColor}, ${COLORS[debtColor]});">${debtText}</span>`;
-  out.innerHTML += `</div>`;
+  buf.push(`<span style="color:var(--${debtColor}, ${COLORS[debtColor]});">${debtText}</span></div>`);
 
-  out.innerHTML += `<div class="sep"><b>帐户分布:</b><br>`;
+  buf.push(`<div class="sep"><b>帐户分布:</b><br>`);
   Object.entries(stats.accounts).forEach(([k, v]) => {
-    out.innerHTML += `${ACCOUNTS[k]}: <span class="amount ${v >= 0 ? 'positive' : 'negative'}">${fmt(v)}</span><br>`;
+    buf.push(`${ACCOUNTS[k]}: <span class="amount ${v >= 0 ? 'positive' : 'negative'}">${fmt(v)}</span><br>`);
   });
-  out.innerHTML += `</div>`;
+  buf.push(`</div>`);
 
   const catTotals = {}; let totalCatExpense = 0;
   flows.forEach(f => {
     if (f.dst === 'e') { catTotals[f.cat] = (catTotals[f.cat] || 0) + f.amount; totalCatExpense += f.amount; }
   });
-  out.innerHTML += `<div class="sep"><b>支出占比:</b><br>`;
+  buf.push(`<div class="sep"><b>支出占比:</b><br>`);
   Object.entries(catTotals).sort((a, b) => b[1] - a[1]).forEach(([c, sum]) => {
       const pct = totalCatExpense ? ((sum / totalCatExpense) * 100).toFixed(1) : 0;
-      out.innerHTML += `<span>${CAT_MAP[c]}</span> <span class="amount negative">${fmt(sum)}</span> (${pct}%)<br>`;
+      buf.push(`<span>${CAT_MAP[c]}</span> <span class="amount negative">${fmt(sum)}</span> (${pct}%)<br>`);
     });
-  out.innerHTML += '</div>';
+  buf.push('</div>');
 
-  out.innerHTML += `
+  buf.push(`
   <div class="sep" id="trend-sep">
     <b>趋势:</b><br><br><select id="trendCat"></select><br>
     <canvas id="trendCanvas" style="width:600px;height:200px"></canvas> 结束月: <input type="month" id="trendEnd"><br>
   </div>
-  `;
+  `);
 
-  out.innerHTML += '<div class="sep"><b>具体年:</b><br>';
+  buf.push('<div class="sep"><b>具体年:</b><br>');
   Object.keys(stats.years).sort((a, b) => b - a).forEach(y => {
-    out.innerHTML += `<button onclick="renderYear(${y})">${y}年</button>`;
+    buf.push(`<button onclick="renderYear(${y})">${y}年</button>`);
   });
-  out.innerHTML += '</div>';
+  buf.push('</div>');
 
   function renderFilterItems() {
     const FILTER_ITEMS = [
@@ -1237,7 +1242,7 @@ function renderDefaultView() {
       </div>
     `).join('');
   }
-  out.innerHTML += `
+  buf.push(`
   <div class="sep"><b>筛选:</b>
     <div class="filter-bar">
       ${renderFilterItems()}
@@ -1249,7 +1254,8 @@ function renderDefaultView() {
       <button id="fgo">GO</button> <button id="freset">RST</button>
     </div>
   </div>
-  `;
+  `);
+  out.innerHTML = buf.join('');
 
   initTrendSelector();
   renderTrendChart();
@@ -1269,46 +1275,49 @@ function renderDefaultView() {
 ---------------*/
 function renderYear(y) {
   store[getFileKey('view')] = { type: 'year', y };
-  out.innerHTML = '<button onclick="resetFilterState();renderDefaultView();">' + y + '年 | 返回' + '</button>';
+  const buf = ['<button onclick="resetFilterState();renderDefaultView();">' + y + '年 | 返回' + '</button>'];
 
   const yData = stats.years[y];
   const net = yData.income - yData.expense;
   const bal = calcBalanceUntil(y);
   const totalBal = Object.values(bal).reduce((a, b) => a + b, 0);
 
-  out.innerHTML += `<div class="sep"><b>总览:</b><br>`;
-  out.innerHTML += `净变化: <span class="amount ${net >= 0 ? 'positive' : 'negative'}">${fmt(net)}</span> `;
-  out.innerHTML += `年收: <span class="amount positive">${fmt(yData.income)}</span> `;
-  out.innerHTML += `年支: <span class="amount negative">${fmt(yData.expense)}</span> `;
-  out.innerHTML += `截止余额: <span class="amount ${totalBal >= 0 ? 'positive' : 'negative'}">${fmt(totalBal)}</span>`;
-  out.innerHTML += `</div>`;
+  buf.push(`<div class="sep"><b>总览:</b><br>`);
+  buf.push(`净变化: <span class="amount ${net >= 0 ? 'positive' : 'negative'}">${fmt(net)}</span> `);
+  buf.push(`年收: <span class="amount positive">${fmt(yData.income)}</span> `);
+  buf.push(`年支: <span class="amount negative">${fmt(yData.expense)}</span> `);
+  buf.push(`截止余额: <span class="amount ${totalBal >= 0 ? 'positive' : 'negative'}">${fmt(totalBal)}</span></div>`);
 
-  out.innerHTML += `<div class="sep"><b>截止帐户分布:</b><br>`;
+  buf.push(`<div class="sep"><b>截止帐户分布:</b><br>`);
   Object.entries(bal).forEach(([k, v]) => {
-    out.innerHTML += `${ACCOUNTS[k]}: <span class="amount ${v >= 0 ? 'positive' : 'negative'}">${fmt(v)}</span><br>`;
+    buf.push(`${ACCOUNTS[k]}: <span class="amount ${v >= 0 ? 'positive' : 'negative'}">${fmt(v)}</span><br>`);
   });
-  out.innerHTML += `</div>`;
+  buf.push(`</div>`);
 
   let yTotal = Object.values(yData.cats).reduce((a, b) => a + b, 0);
-  out.innerHTML += `<div class="sep"><b>支出占比:</b><br>`;
+  buf.push(`<div class="sep"><b>支出占比:</b><br>`);
   Object.entries(yData.cats).sort((a, b) => b[1] - a[1]).forEach(([c, sum]) => {
       const pct = yTotal ? ((sum / yTotal) * 100).toFixed(1) : 0;
-      out.innerHTML += `${CAT_MAP[c]} <span class="amount negative">${fmt(sum)}</span> (${pct}%)<br>`;
+      buf.push(`${CAT_MAP[c]} <span class="amount negative">${fmt(sum)}</span> (${pct}%)<br>`);
     });
-  out.innerHTML += '</div>';
+  buf.push('</div>');
 
-  out.innerHTML += '<div class="sep"><b>具体月:</b><br>';
+  buf.push('<div class="sep"><b>具体月:</b><br>');
   Object.keys(yData.months).sort((a, b) => b - a).forEach(m => {
-    out.innerHTML += `<button onclick="renderMonth(${y},${m})">${m}月</button>`;
+    buf.push(`<button onclick="renderMonth(${y},${m})">${m}月</button>`);
   });
-  out.innerHTML += '</div>';
+  buf.push('</div>');
 
   const flowsWithDay = [];
   for (const m in yData.months) { flowsWithDay.push(...yData.months[m].filter(f => f.day != null)); }
   flowsWithDay.sort((a, b) => a.lineNum - b.lineNum);
   
   if (flowsWithDay.length > 0) {
-    out.innerHTML += `<div class="sep"><b>具体日:</b></div>`;
+    buf.push(`<div class="sep"><b>具体日:</b></div>`);
+  }
+  out.innerHTML = buf.join('');
+
+  if (flowsWithDay.length > 0) {
     const box = document.createElement('div'); out.appendChild(box);
     pagedContext = {
       data: flowsWithDay,
@@ -1324,7 +1333,7 @@ function renderYear(y) {
 ---------------*/
 function renderMonth(y, m) {
   store[getFileKey('view')] = { type: 'month', y, m };
-  out.innerHTML = '<button onclick="renderYear(' + y + ')">' + y + '年' + m + '月 | 返回</button>';
+  const buf = ['<button onclick="renderYear(' + y + ')">' + y + '年' + m + '月 | 返回</button>'];
 
   const monthAllFlows = flows.filter(f => f.year === y && f.month === m);
   let income = 0, expense = 0, catSum = {};
@@ -1335,30 +1344,33 @@ function renderMonth(y, m) {
   const bal = calcBalanceUntil(y, m);
   const totalBal = Object.values(bal).reduce((a, b) => a + b, 0);
 
-  out.innerHTML += `<div class="sep"><b>总览:</b><br>`;
-  out.innerHTML += `净变化: <span class="amount ${(income - expense) >= 0 ? 'positive' : 'negative'}">${fmt((income - expense))}</span> `
-  out.innerHTML += `月收: <span class="amount positive">${fmt(income)}</span> `;
-  out.innerHTML += `月支: <span class="amount negative">${fmt(expense)}</span> `;
-  out.innerHTML += `截止余额: <span class="amount ${totalBal >= 0 ? 'positive' : 'negative'}">${fmt(totalBal)}</span>`;
-  out.innerHTML += `</div>`;
+  buf.push(`<div class="sep"><b>总览:</b><br>`);
+  buf.push(`净变化: <span class="amount ${(income - expense) >= 0 ? 'positive' : 'negative'}">${fmt((income - expense))}</span> `);
+  buf.push(`月收: <span class="amount positive">${fmt(income)}</span> `);
+  buf.push(`月支: <span class="amount negative">${fmt(expense)}</span> `);
+  buf.push(`截止余额: <span class="amount ${totalBal >= 0 ? 'positive' : 'negative'}">${fmt(totalBal)}</span></div>`);
 
-  out.innerHTML += `<div class="sep"><b>截止帐户分布:</b><br>`;
+  buf.push(`<div class="sep"><b>截止帐户分布:</b><br>`);
   Object.entries(bal).forEach(([k, v]) => {
-    out.innerHTML += `${ACCOUNTS[k]}: <span class="amount ${v >= 0 ? 'positive' : 'negative'}">${fmt(v)}</span><br>`;
+    buf.push(`${ACCOUNTS[k]}: <span class="amount ${v >= 0 ? 'positive' : 'negative'}">${fmt(v)}</span><br>`);
   });
-  out.innerHTML += `</div>`;
+  buf.push(`</div>`);
 
   let monthTotal = Object.values(catSum).reduce((a, b) => a + b, 0);
-  out.innerHTML += `<div class="sep"><b>支出占比:</b><br>`;
+  buf.push(`<div class="sep"><b>支出占比:</b><br>`);
   Object.entries(catSum).sort((a, b) => b[1] - a[1]).forEach(([c, sum]) => {
       const pct = monthTotal ? ((sum / monthTotal) * 100).toFixed(1) : 0;
-      out.innerHTML += `${CAT_MAP[c]} <span class="amount negative">${fmt(sum)}</span> (${pct}%)<br>`;
+      buf.push(`${CAT_MAP[c]} <span class="amount negative">${fmt(sum)}</span> (${pct}%)<br>`);
     });
-  out.innerHTML += '</div>';
+  buf.push('</div>');
 
   const monthFlowsWithDay = monthAllFlows.filter(f => f.day).sort((a, b) => a.lineNum - b.lineNum);
   if (monthFlowsWithDay.length > 0) {
-    out.innerHTML += `<div class="sep"><b>具体日:</b></div>`;
+    buf.push(`<div class="sep"><b>具体日:</b></div>`);
+  }
+  out.innerHTML = buf.join('');
+
+  if (monthFlowsWithDay.length > 0) {
     const box = document.createElement('div'); out.appendChild(box);
     pagedContext = {
       data: monthFlowsWithDay,
@@ -1434,7 +1446,7 @@ function fmtMain(n) { return n.toLocaleString('zh-CN', { minimumFractionDigits: 
 function fmtTip(n, expr) {
   const approx = fxMeta.approx ? '≈ ' : ''; const header = fxSourceLabel();
   return `
-    ${expr ? `<div class="tip-row" style="margin-bottom:4px"><span class="tip-cur">算式</span><span class="tip-val">${expr}</span></div>` : ''}
+    ${expr ? `<div class="tip-row" style="margin-bottom:4px"><span class="tip-cur">算式</span><span class="tip-val">${escapeHtml(expr)}</span></div>` : ''}
     ${header ? `<div style="opacity:.7;margin-bottom:4px">${header}</div>` : ''}
     ${Object.entries(FX).map(([c, rate]) => {
         const value = n * rate;
@@ -1520,11 +1532,18 @@ if (store.online_flag === "0") {
     document.body.appendChild(menu);
     menu.querySelector('#local-reload-btn').addEventListener('click', () => { window.location.reload(); });
 
+    if (window._txnCloseCtxMenu) {
+      document.removeEventListener('click', window._txnCloseCtxMenu);
+      window._txnCloseCtxMenu = null;
+    }
     setTimeout(() => {
-      document.addEventListener('click', function closeMenu(ev) {
+      const closeMenu = (ev) => {
         if (menu && !menu.contains(ev.target)) { menu.remove(); }
         document.removeEventListener('click', closeMenu);
-      });
+        if (window._txnCloseCtxMenu === closeMenu) window._txnCloseCtxMenu = null;
+      };
+      window._txnCloseCtxMenu = closeMenu;
+      document.addEventListener('click', closeMenu);
     }, 0);
   });
 }

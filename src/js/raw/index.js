@@ -230,15 +230,25 @@ window.VirtualCursor = {
                     }
                     fire('mousemove', { button: 0 });
                     break;
-                case 'click':
-                    fire('mousedown', { button: 0 }); maybeFocus(el); fire('mouseup', { button: 0 }); fire('click', { button: 0 });
+                case 'click': {
+                    fire('mousedown', { button: 0 }); maybeFocus(el); fire('mouseup', { button: 0 });
+                    const targetEl = (el.closest && (el.closest('summary, label') || el)) || el;
+                    if (typeof targetEl.click === 'function') targetEl.click();
+                    else fire('click', { button: 0 });
                     if (el.tagName === 'VIDEO' || el.tagName === 'AUDIO') { if (el.paused) el.play().catch(() => { }); else el.pause(); }
                     break;
-                case 'dblclick':
-                    fire('mousedown', { button: 0 }); maybeFocus(el); fire('mouseup', { button: 0 }); fire('click', { button: 0 });
-                    fire('mousedown', { button: 0 }); fire('mouseup', { button: 0 }); fire('click', { button: 0 });
+                }
+                case 'dblclick': {
+                    fire('mousedown', { button: 0 }); maybeFocus(el); fire('mouseup', { button: 0 });
+                    const targetEl = (el.closest && (el.closest('summary, label') || el)) || el;
+                    if (typeof targetEl.click === 'function') targetEl.click();
+                    else fire('click', { button: 0 });
+                    fire('mousedown', { button: 0 }); fire('mouseup', { button: 0 });
+                    if (typeof targetEl.click === 'function') targetEl.click();
+                    else fire('click', { button: 0 });
                     fire('dblclick', { button: 0 });
                     break;
+                }
                 case 'auxclick': fire('mousedown', { button: 1 }); fire('mouseup', { button: 1 }); fire('auxclick', { button: 1 }); break;
                 case 'contextmenu': fire('contextmenu', { button: 2 }); break;
                 case 'drag_start': fire('mousedown', { button: 0 }); break;
@@ -963,9 +973,10 @@ function createSearchResultCache(db, lru, { memMax = 48, flushDelay = 400, onCle
         } catch (e) { return null; }
     };
 
+    const SEARCH_CACHE_MAX_HITS = 300;
     const set = async (kw, results) => {
         const normKw = normalizeKeyword(kw);
-        if (!normKw || !Array.isArray(results)) return;
+        if (!normKw || !Array.isArray(results) || results.length > SEARCH_CACHE_MAX_HITS) return;
         memSet(normKw, results);
         dirty.set(normKw, results);
         clearTimeout(flushTimer);
@@ -1311,12 +1322,24 @@ function createSearchWorker() {
             return;
         }
 
+        if (type === 'ENGINE_ERROR') {
+            window._engineError = e.data.error || '搜索引擎异常';
+            sfPaintStatus(window._currentRenderedKeyword || ($("#searchInput") && $("#searchInput").value) || '');
+            return;
+        }
+
         if (type === 'SEARCH_RESULTS') {
             if (token !== window._searchToken) {
                 console.log(`[Search] 拦截到滞后结果 "${keyword}"，已丢弃。`);
                 return;
             }
+            const curNs = computeCoreNamespace();
+            if (e.data.ns && e.data.ns !== curNs) {
+                console.log(`[Search] 拦截到跨设置结果 "${keyword}"，已丢弃。`);
+                return;
+            }
 
+            window._engineError = '';
             if (Array.isArray(commentHits)) setCommentHits(keyword, commentHits);
             if (e.data.error) window._adsStatus = { error: e.data.error };
 
@@ -1329,10 +1352,13 @@ function createSearchWorker() {
                 }, 600);
             }
 
-            processAndShowResults(results, activeKw, { noCache: window._searchCacheOk === false });
+            const nsMatched = !e.data.ns || e.data.ns === curNs;
+            processAndShowResults(results, activeKw, { noCache: window._searchCacheOk === false || !nsMatched });
         }
 
         else if (type === 'DATA_READY') {
+            window._engineError = '';
+            invalidateSearch();
             // worker 只回传瘦身后的数据（html 正文已剥离，仅保留 path/type/localOnly 标记）和数据指纹
             const slim = Array.isArray(payload) ? payload : ((payload && payload.data) || []);
             window.data = slim;
@@ -1346,6 +1372,16 @@ function createSearchWorker() {
                 rerunActiveSearch();
             }
         }
+    };
+    worker.onerror = (err) => {
+        console.error('[Worker] 运行时错误:', err);
+        window._engineError = '搜索引擎线程崩溃，请刷新或修复站点';
+        sfPaintStatus(window._currentRenderedKeyword || ($("#searchInput") && $("#searchInput").value) || '');
+    };
+    worker.onmessageerror = (err) => {
+        console.error('[Worker] 消息反序列化失败:', err);
+        window._engineError = '搜索引擎通信异常';
+        sfPaintStatus(window._currentRenderedKeyword || ($("#searchInput") && $("#searchInput").value) || '');
     };
     if (commentModel.index) worker.postMessage({ type: 'SET_COMMENTS', payload: commentModel.index });
     return worker;
@@ -1654,24 +1690,109 @@ function sw() {
     }
 }
 
+function upgradeSearchHistoryBox(oldEl) {
+    if (!oldEl || oldEl.tagName !== 'SELECT') return oldEl;
+
+    const selCs = getComputedStyle(oldEl);
+    const selBg = (selCs.backgroundColor && selCs.backgroundColor !== 'rgba(0, 0, 0, 0)' && selCs.backgroundColor !== 'transparent')
+        ? selCs.backgroundColor : '#fff';
+    const selBorder = (selCs.borderTopWidth && parseFloat(selCs.borderTopWidth) > 0)
+        ? `${selCs.borderTopWidth} ${selCs.borderTopStyle || 'solid'} ${selCs.borderTopColor || '#767676'}`
+        : '1px solid #767676';
+    const selRadius = selCs.borderRadius || '2px';
+    const selFont = selCs.fontFamily || 'Arial, "Microsoft YaHei", sans-serif';
+    const selFontSize = selCs.fontSize || '13.3333px';
+
+    if (!document.getElementById('sh-custom-style')) {
+        const st = document.createElement('style');
+        st.id = 'sh-custom-style';
+        st.textContent = `
+#searchHistory{box-sizing:border-box;overflow-y:auto;overflow-x:hidden;background-color:${selBg};border:${selBorder};border-radius:${selRadius};font-family:${selFont};font-size:${selFontSize};line-height:normal;color:#000;user-select:none;-webkit-user-select:none;outline:none}
+#searchHistory .sh-opt{display:block;box-sizing:border-box;width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:default;padding:0 4px 1px;min-height:1.2em;line-height:1.35}
+#searchHistory .sh-opt:hover{background-color:aliceblue}
+#searchHistory .sh-opt.sh-selected{background-color:#dcdcdc;color:#000}
+`;
+        document.head.appendChild(st);
+    }
+
+    const box = document.createElement('div');
+    box.id = 'searchHistory';
+    box.setAttribute('role', 'listbox');
+    box.tabIndex = 0;
+    box.style.cssText = oldEl.style.cssText;
+
+    let _selectedIdx = -1;
+    Object.defineProperty(box, 'options', {
+        get() { return this.querySelectorAll('.sh-opt'); }
+    });
+    Object.defineProperty(box, 'selectedIndex', {
+        get() {
+            const opts = this.options;
+            return (_selectedIdx >= 0 && _selectedIdx < opts.length) ? _selectedIdx : -1;
+        },
+        set(val) {
+            const opts = this.options;
+            const next = (typeof val === 'number' && val >= 0 && val < opts.length) ? val : -1;
+            _selectedIdx = next;
+            opts.forEach((el, i) => {
+                const sel = i === next;
+                el.classList.toggle('sh-selected', sel);
+                el.setAttribute('aria-selected', sel ? 'true' : 'false');
+                if (sel) el.scrollIntoView({ block: 'nearest' });
+            });
+        }
+    });
+    box.syncHeight = function () {
+        const opts = this.options;
+        if (!opts.length) {
+            this.style.display = 'none';
+            return;
+        }
+        const rowH = (opts[0] && opts[0].offsetHeight) || Math.ceil(parseFloat(getComputedStyle(this).fontSize || '13.33') * 1.35) || 18;
+        const rows = Math.max(2, Math.min(10, opts.length));
+        this.style.height = (rows * rowH + 2) + 'px';
+    };
+
+    oldEl.parentNode.replaceChild(box, oldEl);
+    return box;
+}
+
+function makeHistoryOption(keyword, isHistory = true) {
+    const opt = document.createElement('div');
+    opt.className = 'sh-opt';
+    opt.setAttribute('role', 'option');
+    opt.textContent = keyword;
+    Object.defineProperty(opt, 'text', {
+        get() { return this.textContent; },
+        set(v) { this.textContent = v; }
+    });
+    if (!isHistory) {
+        opt.style.color = '#64748b';
+        opt.style.fontStyle = 'italic';
+    }
+    return opt;
+}
+
 function search_box() {
     const elSearchInput = $("#searchInput");
-    const elSearchHistory = $("#searchHistory");
+    const elSearchHistory = upgradeSearchHistoryBox($("#searchHistory"));
     const elSearchResults = upgradeSearchResultsBox($("#searchResults"));
     elSearchInput.setAttribute("autocomplete", "off");
 
     function showSearchHistoryByTime() {
         const elSearchHistory = $("#searchHistory");
         elSearchHistory.innerHTML = "";
-        elSearchHistory.style.display = "block";
         const history = [...(store.searchHistory || [])];
+        if (history.length === 0) {
+            elSearchHistory.style.display = "none";
+            return;
+        }
+        elSearchHistory.style.display = "block";
         history.sort((a, b) => b.timestamp - a.timestamp);
         history.forEach(item => {
-            const option = document.createElement("option");
-            option.text = item.keyword;
-            elSearchHistory.appendChild(option);
+            elSearchHistory.appendChild(makeHistoryOption(item.keyword, true));
         });
-        elSearchHistory.options.length > 10 ? elSearchHistory.setAttribute("size", "10") : elSearchHistory.setAttribute("size", elSearchHistory.options.length);
+        if (typeof elSearchHistory.syncHeight === 'function') elSearchHistory.syncHeight();
     }
 
     async function loadContent(selectedIndex) {
@@ -1708,7 +1829,7 @@ function search_box() {
         };
         if (select.tagName !== 'SELECT') {
             select.addEventListener('click', (e) => {
-                const opt = e.target.closest && e.target.closest('.sr-opt');
+                const opt = e.target.closest && e.target.closest('.sr-opt, .sh-opt');
                 if (!opt) return;
                 const idx = Array.prototype.indexOf.call(select.options, opt);
                 if (idx >= 0) {
@@ -1875,20 +1996,19 @@ function search_box() {
                 showSearchHistoryByTime();
             } else {
                 matchingHistory.forEach(item => {
-                    const option = document.createElement("option");
-                    option.text = item.keyword;
-                    elSearchHistory.appendChild(option);
+                    elSearchHistory.appendChild(makeHistoryOption(item.keyword, true));
                 });
-                elSearchHistory.setAttribute("size", Math.max(2, Math.min(10, elSearchHistory.options.length)));
+                if (typeof elSearchHistory.syncHeight === 'function') elSearchHistory.syncHeight();
             }
         }
     }
 
     elSearchHistory.addEventListener("contextmenu", async function (e) {
-        if (e.target.tagName === 'OPTION') {
+        const optEl = e.target.closest && e.target.closest('.sh-opt');
+        if (optEl || e.target.tagName === 'OPTION') {
             e.preventDefault();
             e.stopPropagation();
-            const keywordToDelete = e.target.text;
+            const keywordToDelete = (optEl || e.target).text;
 
             let history = [...(store.searchHistory || [])];
             const newHistory = history.filter(item => item.keyword !== keywordToDelete);
@@ -2392,6 +2512,7 @@ async function search(rawKeyword) {
                 keyword: kw,
                 noise: Number(store.noise_level ?? 5),
                 token: currentToken,
+                ns: computeCoreNamespace(),
                 searchKeywords: getSearchKeywords(kw)
             }
         });
@@ -2611,9 +2732,10 @@ function buildAdsPositiveTerms(kw) {
     for (const idx of [...posIdx].sort((a, b) => a - b)) {
         const t = plan.terms[idx];
         if (!t) continue;
+        const cleanText = String(t.text || '').replace(/\s+/g, '');
         const keywords = (t.like && typeof expand === 'function')
-            ? [t.text, ...expand(t.text).variants]
-            : [t.text];
+            ? [cleanText, ...expand(cleanText).variants]
+            : [cleanText];
         terms.push({ noise: t.noise, keywords });
     }
     return terms;
@@ -2700,10 +2822,12 @@ function publishSearchHighlights() {
 }
 
 function getSearchKeywords(kw) {
+    const cleanKw = String(kw || '').replace(/\s+/g, '');
+    if (!cleanKw) return [];
     const synonymsEnabled = (store.synonyms_enabled ?? 1) === 1;
-    const expandQueryFn = window.top.expandQuery || ((kw) => ({ variants: [] }));
-    const { variants } = synonymsEnabled ? expandQueryFn(kw) : { variants: [] };
-    return [kw, ...variants];
+    const expandQueryFn = window.top.expandQuery || (() => ({ variants: [] }));
+    const { variants } = synonymsEnabled ? expandQueryFn(cleanKw) : { variants: [] };
+    return [cleanKw, ...variants];
 }
 
 async function updateAutocompleteSuggestions(val) {
@@ -2766,18 +2890,10 @@ async function updateAutocompleteSuggestions(val) {
 
     elSearchHistory.style.display = "block";
     filteredSuggestions.forEach(item => {
-        const option = document.createElement("option");
-        option.text = item.keyword;
-
-        if (!item.isHistory) {
-            option.style.color = "#64748b";
-            option.style.fontStyle = "italic";
-        }
-
-        elSearchHistory.appendChild(option);
+        elSearchHistory.appendChild(makeHistoryOption(item.keyword, item.isHistory));
     });
 
-    elSearchHistory.setAttribute("size", Math.max(2, Math.min(10, elSearchHistory.options.length)));
+    if (typeof elSearchHistory.syncHeight === 'function') elSearchHistory.syncHeight();
 }
 
 function normalizeKeyword(kw) {
@@ -2939,9 +3055,10 @@ function searchAds(kw) {
     const expand = window.top.expandQuery;
     let synMissed = false;
     const terms = plan.terms.map(t => {
-        let keywords = [t.text];
+        const cleanText = String(t.text || '').replace(/\s+/g, '');
+        let keywords = [cleanText];
         if (t.like) {
-            if (typeof expand === 'function') keywords = [t.text, ...expand(t.text).variants];
+            if (typeof expand === 'function') keywords = [cleanText, ...expand(cleanText).variants];
             else synMissed = true;
         }
         return { noise: t.noise, keywords };
@@ -2950,7 +3067,7 @@ function searchAds(kw) {
 
     window._adsStatus = { summary: plan.summary };
     sfPaintStatus(kw);
-    searchWorker.postMessage({ type: 'SEARCH_ADS', payload: { keyword: kw, token, plan: { terms, expr: plan.expr } } });
+    searchWorker.postMessage({ type: 'SEARCH_ADS', payload: { keyword: kw, token, ns: computeCoreNamespace(), plan: { terms, expr: plan.expr } } });
 }
 
 // ── 筛选状态（后缀 + html 所属年月，默认全选）──────────────────────────────────
@@ -3053,11 +3170,20 @@ function sfSyncEngine() {
     const l = Number(store.synonyms_enabled ?? 1);
     const bar = document.getElementById('sf-bar');
     if (!bar) return;
-    bar.querySelector('#sf-noise').value = String(n);
+    const noiseEl = bar.querySelector('#sf-noise');
+    if (noiseEl) {
+        noiseEl.value = String(n);
+        const valSpan = noiseEl.querySelector('.sf-noise-val');
+        if (valSpan) valSpan.textContent = String(n);
+        noiseEl.querySelectorAll('[data-noise]').forEach(it => {
+            it.classList.toggle('active', Number(it.dataset.noise) === n);
+        });
+    }
     bar.querySelector('#sf-like').checked = l === 1;
 }
 
 async function sfApplyEngine(key, value) {
+    invalidateSearch();
     store[key] = value;
     sfSyncEngine();
     clearSearchOverlays();
@@ -3076,6 +3202,11 @@ function sfInjectStyle() {
 #sf-bar select,#sf-bar input,#sf-bar button{font-size:12px;user-select:text;-webkit-user-select:text}
 #sf-bar details{position:relative}
 #sf-bar summary{cursor:pointer}
+#sf-bar #sf-noise{position:relative;display:inline-flex;align-items:center;gap:2px;padding:0 4px;border:1px solid #767676;border-radius:2px;background:#fff;cursor:pointer}
+#sf-bar #sf-noise .sf-noise-menu{position:absolute;z-index:30;top:100%;left:-1px;margin-top:2px;min-width:100%;background:#fff;border:1px solid #767676;box-shadow:0 2px 6px rgba(0,0,0,0.15);display:none}
+#sf-bar #sf-noise.open .sf-noise-menu{display:block}
+#sf-bar #sf-noise .sf-noise-opt{padding:1px 6px;text-align:center}
+#sf-bar #sf-noise .sf-noise-opt:hover,#sf-bar #sf-noise .sf-noise-opt.active{background:aliceblue;font-weight:bold}
 #sf-bar .sf-pop{position:absolute;z-index:20;top:100%;left:0;margin-top:4px;min-width:130px;max-height:320px;overflow:auto;padding:4px 6px;background:#fff;border:1px solid #999;box-shadow:0 2px 6px rgba(0,0,0,0.15)}
 #sf-bar .sf-pop-hd{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:2px;color:#555;font-size:11px}
 #sf-bar .sf-pop label{display:block}
@@ -3120,9 +3251,9 @@ function sfBuildBar() {
     sfInjectStyle();
     const bar = document.createElement('div');
     bar.id = 'sf-bar';
-    const noiseOpts = [0, 1, 2, 3, 4, 5].map(n => `<option value="${n}">${n}</option>`).join('');
+    const noiseOpts = [0, 1, 2, 3, 4, 5].map(n => `<div class="sf-noise-opt" data-noise="${n}">${n}</div>`).join('');
     bar.innerHTML =
-        `<label title="字间允许无关字数 (0~5)">噪 <select id="sf-noise">${noiseOpts}</select></label>` +
+        `<span title="字间允许无关字数 (0~5)">噪 <span id="sf-noise" tabindex="0"><span class="sf-noise-val">5</span><span>▾</span><div class="sf-noise-menu">${noiseOpts}</div></span></span>` +
         `<label title="同义词扩展"><input type="checkbox" id="sf-like">近义</label>` +
         `<span id="sf-count" aria-live="polite"></span>` +
         `<details id="sf-sfx"><summary>筛选</summary><div class="sf-pop">` +
@@ -3135,20 +3266,35 @@ function sfBuildBar() {
         `<button type="button" id="sf-reset" title="重置筛选">重置</button>` +
         `<div id="sf-status"></div>`;
 
+    const noiseBox = bar.querySelector('#sf-noise');
+    noiseBox.addEventListener('click', (e) => {
+        const opt = e.target.closest && e.target.closest('.sf-noise-opt');
+        if (opt) {
+            e.stopPropagation();
+            noiseBox.classList.remove('open');
+            sfApplyEngine('noise_level', Number(opt.dataset.noise));
+            return;
+        }
+        noiseBox.classList.toggle('open');
+    });
+
     bar.querySelector('#sf-sfx').addEventListener('toggle', () => sfLayout());
     bar.addEventListener('keydown', (e) => {
         e.stopPropagation();
-        if (e.key === 'Escape') bar.querySelector('#sf-sfx').open = false;
+        if (e.key === 'Escape') {
+            bar.querySelector('#sf-sfx').open = false;
+            noiseBox.classList.remove('open');
+        }
     });
     document.addEventListener('click', (e) => {
         const d = bar.querySelector('#sf-sfx');
         if (d.open && !d.contains(e.target)) d.open = false;
+        if (noiseBox.classList.contains('open') && !noiseBox.contains(e.target)) noiseBox.classList.remove('open');
     });
 
     bar.addEventListener('change', (e) => {
         const t = e.target;
         const s = sfState();
-        if (t.id === 'sf-noise') { sfApplyEngine('noise_level', Number(t.value)); return; }
         if (t.id === 'sf-like') { sfApplyEngine('synonyms_enabled', t.checked ? 1 : 0); return; }
         if (t.dataset && t.dataset.k !== undefined) {
             s.off = s.off.filter(x => x !== t.dataset.k);
@@ -3204,6 +3350,10 @@ function sfSyncPanel(bar, stats) {
 function sfPaintStatus(keyword) {
     const el = document.getElementById('sf-status');
     if (!el) return;
+    if (window._engineError) {
+        el.textContent = '⚠️ ' + window._engineError;
+        return;
+    }
     const info = isAdsQuery(keyword) ? window._adsStatus : null;
     el.textContent = info ? (info.error || info.summary || '') : '';
 }

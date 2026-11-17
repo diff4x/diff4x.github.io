@@ -297,7 +297,8 @@ export const imageLogic = function () {
         im.ontouchend = (e) => { const now = Date.now(); if (now - lastTap < 300) { pop(); e.preventDefault(); } lastTap = now; };
     });
 
-    $("#addbg").addEventListener('click', (e) => {
+    const addbgBtn = $("#addbg");
+    addbgBtn.addEventListener('click', (e) => {
         e.stopPropagation();
         try {
             let config = store.wallpaper_config || {
@@ -308,10 +309,14 @@ export const imageLogic = function () {
                 layout: 'contain'
             };
 
-            if (!config.list.includes(path)) {
+            const added = !config.list.includes(path);
+            if (added) {
                 config.list.push(path);
                 store.wallpaper_config = config;
             }
+            const origText = addbgBtn.textContent;
+            addbgBtn.textContent = added ? '已设为壁纸 ✓' : '已在壁纸列表中';
+            setTimeout(() => { addbgBtn.textContent = origText; }, 1000);
         } catch (err) {
             console.error("添加壁纸失败", err);
         }
@@ -321,7 +326,8 @@ export const imageLogic = function () {
 export const videoLogic = function () {
     const store = createStore({ lightbox_stauts: "0" });
     const video = $('#video');
-    const path = store.video_path || ("video/" + decodeURIComponent($('#source').src).split("/video/")[1]);
+    const rawVidSrc = (video && video.currentSrc) || (video && video.src) || ($('#source') && $('#source').src) || '';
+    const path = store.video_path || (rawVidSrc.includes("/video/") ? "video/" + decodeURIComponent(rawVidSrc).split("/video/")[1] : "");
     const videolist = store.videolist || [];
     const idx = videolist.indexOf(path);
     const _cat = path.split(path.split("/").pop())[0].split("video/")[1];
@@ -404,8 +410,11 @@ export const videoLogic = function () {
         const track = video.textTracks[0];
         if (!track || !track.cues || track.cues.length === 0) return;
         for (let i = 0; i < track.cues.length; i++) {
-            track.cues[i].startTime += seconds;
-            track.cues[i].endTime += seconds;
+            const cue = track.cues[i];
+            const dur = Math.max(0, cue.endTime - cue.startTime);
+            const nextStart = Math.max(0, cue.startTime + seconds);
+            cue.startTime = nextStart;
+            cue.endTime = nextStart + dur;
         }
         currentOffset += seconds;
         const di = document.getElementById('delay-info');
