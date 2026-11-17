@@ -80,6 +80,20 @@ export function format_markdown(text) {
 
 /**
  * @param {string} path
+ * @param {any} terms_val
+ * @param {number} max_body
+ * @param {number} max_comments
+ * @returns {any}
+ */
+export function get_ads_snippets(path, terms_val, max_body, max_comments) {
+    const ptr0 = passStringToWasm0(path, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.get_ads_snippets(ptr0, len0, addHeapObject(terms_val), max_body, max_comments);
+    return takeObject(ret);
+}
+
+/**
+ * @param {string} path
  * @param {any} keywords_val
  * @param {number} noise_level
  * @param {number} max_body

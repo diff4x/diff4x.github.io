@@ -8,6 +8,7 @@ const {
 const build_and_set_data = wasm.build_and_set_data;
 // 组合搜索（@ads）同样是新版 wasm 才有的导出；旧版没有时 SEARCH_ADS 会回一个带 error 的空结果
 const search_ads_range = wasm.search_ads_range;
+const get_ads_snippets = wasm.get_ads_snippets;
 
 let wasmReady = false;
 let messageQueue = [];
@@ -289,14 +290,26 @@ function processMessage(data) {
 
         case 'SNIPPETS': {
             let snippets = null;
+            const maxBody = payload.maxBody !== undefined ? payload.maxBody : 40;
+            const maxComments = payload.maxComments !== undefined ? payload.maxComments : 30;
             try {
-                snippets = get_snippets(
-                    payload.path,
-                    payload.searchKeywords || [payload.keyword],
-                    payload.noise !== undefined ? payload.noise : 5,
-                    payload.maxBody !== undefined ? payload.maxBody : 40,
-                    payload.maxComments !== undefined ? payload.maxComments : 30
-                );
+                if (Array.isArray(payload.adsTerms)) {
+                    if (typeof get_ads_snippets === 'function') {
+                        snippets = get_ads_snippets(payload.path, payload.adsTerms, maxBody, maxComments);
+                    } else {
+                        const allKws = payload.adsTerms.flatMap(t => t.keywords || []);
+                        const maxNoise = payload.adsTerms.reduce((m, t) => Math.max(m, t.noise ?? 5), 0);
+                        snippets = get_snippets(payload.path, allKws, maxNoise, maxBody, maxComments);
+                    }
+                } else {
+                    snippets = get_snippets(
+                        payload.path,
+                        payload.searchKeywords || [payload.keyword],
+                        payload.noise !== undefined ? payload.noise : 5,
+                        maxBody,
+                        maxComments
+                    );
+                }
             } catch (err) {
                 console.error("[Worker] snippet 生成失败:", err);
             }

@@ -114,7 +114,14 @@ input#searchInput {
 #searchResults {
     padding-bottom: 1rem;
     overflow: scroll;
-    position: absolute
+    position: absolute;
+    background-color: #fff;
+    border: 1px solid #767676;
+    border-radius: 2px;
+    font-family: Arial, "Microsoft YaHei", sans-serif;
+    font-size: 13.3333px;
+    line-height: normal;
+    color: #000;
 }
 
 #searchResults::-webkit-scrollbar-thumb {
@@ -131,31 +138,38 @@ input#searchInput {
     width: 177px;
 }
 
-option:hover {
+option:hover,
+#searchResults .sr-opt:hover {
     background: aliceblue;
 }
 
-#searchResults option[data-type="image"] {
+#searchResults option[data-type="image"],
+#searchResults .sr-opt[data-type="image"] {
     color: #00a8ff;
 }
 
-#searchResults option[data-type="audio"] {
+#searchResults option[data-type="audio"],
+#searchResults .sr-opt[data-type="audio"] {
     color: orange;
 }
 
-#searchResults option[data-type="video"] {
+#searchResults option[data-type="video"],
+#searchResults .sr-opt[data-type="video"] {
     color: #9c88ff;
 }
 
-#searchResults option[data-type="pdf"] {
+#searchResults option[data-type="pdf"],
+#searchResults .sr-opt[data-type="pdf"] {
     color: #e84118;
 }
 
-#searchResults option[data-type="epub"] {
+#searchResults option[data-type="epub"],
+#searchResults .sr-opt[data-type="epub"] {
     color: #4cd137;
 }
 
-#searchResults option[data-type="txt"] {
+#searchResults option[data-type="txt"],
+#searchResults .sr-opt[data-type="txt"] {
     color: #7f8fa6;
 }
 

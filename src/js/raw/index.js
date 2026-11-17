@@ -340,7 +340,7 @@ BUS.addEventListener('message', async (e) => {
             if (activeKw && liveKw && normalizeKeyword(activeKw) !== normalizeKeyword(liveKw)) {
                 break;
             }
-            if (!activeKw || isReservedSearchCommand(activeKw)) break;
+            if (!activeKw || isActionCommand(activeKw)) break;
 
             let hist = store.last_li_a;
             if (!Array.isArray(hist)) hist = hist ? [hist] : [];
@@ -348,10 +348,28 @@ BUS.addEventListener('message', async (e) => {
 
             const currentPath = hist[0];
             const path = currentPath.startsWith('../') ? currentPath.substring(3) : currentPath;
+            const title = payload.title || path.split('/').pop().replace('.html', '');
+            const count = typeof payload.count === 'number' ? payload.count : 0;
+
+            if (isAdsQuery(activeKw)) {
+                const evalRes = evaluateAdsOverlayForPath(activeKw, path, payload.adsBodyHits);
+                if (!evalRes) break;
+                const changed = setPageHit(activeKw, {
+                    path,
+                    title,
+                    count,
+                    isAds: true,
+                    matched: evalRes.matched,
+                    viaComment: evalRes.viaComment
+                });
+                if (changed) rerenderSearchOverlay();
+                break;
+            }
+
             const changed = setPageHit(activeKw, {
                 path,
-                title: payload.title || path.split('/').pop().replace('.html', ''),
-                count: typeof payload.count === 'number' ? payload.count : 0
+                title,
+                count
             });
             if (changed) rerenderSearchOverlay();
             break;
@@ -386,8 +404,17 @@ BUS.addEventListener('message', async (e) => {
             store.bookmarkhtml_modifing = "0";
 
             if (store.bookmarkhtml_linksHash !== rawHash && 'caches' in window) {
-                const cache = await caches.open('core-cache-cache');
-                await cache.add('/src/tpl/bookmark.html');
+                try {
+                    const keys = await caches.keys();
+                    for (const key of keys) {
+                        if (key === 'core-cache-cache') {
+                            await caches.delete(key);
+                        } else if (key.startsWith('core-cache-')) {
+                            const cache = await caches.open(key);
+                            await cache.add('/src/tpl/bookmark.html');
+                        }
+                    }
+                } catch (err) { console.warn("回填书签缓存失败", err); }
             }
             break;
 
@@ -670,9 +697,8 @@ window.onload = () => {
                     if (match) {
                         const remoteId = parseInt(match[1], 10);
                         const localId = parseInt(store.repair_command_id || '0', 10);
-                        const isUpdate = sessionStorage.getItem("isUpdate") === "1";
 
-                        if (localId === 0 || !isUpdate) {
+                        if (localId === 0) {
                             store.repair_command_id = remoteId.toString();
                             return;
                         }
@@ -1123,12 +1149,29 @@ function createDBProxy(dbName, storeName) {
             });
         },
 
+        async saveBatch(entries) {
+            const db = await init();
+            return new Promise((resolve, reject) => {
+                const tx = db.transaction(storeName, 'readwrite');
+                tx.oncomplete = () => resolve();
+                tx.onerror = (e) => reject(tx.error || (e && e.target && e.target.error));
+                try {
+                    const os = tx.objectStore(storeName);
+                    for (const { id, payload } of entries) {
+                        os.put(payload, id);
+                    }
+                } catch (err) {
+                    reject(err);
+                }
+            });
+        },
+
         async put(targetStore, key, value) {
             const db = await init();
             return new Promise((resolve, reject) => {
                 const tx = db.transaction(targetStore, 'readwrite');
                 tx.oncomplete = () => resolve();
-                tx.onerror = () => reject(targetStore.error || event.target.error);
+                tx.onerror = (e) => reject(tx.error || (e && e.target && e.target.error));
                 try {
                     tx.objectStore(targetStore).put(value, key);
                 } catch (err) {
@@ -1225,11 +1268,13 @@ async function loadScripts(concurrency) {
                 $("#search").style.display = "block";
             });
 
-        const fatFiles = window.dataIndex.filter(f => f.startsWith('fat_data_'));
+        const rawIndex = Array.isArray(window.dataIndex) ? window.dataIndex : [];
+        const fatFiles = rawIndex.filter(f => typeof f === 'string' && f.startsWith('fat_data_'));
 
         await loadDataInBatches(fatFiles, now, concurrency);
     } catch (err) {
         console.error("❌ 核心流程中断，降级处理:", err);
+        consumeRefreshCelebration();
     } finally {
         window.isDataSyncing = false;
         if (window._globalWatchdog) {
@@ -1396,7 +1441,9 @@ async function loadDataInBatches(files, now, concurrency) {
         return;
     }
 
-    store.SearchCache.clear();
+    const fetchedEntries = [];
+    let failedCount = 0;
+
     for (let i = 0; i < filesToFetch.length; i += concurrency) {
         const batch = filesToFetch.slice(i, i + concurrency);
 
@@ -1415,12 +1462,11 @@ async function loadDataInBatches(files, now, concurrency) {
                     if (!chunkData || typeof chunkData !== 'object')
                         throw new Error(`结构无效`);
 
-                    chunkDataMap.set(src, chunkData);
-                    await dbProxy.save(src, { id: src, fingerprint: newHash, data: chunkData });
-
-                    if (store.isUpdate === "1") {
-                        await dbProxy.addLog(cachedMap.has(src) ? `🔄 更新: ${src}` : `✅ 新增: ${src}`);
-                    }
+                    fetchedEntries.push({
+                        src,
+                        isExisted: cachedMap.has(src),
+                        payload: { id: src, fingerprint: newHash, data: chunkData }
+                    });
                 } finally {
                     clearTimeout(timeoutTimer);
                 }
@@ -1429,78 +1475,105 @@ async function loadDataInBatches(files, now, concurrency) {
 
         results.forEach((res, index) => {
             if (res.status === 'rejected') {
+                failedCount++;
                 console.error(`❌ 切片 ${batch[index]} 拉取失败:`, res.reason);
             }
         });
     }
 
+    if (fetchedEntries.length > 0) {
+        if (failedCount === 0) {
+            for (const entry of fetchedEntries) {
+                chunkDataMap.set(entry.src, entry.payload.data);
+            }
+            await dbProxy.saveBatch(fetchedEntries.map(e => ({ id: e.src, payload: e.payload })));
+            await store.SearchCache.clear();
+            if (cachedMap.size > 0) {
+                for (const entry of fetchedEntries) {
+                    await dbProxy.addLog(entry.isExisted ? `🔄 更新: ${entry.src}` : `✅ 新增: ${entry.src}`);
+                }
+            }
+        } else {
+            console.warn(`⚠️ 本轮 ${failedCount}/${filesToFetch.length} 个切片拉取失败，跳过落盘以避免切片版本不一致`);
+        }
+    }
+
     await buildAndPushData();
+}
+
+function consumeRefreshCelebration() {
+    if (store.force_refresh_cache !== "1") return;
+    store.force_refresh_cache = "0";
+    const runCelebration = () => {
+        import('./deferred-features.js').then(m => {
+            idleRun(m.playConfetti);
+            if (store.auto_show_changelog !== "0") {
+                setTimeout(() => m.showChangelog({ dbProxy, emitEvent }), 800);
+            }
+        });
+    };
+    if (window.restoreSnapPromise) {
+        window.restoreSnapPromise.then(() => {
+            runCelebration();
+            window.restoreSnapPromise = null;
+        });
+    } else {
+        runCelebration();
+    }
 }
 
 async function finalizeDataLoad() {
     try {
-        const currentMediaPaths = new Set();
-        if (window.data && window.data.length > 0) {
+        if (!window._isOfflineDataFallback && Array.isArray(window.data) && window.data.length > 0) {
+            const currentMediaPaths = new Set();
             for (let i = 0; i < window.data.length; i += 4) {
                 const type = window.data[i + 3];
                 if (['image', 'video', 'audio', 'ebook'].includes(type)) {
                     currentMediaPaths.add(window.data[i + 2]);
                 }
             }
-        }
 
-        const oldMediaListRaw = await dbProxy.get('sys_state', 'media_paths_snapshot');
+            const oldMediaListRaw = await dbProxy.get('sys_state', 'media_paths_snapshot');
 
-        if (!oldMediaListRaw) {
-            await dbProxy.put('sys_state', 'media_paths_snapshot', Array.from(currentMediaPaths));
-        } else {
-            const oldMediaPaths = new Set(oldMediaListRaw);
-            let hasMediaUpdates = false;
-
-            for (const path of currentMediaPaths) {
-                if (!oldMediaPaths.has(path)) {
-                    await dbProxy.addLog(`✅ 新增媒体: /${path}`);
-                    hasMediaUpdates = true;
-                }
-            }
-
-            for (const path of oldMediaPaths) {
-                if (!currentMediaPaths.has(path)) {
-                    await dbProxy.addLog(`⛔ 删除媒体: /${path}`);
-                    hasMediaUpdates = true;
-                }
-            }
-
-            if (hasMediaUpdates) {
+            if (!oldMediaListRaw) {
                 await dbProxy.put('sys_state', 'media_paths_snapshot', Array.from(currentMediaPaths));
+            } else {
+                const oldMediaPaths = new Set(oldMediaListRaw);
+                let hasMediaUpdates = false;
+                const deletedPaths = [];
+
+                for (const path of currentMediaPaths) {
+                    if (!oldMediaPaths.has(path)) {
+                        await dbProxy.addLog(`✅ 新增媒体: /${path}`);
+                        hasMediaUpdates = true;
+                    }
+                }
+
+                for (const path of oldMediaPaths) {
+                    if (!currentMediaPaths.has(path)) {
+                        await dbProxy.addLog(`⛔ 删除媒体: /${path}`);
+                        deletedPaths.push(path);
+                        hasMediaUpdates = true;
+                    }
+                }
+
+                if (deletedPaths.length > 0 && 'caches' in window) {
+                    try {
+                        const mediaCache = await caches.open('media-cache');
+                        await Promise.all(deletedPaths.map(p => mediaCache.delete('/' + p, { ignoreSearch: true })));
+                    } catch (e) { }
+                }
+
+                if (hasMediaUpdates) {
+                    await dbProxy.put('sys_state', 'media_paths_snapshot', Array.from(currentMediaPaths));
+                }
             }
         }
     } catch (err) {
         console.warn("媒体资源 Diff 侦测失败", err);
     }
 
-    if (store.force_refresh_cache === "1") {
-        store.force_refresh_cache = "0";
-        const triggerConfetti = () => {
-            const runCelebration = () => {
-                import('./deferred-features.js').then(m => {
-                    idleRun(m.playConfetti);
-                    if (store.auto_show_changelog !== "0") {
-                        setTimeout(() => m.showChangelog({ dbProxy, emitEvent }), 800);
-                    }
-                });
-            };
-            if (window.restoreSnapPromise) {
-                window.restoreSnapPromise.then(() => {
-                    runCelebration();
-                    window.restoreSnapPromise = null;
-                });
-            } else {
-                runCelebration();
-            }
-        };
-        triggerConfetti();
-    }
+    consumeRefreshCelebration();
 }
 
 function sw() {
@@ -1584,7 +1657,7 @@ function sw() {
 function search_box() {
     const elSearchInput = $("#searchInput");
     const elSearchHistory = $("#searchHistory");
-    const elSearchResults = $("#searchResults");
+    const elSearchResults = upgradeSearchResultsBox($("#searchResults"));
     elSearchInput.setAttribute("autocomplete", "off");
 
     function showSearchHistoryByTime() {
@@ -1627,11 +1700,47 @@ function search_box() {
 
     function clickOrChange(select, handler) {
         let isHandling = false;
-        const wrap = function () {
-            if (isHandling || this.selectedIndex < 0) return;
+        const trigger = (idx) => {
+            if (isHandling || idx < 0) return;
             isHandling = true;
-            handler(this.selectedIndex);
+            handler(idx);
             setTimeout(() => { isHandling = false; }, 150);
+        };
+        if (select.tagName !== 'SELECT') {
+            select.addEventListener('click', (e) => {
+                const opt = e.target.closest && e.target.closest('.sr-opt');
+                if (!opt) return;
+                const idx = Array.prototype.indexOf.call(select.options, opt);
+                if (idx >= 0) {
+                    select.selectedIndex = idx;
+                    trigger(idx);
+                }
+            });
+            select.addEventListener('keydown', (e) => {
+                const opts = select.options;
+                if (e.key === 'Escape') {
+                    e.preventDefault();
+                    elSearchInput.focus();
+                    return;
+                }
+                if (!opts.length) return;
+                if (e.key === 'ArrowDown') {
+                    e.preventDefault();
+                    const cur = select.selectedIndex;
+                    select.selectedIndex = cur < 0 ? 0 : (cur + 1) % opts.length;
+                } else if (e.key === 'ArrowUp') {
+                    e.preventDefault();
+                    const cur = select.selectedIndex;
+                    select.selectedIndex = cur <= 0 ? opts.length - 1 : cur - 1;
+                } else if (e.key === 'Enter') {
+                    e.preventDefault();
+                    if (select.selectedIndex >= 0) trigger(select.selectedIndex);
+                }
+            });
+            return;
+        }
+        const wrap = function () {
+            trigger(this.selectedIndex);
         };
         const isMobile = /Mobi|Android/i.test(navigator.userAgent);
         if (isMobile) {
@@ -1647,24 +1756,48 @@ function search_box() {
         elSearchHistory.style.display = status === 1 ? "block" : "none";
     }
 
+    function recordSearchHistory(keyword) {
+        const kw = (keyword || "").trim();
+        if (!kw || isActionCommand(kw)) return;
+        const history = [...(store.searchHistory || [])];
+        const i = history.findIndex(item => item.keyword === kw);
+        if (i !== -1) history.splice(i, 1);
+        history.unshift({ keyword: kw, timestamp: Date.now() });
+        history.sort((a, b) => b.timestamp - a.timestamp);
+        if (history.length > 100) history.length = 100;
+        store.searchHistory = history;
+    }
+
     let searchDebounceTimer = null;
     let composing = false;
 
     const scheduleSearch = (val, delay) => {
         clearTimeout(searchDebounceTimer);
         searchDebounceTimer = setTimeout(() => {
-            search(val.trim());
+            const trimmed = val.trim();
+            if (isActionCommand(trimmed)) return;
+            search(trimmed);
             store.keyword = val;
         }, isAdsQuery(val) ? Math.max(delay, 450) : delay);
     };
 
     const onValueSettled = (val, delay = 150) => {
-        if (val.trim() === "") {
+        const trimmed = val.trim();
+        if (trimmed === "") {
             clearTimeout(searchDebounceTimer);
             invalidateSearch();
             _autocompleteSeq++;
             updateSearchResults([]);
             showSearchHistoryByTime();
+            return;
+        }
+
+        if (isActionCommand(trimmed)) {
+            clearTimeout(searchDebounceTimer);
+            invalidateSearch();
+            _autocompleteSeq++;
+            updateSearchResults([]);
+            initHistoryBox(0);
             return;
         }
 
@@ -1689,14 +1822,11 @@ function search_box() {
     });
 
     elSearchInput.addEventListener("focus", function () {
-        initHistoryBox(1);
-        const history = store.searchHistory;
-        history.forEach(item => {
-            const option = document.createElement("option");
-            option.text = item.keyword;
-            elSearchHistory.appendChild(option);
-        });
-        elSearchHistory.setAttribute("size", Math.max(2, Math.min(10, elSearchHistory.options.length)));
+        if (this.value.trim() !== "") {
+            updateAutocompleteSuggestions(this.value).catch(err => console.warn("联想渲染失败", err));
+            return;
+        }
+        showSearchHistoryByTime();
         elSearchHistory.selectedIndex = -1;
     });
 
@@ -1712,24 +1842,19 @@ function search_box() {
             if (val === "@bomb") {
                 import('./deferred-features.js').then(m => m.bomb({ iframes }));
                 this.value = "";
+                initHistoryBox(0);
                 return;
             }
             if (val === "@rebirth") {
                 import('./deferred-features.js').then(m => m.rebirth({ iframes }));
                 this.value = "";
+                initHistoryBox(0);
                 return;
             }
             const select = $("#searchResults");
             select.focus();
             select.selectedIndex = -1;
-            if (val !== "") {
-                const history = [...(store.searchHistory || [])];
-                const i = history.findIndex(item => item.keyword === val);
-                if (i !== -1) history.splice(i, 1);
-                history.push({ keyword: val, timestamp: Date.now() });
-                history.sort((a, b) => b.timestamp - a.timestamp);
-                store.searchHistory = history;
-            }
+            recordSearchHistory(val);
         }
     });
 
@@ -1781,7 +1906,7 @@ function search_box() {
             }
         }
     });
-    elSearchHistory.title = "右击删除该记录";
+    elSearchHistory.title = "右击删除";
 
     clickOrChange(elSearchHistory, function (index) {
         elSearchInput.value = elSearchHistory.options[index].text;
@@ -1794,20 +1919,8 @@ function search_box() {
     });
     clickOrChange(elSearchResults, function (index) {
         loadContent(index);
-        const keyword = elSearchInput.value.trim();
-        if (keyword !== "") {
-            const history = [...(store.searchHistory || [])];
-            const existingIndex = history.findIndex(item => item.keyword === keyword);
-            if (existingIndex !== -1) {
-                history.splice(existingIndex, 1);
-            }
-            history.push({
-                keyword,
-                timestamp: new Date().getTime()
-            });
-            history.sort((a, b) => b.timestamp - a.timestamp);
-            store.searchHistory = history;
-        }
+        initHistoryBox(0);
+        recordSearchHistory(elSearchInput.value);
     });
 
     $("#clear").addEventListener("click", function () {
@@ -1862,7 +1975,46 @@ function search_box() {
     let hoverSnippetTimer = null;
     let isPaused = true;
 
+    function formatCountdown(sec) {
+        if (!Number.isFinite(sec) || sec < 0) return '';
+        const total = Math.max(0, Math.ceil(sec));
+        const h = Math.floor(total / 3600);
+        const m = Math.floor((total % 3600) / 60);
+        const s = total % 60;
+        const pad = (n) => String(n).padStart(2, '0');
+        return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`;
+    }
+
+    function attachPreviewCountdown(mediaEl) {
+        const old = document.getElementById('preview-countdown');
+        if (old) old.remove();
+        if (!previewBox || !mediaEl) return;
+
+        const badge = document.createElement('div');
+        badge.id = 'preview-countdown';
+        badge.style.cssText = 'position:absolute;right:8px;bottom:6px;padding:1px 6px;border-radius:4px;background:rgba(0,0,0,0.65);color:#abb2bf;font-size:11px;font-family:monospace;line-height:1.4;pointer-events:none;z-index:10;display:none;';
+        previewBox.appendChild(badge);
+
+        const update = () => {
+            const dur = mediaEl.duration;
+            if (!Number.isFinite(dur) || dur <= 0) {
+                badge.style.display = 'none';
+                return;
+            }
+            badge.textContent = formatCountdown(dur - (mediaEl.currentTime || 0));
+            badge.style.display = 'block';
+        };
+
+        mediaEl.addEventListener('loadedmetadata', update);
+        mediaEl.addEventListener('durationchange', update);
+        mediaEl.addEventListener('timeupdate', update);
+        mediaEl.addEventListener('seeked', update);
+        update();
+    }
+
     function destroyMediaPreview() {
+        const badge = document.getElementById('preview-countdown');
+        if (badge) badge.remove();
         if (previewBox) previewBox.style.display = 'none';
         lastHoveredPath = null;
         clearTimeout(hoverSnippetTimer);
@@ -1878,7 +2030,16 @@ function search_box() {
         }
     }
 
-    window.addEventListener('blur', destroyMediaPreview);
+    window.addEventListener('blur', () => {
+        destroyMediaPreview();
+        initHistoryBox(0);
+    });
+    document.addEventListener('mousedown', (e) => {
+        const searchWrap = document.getElementById('search');
+        if (searchWrap && !searchWrap.contains(e.target)) {
+            initHistoryBox(0);
+        }
+    });
 
     const handleMiddleClick = (e) => {
         if (e.button === 1) {
@@ -1936,7 +2097,7 @@ function search_box() {
                 if (items.length === 0) return;
                 const title = document.createElement('div');
                 title.style.cssText = 'color: #e5c07b; font-size: 11px; font-weight: bold; margin: 0 0 6px;';
-                title.textContent = label + (more > 0 ? `（另有 ${more} 条未显示）` : '');
+                title.textContent = label + (more > 0 ? ` (+${more})` : '');
                 block.appendChild(title);
 
                 items.forEach((item, k) => {
@@ -1990,13 +2151,14 @@ function search_box() {
     }
 
     elSearchResults.addEventListener('mousemove', (e) => {
-        if (e.target.tagName.toUpperCase() === 'OPTION') {
-            const path = e.target.dataset.path;
-            const type = e.target.dataset.type;
-            const isLocalOnly = e.target.dataset.localOnly === "true";
+        const optEl = e.target.closest && e.target.closest('.sr-opt');
+        if (optEl) {
+            const path = optEl.dataset.path;
+            const type = optEl.dataset.type;
+            const isLocalOnly = optEl.dataset.localOnly === "true";
 
-            if (e.target.dataset.localOnly === "true" && store.online_flag === "1") {
-                e.target.title = "";
+            if (optEl.dataset.localOnly === "true" && store.online_flag === "1") {
+                optEl.title = "";
                 if (lastHoveredPath !== path) {
                     destroyMediaPreview();
                     lastHoveredPath = path;
@@ -2007,13 +2169,12 @@ function search_box() {
             const isMedia = type === 'video' || type === 'audio' || /\.(mp4|webm|ogg|mp3|wav|flac|m4a)$/i.test(path);
             const isImage = type === 'image' || /\.(png|jpg|jpeg|gif|webp|bmp|svg|ico)$/i.test(path);
 
-            const adsMode = isAdsQuery(window._currentRenderedKeyword || elSearchInput.value.trim());
             if (type === 'html') {
-                e.target.title = adsMode ? "" : "右击滚动或停止";
+                optEl.title = "右击滚动/停止";
             } else if (isMedia) {
-                e.target.title = "右击播放或停止";
+                optEl.title = "右击播放/停止";
             } else {
-                e.target.title = "";
+                optEl.title = "";
             }
 
             if (path === lastHoveredPath) return;
@@ -2043,7 +2204,6 @@ function search_box() {
             const resultData = window._currentResultMap && window._currentResultMap.get(path);
             const keyword = window._currentRenderedKeyword || elSearchInput.value.trim();
             if (!resultData || !keyword) return;
-            if (isAdsQuery(keyword)) return;   // 组合搜索：html 条目不创建预览
 
             hoverSnippetTimer = setTimeout(async () => {
                 const data = await requestSnippets(path, keyword);
@@ -2054,12 +2214,13 @@ function search_box() {
     });
 
     elSearchResults.addEventListener('contextmenu', (e) => {
-        if (e.target.tagName.toUpperCase() === 'OPTION') {
+        const optEl = e.target.closest && e.target.closest('.sr-opt');
+        if (optEl) {
             e.preventDefault();
-            const path = e.target.dataset.path;
-            const type = e.target.dataset.type;
+            const path = optEl.dataset.path;
+            const type = optEl.dataset.type;
 
-            if (e.target.dataset.localOnly === "true" && store.online_flag === "1") {
+            if (optEl.dataset.localOnly === "true" && store.online_flag === "1") {
                 return;
             }
 
@@ -2113,6 +2274,7 @@ function search_box() {
 
                     mediaEl = scrollContent.querySelector('video, audio');
                     mediaEl.volume = 0.1;
+                    attachPreviewCountdown(mediaEl);
                     resumeMediaPosition(mediaEl, path);   // 从上一次的位置继续
                     const playPromise = mediaEl.play();
                     if (playPromise !== undefined) {
@@ -2168,8 +2330,10 @@ function processAndShowResults(results, keyword, options = {}) {
         currentIndex = finalResults.findIndex(r => r.path === currentPath || r.path === strippedPath);
     }
 
-    if (activeKw !== "" && !isReservedSearchCommand(activeKw)) {
-        if (!provisional && !fromCache && !options.noCache) store.SearchCache.set(activeKw, base);
+    if (activeKw !== "" && !isActionCommand(activeKw)) {
+        if (!isAdsQuery(activeKw) && !provisional && !fromCache && !options.noCache) {
+            store.SearchCache.set(activeKw, base);
+        }
         if (currentIndex === -1) emitEvent('LOCAL_SEARCH_COUNT', activeKw, 'content');
     }
 
@@ -2184,7 +2348,7 @@ function processAndShowResults(results, keyword, options = {}) {
 }
 
 async function search(rawKeyword) {
-    if (typeof rawKeyword !== "string" || !rawKeyword.trim()) {
+    if (typeof rawKeyword !== "string" || !rawKeyword.trim() || isActionCommand(rawKeyword)) {
         invalidateSearch();
         updateSearchResults([]);
         return;
@@ -2324,35 +2488,102 @@ function isPrivatePath(p) {
     return _privateSet.has(p);
 }
 
+function pageOverlayKey(kw) {
+    return isAdsQuery(kw) ? String(kw).trim() : normalizeKeyword(kw);
+}
+
 function setPageHit(kw, entry) {
-    const norm = normalizeKeyword(kw);
-    if (!norm) return false;
-    let m = pageHitCache.get(norm);
-    pageHitCache.delete(norm);
+    const key = pageOverlayKey(kw);
+    if (!key) return false;
+    let m = pageHitCache.get(key);
+    pageHitCache.delete(key);
     if (!m) m = new Map();
     const prev = m.get(entry.path);
     m.delete(entry.path);
     m.set(entry.path, entry);
-    pageHitCache.set(norm, m);
+    pageHitCache.set(key, m);
     if (pageHitCache.size > 100) pageHitCache.delete(pageHitCache.keys().next().value);
-    return !prev || prev.count !== entry.count;
+    return !prev
+        || prev.count !== entry.count
+        || !!prev.matched !== !!entry.matched
+        || !!prev.viaComment !== !!entry.viaComment;
+}
+
+function evaluateAdsOverlayForPath(kw, path, adsBodyHits) {
+    if (!Array.isArray(adsBodyHits)) return null;
+    const plan = parseAdsQuery(kw);
+    if (!plan.ok || plan.terms.length !== adsBodyHits.length) return null;
+
+    const expand = window.top.expandQuery;
+    let cmtTexts = null;
+    if (commentModel.ready && Array.isArray(commentModel.index)) {
+        const doc = commentModel.index.find(d => d && d.path === path);
+        if (doc && Array.isArray(doc.texts)) cmtTexts = doc.texts;
+    }
+
+    const cmtHits = plan.terms.map((t, idx) => {
+        if (adsBodyHits[idx] || !cmtTexts || cmtTexts.length === 0) return false;
+        const kws = (t.like && typeof expand === 'function')
+            ? [t.text, ...expand(t.text).variants]
+            : [t.text];
+        const out = [];
+        for (const text of cmtTexts) {
+            if (!text) continue;
+            srCollectMatches(Array.from(text), kws, t.noise, out);
+            if (out.length > 0) return true;
+        }
+        return false;
+    });
+
+    const evalNode = (n, useComments) => {
+        if (n.op === 'term') {
+            const hit = !!adsBodyHits[n.term] || (!n.neg && useComments && !!cmtHits[n.term]);
+            return n.neg ? !hit : hit;
+        }
+        if (n.op === 'and') return n.args.every(a => evalNode(a, useComments));
+        if (n.op === 'or') return n.args.some(a => evalNode(a, useComments));
+        return false;
+    };
+
+    const matched = evalNode(plan.expr, true);
+    const matchedBodyOnly = evalNode(plan.expr, false);
+    return {
+        matched,
+        viaComment: matched && !matchedBodyOnly
+    };
 }
 
 function applyPageOverlay(results, keyword) {
-    if (!keyword || isReservedSearchCommand(keyword)) return results;
-    const entries = pageHitCache.get(normalizeKeyword(keyword));
+    if (!keyword || isActionCommand(keyword)) return results;
+    const entries = pageHitCache.get(pageOverlayKey(keyword));
     if (!entries || entries.size === 0) return results;
 
     const strip = (p) => (p.startsWith('../') ? p.substring(3) : p);
     const indexByPath = new Map();
     results.forEach((r, i) => indexByPath.set(strip(r.path), i));
 
+    const adsMode = isAdsQuery(keyword);
     const out = results.slice();
     const added = [];
     let latest = null;
     for (const e of entries.values()) {
         latest = e;
         const i = indexByPath.get(e.path);
+        if (adsMode) {
+            if (i !== undefined) {
+                out[i] = Object.assign({}, out[i], { viaComment: !!e.viaComment });
+            } else if (e.matched) {
+                added.push({
+                    title: e.title,
+                    path: e.path,
+                    type: 'html',
+                    count: e.count,
+                    localOnly: isPrivatePath(e.path),
+                    viaComment: !!e.viaComment
+                });
+            }
+            continue;
+        }
         if (i !== undefined) {
             out[i] = Object.assign({}, out[i], { count: e.count });
         } else if (e.count > 0) {
@@ -2365,11 +2596,36 @@ function applyPageOverlay(results, keyword) {
     return added.length ? added.reverse().concat(out) : out;
 }
 
+function buildAdsPositiveTerms(kw) {
+    const plan = parseAdsQuery(kw);
+    if (!plan.ok) return null;
+    const posIdx = new Set();
+    const collect = (n) => {
+        if (!n) return;
+        if (n.op === 'term') { if (!n.neg) posIdx.add(n.term); }
+        else if (Array.isArray(n.args)) n.args.forEach(collect);
+    };
+    collect(plan.expr);
+    const expand = window.top.expandQuery;
+    const terms = [];
+    for (const idx of [...posIdx].sort((a, b) => a - b)) {
+        const t = plan.terms[idx];
+        if (!t) continue;
+        const keywords = (t.like && typeof expand === 'function')
+            ? [t.text, ...expand(t.text).variants]
+            : [t.text];
+        terms.push({ noise: t.noise, keywords });
+    }
+    return terms;
+}
+window.buildAdsPositiveTerms = buildAdsPositiveTerms;
+
 function requestSnippets(path, keyword) {
     const worker = searchWorker;
     if (!worker) return Promise.resolve(null);
     const noise = Number(store.noise_level ?? 5);
-    const key = [normalizeKeyword(keyword), noise, store.synonyms_enabled ?? 1, commentModel.ver, path].join('|');
+    const ads = isAdsQuery(keyword);
+    const key = [ads ? keyword.trim() : normalizeKeyword(keyword), noise, store.synonyms_enabled ?? 1, commentModel.ver, path].join('|');
 
     const hit = snippetCache.get(key);
     if (hit) {
@@ -2377,6 +2633,13 @@ function requestSnippets(path, keyword) {
         snippetCache.set(key, hit);
         return Promise.resolve(hit);
     }
+
+    let adsTerms = null;
+    if (ads) {
+        adsTerms = buildAdsPositiveTerms(keyword);
+        if (!adsTerms || adsTerms.length === 0) return Promise.resolve(null);
+    }
+
     return new Promise((resolve) => {
         const reqId = ++_snipReqId;
         pendingSnippets.set(reqId, (data) => {
@@ -2388,11 +2651,13 @@ function requestSnippets(path, keyword) {
         });
         worker.postMessage({
             type: 'SNIPPETS',
-            payload: {
-                reqId, path, keyword, noise,
-                searchKeywords: getSearchKeywords(keyword),
-                maxBody: 40, maxComments: 30
-            }
+            payload: ads
+                ? { reqId, path, keyword, adsTerms, maxBody: 40, maxComments: 30 }
+                : {
+                    reqId, path, keyword, noise,
+                    searchKeywords: getSearchKeywords(keyword),
+                    maxBody: 40, maxComments: 30
+                }
         });
     });
 }
@@ -2520,26 +2785,16 @@ function normalizeKeyword(kw) {
     return kw.trim().toLowerCase().replace(/\s+/g, '');
 }
 
-// 以 @[ 开头的组合搜索也算保留前缀：不进结果缓存、不统计页内命中、不叠加页面 / 评论 overlay、不通知 content 高亮
+function isActionCommand(kw) {
+    return typeof kw === 'string' && /^@(bomb|rebirth)$/.test(kw.trim());
+}
+
 function isReservedSearchCommand(kw) {
-    return typeof kw === 'string' && (/^@(bomb$|rebirth$)/.test(kw) || isAdsQuery(kw));
+    return isActionCommand(kw) || isAdsQuery(kw);
 }
 
 // [ads-filter:begin] ───────────────────────────────────────────────────────────
 // 组合搜索与结果筛选条
-//
-//  · 组合搜索  @[a&!(b|c)]飞机[31]大炮[]机枪[0]
-//      开头的 @[...] 进入组合搜索。第一个 [] 是表达式：运算符 & | ! ( )（优先级 ! > & > |），字母 a~z 是形参；
-//      第 n 个字母对应后面第 n 个"词[]"——词写在 [] 的左边，[] 里 0~2 位数字：
-//          []   噪值、近义都取全局（筛选条里的噪值 / 近义）
-//          [3]  噪值 3（0~5），近义取全局
-//          [31] 噪值 3，近义 1（0 关 / 1 开）
-//      示例 = 飞机（噪 3、近义） 且 非(大炮（全局）或 机枪（噪 0、近义取全局））。
-//      语义是"同一文档内"：包含项可由标题 / 正文 / 评论满足，排除项只看标题 / 正文（不看评论）；
-//      解析和近义展开在主线程，匹配在 wasm 里一遍扫完。
-//  · 筛选分两类：
-//      引擎参数（噪值、近义）→ 改变匹配结果，改后重搜（存在 store.noise_level / store.synonyms_enabled）；
-//      视图筛选（后缀、无明确日期、日期范围）→ 只过滤已算好的结果，不重搜、不进缓存。
 // ──────────────────────────────────────────────────────────────────────────────
 const ADS_PREFIX_RE = /^[@＠][\[［【]/;
 
@@ -2552,31 +2807,26 @@ const ADS_USAGE = '@[a&!(b|c)]飞机[31]大炮[]机枪[0]';
 
 class AdsSyntaxError extends Error { }
 
-// 表达式在"什么都不含的空文档"上是否成立（成立就会匹配几乎全库，必须拒绝）
 function adsHoldsOnEmpty(n) {
     if (n.op === 'term') return n.neg;
     return n.op === 'and' ? n.args.every(adsHoldsOnEmpty) : n.args.some(adsHoldsOnEmpty);
 }
 
-// 把整条命令解析成 { terms, expr, summary }；输入是边敲边搜的，半截语法返回 { ok:false, error }，
-// 不会被当普通关键词去搜。expr 是引用词条下标的表达式树（非 已用德摩根定律下推到词条上）。
 function parseAdsQuery(raw) {
     const fail = (error) => ({ ok: false, error });
     const src = String(raw).trim()
-        .replace(/＠/g, '@').replace(/[【［]/g, '[').replace(/[】］]/g, ']');   // 中文输入法下的符号
-    if (!/^@\[/.test(src)) return fail('组合搜索以 @[表达式] 开头，例如 ' + ADS_USAGE);
+        .replace(/＠/g, '@').replace(/[【［]/g, '[').replace(/[】］]/g, ']');
+    if (!/^@\[/.test(src)) return fail('格式: ' + ADS_USAGE);
 
-    // 1) 表达式区：第一个 [ ] 之间
     const close = src.indexOf(']', 2);
-    if (close < 0) return fail('表达式缺少 ]，例如 ' + ADS_USAGE);
+    if (close < 0) return fail('缺少 ]，如 ' + ADS_USAGE);
     const es = src.slice(2, close)
         .replace(/＆/g, '&').replace(/｜/g, '|').replace(/！/g, '!').replace(/（/g, '(').replace(/）/g, ')')
         .replace(/\s+/g, '').toLowerCase();
-    if (!es) return fail('表达式为空，例如 ' + ADS_USAGE);
+    if (!es) return fail('表达式为空');
     const bad = /[^a-z&|!()]/.exec(es);
-    if (bad) return fail(`表达式里不能有「${bad[0]}」（只能用 & | ! ( ) 和字母 a~z）`);
+    if (bad) return fail(`非法字符「${bad[0]}」(仅限 & | ! ( ) a~z)`);
 
-    // 2) 实参区：词[噪值近义] 词[噪值近义] …（词在 [] 的左边）
     const rest = src.slice(close + 1);
     const defNoise = Math.min(5, Math.max(0, Number(store.noise_level ?? 5) || 0));
     const defLike = (store.synonyms_enabled ?? 1) === 1 ? 1 : 0;
@@ -2588,11 +2838,11 @@ function parseAdsQuery(raw) {
         const n = terms.length + 1;
         const text = m[1].trim();
         const digits = m[2].replace(/\s+/g, '');
-        if (!text) return fail(`第 ${n} 个 [] 前面没有词`);
-        if (!/^[0-9]*$/.test(digits)) return fail(`第 ${n} 个 [${m[2]}] 里只能写数字：[] / [噪值] / [噪值近义]`);
-        if (digits.length > 2) return fail(`第 ${n} 个 [${digits}] 最多 2 位：噪值 0~5，近义 0 或 1`);
-        if (digits.length >= 1 && Number(digits[0]) > 5) return fail(`第 ${n} 个 [${digits}] 的噪值只能是 0~5`);
-        if (digits.length === 2 && Number(digits[1]) > 1) return fail(`第 ${n} 个 [${digits}] 的近义只能是 0 或 1`);
+        if (!text) return fail(`第 ${n} 个 [] 前缺词`);
+        if (!/^[0-9]*$/.test(digits)) return fail(`第 ${n} 个 [${m[2]}] 仅限数字`);
+        if (digits.length > 2) return fail(`第 ${n} 个 [${digits}] 最多 2 位`);
+        if (digits.length >= 1 && Number(digits[0]) > 5) return fail(`第 ${n} 个 [${digits}] 噪值需为 0~5`);
+        if (digits.length === 2 && Number(digits[1]) > 1) return fail(`第 ${n} 个 [${digits}] 近义需为 0/1`);
         terms.push({
             text,
             noise: digits.length >= 1 ? Number(digits[0]) : defNoise,
@@ -2600,11 +2850,10 @@ function parseAdsQuery(raw) {
         });
     }
     const tail = rest.slice(at).trim();
-    if (tail) return fail(/[\[\]]/.test(tail) ? '方括号 [ ] 没有配对' : `「${tail}」后面缺少 []（每个词后面都要跟一个 []，留空表示用全局设置）`);
-    if (terms.length === 0) return fail('表达式后面要跟词和 []，例如 ' + ADS_USAGE);
-    if (terms.length > 26) return fail('最多 26 个词（字母 a~z）');
+    if (tail) return fail(/[\[\]]/.test(tail) ? '方括号未配对' : `「${tail}」后缺 []`);
+    if (terms.length === 0) return fail('缺少词与 []，如 ' + ADS_USAGE);
+    if (terms.length > 26) return fail('最多 26 个词 (a~z)');
 
-    // 3) 表达式语法：or := and ('|' and)* ；and := unary ('&' unary)* ；unary := '!' unary | '(' or ')' | 字母
     let pos = 0;
     const used = new Set();
     const parseOr = (depth) => {
@@ -2619,41 +2868,39 @@ function parseAdsQuery(raw) {
     };
     const parseUnary = (depth) => {
         const c = es[pos];
-        if (c === undefined) throw new AdsSyntaxError('表达式不完整：运算符后面缺少内容');
+        if (c === undefined) throw new AdsSyntaxError('表达式不完整');
         if (c === '!') { pos++; return { k: 'not', x: parseUnary(depth) }; }
         if (c === '(') {
-            if (depth >= ADS_MAX_DEPTH) throw new AdsSyntaxError(`括号嵌套太深（最多 ${ADS_MAX_DEPTH} 层）`);
+            if (depth >= ADS_MAX_DEPTH) throw new AdsSyntaxError('括号嵌套过深');
             pos++;
             const e = parseOr(depth + 1);
-            if (es[pos] !== ')') throw new AdsSyntaxError('括号没有闭合，缺少 )');
+            if (es[pos] !== ')') throw new AdsSyntaxError('缺少 )');
             pos++;
             return e;
         }
         if (c >= 'a' && c <= 'z') { pos++; used.add(c); return { k: 'var', ch: c }; }
-        throw new AdsSyntaxError(`「${c}」前面缺少内容`);
+        throw new AdsSyntaxError(`「${c}」前缺内容`);
     };
     let tree;
     try {
         tree = parseOr(0);
         if (pos < es.length) {
-            throw new AdsSyntaxError(es[pos] === ')' ? '多余的 )' : `「${es[pos - 1]}」和「${es[pos]}」之间缺少运算符 & 或 |`);
+            throw new AdsSyntaxError(es[pos] === ')' ? '多余的 )' : `「${es[pos - 1]}」「${es[pos]}」间缺 & 或 |`);
         }
     } catch (e) {
         if (e instanceof AdsSyntaxError) return fail(e.message);
         throw e;
     }
 
-    // 4) 形参与实参一一对应：第 n 个字母 ↔ 第 n 个词；多出来或没用到的都报错，免得手误悄悄改变含义
     for (const ch of [...used].sort()) {
-        if (ch.charCodeAt(0) - 97 >= terms.length) return fail(`表达式里用到了 ${ch}，但后面只有 ${terms.length} 个词`);
+        if (ch.charCodeAt(0) - 97 >= terms.length) return fail(`未知形参 ${ch}(共 ${terms.length} 词)`);
     }
     for (let i = 0; i < terms.length; i++) {
         if (!used.has(String.fromCharCode(97 + i))) {
-            return fail(`第 ${i + 1} 个词「${terms[i].text}」在表达式里没有对应的 ${String.fromCharCode(97 + i)}`);
+            return fail(`词「${terms[i].text}」未在表达式中使用`);
         }
     }
 
-    // 5) 转成引擎用的表达式树：非 只出现在词条上（德摩根：非(与)=或(非)、非(或)=与(非)），同运算符嵌套拍平
     const wire = (n, neg) => {
         if (n.k === 'var') return { op: 'term', term: n.ch.charCodeAt(0) - 97, neg };
         if (n.k === 'not') return wire(n.x, !neg);
@@ -2662,18 +2909,18 @@ function parseAdsQuery(raw) {
     };
     const expr = wire(tree, false);
     if (adsHoldsOnEmpty(expr)) {
-        return fail('至少要有一个必须出现的词（只有被 ! 排除的词，或 | 里带 !，会匹配几乎所有文档）');
+        return fail('至少需一个正向词');
     }
 
-    // 6) 摘要：按用户写的结构显示（保留 非(…)），词条后标出实际生效的噪值 / 近义
     const show = (n, parent) => {
-        if (n.k === 'var') { const t = terms[n.ch.charCodeAt(0) - 97]; return `${t.text}（噪${t.noise}${t.like ? '·近义' : ''}）`; }
-        if (n.k === 'not') return n.x.k === 'var' ? '非 ' + show(n.x) : '非(' + show(n.x, null) + ')';
+        if (n.k === 'var') { const t = terms[n.ch.charCodeAt(0) - 97]; return `${t.text}[${t.noise}${t.like ? '·近' : ''}]`; }
+        if (n.k === 'not') return n.x.k === 'var' ? '非' + show(n.x) : '非(' + show(n.x, null) + ')';
         const s = n.xs.map(x => show(x, n.k)).join(n.k === 'and' ? ' 且 ' : ' 或 ');
         return parent && parent !== n.k ? `(${s})` : s;
     };
     return { ok: true, terms, expr, summary: show(tree, null) };
 }
+window.parseAdsQuery = parseAdsQuery;
 
 function searchAds(kw) {
     const token = ++window._searchToken;
@@ -2689,7 +2936,6 @@ function searchAds(kw) {
         return;
     }
 
-    // 近义词在主线程按词条展开（expandQuery 挂在 window 上，worker 看不到）
     const expand = window.top.expandQuery;
     let synMissed = false;
     const terms = plan.terms.map(t => {
@@ -2700,7 +2946,6 @@ function searchAds(kw) {
         }
         return { noise: t.noise, keywords };
     });
-    // synonyms.js 是异步加载的：没赶上时由 onSynonymsLoaded 负责重跑
     if (synMissed) window._searchSentWithoutSyn = true;
 
     window._adsStatus = { summary: plan.summary };
@@ -2708,31 +2953,26 @@ function searchAds(kw) {
     searchWorker.postMessage({ type: 'SEARCH_ADS', payload: { keyword: kw, token, plan: { terms, expr: plan.expr } } });
 }
 
-// ── 筛选状态（持久化在 store.search_filter，一经设置一直有效）──────────────────
-// 后缀下拉的选项从"原始结果列表"（叠加评论之后、筛选之前）统计：页面和评论条目统归 html，其余按文件后缀。
-// "无明确日期"是同一个下拉里的一项，取消勾选即隐藏没有日期的条目；日期范围只约束有明确日期的条目，两者互相独立。
+// ── 筛选状态（后缀 + html 所属年月，默认全选）──────────────────────────────────
+const SF_BAR_WIDTH = 270;
+
 function sfState() {
     if (!window._sfState) {
         let saved = null;
         try { saved = store.search_filter; } catch (e) { }
         saved = saved && typeof saved === 'object' ? saved : {};
-        const okDate = (v) => (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v)) ? v : '';
         window._sfState = {
-            // 旧版本存过的 comment / other 已不再是独立类别，丢弃
             off: Array.isArray(saved.off) ? saved.off.filter(k => typeof k === 'string' && k && k !== 'comment' && k !== 'other') : [],
-            hideUndated: saved.hideUndated === true,
-            from: okDate(saved.from),
-            to: okDate(saved.to)
+            ymOff: []
         };
     }
     return window._sfState;
 }
 
 function sfSave() {
-    try { store.search_filter = window._sfState; } catch (e) { }
+    try { store.search_filter = { off: window._sfState ? window._sfState.off : [] }; } catch (e) { }
 }
 
-// 日期戳：html 在 lite_data（轻数据第 4 项 "时间戳-localOnly"），图片在文件名，其余类型没有明确日期
 let _sfStampSrc = null, _sfStampFp = null, _sfStampMap = null;
 function sfStampMap() {
     const src = window.lite_data, fp = window._dataFp;
@@ -2743,7 +2983,7 @@ function sfStampMap() {
         const f = node._f;
         if (Array.isArray(f)) {
             for (const it of f) {
-                if (Array.isArray(it) && typeof it[0] === 'string' && typeof it[3] === 'string') {   // 只遍历 lite_data.html 子树，与 collectHtmlFiles 一致
+                if (Array.isArray(it) && typeof it[0] === 'string' && typeof it[3] === 'string') {
                     const stamp = it[3].split('-')[0];
                     if (/^\d{14}$/.test(stamp)) map.set('html/' + it[0], stamp);
                 }
@@ -2758,70 +2998,56 @@ function sfStampMap() {
     return map;
 }
 
-function sfStampOf(r) {
+function sfYmOf(r) {
+    if (r.type !== 'html') return '';
     const p = String(r.path || '').replace(/^\.\.\//, '');
-    if (r.type === 'html') return sfStampMap().get(p) || '';
-    if (r.type === 'image') {
-        const m = /(?:^|\D)(\d{14})(?:\D|$)/.exec(p.split('/').pop() || '');
-        if (m && /^(19|20)\d{2}(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])/.test(m[1])) return m[1];
-    }
-    return '';
+    const stamp = sfStampMap().get(p) || '';
+    return stamp.length >= 6 ? `${stamp.slice(0, 4)}-${stamp.slice(4, 6)}` : '';
 }
 
-// 页面与评论条目（commentOnly / viaComment 也是 html 页面）统归 html，其余取文件后缀
 function sfExtOf(r) {
     if (r.type === 'html') return 'html';
     const m = /\.([A-Za-z0-9]+)$/.exec(r.path || '');
     return m ? m[1].toLowerCase() : '(无)';
 }
 
-// 对原始结果列表统计：各后缀的条目数 + 没有明确日期的条目数
 function sfStats(results) {
     const exts = new Map();
-    let undated = 0;
+    const yms = new Map();
     for (const r of results) {
         const e = sfExtOf(r);
         exts.set(e, (exts.get(e) || 0) + 1);
-        if (!sfStampOf(r)) undated++;
+        if (r.type === 'html') {
+            const ym = sfYmOf(r);
+            if (ym) yms.set(ym, (yms.get(ym) || 0) + 1);
+        }
     }
-    return { exts, undated };
+    return { exts, yms };
 }
 
 function sfActive() {
     const s = sfState();
-    return s.off.length > 0 || s.hideUndated || !!s.from || !!s.to;
+    return s.off.length > 0 || s.ymOff.length > 0;
 }
 
-// 纯视图过滤：返回 { list, total, stats }（stats 统计的是过滤前的原始列表）
 function sfApply(results) {
     const s = sfState();
     const stats = sfStats(results);
     const off = new Set(s.off);
-    let from = s.from ? s.from.replace(/-/g, '') + '000000' : '';
-    let to = s.to ? s.to.replace(/-/g, '') + '235959' : '';
-    if (from && to && from > to) {
-        const a = s.to.replace(/-/g, '') + '000000';
-        const b = s.from.replace(/-/g, '') + '235959';
-        from = a; to = b;
-    }
-    if (off.size === 0 && !s.hideUndated && !from && !to) return { list: results, total: results.length, stats };
+    const ymOff = new Set(s.ymOff);
+    if (off.size === 0 && ymOff.size === 0) return { list: results, total: results.length, stats };
 
     const list = results.filter(r => {
         if (off.has(sfExtOf(r))) return false;
-        if (s.hideUndated || from || to) {
-            const stamp = sfStampOf(r);
-            if (!stamp) {
-                if (s.hideUndated) return false;
-            } else if ((from && stamp < from) || (to && stamp > to)) {
-                return false;
-            }
+        if (ymOff.size > 0 && r.type === 'html') {
+            const ym = sfYmOf(r);
+            if (ym && ymOff.has(ym)) return false;
         }
         return true;
     });
     return { list, total: results.length, stats };
 }
 
-// ── 引擎参数：噪值 / 近义存在 store 里，改后清缓存命名空间并重搜 ──────────────────
 function sfSyncEngine() {
     const n = Number(store.noise_level ?? 5);
     const l = Number(store.synonyms_enabled ?? 1);
@@ -2841,50 +3067,51 @@ async function sfApplyEngine(key, value) {
     rerunActiveSearch();
 }
 
-// ── 筛选条 UI：单行，原生控件 ─────────────────────────────────────────────────
 function sfInjectStyle() {
     if (document.getElementById('sf-style')) return;
     const st = document.createElement('style');
     st.id = 'sf-style';
     st.textContent = `
-#sf-bar{box-sizing:border-box;display:none;flex-wrap:wrap;align-items:center;gap:2px 8px;margin:0 0 2px;padding:2px 4px;font-size:12px;white-space:nowrap;background:#fff;border:1px solid #999}
+#sf-bar{box-sizing:border-box;display:none;flex-wrap:wrap;align-items:center;gap:2px 6px;margin:0 0 2px;padding:2px 5px;font-size:12px;white-space:nowrap;background:#fff;border:1px solid #999}
 #sf-bar select,#sf-bar input,#sf-bar button{font-size:12px;user-select:text;-webkit-user-select:text}
 #sf-bar details{position:relative}
 #sf-bar summary{cursor:pointer}
-#sf-bar .sf-pop{position:absolute;z-index:2;top:100%;left:0;margin-top:4px;max-height:320px;overflow:auto;padding:2px 6px;background:#fff;border:1px solid #999}
+#sf-bar .sf-pop{position:absolute;z-index:20;top:100%;left:0;margin-top:4px;min-width:130px;max-height:320px;overflow:auto;padding:4px 6px;background:#fff;border:1px solid #999;box-shadow:0 2px 6px rgba(0,0,0,0.15)}
+#sf-bar .sf-pop-hd{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:2px;color:#555;font-size:11px}
 #sf-bar .sf-pop label{display:block}
-#sf-bar hr{margin:2px 0}
+#sf-bar hr{margin:4px 0}
+#sf-count{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;text-align:center}
 #sf-count.sf-hot{font-weight:bold}
-#sf-status{flex-basis:100%;white-space:normal;word-break:break-all}
+#sf-status{flex-basis:100%;white-space:normal;word-break:break-all;color:#444}
 #sf-status:empty{display:none}
 `;
     document.head.appendChild(st);
 }
 
-function sfFillControls() {
-    const bar = document.getElementById('sf-bar');
-    if (!bar) return;
-    const s = sfState();
-    bar.querySelector('#sf-from').value = s.from;
-    bar.querySelector('#sf-to').value = s.to;
-}
-
 function sfReset() {
-    Object.assign(sfState(), { off: [], hideUndated: false, from: '', to: '' });
+    Object.assign(sfState(), { off: [], ymOff: [] });
     sfSave();
-    sfFillControls();
     rerenderSearchOverlay();
 }
 
-// 反选：只翻转当前下拉里各后缀的勾选状态；"无明确日期"不动
-// （否则"取消 pdf 再反选 = 只看 pdf"时，没有日期的 pdf 会被连带隐藏）
-function sfInvert(bar) {
-    const keys = [...bar.querySelectorAll('.sf-list input[data-k]')].map(i => i.dataset.k).filter(k => k !== '@nodate');
+function sfInvertExt(bar) {
+    const keys = [...bar.querySelectorAll('.sf-list input[data-k]')].map(i => i.dataset.k);
     if (!keys.length) return;
     const s = sfState();
     const off = new Set(s.off);
     for (const k of keys) { if (off.has(k)) off.delete(k); else off.add(k); }
     s.off = [...off];
+    sfSave();
+    rerenderSearchOverlay();
+}
+
+function sfInvertYm(bar) {
+    const keys = [...bar.querySelectorAll('.sf-ym-list input[data-ym]')].map(i => i.dataset.ym);
+    if (!keys.length) return;
+    const s = sfState();
+    const ymOff = new Set(s.ymOff);
+    for (const k of keys) { if (ymOff.has(k)) ymOff.delete(k); else ymOff.add(k); }
+    s.ymOff = [...ymOff];
     sfSave();
     rerenderSearchOverlay();
 }
@@ -2895,24 +3122,24 @@ function sfBuildBar() {
     bar.id = 'sf-bar';
     const noiseOpts = [0, 1, 2, 3, 4, 5].map(n => `<option value="${n}">${n}</option>`).join('');
     bar.innerHTML =
-        `<label title="字间允许夹杂的无关字数上限，0~5；组合搜索里 [] 留空或只写噪值的词，近义同理，都取这里的值">噪值 <select id="sf-noise">${noiseOpts}</select></label>` +
-        `<label title="近义搜索；组合搜索里 [] 留空或只写一位的词也用它"><input type="checkbox" id="sf-like">近义</label>` +
-        `<details id="sf-sfx"><summary>筛选</summary><div class="sf-pop">` +
-        `<button type="button" id="sf-inv" title="反选各后缀的勾选状态（不含「无明确日期」）">反选</button>` +
-        `<div class="sf-list"></div><hr>` +
-        `<label>起 <input type="date" id="sf-from" aria-label="起始日期"></label>` +
-        `<label>止 <input type="date" id="sf-to" aria-label="结束日期"></label>` +
-        `</div></details>` +
+        `<label title="字间允许无关字数 (0~5)">噪 <select id="sf-noise">${noiseOpts}</select></label>` +
+        `<label title="同义词扩展"><input type="checkbox" id="sf-like">近义</label>` +
         `<span id="sf-count" aria-live="polite"></span>` +
-        `<button type="button" id="sf-reset" title="恢复默认筛选（不影响噪值和近义）">重置</button>` +
+        `<details id="sf-sfx"><summary>筛选</summary><div class="sf-pop">` +
+        `<div class="sf-pop-hd"><span>类型</span><button type="button" id="sf-inv" title="反选类型">反选</button></div>` +
+        `<div class="sf-list"></div>` +
+        `<div id="sf-ym-sec" hidden><hr>` +
+        `<div class="sf-pop-hd"><span>年月</span><button type="button" id="sf-ym-inv" title="反选年月">反选</button></div>` +
+        `<div class="sf-ym-list"></div></div>` +
+        `</div></details>` +
+        `<button type="button" id="sf-reset" title="重置筛选">重置</button>` +
         `<div id="sf-status"></div>`;
 
-    // 键盘事件留在条内，避免触发页面级快捷键；Esc 收起下拉
+    bar.querySelector('#sf-sfx').addEventListener('toggle', () => sfLayout());
     bar.addEventListener('keydown', (e) => {
         e.stopPropagation();
         if (e.key === 'Escape') bar.querySelector('#sf-sfx').open = false;
     });
-    // 点到条外收起下拉
     document.addEventListener('click', (e) => {
         const d = bar.querySelector('#sf-sfx');
         if (d.open && !d.contains(e.target)) d.open = false;
@@ -2924,16 +3151,11 @@ function sfBuildBar() {
         if (t.id === 'sf-noise') { sfApplyEngine('noise_level', Number(t.value)); return; }
         if (t.id === 'sf-like') { sfApplyEngine('synonyms_enabled', t.checked ? 1 : 0); return; }
         if (t.dataset && t.dataset.k !== undefined) {
-            if (t.dataset.k === '@nodate') {
-                s.hideUndated = !t.checked;
-            } else {
-                s.off = s.off.filter(x => x !== t.dataset.k);
-                if (!t.checked) s.off.push(t.dataset.k);
-            }
-        } else if (t.id === 'sf-from') {
-            s.from = t.value;
-        } else if (t.id === 'sf-to') {
-            s.to = t.value;
+            s.off = s.off.filter(x => x !== t.dataset.k);
+            if (!t.checked) s.off.push(t.dataset.k);
+        } else if (t.dataset && t.dataset.ym !== undefined) {
+            s.ymOff = s.ymOff.filter(x => x !== t.dataset.ym);
+            if (!t.checked) s.ymOff.push(t.dataset.ym);
         } else {
             return;
         }
@@ -2942,28 +3164,40 @@ function sfBuildBar() {
     });
     bar.addEventListener('click', (e) => {
         if (e.target.id === 'sf-reset') sfReset();
-        else if (e.target.id === 'sf-inv') sfInvert(bar);
+        else if (e.target.id === 'sf-inv') sfInvertExt(bar);
+        else if (e.target.id === 'sf-ym-inv') sfInvertYm(bar);
     });
     return bar;
 }
 
-// 下拉里的勾选列表由原始结果列表统计得出；统计没变时只同步勾选状态，不重建（避免打断正在操作的下拉）。
-// 日期输入框在列表之外，重建列表不会动它们。
 function sfSyncPanel(bar, stats) {
     const s = sfState();
     const exts = [...stats.exts].sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
-    const sig = exts.map(e => e.join(':')).join(',') + '|' + stats.undated;
+    const yms = [...stats.yms].sort((a, b) => (b[0] > a[0] ? 1 : b[0] < a[0] ? -1 : 0));
+    const sig = exts.map(e => e.join(':')).join(',') + '|' + yms.map(y => y.join(':')).join(',');
+
     const list = bar.querySelector('.sf-list');
+    const ymSec = bar.querySelector('#sf-ym-sec');
+    const ymList = bar.querySelector('.sf-ym-list');
+
     if (bar._sfSig !== sig) {
-        const row = (k, text, n) => `<label><input type="checkbox" data-k="${k}"> ${text} (${n})</label>`;
         list.innerHTML = exts.length
-            ? exts.map(([k, n]) => row(k, k === '(无)' ? '无后缀' : '.' + k, n)).join('') +
-              (stats.undated ? '<hr>' + row('@nodate', '无明确日期', stats.undated) : '')
+            ? exts.map(([k, n]) => `<label><input type="checkbox" data-k="${k}"> ${k === '(无)' ? '无后缀' : '.' + k} (${n})</label>`).join('')
             : '无条目';
+        if (yms.length > 0) {
+            ymSec.hidden = false;
+            ymList.innerHTML = yms.map(([ym, n]) => `<label><input type="checkbox" data-ym="${ym}"> ${ym} (${n})</label>`).join('');
+        } else {
+            ymSec.hidden = true;
+            ymList.innerHTML = '';
+        }
         bar._sfSig = sig;
     }
     list.querySelectorAll('input[data-k]').forEach(cb => {
-        cb.checked = cb.dataset.k === '@nodate' ? !s.hideUndated : !s.off.includes(cb.dataset.k);
+        cb.checked = !s.off.includes(cb.dataset.k);
+    });
+    ymList.querySelectorAll('input[data-ym]').forEach(cb => {
+        cb.checked = !s.ymOff.includes(cb.dataset.ym);
     });
 }
 
@@ -2974,9 +3208,6 @@ function sfPaintStatus(keyword) {
     el.textContent = info ? (info.error || info.summary || '') : '';
 }
 
-// 筛选条放在 #searchResults 正上方，右缘与结果框对齐（结果框靠 left:-宽度 伸向左侧），宽度由内容决定，放不下才折行。
-// 结果框是 position:relative 时，条按文档流插在它前面即可把它顶下去；
-// 结果框是 position:absolute（本项目的样式）时，条改用绝对定位，并把结果框的 top 下移一个条高。
 function sfLayout() {
     const bar = document.getElementById('sf-bar');
     const box = document.getElementById('searchResults');
@@ -2984,20 +3215,41 @@ function sfLayout() {
 
     const cs = getComputedStyle(box);
     const abs = cs.position === 'absolute';
-    // 必须先让条脱离文档流再量任何东西：条在流内会撑大 shrink-to-fit 的 #search，
-    // 也会把结果框的静态位置顶下去，量到的宽度和位置都会被条自己污染
     bar.style.position = abs ? 'absolute' : 'relative';
-    bar.style.maxWidth = '';
-    bar.style.width = 'max-content';
 
     const search = document.getElementById('search');
     const content = document.getElementById('content');
     const maxW = (search && content) ? Math.max(0, content.clientWidth - search.offsetWidth - 10) : 0;
-    if (maxW) bar.style.maxWidth = maxW + 'px';
-    bar.style.left = (-bar.offsetWidth) + 'px';
-    // 条（及其下拉面板）要压在结果框之上：结果框有 z-index 时取它加一，否则不设
+    const barW = maxW > 0 ? Math.min(SF_BAR_WIDTH, maxW) : SF_BAR_WIDTH;
+    bar.style.maxWidth = '';
+    bar.style.width = barW + 'px';
+    bar.style.left = (-barW) + 'px';
+
     const zi = parseInt(cs.zIndex, 10);
-    bar.style.zIndex = Number.isFinite(zi) ? String(zi + 1) : '';
+    const hist = document.getElementById('searchHistory');
+    const histZi = hist ? parseInt(getComputedStyle(hist).zIndex, 10) : NaN;
+    const baseZi = Math.max(Number.isFinite(zi) ? zi : 0, Number.isFinite(histZi) ? histZi : 0);
+    bar.style.zIndex = String(baseZi + 10);
+
+    const sfx = bar.querySelector('#sf-sfx');
+    const pop = bar.querySelector('.sf-pop');
+    if (sfx && pop) {
+        pop.style.left = '';
+        pop.style.right = '';
+        pop.style.maxWidth = '';
+        const desiredLeft = Math.max(0, bar.offsetWidth - sfx.offsetLeft);
+        pop.style.left = desiredLeft + 'px';
+        const sfxRect = sfx.getBoundingClientRect();
+        const popLeftOnScreen = sfxRect.left + desiredLeft;
+        const rightSpace = window.innerWidth - popLeftOnScreen - 8;
+        if (rightSpace >= 120) {
+            pop.style.maxWidth = rightSpace + 'px';
+        } else {
+            pop.style.left = 'auto';
+            pop.style.right = '0px';
+            pop.style.maxWidth = Math.max(120, sfxRect.right - 8) + 'px';
+        }
+    }
 
     if (abs) {
         let base = parseFloat(box.dataset.sfBaseTop);
@@ -3008,7 +3260,7 @@ function sfLayout() {
                 const inp = document.getElementById('searchInput');
                 base = inp ? inp.offsetTop + inp.offsetHeight + 2 : 0;
             }
-            if (box.offsetWidth) box.dataset.sfBaseTop = String(base);   // 结果框隐藏时的数值不可靠，不缓存
+            box.dataset.sfBaseTop = String(base);
         }
         bar.style.top = base + 'px';
         box.style.top = (base + bar.offsetHeight + 2) + 'px';
@@ -3038,11 +3290,9 @@ function sfRefreshBar(keyword, sf) {
         if (!box || !box.parentNode) return;
         bar = sfBuildBar();
         box.parentNode.insertBefore(bar, box);
-        sfFillControls();
     }
     bar.style.display = 'flex';
 
-    // 组合搜索下噪值 / 近义照常可用：它们是 [] 留空（或只写噪值）的词的默认值，改动后整条重搜
     const ads = isAdsQuery(kw);
     sfSyncEngine();
     sfSyncPanel(bar, sf.stats);
@@ -3052,20 +3302,226 @@ function sfRefreshBar(keyword, sf) {
     const countEl = bar.querySelector('#sf-count');
     let txt;
     if (info && info.error) txt = '';
-    else if (total === 0) txt = '无结果';
-    else if (shown === 0) txt = `全部 ${total} 条被筛选隐藏`;
-    else if (shown < total) txt = `${shown} / ${total}`;
-    else txt = `共 ${total} 条`;
+    else if (total === 0) txt = '0 条';
+    else if (shown < total) txt = `${shown}/${total}`;
+    else txt = `${total} 条`;
     countEl.textContent = txt;
     countEl.classList.toggle('sf-hot', total > 0 && shown < total);
-    bar.querySelector('#sf-reset').hidden = !sfActive();
+    bar.querySelector('#sf-reset').style.visibility = sfActive() ? 'visible' : 'hidden';
     sfPaintStatus(kw);
 
     sfLayout();
 }
 // [ads-filter:end]
 
+function upgradeSearchResultsBox(oldEl) {
+    if (!oldEl || oldEl.tagName !== 'SELECT') return oldEl;
+
+    const selCs = getComputedStyle(oldEl);
+    const selBg = (selCs.backgroundColor && selCs.backgroundColor !== 'rgba(0, 0, 0, 0)' && selCs.backgroundColor !== 'transparent')
+        ? selCs.backgroundColor : '#fff';
+    const selBorder = (selCs.borderTopWidth && parseFloat(selCs.borderTopWidth) > 0)
+        ? `${selCs.borderTopWidth} ${selCs.borderTopStyle || 'solid'} ${selCs.borderTopColor || '#767676'}`
+        : '1px solid #767676';
+    const selRadius = selCs.borderRadius || '2px';
+    const selFont = selCs.fontFamily || 'Arial, "Microsoft YaHei", sans-serif';
+    const selFontSize = selCs.fontSize || '13.3333px';
+
+    const types = ['', 'html', 'image', 'video', 'audio', 'pdf', 'epub', 'txt'];
+    const typeStyles = {};
+    for (const t of types) {
+        const opt = document.createElement('option');
+        if (t) opt.dataset.type = t;
+        opt.textContent = 'M';
+        oldEl.appendChild(opt);
+        const cs = getComputedStyle(opt);
+        typeStyles[t || 'default'] = {
+            color: cs.color,
+            bg: cs.backgroundColor
+        };
+    }
+    oldEl.innerHTML = '';
+
+    if (!document.getElementById('sr-custom-style')) {
+        const def = typeStyles.default || {};
+        const typeRules = types.filter(Boolean).map(t => {
+            const s = typeStyles[t];
+            if (!s) return '';
+            const decls = [];
+            if (s.color && s.color !== def.color) decls.push(`color:${s.color}`);
+            if (s.bg && s.bg !== def.bg && s.bg !== 'rgba(0, 0, 0, 0)' && s.bg !== 'transparent') {
+                decls.push(`background-color:${s.bg}`);
+            }
+            return decls.length ? `#searchResults .sr-opt[data-type="${t}"]{${decls.join(';')}}` : '';
+        }).filter(Boolean).join('\n');
+
+        const hlRules = SEARCH_HL_STYLE
+            .map(([a, c], b) => `#searchResults .sr-hl-${b}{background-color:rgba(255,235,0,${Math.min(0.92, a + 0.08)});color:${c}}`)
+            .join('\n');
+
+        const st = document.createElement('style');
+        st.id = 'sr-custom-style';
+        st.textContent = `
+#searchResults{box-sizing:content-box;background-color:${selBg};border:${selBorder};border-radius:${selRadius};font-family:${selFont};font-size:${selFontSize};line-height:normal;user-select:none;-webkit-user-select:none;outline:none}
+#searchResults .sr-opt{display:block;box-sizing:border-box;min-width:100%;width:max-content;white-space:pre;cursor:default;padding:0 4px 1px;min-height:1.2em;line-height:1.35;${def.color ? `color:${def.color};` : ''}}
+#searchResults .sr-opt:hover{background-color:aliceblue}
+${typeRules}
+#searchResults .sr-opt.sr-selected{background-color:#dcdcdc;color:#000}
+#searchResults:focus .sr-opt.sr-selected{background-color:Highlight;color:HighlightText}
+#searchResults .sr-hl{margin:0;padding:0;border-radius:1px;font:inherit}
+${hlRules}
+`;
+        document.head.appendChild(st);
+    }
+
+    const box = document.createElement('div');
+    box.id = 'searchResults';
+    box.setAttribute('role', 'listbox');
+    box.tabIndex = 0;
+    box.style.cssText = oldEl.style.cssText;
+
+    let _selectedIdx = -1;
+    Object.defineProperty(box, 'options', {
+        get() { return this.querySelectorAll('.sr-opt'); }
+    });
+    Object.defineProperty(box, 'selectedIndex', {
+        get() {
+            const opts = this.options;
+            return (_selectedIdx >= 0 && _selectedIdx < opts.length) ? _selectedIdx : -1;
+        },
+        set(val) {
+            const opts = this.options;
+            const next = (typeof val === 'number' && val >= 0 && val < opts.length) ? val : -1;
+            _selectedIdx = next;
+            opts.forEach((el, i) => {
+                const sel = i === next;
+                el.classList.toggle('sr-selected', sel);
+                el.setAttribute('aria-selected', sel ? 'true' : 'false');
+                if (sel) el.scrollIntoView({ block: 'nearest' });
+            });
+        }
+    });
+
+    oldEl.parentNode.replaceChild(box, oldEl);
+    return box;
+}
+
+const SR_HARD_BREAK_RE = /[\n\r。！？；!?;]/;
+
+function srAsciiLower(ch) {
+    const code = ch.charCodeAt(0);
+    return (code >= 65 && code <= 90) ? String.fromCharCode(code + 32) : ch;
+}
+
+function srEffectiveNoise(kwLen, noiseLevel) {
+    return kwLen > 25 ? 0 : Math.min(noiseLevel, Math.floor(kwLen / 2));
+}
+
+function srNormalizeKeywords(keywords) {
+    const out = [];
+    for (const k of keywords) {
+        if (!k) continue;
+        const chars = [];
+        for (const ch of k) {
+            if (!/\s/.test(ch)) chars.push(srAsciiLower(ch));
+        }
+        if (chars.length > 0) out.push(chars);
+    }
+    return out;
+}
+
+function srTryMatchAt(chars, i, kwChars, effNoise) {
+    const len = chars.length;
+    const kwLen = kwChars.length;
+    let kIdx = 0;
+    let j = i;
+    let currentGap = 0;
+    let totalNoise = 0;
+    let last = i;
+
+    while (j < len && kIdx < kwLen) {
+        const ch = chars[j];
+        if (srAsciiLower(ch) === kwChars[kIdx]) {
+            kIdx++;
+            currentGap = 0;
+            last = j;
+        } else if (kIdx > 0 && SR_HARD_BREAK_RE.test(ch)) {
+            break;
+        } else if (!/\s/.test(ch)) {
+            currentGap++;
+            totalNoise++;
+            if (currentGap > effNoise) break;
+        }
+        j++;
+        if (kIdx === kwLen) break;
+    }
+
+    return kIdx === kwLen ? [i, last + 1, totalNoise] : null;
+}
+
+function srCollectMatches(chars, keywords, noiseLevel, out) {
+    const normKws = srNormalizeKeywords(keywords);
+    const textLen = chars.length;
+    for (const kwChars of normKws) {
+        const kwLen = kwChars.length;
+        if (kwLen === 0) continue;
+        const effNoise = srEffectiveNoise(kwLen, noiseLevel);
+        const first = kwChars[0];
+        for (let i = 0; i < textLen; i++) {
+            if (srAsciiLower(chars[i]) !== first) continue;
+            const hit = srTryMatchAt(chars, i, kwChars, effNoise);
+            if (hit) out.push(hit);
+        }
+    }
+}
+
+function computeTitleMatchRanges(title, keyword) {
+    if (!title || !keyword || typeof keyword !== 'string') return [];
+    const kw = keyword.trim();
+    if (!kw || /^@(bomb$|rebirth$)/.test(kw)) return [];
+
+    const chars = Array.from(title);
+    if (chars.length === 0) return [];
+
+    const allHits = [];
+    if (isAdsQuery(kw)) {
+        const posTerms = buildAdsPositiveTerms(kw);
+        if (!posTerms || posTerms.length === 0) return [];
+        for (const t of posTerms) {
+            srCollectMatches(chars, t.keywords, t.noise, allHits);
+        }
+    } else {
+        const noise = Number(store.noise_level ?? 5);
+        srCollectMatches(chars, getSearchKeywords(kw), noise, allHits);
+    }
+
+    if (allHits.length === 0) return [];
+    allHits.sort((a, b) => a[0] - b[0]);
+
+    const merged = [];
+    for (const hit of allHits) {
+        const last = merged[merged.length - 1];
+        if (last && hit[0] < last[1]) {
+            const lastLen = last[1] - last[0];
+            const hitLen = hit[1] - hit[0];
+            if (hit[2] < last[2] || (hit[2] === last[2] && hitLen < lastLen)) {
+                merged[merged.length - 1] = hit;
+            }
+            continue;
+        }
+        merged.push(hit);
+    }
+    return merged;
+}
+
 function updateSearchResults(results, keyword) {
+    const kwKey = pageOverlayKey(keyword);
+    if (kwKey !== window._sfLastKw) {
+        window._sfLastKw = kwKey;
+        const s = sfState();
+        if (s.ymOff.length > 0) s.ymOff = [];
+    }
+
     window._baseRenderedResults = results;
     results = applyCommentOverlay(applyPageOverlay(results, keyword), keyword);
 
@@ -3095,7 +3551,10 @@ function updateSearchResults(results, keyword) {
         const fragment = document.createDocumentFragment();
 
         results.forEach(result => {
-            let option = document.createElement('option');
+            const option = document.createElement('div');
+            option.className = 'sr-opt';
+            option.setAttribute('role', 'option');
+
             const isPrivate = (result.localOnly === true || result.info === "localOnly");
             const title = result.type === "html" ? result.title.replace(/\.html$/, '') : result.title;
             // 组合搜索：不显示命中数；评论只用 [💬] 标出"靠评论才满足"的条目，不带数量
@@ -3103,7 +3562,33 @@ function updateSearchResults(results, keyword) {
             const commentStr = adsMode
                 ? (result.viaComment ? " [💬]" : "")
                 : (result.commentHits ? ` [💬 ${result.commentHits}]` : "");
-            option.text = (isPrivate ? (store.online_flag === "1" ? "🔒 " : "🔓 ") : "") + `${title}${countStr}${commentStr}`;
+
+            const prefix = isPrivate ? (store.online_flag === "1" ? "🔒 " : "🔓 ") : "";
+            if (prefix) option.appendChild(document.createTextNode(prefix));
+
+            const titleRanges = computeTitleMatchRanges(title, keyword);
+            if (titleRanges.length === 0) {
+                option.appendChild(document.createTextNode(title));
+            } else {
+                const chars = Array.from(title);
+                let cursor = 0;
+                for (const [s, e, n] of titleRanges) {
+                    if (s > cursor) {
+                        option.appendChild(document.createTextNode(chars.slice(cursor, s).join('')));
+                    }
+                    const mark = document.createElement('mark');
+                    mark.className = `sr-hl sr-hl-${searchHlBucket(n)}`;
+                    mark.textContent = chars.slice(s, e).join('');
+                    option.appendChild(mark);
+                    cursor = e;
+                }
+                if (cursor < chars.length) {
+                    option.appendChild(document.createTextNode(chars.slice(cursor).join('')));
+                }
+            }
+
+            const suffix = `${countStr}${commentStr}`;
+            if (suffix) option.appendChild(document.createTextNode(suffix));
 
             option.style.opacity = (isPrivate ? (store.online_flag === "1" ? 0.5 : 1) : 1);
             option.dataset.path = result.path;
@@ -3119,8 +3604,12 @@ function updateSearchResults(results, keyword) {
         });
 
         resultsBox.appendChild(fragment);
-        resultsBox.setAttribute("size", Math.max(2, Math.min(10, resultsBox.options.length)));
         resultsBox.style.display = "block";
+
+        const firstOpt = resultsBox.options[0];
+        const rowH = (firstOpt && firstOpt.offsetHeight) || Math.ceil(parseFloat(getComputedStyle(resultsBox).fontSize || '13.33') * 1.35) || 18;
+        const visibleRows = Math.max(2, Math.min(10, resultsBox.options.length));
+        resultsBox.style.height = (visibleRows * rowH) + "px";
 
         if ($("#content") && $("#search")) {
             const maxW = Math.max(0, $("#content").clientWidth - $("#search").offsetWidth - 10);

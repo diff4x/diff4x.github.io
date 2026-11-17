@@ -1,6 +1,6 @@
-importScripts('/src/js/core-list.js?v=1794870228174');
+importScripts('/src/js/core-list.js?v=1794926675997');
 
-self.SW_VERSION = '1794870228174';
+self.SW_VERSION = '1794926675997';
 self.EMERGENCY = 'repair_command_id=2';
 
 const CACHE_NAME_CORE = 'core-cache-' + BUILD_VERSION;
@@ -91,6 +91,17 @@ self.addEventListener('install', event => {
             }
         }
 
+        const CRITICAL_URLS = new Set([
+            '/',
+            '/index.html',
+            '/src/js/index.js',
+            '/src/js/side.js',
+            '/src/js/content.js',
+            '/src/js/data/lite_data.js',
+            '/src/js/worker.js'
+        ]);
+        const cachedUrls = new Set();
+
         const fetchWithConcurrency = async (urls, maxConcurrent) => {
             const results = [];
             const executing = new Set();
@@ -99,18 +110,23 @@ self.addEventListener('install', event => {
                 const task = (async () => {
                     try {
                         const response = await fetchWithLock(new Request(url, { cache: 'no-cache' }));
-                        if (response.ok) {
-                            if (url !== '/') {
-                                if (oldManifest[url]) {
-                                    await writeLog(`🔄 [SW] 更新文件: ${url}`);
-                                } else if (isUpdate) {
-                                    await writeLog(`✅ [SW] 新增文件: ${url}`);
-                                }
-                            }
-                            await newCache.put(url, response);
+                        if (!response || !response.ok) {
+                            throw new Error(`HTTP ${response ? response.status : 'ERR'}`);
                         }
+                        if (url !== '/') {
+                            if (oldManifest[url]) {
+                                await writeLog(`🔄 [SW] 更新文件: ${url}`);
+                            } else if (isUpdate) {
+                                await writeLog(`✅ [SW] 新增文件: ${url}`);
+                            }
+                        }
+                        await newCache.put(url, response);
+                        cachedUrls.add(url);
                     } catch (err) {
-                        console.warn(`[SW] Fetch failed: ${url}`);
+                        console.warn(`[SW] Fetch failed: ${url}`, err);
+                        if (CRITICAL_URLS.has(url)) {
+                            throw err;
+                        }
                     }
                 })();
 
@@ -211,11 +227,15 @@ self.addEventListener('install', event => {
             }
 
             if (oldMeta && oldMeta.hash === meta.hash) {
-                if (lastCacheName === CACHE_NAME_CORE) continue;
+                if (lastCacheName === CACHE_NAME_CORE) {
+                    cachedUrls.add(url);
+                    continue;
+                }
                 const lastCache = await caches.open(lastCacheName);
                 const cachedRes = await lastCache.match(url);
                 if (cachedRes) {
                     await newCache.put(url, cachedRes);
+                    cachedUrls.add(url);
                     continue;
                 }
             }
@@ -223,13 +243,7 @@ self.addEventListener('install', event => {
             if (meta.source === 'core-bundle.json') {
                 bundleUpdates.push(url);
             } else {
-                if (
-                    !url.endsWith('/src/js/worker.js') &&
-                    !url.endsWith('compute_intensive_task_processor.min.js') &&
-                    !url.endsWith('compute_intensive_task_processor.wasm')
-                ) {
-                    standaloneUpdates.push(url);
-                }
+                standaloneUpdates.push(url);
             }
         }
 
@@ -257,7 +271,7 @@ self.addEventListener('install', event => {
                         const fakeRes = new Response(bundleData[url], {
                             headers: { 'Content-Type': contentType }
                         });
-                        putPromises.push(newCache.put(url, fakeRes));
+                        putPromises.push(newCache.put(url, fakeRes).then(() => cachedUrls.add(url)));
                     }
                 }
                 await Promise.all(putPromises);
@@ -301,8 +315,12 @@ self.addEventListener('install', event => {
             }));
         }
 
+        const committedManifest = {};
+        for (const url of cachedUrls) {
+            if (FILE_MANIFEST[url]) committedManifest[url] = FILE_MANIFEST[url];
+        }
         const manifestSaveUrl = new URL('/sw-manifest.json', self.location.origin).href;
-        await newCache.put(manifestSaveUrl, new Response(JSON.stringify(FILE_MANIFEST), {
+        await newCache.put(manifestSaveUrl, new Response(JSON.stringify(committedManifest), {
             headers: { 'Content-Type': 'application/json' }
         }));
     })());
@@ -342,8 +360,12 @@ self.addEventListener('fetch', event => {
                     const manifestRes = await cache.match(new URL('/sw-manifest.json', self.location.origin).href);
 
                     if (manifestRes) {
-                        const manifestData = await manifestRes.text();
-                        const fallbackJS = `window.BUILD_VERSION = 'offline'; window.FILE_MANIFEST = ${manifestData};`;
+                        const manifestObj = await manifestRes.json();
+                        const dataIndex = Object.keys(manifestObj)
+                            .filter(k => k.startsWith('/src/js/data/fat_data_') && k.endsWith('.json'))
+                            .map(k => k.slice('/src/js/data/'.length))
+                            .sort();
+                        const fallbackJS = `window.BUILD_VERSION = 'offline'; window.FILE_MANIFEST = ${JSON.stringify(manifestObj)}; window.dataIndex = ${JSON.stringify(dataIndex)};`;
                         return new Response(fallbackJS, {
                             status: 200,
                             headers: { 'Content-Type': 'application/javascript; charset=utf-8' }
@@ -353,7 +375,7 @@ self.addEventListener('fetch', event => {
                     console.error("❌ [SW] Offline mock failed", err);
                 }
 
-                return new Response('window.FILE_MANIFEST = {};', {
+                return new Response('window.FILE_MANIFEST = {}; window.dataIndex = [];', {
                     status: 200,
                     headers: { 'Content-Type': 'application/javascript; charset=utf-8' }
                 });

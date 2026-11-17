@@ -1404,6 +1404,112 @@ pub fn get_snippets(
     serde_wasm_bindgen::to_value(&out).unwrap()
 }
 
+fn collect_ads_matches(
+    buf: &[(usize, usize, char)],
+    terms: &[AdsTerm],
+) -> Vec<(usize, usize, usize)> {
+    let mut all_hits: Vec<(usize, usize, usize)> = Vec::new();
+    for term in terms {
+        all_hits.extend(get_multi_matches(buf, &term.kws, term.noise));
+    }
+    all_hits.sort_by_key(|h| h.0);
+    let mut merged = Vec::<(usize, usize, usize)>::new();
+    for hit in all_hits {
+        if let Some(last) = merged.last_mut() {
+            if hit.0 < last.1 {
+                let last_len = last.1 - last.0;
+                let hit_len = hit.1 - hit.0;
+                if hit.2 < last.2 || (hit.2 == last.2 && hit_len < last_len) {
+                    *last = hit;
+                }
+                continue;
+            }
+        }
+        merged.push(hit);
+    }
+    merged
+}
+
+#[wasm_bindgen]
+pub fn get_ads_snippets(
+    path: &str,
+    terms_val: JsValue,
+    max_body: usize,
+    max_comments: usize,
+) -> JsValue {
+    let raw_terms: Vec<AdsTermIn> = serde_wasm_bindgen::from_value(terms_val).unwrap_or_default();
+    let mut terms: Vec<AdsTerm> = Vec::with_capacity(raw_terms.len());
+    for t in raw_terms {
+        let kws = normalize_keywords(&t.keywords);
+        if !kws.is_empty() {
+            terms.push(AdsTerm { noise: t.noise, kws });
+        }
+    }
+
+    let mut out = SnippetsOut {
+        body: SnipSection::default(),
+        comments: SnipSection::default(),
+    };
+    if terms.is_empty() {
+        return serde_wasm_bindgen::to_value(&out).unwrap();
+    }
+    let key: &str = path.strip_prefix("../").unwrap_or(path);
+
+    let doc_i: Option<usize> = PATH_INDEX.with(|p| p.borrow().get(key).copied());
+    if let Some(i) = doc_i {
+        GLOBAL_DATA.with(|data| {
+            let pool = data.borrow();
+            if i + 3 >= pool.len() {
+                return;
+            }
+            let raw = &pool[i + 1];
+            let content: &str = if raw.starts_with("localOnly") {
+                &raw[9..]
+            } else {
+                raw.as_str()
+            };
+            let mut buf: Vec<(usize, usize, char)> = Vec::new();
+            fill_chars(&mut buf, content);
+            let merged = collect_ads_matches(&buf, &terms);
+            out.body.hits = merged.len();
+            if !merged.is_empty() {
+                let (items, more) = select_snippets(build_snippets(content, &merged, None), max_body);
+                out.body.items = items;
+                out.body.more = more;
+            }
+        });
+    }
+
+    let cm_i: Option<usize> = COMMENT_INDEX.with(|m| m.borrow().get(key).copied());
+    if let Some(di) = cm_i {
+        COMMENTS.with(|c| {
+            let docs = c.borrow();
+            if let Some(doc) = docs.get(di) {
+                let mut all: Vec<SnipOut> = Vec::new();
+                let mut buf: Vec<(usize, usize, char)> = Vec::new();
+                for (idx, text) in doc.texts.iter().enumerate() {
+                    if text.is_empty() {
+                        continue;
+                    }
+                    fill_chars(&mut buf, text);
+                    let merged = collect_ads_matches(&buf, &terms);
+                    if merged.is_empty() {
+                        continue;
+                    }
+                    out.comments.docs += 1;
+                    out.comments.hits += merged.len();
+                    all.extend(build_snippets(text, &merged, Some(idx as u32)));
+                }
+                let (items, more) = select_snippets(all, max_comments);
+                out.comments.items = items;
+                out.comments.more = more;
+            }
+        });
+    }
+
+    serde_wasm_bindgen::to_value(&out).unwrap()
+}
+
 #[wasm_bindgen]
 pub fn find_content_matches_multi(global_text: &str, keywords_val: JsValue, noise_level: usize) -> JsValue {
     let kws = parse_keywords(keywords_val);

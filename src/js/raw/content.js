@@ -197,6 +197,7 @@ BUS.addEventListener('message', (e) => {
                 emitEvent("LOCAL_SEARCH_RESULT", {
                     keyword: payload,
                     count: resultObj.count,
+                    adsBodyHits: resultObj.adsBodyHits,
                     title: document.title
                 }, "index");
             })();
@@ -413,14 +414,111 @@ function makeBlockBreakDetector() {
     };
 }
 
+function getTopAdsPosTerms(rawKeyword) {
+    if (window.top && typeof window.top.buildAdsPositiveTerms === 'function') {
+        return window.top.buildAdsPositiveTerms(rawKeyword) || [];
+    }
+    return [];
+}
+
+function evaluateAdsPage(globalText, rawKeyword) {
+    const rawMatches = [];
+    let adsBodyHits = null;
+    const expandQueryFn = (window.top && window.top.expandQuery) || (() => ({ variants: [] }));
+
+    if (window.top && typeof window.top.parseAdsQuery === 'function') {
+        const plan = window.top.parseAdsQuery(rawKeyword);
+        if (plan && plan.ok && Array.isArray(plan.terms)) {
+            const titleAndBody = (document.title || '') + '\n' + globalText;
+            const posSet = new Set();
+            const collectPos = (n) => {
+                if (!n) return;
+                if (n.op === 'term') { if (!n.neg) posSet.add(n.term); }
+                else if (Array.isArray(n.args)) n.args.forEach(collectPos);
+            };
+            collectPos(plan.expr);
+
+            adsBodyHits = plan.terms.map((t, idx) => {
+                const kws = t.like ? [t.text, ...expandQueryFn(t.text).variants] : [t.text];
+                if (posSet.has(idx)) {
+                    const res = find_content_matches_multi(globalText, kws, t.noise);
+                    const buf = res.matches;
+                    const cnt = res.count || 0;
+                    for (let i = 0; i < cnt; i++) {
+                        rawMatches.push({ start: buf[i * 3], end: buf[i * 3 + 1], noise: buf[i * 3 + 2] });
+                    }
+                    if (cnt > 0) return true;
+                }
+                const fullRes = find_content_matches_multi(titleAndBody, kws, t.noise);
+                return (fullRes.count || 0) > 0;
+            });
+            return { rawMatches, adsBodyHits };
+        }
+    }
+
+    const posTerms = getTopAdsPosTerms(rawKeyword);
+    for (const t of posTerms) {
+        const res = find_content_matches_multi(globalText, t.keywords, t.noise);
+        const buf = res.matches;
+        const cnt = res.count || 0;
+        for (let i = 0; i < cnt; i++) {
+            rawMatches.push({ start: buf[i * 3], end: buf[i * 3 + 1], noise: buf[i * 3 + 2] });
+        }
+    }
+    return { rawMatches, adsBodyHits };
+}
+
+function analyzePageMatches(globalText, rawKeyword) {
+    if (/^@(bomb|rebirth)$/.test(rawKeyword)) {
+        return { matches: [], adsBodyHits: null };
+    }
+    const isAds = /^[@＠][\[［【]/.test(rawKeyword);
+    let rawMatches = [];
+    let adsBodyHits = null;
+
+    if (isAds) {
+        const evaluated = evaluateAdsPage(globalText, rawKeyword);
+        rawMatches = evaluated.rawMatches;
+        adsBodyHits = evaluated.adsBodyHits;
+    } else {
+        const noise = Number(store.noise_level ?? 5);
+        const synonymsEnabled = (store.synonyms_enabled ?? 1) === 1;
+        const expandQueryFn = (window.top && window.top.expandQuery) || (() => ({ variants: [] }));
+        const { variants } = synonymsEnabled ? expandQueryFn(rawKeyword) : { variants: [] };
+        const res = find_content_matches_multi(globalText, [rawKeyword, ...variants], noise);
+        const buf = res.matches;
+        const cnt = res.count || 0;
+        for (let i = 0; i < cnt; i++) {
+            rawMatches.push({ start: buf[i * 3], end: buf[i * 3 + 1], noise: buf[i * 3 + 2] });
+        }
+    }
+
+    rawMatches.sort((a, b) => a.start - b.start);
+    const merged = [];
+    for (const m of rawMatches) {
+        const last = merged[merged.length - 1];
+        if (last && m.start < last.end) {
+            const lastLen = last.end - last.start;
+            const curLen = m.end - m.start;
+            if (m.noise < last.noise || (m.noise === last.noise && curLen < lastLen)) {
+                merged[merged.length - 1] = m;
+            }
+            continue;
+        }
+        merged.push(m);
+    }
+    return {
+        matches: merged.map((m, index) => ({ ...m, index })),
+        adsBodyHits
+    };
+}
+
 function search() {
     if (store.jump_from_search_ex !== "1") return;
     store.jump_from_search_ex = "0";
 
     const rawKeyword = (store.keyword || "").trim();
     if (!rawKeyword || !wasmEngineReady) return;
-    // @[表达式]词[]… 组合搜索：store.keyword 是整条命令而不是关键词，条目不做高亮导航（与 index.js 的 isAdsQuery 保持一致）
-    if (/^[@＠][\[［【]/.test(rawKeyword)) return;
 
     const contentRoot =
         document.querySelector('pre:not(#diff-pre)') ||
@@ -472,33 +570,12 @@ function search() {
         currentPos += val.length;
     }
 
-    const noise = Number(store.noise_level ?? 5);
-
-    const expandQueryFn = window.top.expandQuery || ((kw) => ({ variants: [] }));
-    const { variants } = expandQueryFn(rawKeyword);
-    const allKeywords = [rawKeyword, ...variants];
-
-    const resultObj = find_content_matches_multi(globalText, allKeywords, noise);
-
-    const totalMatches = resultObj.count || 0;
-    const matchBuffer = resultObj.matches;
-
-    const matches = [];
-    if (matchBuffer && totalMatches > 0) {
-        for (let i = 0; i < totalMatches; i++) {
-            const base = i * 3;
-            matches.push({
-                start: matchBuffer[base],
-                end: matchBuffer[base + 1],
-                noise: matchBuffer[base + 2],
-                index: i
-            });
-        }
-    }
+    const { matches, adsBodyHits } = analyzePageMatches(globalText, rawKeyword);
+    const totalMatches = matches.length;
 
     if (matches.length === 0) {
         hideSearchMinimap();
-        emitEvent("LOCAL_SEARCH_RESULT", { keyword: rawKeyword, count: 0, title: document.title }, "index");
+        emitEvent("LOCAL_SEARCH_RESULT", { keyword: rawKeyword, count: 0, adsBodyHits, title: document.title }, "index");
         return;
     }
 
@@ -571,7 +648,8 @@ function search() {
 
     emitEvent("LOCAL_SEARCH_RESULT", {
         keyword: rawKeyword,
-        count: resultObj.count,
+        count: totalMatches,
+        adsBodyHits,
         title: document.title
     }, "index");
 
@@ -602,13 +680,11 @@ function search() {
                 store.jump_from_search_ex = "0";
             };
 
-            setTimeout(() => {
-                const nav = $("#s_nav");
-                if (nav) {
-                    nav.appendChild(indexDisplay);
-                    nav.appendChild(destroyButton);
-                }
-            }, 100);
+            const nav = $("#s_nav");
+            if (nav) {
+                nav.appendChild(indexDisplay);
+                nav.appendChild(destroyButton);
+            }
         }
 
         indexDisplay.innerText = " " + (currentIndex + 1) + " / " + totalMatches;
@@ -672,16 +748,16 @@ function search() {
             updateIndexDisplay();
         };
 
-        setTimeout(() => {
-            const nav = $("#s_nav");
-            if (nav) {
-                nav.appendChild(prevButton);
-                nav.appendChild(nextButton);
-            }
-        }, 100);
+        const nav = $("#s_nav");
+        if (nav) {
+            nav.appendChild(prevButton);
+            nav.appendChild(nextButton);
+        }
     }
 
     if (totalMatches > 0) {
+        const nav = $("#s_nav");
+        if (nav) nav.innerHTML = "";
         createNavigationButtons();
         updateIndexDisplay();
         updateSearchMinimap();
@@ -689,7 +765,7 @@ function search() {
 }
 
 function countMatchesEnhanced(kw) {
-    if (!kw || kw.trim() === "" || !wasmEngineReady) return { count: 0 };
+    if (!kw || kw.trim() === "" || !wasmEngineReady) return { count: 0, adsBodyHits: null };
 
     const contentRoot =
         document.querySelector('pre:not(#diff-pre)') ||
@@ -730,15 +806,10 @@ function countMatchesEnhanced(kw) {
         globalText += val;
     }
 
-    const noise = Number(store.noise_level ?? 5);
-    const expandQueryFn = window.top.expandQuery || ((keyword) => ({ variants: [] }));
-    const { variants } = expandQueryFn(kw);
-    const allKeywords = [kw, ...variants];
-
-    const resultObj = find_content_matches_multi(globalText, allKeywords, noise);
-
+    const res = analyzePageMatches(globalText, kw.trim());
     return {
-        count: resultObj.count
+        count: res.matches.length,
+        adsBodyHits: res.adsBodyHits
     };
 }
 
