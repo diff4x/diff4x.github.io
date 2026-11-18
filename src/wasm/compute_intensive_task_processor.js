@@ -94,6 +94,20 @@ export function get_snippets(path, keywords_val, noise_level, max_body, max_comm
 }
 
 /**
+ * @param {string} path
+ * @param {any} ads_terms_val
+ * @param {number} max_body
+ * @param {number} max_comments
+ * @returns {any}
+ */
+export function get_snippets_ads(path, ads_terms_val, max_body, max_comments) {
+    const ptr0 = passStringToWasm0(path, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.get_snippets_ads(ptr0, len0, addHeapObject(ads_terms_val), max_body, max_comments);
+    return takeObject(ret);
+}
+
+/**
  * @param {any} plan_val
  * @param {number} from_doc
  * @param {number} to_doc
