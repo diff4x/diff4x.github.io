@@ -32,7 +32,6 @@ pub struct SearchResult<'a> {
     pub path: &'a str,
     #[serde(rename = "localOnly")]
     pub local_only: bool,
-    // 仅组合搜索使用：至少有一个包含项只靠评论才满足时为 true（普通搜索恒为 false，不序列化）
     #[serde(rename = "viaComment", skip_serializing_if = "is_false")]
     pub via_comment: bool,
 }
@@ -174,7 +173,6 @@ fn fnv_feed(mut h: u64, bytes: &[u8]) -> u64 {
     h
 }
 
-// 数据指纹：覆盖搜索实际看到的全部文本（含 is_offline 带来的正文差异），供主线程做缓存失效判断
 fn data_fingerprint(pool: &[String], is_offline: bool) -> String {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
     h = fnv_feed(h, &[is_offline as u8]);
@@ -186,7 +184,6 @@ fn data_fingerprint(pool: &[String], is_offline: bool) -> String {
     format!("{:016x}.{}", h, pool.len())
 }
 
-// 回传主线程的瘦身视图：html 正文只保留 "localOnly" 标记（主线程只用它判断私有文档），其余类型原样保留
 fn slim_view(pool: &[String]) -> Vec<String> {
     let mut out: Vec<String> = Vec::with_capacity(pool.len());
     let mut i = 0usize;
@@ -213,8 +210,6 @@ fn slim_view(pool: &[String]) -> Vec<String> {
     out
 }
 
-// 构建 + 入库一步完成：不再把整份语料序列化成 JsValue 再反序列化回来，
-// 返回值只含瘦身数据和指纹，主线程不再持有全部正文。
 #[wasm_bindgen]
 pub fn build_and_set_data(
     lite_val: JsValue,
@@ -465,8 +460,6 @@ fn expand_diff_ops(ops: &[DiffOp], offset: usize, out: &mut Vec<DiffLineOp>) {
     }
 }
 
-// 噪声上限随关键词长度缩放：每 NOISE_CHARS_PER_UNIT 个字符允许 1 个噪声字符，且不超过用户设置值。
-// 例：2 字词最多隔 1 个字，4 字词最多隔 2 个字；> 25 字的长句仍要求完全连续。
 const NOISE_CHARS_PER_UNIT: usize = 2;
 
 #[inline]
@@ -478,8 +471,6 @@ fn effective_noise(kw_len: usize, noise_level: usize) -> usize {
     }
 }
 
-// 硬边界：匹配开始后遇到换行或句末标点就终止，不允许跨行/跨句凑出一个"命中"。
-// 关键词本身包含这些字符时，字符相等的判断在前，不受影响。
 #[inline]
 fn is_hard_break(ch: char) -> bool {
     matches!(ch, '\n' | '\r' | '。' | '！' | '？' | '；' | '!' | '?' | ';')
@@ -551,7 +542,6 @@ fn parse_keywords(val: JsValue) -> Vec<Vec<char>> {
     normalize_keywords(&keywords)
 }
 
-// (start_byte, end_byte, noise, is_synonym)
 fn get_multi_matches_tagged(
     text_chars: &[(usize, usize, char)],
     keywords: &[Vec<char>],
@@ -639,6 +629,18 @@ fn has_any_match(chars: &[char], keywords: &[Vec<char>], noise_level: usize) -> 
     false
 }
 
+const TYPE_ROOT_PREFIXES: [&str; 5] = ["html/", "gallery/", "video/", "audio/", "ebook/"];
+
+#[inline]
+fn strip_type_root(path: &str) -> &str {
+    for &p in TYPE_ROOT_PREFIXES.iter() {
+        if let Some(rest) = path.strip_prefix(p) {
+            return rest;
+        }
+    }
+    path
+}
+
 const TITLE_HIT_SCORE: usize = 5000;
 const TITLE_NOISE_STEP: usize = 500;
 const CONTENT_HIT_SCORE: usize = 100;
@@ -646,7 +648,6 @@ const CONTENT_NOISE_STEP: usize = 10;
 const PATH_HIT_SCORE: usize = 50;
 const PATH_NOISE_STEP: usize = 5;
 
-// 每个命中的得分 = base − 噪声惩罚，惩罚封顶 90%；同义词变体按 70% 折算，原词优先
 fn weigh_hits(hits: &[(usize, usize, usize, bool)], base: usize, step: usize) -> usize {
     let max_penalty = base - base / 10;
     hits.iter()
@@ -679,9 +680,6 @@ fn scan_docs<'a>(
         let raw_content = &pool[i + 1];
         let path = &pool[i + 2];
         let res_type = &pool[i + 3];
-
-        // 标题用构建阶段已处理好的 pool[i]（html 已去掉 .html 后缀），
-        // 不再从 path 截取，否则搜 "ht"/"html" 会命中所有 html 文档的标题
         let title = pool[i].as_str();
 
         let mut is_local_only = false;
@@ -703,7 +701,7 @@ fn scan_docs<'a>(
             + weigh_hits(&content_m, CONTENT_HIT_SCORE, CONTENT_NOISE_STEP);
 
         if count == 0 && res_type.as_str() != "html" && res_type.as_str() != "image" {
-            fill_chars(&mut title_buf, path);
+            fill_chars(&mut title_buf, strip_type_root(path));
             let path_m = get_multi_matches_tagged(&title_buf, kws, noise);
             count = path_m.len();
             score = weigh_hits(&path_m, PATH_HIT_SCORE, PATH_NOISE_STEP);
@@ -750,17 +748,6 @@ pub fn search_multi_range(
     })
 }
 
-// ---------------------------------------------------------------------------
-// 组合搜索（@[表达式]词[]…）：文档级布尔表达式（且 / 或 / 非）
-//   - plan = { terms, expr }：terms 是词条表（每个词条自带 noise 和已由主线程展开好的近义关键词），
-//     expr 是引用词条的表达式树：{op:"term",term,neg} | {op:"and",args} | {op:"or",args}
-//   - 一个词条"命中"某文档 = 标题 / 正文 / 路径（仅非 html、非图片）中出现；
-//     正向词条（neg=false）还可以由该文档的任一条评论满足，排除项（neg=true）不看评论
-//   - 粒度是"同一文档内"，不要求同句同段
-//   - 逐文档惰性求值并备忘：且 / 或 都短路，且的子项里更严的正向词条排前、排除项排最后；
-//     判定只要布尔结果（has_match_chars 命中即返回），只对入选的文档再算分
-//   - 表达式在"什么都不含的空文档"上成立时拒绝执行（只有排除项会匹配几乎全库）
-// ---------------------------------------------------------------------------
 #[derive(Deserialize)]
 struct AdsTermIn {
     #[serde(default)]
@@ -802,7 +789,6 @@ enum AdsNode {
 struct AdsPlan {
     terms: Vec<AdsTerm>,
     expr: AdsNode,
-    // 以正向（非 neg）形式出现的词条下标，用于入选后算分
     positives: Vec<usize>,
 }
 
@@ -836,7 +822,6 @@ fn build_ads_node(n: &AdsNodeIn, term_count: usize) -> Option<AdsNode> {
     }
 }
 
-// 空文档（所有词条都未命中）上表达式是否成立
 fn ads_holds_on_empty(n: &AdsNode) -> bool {
     match n {
         AdsNode::Term { neg, .. } => *neg,
@@ -845,7 +830,6 @@ fn ads_holds_on_empty(n: &AdsNode) -> bool {
     }
 }
 
-// "且"的子项求值顺序：正向词条（噪声小、主关键词长的先判）→ 括号 / 或 → 排除项
 fn ads_rank(n: &AdsNode, terms: &[AdsTerm]) -> (u8, usize, usize) {
     match n {
         AdsNode::Term { idx, neg } => {
@@ -892,8 +876,6 @@ fn ads_collect_positives(n: &AdsNode, out: &mut Vec<usize>) {
     }
 }
 
-// 任一词条没有可用关键词、表达式不合法、或空文档上成立时返回 None（调用方据此返回空结果，
-// 绝不能悄悄丢掉一个约束而放大结果集）
 fn parse_ads_plan(val: JsValue) -> Option<AdsPlan> {
     let raw: AdsPlanIn = serde_wasm_bindgen::from_value(val).ok()?;
     let mut terms: Vec<AdsTerm> = Vec::with_capacity(raw.terms.len());
@@ -914,7 +896,6 @@ fn parse_ads_plan(val: JsValue) -> Option<AdsPlan> {
     ads_optimize(&mut expr, &terms);
     let mut positives: Vec<usize> = Vec::new();
     ads_collect_positives(&expr, &mut positives);
-    // 同一个词条可以在表达式里出现多次（如 (a&b)|(!a&c)），算分时每个词条只算一次
     positives.sort_unstable();
     positives.dedup();
     Some(AdsPlan {
@@ -924,7 +905,6 @@ fn parse_ads_plan(val: JsValue) -> Option<AdsPlan> {
     })
 }
 
-// 与 has_any_match 同语义，但直接吃 fill_chars 的缓冲，避免为"判定"再转一份 Vec<char>
 fn has_match_chars(
     chars: &[(usize, usize, char)],
     keywords: &[Vec<char>],
@@ -954,14 +934,13 @@ fn has_match_chars(
     false
 }
 
-// 扫描期间复用的缓冲和逐文档备忘（0 = 未算，1 = 否，2 = 是）
 struct AdsScratch {
     title_buf: Vec<(usize, usize, char)>,
     content_buf: Vec<(usize, usize, char)>,
     path_buf: Vec<(usize, usize, char)>,
     cm_buf: Vec<(usize, usize, char)>,
-    body: Vec<u8>, // 标题 / 正文 / 路径 是否命中
-    cmt: Vec<u8>,  // 评论是否命中
+    body: Vec<u8>,
+    cmt: Vec<u8>,
 }
 
 struct AdsDoc<'a> {
@@ -969,7 +948,6 @@ struct AdsDoc<'a> {
     path_searchable: bool,
     path_ready: bool,
     comments: Option<&'a CommentDoc>,
-    // 求值过程中是否有正向词条是"只靠评论"才命中的
     comment_used: bool,
 }
 
@@ -984,10 +962,9 @@ fn ads_term_hit(
     if s.body[idx] == 0 {
         let mut hit = has_match_chars(&s.title_buf, &term.kws, term.noise)
             || has_match_chars(&s.content_buf, &term.kws, term.noise);
-        // 与普通搜索一致：html / 图片只看标题和正文，其余媒体类型还看路径
         if !hit && doc.path_searchable {
             if !doc.path_ready {
-                fill_chars(&mut s.path_buf, doc.path);
+                fill_chars(&mut s.path_buf, strip_type_root(doc.path));
                 doc.path_ready = true;
             }
             hit = has_match_chars(&s.path_buf, &term.kws, term.noise);
@@ -1023,7 +1000,6 @@ fn ads_term_hit(
     false
 }
 
-// use_comments 只对正向词条生效；排除项永远只看标题 / 正文 / 路径
 fn ads_eval(
     n: &AdsNode,
     use_comments: bool,
@@ -1120,13 +1096,10 @@ fn scan_docs_ads<'a>(
         if !ads_eval(&plan.expr, true, &plan.terms, &mut s, &mut doc) {
             continue;
         }
-        // 只有求值时真的用到了"只靠评论命中"的词条，才需要复核：
-        // 不看评论时仍成立 → 不算 viaComment；不成立 → 这篇文档是靠评论才入选的
+
         let via_comment =
             doc.comment_used && !ads_eval(&plan.expr, false, &plan.terms, &mut s, &mut doc);
 
-        // 只对入选的文档算分：各正向词条的标题 / 正文得分之和；
-        // 没命中标题 / 正文、但靠路径或评论命中的词条给一份保底分；没命中的（"或"的其它分支）不计分
         let mut count = 0usize;
         let mut score = 0usize;
         for &idx in &plan.positives {
@@ -1157,7 +1130,6 @@ fn scan_docs_ads<'a>(
     results
 }
 
-// plan: { terms: [{ noise, keywords[] }], expr: 表达式树 }，见上方说明
 #[wasm_bindgen]
 pub fn search_ads_range(plan_val: JsValue, from_doc: usize, to_doc: usize) -> JsValue {
     let plan = match parse_ads_plan(plan_val) {

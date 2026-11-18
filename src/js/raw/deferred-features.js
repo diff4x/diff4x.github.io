@@ -72,7 +72,6 @@ function resumeMediaPosition(el, src) {
         if (Number.isFinite(el.duration) && saved > el.duration - MEDIA_POS_END_GAP) el.currentTime = 0;
     }, { once: true });
 }
-// [media-pos:end]
 
 function makeDraggable(popupSelector, headerSelector) {
     const popup = $(popupSelector);
@@ -830,7 +829,7 @@ export function rebirth(ctx) {
                 reader.onload = (event) => {
                     try {
                         loadedData = JSON.parse(event.target.result);
-                        listArea.innerHTML = ''; // 清空提示
+                        listArea.innerHTML = '';
 
                         PROTOCOL_OPTIONS.forEach(opt => {
                             let hasData = false;

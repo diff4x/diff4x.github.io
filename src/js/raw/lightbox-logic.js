@@ -389,7 +389,7 @@ export const videoLogic = function () {
     window.addEventListener('pagehide', () => {
         try {
             const dur = video.duration, t = video.currentTime;
-            if (!Number.isFinite(dur) || dur <= 0) return;    // 没有时长属性(未加载 / 直播流)不记录
+            if (!Number.isFinite(dur) || dur <= 0) return;
             const key = String(path).replace(/^(?:\.{1,2}\/|\/)+/, '');
             if (!key) return;
             let map = {};

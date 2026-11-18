@@ -752,7 +752,6 @@ window.onload = () => {
 
     window.alertTimer = safeInterval(ls_alert, 60000);
 
-    // 非首屏关键路径的低频功能，等浏览器空闲后再拉取对应 chunk
     idleRun(() => {
         import('./deferred-features.js').then(m => {
             m.initBackupReminder({ iframes, safeInterval });
@@ -887,7 +886,6 @@ function createSearchCacheLRU(db, max = 500) {
         db.put('sys_state', 'search_cache_lru', []).catch(() => { });
     };
 
-    // keys() 返回内部数组本身，调用方只读（filter 等会产生新数组）
     return { keys: () => load(), touch, touchAndEvict, forget, reset };
 }
 
@@ -1011,9 +1009,6 @@ function createSearchResultCache(db, lru, { memMax = 48, flushDelay = 400, onCle
         } catch (e) { }
     };
 
-    // 缓存命名空间：把“会改变搜索结果语义的输入”（数据内容、算法版本、noise、同义词词表等）
-    // 折叠成指纹，存进 IDB。指纹与上次不同就整体丢弃缓存，而不是靠各处手动 clear()。
-    // 按 slot 分开记录，互不影响：core（数据/算法/设置）、syn（同义词词表）。
     const boundNs = new Map();
     const bindNamespace = async (slot, next) => {
         if (typeof slot !== 'string' || typeof next !== 'string') return false;
@@ -1022,7 +1017,7 @@ function createSearchResultCache(db, lru, { memMax = 48, flushDelay = 400, onCle
         const key = 'search_cache_ns:' + slot;
         let saved;
         try { saved = await db.get('sys_state', key); } catch (e) { saved = undefined; }
-        if (boundNs.get(slot) !== next) return false;   // await 期间又被更新，交给后一次调用处理
+        if (boundNs.get(slot) !== next) return false;
         if (saved === next) return false;
         await clear();
         try { await db.put('sys_state', key, next); } catch (e) { }
@@ -1359,12 +1354,10 @@ function createSearchWorker() {
         else if (type === 'DATA_READY') {
             window._engineError = '';
             invalidateSearch();
-            // worker 只回传瘦身后的数据（html 正文已剥离，仅保留 path/type/localOnly 标记）和数据指纹
             const slim = Array.isArray(payload) ? payload : ((payload && payload.data) || []);
             window.data = slim;
             window._dataFp = (payload && !Array.isArray(payload) && payload.fp) || ('len' + slim.length);
             snippetCache.clear();
-            // 与 finalizeDataLoad 并行：缓存库卡住时不阻塞界面初始化（bindCoreNamespace 内部已 try/catch，不会 reject）
             const nsPromise = bindCoreNamespace();
             await finalizeDataLoad();
             if (await nsPromise) {
@@ -2090,6 +2083,7 @@ function search_box() {
 
     let previewScrollFrame = null;
     let previewTimeoutId = null;
+    let previewScrollGen = 0;
     let currentScrollY = 0;
     let lastHoveredPath = null;
     let hoverSnippetTimer = null;
@@ -2132,18 +2126,32 @@ function search_box() {
         update();
     }
 
+    function stopPreviewScroll() {
+        previewScrollGen++;
+        if (previewTimeoutId) { clearTimeout(previewTimeoutId); previewTimeoutId = null; }
+        if (previewScrollFrame) { cancelAnimationFrame(previewScrollFrame); previewScrollFrame = null; }
+    }
+
+    function resetPreviewScroll(scrollContent) {
+        stopPreviewScroll();
+        currentScrollY = 0;
+        if (scrollContent) scrollContent.style.transform = 'translateY(0px)';
+    }
+
     function destroyMediaPreview() {
         const badge = document.getElementById('preview-countdown');
         if (badge) badge.remove();
-        if (previewBox) previewBox.style.display = 'none';
+        if (previewBox) {
+            previewBox.removeAttribute('data-active');
+            previewBox.style.display = 'none';
+        }
         lastHoveredPath = null;
         clearTimeout(hoverSnippetTimer);
         resetSearchHighlights();
         publishSearchHighlights();
         isPaused = true;
-        if (previewTimeoutId) clearTimeout(previewTimeoutId);
-        if (previewScrollFrame) cancelAnimationFrame(previewScrollFrame);
         const scrollContent = document.getElementById('preview-scroll-content');
+        resetPreviewScroll(scrollContent);
         if (scrollContent) {
             saveMediaPositionsIn(scrollContent);
             scrollContent.innerHTML = '';
@@ -2179,9 +2187,11 @@ function search_box() {
     if (elSearchInputNode) elSearchInputNode.addEventListener('mousedown', handleMiddleClick);
 
     function showSnippetPreview(resultData, data) {
+        stopPreviewScroll();
         const body = (data && data.body) || { hits: 0, more: 0, items: [] };
         const cm = (data && data.comments) || { hits: 0, docs: 0, more: 0, items: [] };
         if (body.items.length === 0 && cm.items.length === 0) {
+            previewBox.removeAttribute('data-active');
             previewBox.style.display = 'none';
             return;
         }
@@ -2190,6 +2200,9 @@ function search_box() {
         const scrollWrapper = document.getElementById('preview-scroll-wrapper');
         const scrollContent = document.getElementById('preview-scroll-content');
         previewBox.style.display = 'flex';
+        requestAnimationFrame(() => {
+            previewBox.setAttribute('data-active', 'true');
+        });
         header.style.color = '#abb2bf';
 
         const titleSpan = document.createElement('span');
@@ -2250,18 +2263,23 @@ function search_box() {
         currentScrollY = 0;
         scrollContent.style.transform = `translateY(0px)`;
 
+        const gen = ++previewScrollGen;
         previewTimeoutId = setTimeout(() => {
+            previewTimeoutId = null;
+            if (gen !== previewScrollGen) return;
             const blockHeight = first.offsetHeight;
             const visibleHeight = scrollWrapper.offsetHeight;
             if (blockHeight <= visibleHeight) return;
 
             scrollContent.appendChild(buildBlock());
-            const autoScroll = () => {
-                if (!isPaused) {
-                    currentScrollY += 0.5;
-                    if (currentScrollY >= blockHeight) {
-                        currentScrollY -= blockHeight;
-                    }
+            const SCROLL_PX_PER_SEC = 60;
+            let lastTs = 0;
+            const autoScroll = (ts) => {
+                if (gen !== previewScrollGen) return;
+                const dt = lastTs ? Math.min(ts - lastTs, 100) : 0;
+                lastTs = ts;
+                if (!isPaused && dt > 0) {
+                    currentScrollY = (currentScrollY + SCROLL_PX_PER_SEC * dt / 1000) % blockHeight;
                     scrollContent.style.transform = `translateY(-${currentScrollY}px)`;
                 }
                 previewScrollFrame = requestAnimationFrame(autoScroll);
@@ -2299,12 +2317,11 @@ function search_box() {
 
             if (path === lastHoveredPath) return;
 
-            destroyMediaPreview();
+            clearTimeout(hoverSnippetTimer);
+            if (isMedia || previewBox.querySelector('video, audio')) destroyMediaPreview();
             lastHoveredPath = path;
 
-            if (isMedia) {
-                return;
-            }
+            if (isMedia) return;
 
             isPaused = true;
             previewBox.style.borderColor = '#61afef';
@@ -2316,7 +2333,9 @@ function search_box() {
             previewBox.classList.toggle('image-preview-mode', isImage);
 
             if (isImage) {
+                resetPreviewScroll(scrollContent);
                 previewBox.style.display = 'flex';
+                requestAnimationFrame(() => previewBox.setAttribute('data-active', 'true'));
                 scrollContent.innerHTML = `<img src="${path}" style="max-width: 450px; max-height: 350px; object-fit: contain;" alt="Preview">`;
                 return;
             }
@@ -2326,10 +2345,11 @@ function search_box() {
             if (!resultData || !keyword) return;
 
             hoverSnippetTimer = setTimeout(async () => {
+                if (lastHoveredPath !== path) return;
                 const data = await requestSnippets(path, keyword);
                 if (lastHoveredPath !== path || !data) return;
                 showSnippetPreview(resultData, data);
-            }, 30);
+            }, 60);
         }
     });
 
@@ -2367,8 +2387,10 @@ function search_box() {
                     }
                 } else {
                     saveMediaPositionsIn(scrollContent);
+                    resetPreviewScroll(scrollContent);
                     previewBox.style.display = 'flex';
                     previewBox.classList.add('image-preview-mode');
+                    requestAnimationFrame(() => previewBox.setAttribute('data-active', 'true'));
 
                     const isVideo = type === 'video' || /\.(mp4|webm|ogg)$/i.test(path);
                     if (isVideo) {
@@ -2395,7 +2417,7 @@ function search_box() {
                     mediaEl = scrollContent.querySelector('video, audio');
                     mediaEl.volume = 0.1;
                     attachPreviewCountdown(mediaEl);
-                    resumeMediaPosition(mediaEl, path);   // 从上一次的位置继续
+                    resumeMediaPosition(mediaEl, path);
                     const playPromise = mediaEl.play();
                     if (playPromise !== undefined) {
                         playPromise.catch(err => {
@@ -2536,8 +2558,7 @@ function clearSearchOverlays() {
     snippetCache.clear();
 }
 
-// 修改 lib.rs / worker.js 中匹配、评分、边界语义时递增，旧缓存会因指纹变化被整体丢弃
-const SEARCH_ALGO_VER = 3;
+const SEARCH_ALGO_VER = 4;
 
 function hashText(str) {
     let h1 = 0x811c9dc5, h2 = 0x1b873593;
@@ -2558,8 +2579,6 @@ function computeCoreNamespace() {
     ].join('|');
 }
 
-// 数据、算法版本、noise、近义开关任一变化 → 缓存整体失效。返回是否发生了失效。
-// 数据尚未就绪时不绑定（避免把上个会话仍然有效的缓存误清掉），设置命令用 force 强制绑定。
 async function bindCoreNamespace({ force = false } = {}) {
     if (!window._dataFp && !force) return false;
     try {
@@ -2581,7 +2600,6 @@ function rerunActiveSearch() {
     if (kw && (isAdsQuery(kw) || !isReservedSearchCommand(kw))) search(kw);
 }
 
-// synonyms.js 是异步加载的：之前发出的搜索可能没带同义词，加载完成后要让这些结果失效并重搜
 async function onSynonymsLoaded() {
     const changed = await bindSynonymsNamespace();
     const missed = !!window._searchSentWithoutSyn;
@@ -2909,9 +2927,6 @@ function isReservedSearchCommand(kw) {
     return isActionCommand(kw) || isAdsQuery(kw);
 }
 
-// [ads-filter:begin] ───────────────────────────────────────────────────────────
-// 组合搜索与结果筛选条
-// ──────────────────────────────────────────────────────────────────────────────
 const ADS_PREFIX_RE = /^[@＠][\[［【]/;
 
 function isAdsQuery(kw) {
@@ -3070,7 +3085,6 @@ function searchAds(kw) {
     searchWorker.postMessage({ type: 'SEARCH_ADS', payload: { keyword: kw, token, ns: computeCoreNamespace(), plan: { terms, expr: plan.expr } } });
 }
 
-// ── 筛选状态（后缀 + html 所属年月，默认全选）──────────────────────────────────
 const SF_BAR_WIDTH = 270;
 
 function sfState() {
@@ -3260,7 +3274,7 @@ function sfBuildBar() {
         `<div class="sf-pop-hd"><span>类型</span><button type="button" id="sf-inv" title="反选类型">反选</button></div>` +
         `<div class="sf-list"></div>` +
         `<div id="sf-ym-sec" hidden><hr>` +
-        `<div class="sf-pop-hd"><span>年月</span><button type="button" id="sf-ym-inv" title="反选年月">反选</button></div>` +
+        `<div class="sf-pop-hd"><span>年月 (.html)</span><button type="button" id="sf-ym-inv" title="反选年月">反选</button></div>` +
         `<div class="sf-ym-list"></div></div>` +
         `</div></details>` +
         `<button type="button" id="sf-reset" title="重置筛选">重置</button>` +
@@ -3462,7 +3476,6 @@ function sfRefreshBar(keyword, sf) {
 
     sfLayout();
 }
-// [ads-filter:end]
 
 function upgradeSearchResultsBox(oldEl) {
     if (!oldEl || oldEl.tagName !== 'SELECT') return oldEl;
@@ -3675,7 +3688,6 @@ function updateSearchResults(results, keyword) {
     window._baseRenderedResults = results;
     results = applyCommentOverlay(applyPageOverlay(results, keyword), keyword);
 
-    // 视图筛选只作用于显示：_baseRenderedResults 和结果缓存始终保持未过滤，改筛选不需要重搜
     const sf = sfApply(results);
     results = sf.list;
     const adsMode = isAdsQuery(keyword);
@@ -3707,7 +3719,6 @@ function updateSearchResults(results, keyword) {
 
             const isPrivate = (result.localOnly === true || result.info === "localOnly");
             const title = result.type === "html" ? result.title.replace(/\.html$/, '') : result.title;
-            // 组合搜索：不显示命中数；评论只用 [💬] 标出"靠评论才满足"的条目，不带数量
             const countStr = (result.commentOnly || adsMode) ? "" : ` [${result.count}]`;
             const commentStr = adsMode
                 ? (result.viaComment ? " [💬]" : "")
@@ -4620,7 +4631,7 @@ function requestCommentHits(kw, token) {
 function refreshCommentOverlayForCurrentKeyword() {
     const kw = window._currentRenderedKeyword;
     if (!kw) return;
-    if (isAdsQuery(kw)) { rerunActiveSearch(); return; }   // 评论参与组合搜索的判定
+    if (isAdsQuery(kw)) { rerunActiveSearch(); return; }
     if (isReservedSearchCommand(kw)) return;
     requestCommentHits(kw, window._searchToken);
 }

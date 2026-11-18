@@ -828,3 +828,12 @@ body #tp-toggle.tp-dragging {
   opacity: 1;
   transform: scale(1.08);
 }
+
+
+#center-snippet-preview {
+    transition: opacity 0.15s ease, border-color 0.3s;
+    opacity: 0;
+}
+#center-snippet-preview[data-active="true"] {
+    opacity: 1;
+}

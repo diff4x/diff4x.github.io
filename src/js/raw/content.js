@@ -77,7 +77,7 @@ let find_content_matches_multi = null;
 const SEARCH_HL_STYLE = [[0.80, '#000'], [0.65, '#111'], [0.52, '#111'], [0.42, '#333'], [0.34, '#333'], [0.28, '#333']];
 const searchHlName = (b) => (b <= 0 ? 'search-exact' : `search-noise-${b}`);
 const searchHlBucket = (noise) => Math.min(Math.max(noise | 0, 0), SEARCH_HL_STYLE.length - 1);
-const searchHl = [];   // 稀疏数组：bucket -> Highlight
+const searchHl = [];
 
 function ensureSearchHighlightStyle() {
     if (document.getElementById('search-hl-static')) return;
@@ -111,7 +111,7 @@ function publishSearchHighlights() {
 const wasmInitPromise = (async () => {
     const resolveWasm = (sw) => {
         format_markdown = sw.format_markdown;
-        find_content_matches_multi = sw.find_content_matches_multi; // 挂载 multi 接口
+        find_content_matches_multi = sw.find_content_matches_multi;
         compute_lcs_diff = sw.compute_lcs_diff;
         wasmEngineReady = true;
     };
@@ -388,9 +388,6 @@ async function format() {
     }
 }
 
-// 块级元素边界：相邻文本节点分属不同块时，在拼接文本里插入 "\n" 作为分隔，
-// 让 wasm 的匹配器把它当作硬边界（try_match_at 遇到换行就终止），避免关键词跨段落/跨标题/跨单元格误命中。
-// 行内元素（b/span/a 等）不算块边界，行内加粗拆开的词仍能正常匹配。
 const PAGE_BLOCK_SEL = 'p,div,li,ul,ol,dl,dt,dd,table,thead,tbody,tfoot,tr,td,th,h1,h2,h3,h4,h5,h6,blockquote,pre,section,article,header,footer,figure,figcaption';
 
 function makeBlockBreakDetector() {
@@ -528,7 +525,6 @@ function search() {
 
     const walker = document.createTreeWalker(contentRoot, NodeFilter.SHOW_TEXT, {
         acceptNode(node) {
-            // Skip nodes that live inside known non-content UI containers
             let el = node.parentElement;
             while (el && el !== contentRoot) {
                 const id = el.id || '';
@@ -698,7 +694,7 @@ function search() {
             let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
             currentGroupRanges.forEach(range => {
                 const rect = range.getBoundingClientRect();
-                if (rect.width === 0 && rect.height === 0) return; // 忽略不可见区间
+                if (rect.width === 0 && rect.height === 0) return;
                 minX = Math.min(minX, rect.left);
                 minY = Math.min(minY, rect.top);
                 maxX = Math.max(maxX, rect.right);
@@ -1074,7 +1070,7 @@ function lightbox() {
                 );
 
                 scale = initialScale * (currentDistance / initialDistance);
-                scale = Math.max(minScale, Math.min(scale, maxScale)); // 限制在 0.5 到 10.0 之间
+                scale = Math.max(minScale, Math.min(scale, maxScale));
 
                 lightboxImg.style.transform = `translate(${lightboxImg.dataset.tx}px, ${lightboxImg.dataset.ty}px) scale(${scale})`;
             }
@@ -1232,7 +1228,7 @@ const codeToolsObserver = typeof ResizeObserver === 'function'
 function initCodeTools(root = document) {
     root.querySelectorAll('code').forEach((codeEl) => {
         const prev = codeEl.previousSibling;
-        if (prev && prev.nodeType === Node.ELEMENT_NODE && prev.classList.contains('code-tools')) return;   // 已挂载过
+        if (prev && prev.nodeType === Node.ELEMENT_NODE && prev.classList.contains('code-tools')) return;
 
         const tools = document.createElement('div');
         tools.className = 'code-tools';
@@ -2107,7 +2103,7 @@ function renderSearchMinimapMarks() {
 
         ranges.forEach(range => {
             const rect = range.getBoundingClientRect();
-            if (rect.width === 0 && rect.height === 0) return; // 忽略不可见区间
+            if (rect.width === 0 && rect.height === 0) return;
             const top = window.scrollY + rect.top;
             const bottom = window.scrollY + rect.bottom;
             minTop = Math.min(minTop, top);

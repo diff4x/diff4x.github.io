@@ -4,20 +4,14 @@ const {
     set_data, build_flat_data, doc_count, search_multi_range,
     set_comments, search_comments, get_snippets
 } = wasm;
-// 新版 wasm 才有的导出；旧版没有时退化为 build_flat_data + set_data（见 BUILD_DATA）
 const build_and_set_data = wasm.build_and_set_data;
-// 组合搜索（@ads）同样是新版 wasm 才有的导出；旧版没有时 SEARCH_ADS 会回一个带 error 的空结果
 const search_ads_range = wasm.search_ads_range;
 
 let wasmReady = false;
 let messageQueue = [];
 let lastSavedKw = "";
-
-// 数据就绪门控：BUILD_DATA 完成之前到达的 SEARCH 不能执行，否则 doc_count()==0，
-// 会返回“空结果”并被主线程写进持久缓存。
 let dataReady = false;
 let pendingSearch = null;
-// 每次 set_data 之后递增；搜索分片之间若发现版本变了，整体重来，避免一次搜索混用新旧数据
 let dataGen = 0;
 
 let latestToken = 0;
@@ -47,8 +41,97 @@ function compareResults(a, b) {
         || (a.title < b.title ? -1 : a.title > b.title ? 1 : 0);
 }
 
-// ---- 旧版 wasm 的退化路径：在 JS 里做瘦身与指纹 ----
-// 瘦身：html 正文只保留 "localOnly" 标记（主线程只用它判断私有文档），其余类型原样保留
+function mergeRanges(dst, src) {
+    const seen = new Set(dst.map(r => r[0] + ',' + r[1]));
+    for (const r of src || []) {
+        const k = r[0] + ',' + r[1];
+        if (!seen.has(k)) { seen.add(k); dst.push(r); }
+    }
+    dst.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+}
+
+function itemNoise(it) {
+    if (typeof it.n === 'number') return it.n;
+    let m = Infinity;
+    for (const r of it.h || []) if (r[2] < m) m = r[2];
+    return m === Infinity ? 0 : m;
+}
+
+function mergeSection(parts, pick, keyOf, limit, tie) {
+    const byKey = new Map();
+    const all = [];
+    parts.forEach((p, ti) => {
+        const items = (pick(p) && pick(p).items) || [];
+        items.forEach((it, k) => {
+            const key = keyOf(it);
+            const prev = byKey.get(key);
+            if (prev) {
+                mergeRanges(prev.item.h, it.h);
+                const n = itemNoise(it);
+                if (n < prev.item.n) prev.item.n = n;
+                if (k < prev.k) prev.k = k;
+                return;
+            }
+            const copy = Object.assign({}, it, { h: (it.h || []).slice(), n: itemNoise(it) });
+            const rec = { item: copy, k, ti };
+            byKey.set(key, rec);
+            all.push(rec);
+        });
+    });
+    all.sort((a, b) => (a.item.n - b.item.n) || tie(a, b));
+    const kept = all.slice(0, limit).map(r => r.item);
+    return { items: kept, dropped: Math.max(0, all.length - kept.length) };
+}
+
+function mergeAdsSnippets(parts, maxBody, maxComments) {
+    const valid = parts.filter(Boolean);
+    if (valid.length === 0) return null;
+    if (valid.length === 1) return valid[0];
+
+    const body = mergeSection(valid, p => p.body, it => it.t, maxBody,
+        (a, b) => (a.k - b.k) || (a.ti - b.ti));
+    const cm = mergeSection(valid, p => p.comments, it => it.c + '\u0000' + it.t, maxComments,
+        (a, b) => (a.item.c - b.item.c) || (a.k - b.k) || (a.ti - b.ti));
+
+    const sum = (pick) => valid.reduce((s, p) => s + (pick(p) || 0), 0);
+    const distinctC = new Set(cm.items.map(it => it.c)).size;
+    return {
+        body: {
+            hits: sum(p => p.body && p.body.hits),
+            docs: 0,
+            more: sum(p => p.body && p.body.more) + body.dropped,
+            items: body.items
+        },
+        comments: {
+            hits: sum(p => p.comments && p.comments.hits),
+            docs: Math.max(distinctC, ...valid.map(p => (p.comments && p.comments.docs) || 0)),
+            more: sum(p => p.comments && p.comments.more) + cm.dropped,
+            items: cm.items
+        }
+    };
+}
+
+function getAdsSnippets(payload) {
+    const maxBody = payload.maxBody !== undefined ? payload.maxBody : 40;
+    const maxComments = payload.maxComments !== undefined ? payload.maxComments : 30;
+    const parts = [];
+    for (const t of payload.adsTerms) {
+        if (!t || !Array.isArray(t.keywords) || t.keywords.length === 0) continue;
+        try {
+            parts.push(get_snippets(
+                payload.path,
+                t.keywords,
+                t.noise !== undefined ? t.noise : 5,
+                maxBody,
+                maxComments
+            ));
+        } catch (err) {
+            console.error("[Worker] 组合搜索 snippet 生成失败:", err);
+        }
+    }
+    return mergeAdsSnippets(parts, maxBody, maxComments);
+}
+
 function slimFlat(raw) {
     const n = raw.length;
     const out = new Array(n);
@@ -66,7 +149,6 @@ function slimFlat(raw) {
     return out;
 }
 
-// 数据指纹：覆盖搜索实际看到的全部文本（含 isOffline 带来的正文差异）
 function fingerprintFlat(raw, isOffline) {
     let h1 = 0x811c9dc5, h2 = 0x1b873593;
     h1 = Math.imul(h1 ^ (isOffline ? 1 : 0), 16777619);
@@ -83,9 +165,6 @@ function fingerprintFlat(raw, isOffline) {
     return (h1 >>> 0).toString(16) + (h2 >>> 0).toString(16) + '.' + raw.length;
 }
 
-// 分片扫描全库：每片约 SLICE_MS，片间让出线程；扫描期间数据被替换（BUILD_DATA 插在两片之间）时
-// 丢弃已扫描的部分，用新数据重来。被新搜索取代时返回 null。
-// scan(from, to) 返回该文档区间内的命中数组（普通搜索与组合搜索共用）。
 async function scanAll(token, scan) {
     for (; ;) {
         const gen = dataGen;
@@ -146,8 +225,6 @@ async function runSearch(payload) {
     });
 }
 
-// 组合搜索：plan = { terms: [{ noise, keywords[] }], expr: 表达式树 }，近义词已由主线程按词条展开。
-// 评论在 wasm 内并入各文档一起判定（只对正向词条生效），所以这里不再单独搜评论，也不回 commentHits。
 async function runAdsSearch(payload) {
     const kw = payload.keyword;
     const token = payload.token;
@@ -226,7 +303,6 @@ function processMessage(data) {
             try {
                 let slim, fp;
                 if (typeof build_and_set_data === 'function') {
-                    // 一次完成构建 + 入库，并直接返回瘦身数据与指纹，省掉整份语料的两次序列化往返
                     const out = build_and_set_data(liteData, fatData, shadowData, isOffline);
                     slim = out.data;
                     fp = out.fp;
@@ -240,7 +316,6 @@ function processMessage(data) {
                 dataGen++;
                 dataReady = true;
 
-                // 主线程不再收到整份正文，只拿 path/type/localOnly 标记 + 数据指纹
                 self.postMessage({ type: 'DATA_READY', payload: { data: slim, fp } });
                 flushPendingSearch();
             } catch (err) {
@@ -257,7 +332,6 @@ function processMessage(data) {
         case 'SEARCH_ADS': {
             const job = type === 'SEARCH_ADS' ? Object.assign({}, payload, { ads: true }) : payload;
             if (!dataReady) {
-                // 只保留最新的一次（普通 / 组合不分），数据就绪后再执行
                 pendingSearch = job;
                 break;
             }
@@ -299,13 +373,17 @@ function processMessage(data) {
         case 'SNIPPETS': {
             let snippets = null;
             try {
-                snippets = get_snippets(
-                    payload.path,
-                    payload.searchKeywords || [payload.keyword],
-                    payload.noise !== undefined ? payload.noise : 5,
-                    payload.maxBody !== undefined ? payload.maxBody : 40,
-                    payload.maxComments !== undefined ? payload.maxComments : 30
-                );
+                if (Array.isArray(payload.adsTerms) && payload.adsTerms.length > 0) {
+                    snippets = getAdsSnippets(payload);
+                } else {
+                    snippets = get_snippets(
+                        payload.path,
+                        payload.searchKeywords || [payload.keyword],
+                        payload.noise !== undefined ? payload.noise : 5,
+                        payload.maxBody !== undefined ? payload.maxBody : 40,
+                        payload.maxComments !== undefined ? payload.maxComments : 30
+                    );
+                }
             } catch (err) {
                 console.error("[Worker] snippet 生成失败:", err);
             }

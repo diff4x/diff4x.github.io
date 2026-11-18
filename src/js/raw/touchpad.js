@@ -58,6 +58,12 @@ export function initTouchpad(ctx) {
 
     const colMove = panel.querySelector('.tp-col-move');
     const btns = panel.querySelectorAll('[data-btn]');
+    const NATIVE_MOUSE_EVENTS = ['mousedown', 'mouseup', 'click', 'auxclick', 'dblclick'];
+    function swallowNativeMouse(el) {
+        NATIVE_MOUSE_EVENTS.forEach((type) => el.addEventListener(type, (e) => e.stopPropagation()));
+    }
+    swallowNativeMouse(panel);
+
 
     const cursorEl = document.createElement('div');
     cursorEl.id = 'tp-cursor';
@@ -159,6 +165,73 @@ export function initTouchpad(ctx) {
         }
     }
 
+    const HOVER_CLASS = 'tp-hover';
+    const HOVER_RE = /:hover\b/;
+
+    function splitSelectors(text) {
+        const parts = [];
+        let depth = 0, quote = '', start = 0;
+        for (let i = 0; i < text.length; i++) {
+            const c = text[i];
+            if (quote) { if (c === '\\') i++; else if (c === quote) quote = ''; continue; }
+            if (c === '"' || c === "'") quote = c;
+            else if (c === '(' || c === '[') depth++;
+            else if (c === ')' || c === ']') depth--;
+            else if (c === ',' && depth === 0) { parts.push(text.slice(start, i)); start = i + 1; }
+        }
+        parts.push(text.slice(start));
+        return parts;
+    }
+
+    function mirrorHoverRules(container) {
+        let rules;
+        try { rules = container.cssRules; } catch (e) { return; }
+        if (!rules) return;
+        for (let i = rules.length - 1; i >= 0; i--) {
+            const rule = rules[i];
+            if (!rule.selectorText) {
+                if (rule.cssRules) mirrorHoverRules(rule);
+                continue;
+            }
+            if (!HOVER_RE.test(rule.selectorText)) continue;
+            const next = rules[i + 1];
+            if (next && next.selectorText && next.selectorText.includes('.' + HOVER_CLASS) &&
+                next.style.cssText === rule.style.cssText) continue;
+            const sel = splitSelectors(rule.selectorText)
+                .filter(s => HOVER_RE.test(s))
+                .map(s => s.replace(new RegExp(HOVER_RE.source, 'g'), '.' + HOVER_CLASS))
+                .join(',');
+            try { container.insertRule(`${sel}{${rule.style.cssText}}`, i + 1); } catch (e) { }
+        }
+    }
+
+    function syncHoverStyles() {
+        Array.from(document.styleSheets).forEach(mirrorHoverRules);
+    }
+
+    let hoverSyncTimer = null;
+    function scheduleHoverSync() {
+        clearTimeout(hoverSyncTimer);
+        hoverSyncTimer = setTimeout(syncHoverStyles, 80);
+    }
+    syncHoverStyles();
+
+    new MutationObserver(scheduleHoverSync).observe(document.head, { childList: true, subtree: true, characterData: true });
+    document.addEventListener('load', scheduleHoverSync, true);
+    window.addEventListener('load', scheduleHoverSync);
+
+    let hoverChain = [];
+    function setHoverChain(el) {
+        const next = [];
+        for (let n = el; n; n = n.parentElement) {
+            if (n !== document.body && n !== document.documentElement) next.push(n);
+        }
+        const keep = new Set(next);
+        hoverChain.forEach(n => { if (!keep.has(n)) n.classList.remove(HOVER_CLASS); });
+        next.forEach(n => n.classList.add(HOVER_CLASS));
+        hoverChain = next;
+    }
+
     let localHoverEl = null;
     function getAncestors(el) {
         const chain = [];
@@ -196,6 +269,7 @@ export function initTouchpad(ctx) {
             el.dispatchEvent(new MouseEvent('mouseenter', Object.assign({}, base, { bubbles: false, relatedTarget: localHoverEl || null })));
         });
         localHoverEl = newEl;
+        setHoverChain(newEl);
     }
 
     function clearLocalHover() {
@@ -206,13 +280,12 @@ export function initTouchpad(ctx) {
             a.dispatchEvent(new MouseEvent('mouseleave', { bubbles: false, cancelable: true, relatedTarget: null }));
         });
         localHoverEl = null;
+        setHoverChain(null);
     }
 
     function activateSyntheticClick(el, base) {
         const tag = el.tagName ? el.tagName.toUpperCase() : '';
 
-        // 1) 虚拟光标点到 <option> 时（如 #searchHistory）：移动版没有原生 select 弹出层，
-        //    同步 selectedIndex 并直接调用 el.click()（使其触发父级 <select> 的 click / change 代理）
         if (tag === 'OPTION') {
             const selectEl = el.closest('select');
             if (selectEl) {
@@ -227,16 +300,12 @@ export function initTouchpad(ctx) {
             return;
         }
 
-        // 2) 虚拟光标点到 <details>/<summary> 或其内部文字节点时（如筛选按钮）：
-        //    合成 MouseEvent 不会触发浏览器默认切换行为，显式调用 summary.click()
         const summaryEl = el.closest ? el.closest('summary') : null;
         if (summaryEl) {
             summaryEl.click();
             return;
         }
 
-        // 3) 虚拟光标点到 <label> 或 <input type="checkbox|radio">（如筛选子项、近义开关）：
-        //    用原生 .click() 触发浏览器默认选中翻转与 change 事件冒泡
         const labelEl = el.closest ? el.closest('label') : null;
         if (labelEl) {
             labelEl.click();
@@ -247,8 +316,6 @@ export function initTouchpad(ctx) {
             return;
         }
 
-        // 4) 虚拟光标点到普通 <button> / <a> / 自定义可点击项（如 .sr-opt）：
-        //    先走原生 .click() 以兼容所有标准与委托监听器，若目标未消耗 click 再补派发合成 click
         if (typeof el.click === 'function') {
             el.click();
         } else {
@@ -313,7 +380,7 @@ export function initTouchpad(ctx) {
                     const atTop = scrollTarget.scrollTop <= 0;
                     const atBottom = scrollTarget.scrollTop + scrollTarget.clientHeight >= scrollTarget.scrollHeight - 1;
                     if ((deltaY < 0 && atTop) || (deltaY > 0 && atBottom)) {
-                        found = false; // this scroll unit is exhausted in this direction, hand off
+                        found = false;
                     } else {
                         scrollTarget.scrollBy({ top: deltaY, behavior: 'auto' });
                     }
@@ -389,7 +456,7 @@ export function initTouchpad(ctx) {
         if (nearLeft || nearRight || nearTop || nearBottom) {
             const multX = Math.max(edgeAccelFactor(cursor.x, stage.clientWidth), 1);
             const multY = Math.max(edgeAccelFactor(cursor.y, stage.clientHeight), 1);
-            const BASE_HOLD_SPEED = 6; // logical px per frame at full acceleration
+            const BASE_HOLD_SPEED = 6;
             const dx = (nearLeft ? -1 : nearRight ? 1 : 0) * BASE_HOLD_SPEED * (multX - 1);
             const dy = (nearTop ? -1 : nearBottom ? 1 : 0) * BASE_HOLD_SPEED * (multY - 1);
             if (dx || dy) {
@@ -646,6 +713,7 @@ export function initTouchpad(ctx) {
     toggleBtn.setAttribute('aria-expanded', 'true');
     toggleBtn.addEventListener('contextmenu', (e) => e.preventDefault());
     document.body.appendChild(toggleBtn);
+    swallowNativeMouse(toggleBtn);
 
     let isCollapsed = false;
     let syncTimer = null;
