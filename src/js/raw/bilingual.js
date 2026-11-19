@@ -44,7 +44,11 @@ if (window.top && window.top.VirtualCursor) {
                         e.target.result.createObjectStore(STORE_NAME);
                     }
                 };
-                req.onsuccess = e => resolve(e.target.result);
+                req.onsuccess = e => {
+                    const db = e.target.result;
+                    db.onversionchange = () => db.close();
+                    resolve(db);
+                };
                 req.onerror = e => reject(e);
             });
         }
@@ -149,7 +153,11 @@ if (window.top && window.top.VirtualCursor) {
                 if (draftText !== undefined && draftText !== null && draftText !== zhText.innerText) {
                     lockMsg.textContent = "发现本地草稿，正在回填反序列化...";
                     await new Promise(r => setTimeout(r, 200));
-                    zhText.innerText = draftText;
+                    if (Object.getOwnPropertyDescriptor(zhText, "value")?.set) {
+                        zhText.value = draftText;
+                    } else {
+                        zhText.innerText = draftText;
+                    }
                     statusBar.textContent = "已恢复上次草稿";
                 } else {
                     statusBar.textContent = "就绪 (暂无草稿)";
@@ -188,11 +196,33 @@ if (window.top && window.top.VirtualCursor) {
                 '#gotop',
                 '.pinyin-tooltip',
                 '#giscus-popup',
-                'link[href*="content.css"]'
+                'link[href*="content.css"]',
+                '#toc',
+                '#excerpt-pop-btn',
+                '#search-minimap',
+                '#diff-minimap',
+                '#diff-controls-wrapper',
+                '#search-hl-static',
+                '#content-init-fade',
+                '.active-search-border',
+                '.lightbox'
             ];
             garbageSelectors.forEach(selector => {
                 htmlClone.querySelectorAll(selector).forEach(el => el.remove());
             });
+            htmlClone.querySelectorAll('style').forEach(st => {
+                if (st.textContent && st.textContent.trim() === 'body { opacity: 0; transition: opacity 0.3s ease; }') {
+                    st.remove();
+                }
+            });
+            const clonedBody = htmlClone.querySelector('body');
+            if (clonedBody) {
+                clonedBody.style.removeProperty('opacity');
+                clonedBody.style.removeProperty('transition');
+                if (!clonedBody.getAttribute('style')?.trim()) {
+                    clonedBody.removeAttribute('style');
+                }
+            }
 
             const htmlString = "<!DOCTYPE html>\n" + htmlClone.outerHTML;
             const textarea = document.createElement('textarea');

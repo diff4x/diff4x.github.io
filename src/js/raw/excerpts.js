@@ -89,7 +89,11 @@ export const ExcerptsSys = {
             req.onupgradeneeded = (e) => {
                 e.target.result.createObjectStore(this.storeName);
             };
-            req.onsuccess = (e) => resolve(e.target.result);
+            req.onsuccess = (e) => {
+                const db = e.target.result;
+                db.onversionchange = () => db.close();
+                resolve(db);
+            };
             req.onerror = () => reject(req.error);
         });
     },
@@ -157,10 +161,14 @@ export const ExcerptsSys = {
             getReq.onsuccess = () => {
                 let record = getReq.result;
                 if (record) {
-                    record.excerpts = excerptsArray;
-                    record.updatedAt = Date.now();
-                    const putReq = store.put(record, bookName);
-                    putReq.onerror = () => reject(putReq.error);
+                    if (!excerptsArray || excerptsArray.length === 0) {
+                        store.delete(bookName);
+                    } else {
+                        record.excerpts = excerptsArray;
+                        record.updatedAt = Date.now();
+                        const putReq = store.put(record, bookName);
+                        putReq.onerror = () => reject(putReq.error);
+                    }
                 }
             };
             tx.oncomplete = () => resolve();

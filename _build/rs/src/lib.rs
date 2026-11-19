@@ -255,8 +255,12 @@ fn flatten_tree_recursive(node: &Value, prefix: &str, fat: &Value, shadow: &Valu
                             if title.ends_with(".html") {
                                 title = title[..title.len()-5].to_string();
                             }
+                            let is_private_flag = info.contains("localOnly");
                             if let Some(fat_info) = fat.get(&id).and_then(|v| v.as_str()) {
                                 val1 = fat_info.to_string();
+                            }
+                            if is_private_flag && !val1.starts_with("localOnly") {
+                                val1 = format!("localOnly{}", val1);
                             }
                             if is_offline && val1.starts_with("localOnly") {
                                 if let Some(shadow_info) = shadow.get(&id).and_then(|v| v.as_str()) {

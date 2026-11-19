@@ -1,8 +1,16 @@
 /* ================================== txn_parser.js, 初代 by diff4x | 进化 by Gemini & ChatGPT & Claude ================================== */
 
 if ('serviceWorker' in navigator) {
+    let _initSwCtrl = navigator.serviceWorker.controller;
+    let _reloading = false;
     navigator.serviceWorker.addEventListener('controllerchange', () => {
-        window.location.reload(); 
+        if (_reloading || (window.top && window.top._isBombing)) return;
+        if (!_initSwCtrl) {
+            _initSwCtrl = navigator.serviceWorker.controller;
+            return;
+        }
+        _reloading = true;
+        window.location.reload();
     });
 }
 
@@ -488,7 +496,7 @@ function restoreState() {
 function renderErrors(errors) {
   out.innerHTML = '<h4 class="error">原始记录错误报告</h4>';
   errors.sort((a, b) => a.lineNum - b.lineNum).forEach(e => {
-    out.innerHTML += `<div class="error"><span class="error-line-link" data-line="${e.lineNum}">第 ${e.lineNum} 行</span>：${e.msg}</div>`;
+    out.innerHTML += `<div class="error"><span class="error-line-link" data-line="${e.lineNum}">第 ${e.lineNum} 行</span>：${escapeHtml(e.msg)}</div>`;
   });
 }
 

@@ -518,12 +518,14 @@ async function buildFilesHtml(ctx) {
             isAddOrUpdate = true;
         }
 
-        let msgHtml = log.msg;
+        const safeLogMsg = escapeHtml(log.msg);
+        let msgHtml = safeLogMsg;
 
         const match = log.msg.match(/(\/)?(html|gallery|video|audio|ebook)\/(.+)$/);
 
         if (match) {
             const fullMatch = match[0];
+            const safeFullMatch = escapeHtml(fullMatch);
             const bucket = match[2];
             const rawPath = match[3].split('?')[0].trim();
             const cleanPath = `${bucket}/${rawPath}`;
@@ -534,7 +536,7 @@ async function buildFilesHtml(ctx) {
                 seenPaths.add(cleanPath);
 
                 if (isAddOrUpdate) {
-                    const displayHtml = lockIcon + fullMatch;
+                    const displayHtml = lockIcon + safeFullMatch;
                     const mediaKind = CL_MEDIA_KIND_BY_BUCKET[bucket];
                     const previewable = !!mediaKind && !(isPrivate && store.online_flag === "1");
                     const hint = previewable && mediaKind !== 'image'
@@ -542,16 +544,12 @@ async function buildFilesHtml(ctx) {
                         : '在侧栏中定位并打开';
                     const localAttr = isPrivate ? ' data-local-only="true"' : '';
                     const linkHtml = `<span class="log-link" data-path="${escapeHtml(cleanPath)}" data-bucket="${bucket}"${localAttr} style="cursor: pointer; text-decoration: underline; font-weight: bold;" title="${hint}">${displayHtml}</span>`;
-                    msgHtml = log.msg.replace(fullMatch, linkHtml);
-                } else {
-                    if (lockIcon) {
-                        msgHtml = log.msg.replace(fullMatch, lockIcon + fullMatch);
-                    }
+                    msgHtml = safeLogMsg.replace(safeFullMatch, linkHtml);
+                } else if (lockIcon) {
+                    msgHtml = safeLogMsg.replace(safeFullMatch, lockIcon + safeFullMatch);
                 }
-            } else {
-                if (lockIcon) {
-                    msgHtml = log.msg.replace(fullMatch, lockIcon + fullMatch);
-                }
+            } else if (lockIcon) {
+                msgHtml = safeLogMsg.replace(safeFullMatch, lockIcon + safeFullMatch);
             }
         }
         html += `<div style="color: ${textColor}; margin-bottom: 2px;">${dateStr} ${msgHtml}</div>`;
@@ -731,6 +729,12 @@ export function bomb(ctx) {
         buttons: `<button id="btn-plan-a" class="proto-btn btn-warn">保留所选，清理其余</button><button id="btn-plan-b" class="proto-btn btn-info">导出所选，全部清理</button><button id="btn-plan-c" class="proto-btn btn-danger">全部清理</button>`,
         onReady: (box, closePanel, lockButtons) => {
             const doWipe = async () => {
+                window._isBombing = true;
+                try {
+                    if (ctx?.iframes?.content) ctx.iframes.content.src = 'about:blank';
+                    if (ctx?.iframes?.side) ctx.iframes.side.src = 'about:blank';
+                } catch (_) { }
+                await new Promise(resolve => setTimeout(resolve, 80));
                 localStorage.clear(); sessionStorage.clear();
                 document.cookie.split(";").forEach(c => document.cookie = `${c.split("=")[0].trim()}=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/`);
                 const clearTasks = [];
@@ -782,7 +786,8 @@ export function bomb(ctx) {
                     return k;
                 });
                 await restoreData(backupData, mockSelections);
-                if (typeof takeSnapshot === 'function') takeSnapshot(true); else window.location.reload();
+                if (selections.includes('last_li_a') && typeof takeSnapshot === 'function') takeSnapshot(true);
+                else window.location.reload();
             };
 
             box.querySelector('#btn-plan-b').onclick = async () => {
@@ -1163,7 +1168,7 @@ export function initDueTasksPingPong(ctx = {}) {
             if (Array.isArray(tasks) && tasks.length > 0) {
                 listContainer.innerHTML = tasks.map(t => {
                     const dueDateStr = t.due ? t.due.split('T')[0] : '无截止时间';
-                    return `<li>${t.title} <span style="font-size:11px;opacity:0.9;">(${dueDateStr})</span></li>`;
+                    return `<li>${escapeHtml(t.title)} <span style="font-size:11px;opacity:0.9;">(${escapeHtml(dueDateStr)})</span></li>`;
                 }).join('');
 
                 box.style.display = 'block';

@@ -222,12 +222,12 @@ export const imageLogic = function () {
 
         store.image_path = nPath;
         emitEvent("image", null, "index");
-        emitEvent("image", "#gallery a", "side");
+        emitEvent("SYNC_CURRENT", nPath, "side");
     };
 
     $("#p").onclick = () => go(imagelist[(idx - 1 + imagelist.length) % imagelist.length]);
     $("#n").onclick = () => go(imagelist[(idx + 1) % imagelist.length]);
-    $("#i").innerHTML = `${idx + 1}/${imagelist.length}<input style='width:60px' id='jump' onclick='select(this)'>`;
+    $("#i").innerHTML = `${idx + 1}/${imagelist.length}<input style='width:60px' id='jump' onclick='this.select()'>`;
     $("#c").innerHTML = `[${category}]`;
 
     const sc = $(".span-container");
@@ -335,12 +335,12 @@ export const videoLogic = function () {
     const go = (nPath) => {
         store.video_path = nPath;
         emitEvent("video", null, "index");
-        emitEvent("video", "#video a", "side");
+        emitEvent("SYNC_CURRENT", nPath, "side");
     };
 
     $("#p").onclick = () => go(videolist[(idx - 1 + videolist.length) % videolist.length]);
     $("#n").onclick = () => go(videolist[(idx + 1) % videolist.length]);
-    $("#i").innerHTML = `${idx + 1}/${videolist.length}<input style='width:60px' id='jump' onclick='select(this)'>`;
+    $("#i").innerHTML = `${idx + 1}/${videolist.length}<input style='width:60px' id='jump' onclick='this.select()'>`;
     $("#c").innerHTML = `[${category}]`;
 
     const sc = $(".span-container");
@@ -387,6 +387,7 @@ export const videoLogic = function () {
     video.volume = 0.2;
 
     window.addEventListener('pagehide', () => {
+        if (window._isBombing || (window.top && window.top._isBombing)) return;
         try {
             const dur = video.duration, t = video.currentTime;
             if (!Number.isFinite(dur) || dur <= 0) return;

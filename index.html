@@ -12,16 +12,21 @@
       if (isBot) return;
 
       function getCookie(name) {
+        try {
+          if (localStorage.getItem(name) === "true") return "true";
+        } catch (_) { }
         const value = `; ${document.cookie}`;
         const parts = value.split(`; ${name}=`);
         if (parts.length === 2) return parts.pop().split(';').shift();
         return null;
       }
       function setCookie(name, value, days) {
+        try { localStorage.setItem(name, value); } catch (_) { }
         const date = new Date();
         date.setTime(date.getTime() + (days * 24 * 60 * 60 * 1000));
         const expires = "expires=" + date.toUTCString();
-        document.cookie = `${name}=${value}; ${expires}; path=/; secure; SameSite=Lax`;
+        const secureFlag = location.protocol === "https:" ? "; secure" : "";
+        document.cookie = `${name}=${value}; ${expires}; path=/${secureFlag}; SameSite=Lax`;
       }
       if (getCookie("adult_verified") !== "true") {
         const ok = confirm(
@@ -37,6 +42,7 @@
       }
     })();
   </script>
+  <link rel="icon" id="favicon" href="favicon.ico">
   <link rel="stylesheet" type="text/css" id="css">
 </head>
 

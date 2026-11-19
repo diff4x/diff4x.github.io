@@ -1,6 +1,6 @@
-importScripts('/src/js/core-list.js?v=1795004362100');
+importScripts('/src/js/core-list.js?v=1795063518616');
 
-self.SW_VERSION = '1795004362100';
+self.SW_VERSION = '1795063518616';
 self.EMERGENCY = 'repair_command_id=2';
 
 const CACHE_NAME_CORE = 'core-cache-' + BUILD_VERSION;
@@ -127,6 +127,16 @@ self.addEventListener('install', event => {
                         if (CRITICAL_URLS.has(url)) {
                             throw err;
                         }
+                        if (lastCacheName) {
+                            try {
+                                const lastCache = await caches.open(lastCacheName);
+                                const fallbackRes = await lastCache.match(url);
+                                if (fallbackRes) {
+                                    await newCache.put(url, fallbackRes);
+                                    cachedUrls.add(url);
+                                }
+                            } catch (_) { }
+                        }
                     }
                 })();
 
@@ -165,14 +175,18 @@ self.addEventListener('install', event => {
                     deferredJobs.push(async () => {
                         try {
                             const db = await openMainDB();
-                            if (db.objectStoreNames.contains('search_cache')) {
-                                const tx = db.transaction('search_cache', 'readwrite');
+                            const stores = [];
+                            if (db.objectStoreNames.contains('search_cache')) stores.push('search_cache');
+                            if (db.objectStoreNames.contains('sys_state')) stores.push('sys_state');
+                            if (stores.length > 0) {
+                                const tx = db.transaction(stores, 'readwrite');
                                 const done = new Promise(resolve => {
                                     tx.oncomplete = tx.onerror = tx.onabort = () => resolve();
                                 });
-                                tx.objectStore('search_cache').clear();
+                                if (stores.includes('search_cache')) tx.objectStore('search_cache').clear();
+                                if (stores.includes('sys_state')) tx.objectStore('sys_state').put([], 'search_cache_lru');
                                 await done;
-                                console.warn(`🧹 [SW] 检测到 ${url} 变更，已清空旧的 search_cache`);
+                                console.warn(`🧹 [SW] 检测到 ${url} 变更，已清空旧的 search_cache 与 LRU 索引`);
                             }
                         } catch (err) {
                             console.warn("⚠️ [SW] 清理 search_cache 失败:", err);
@@ -210,7 +224,16 @@ self.addEventListener('install', event => {
                                 }
                             }
 
-                            history.push({ text: compressedData, ts: Date.now(), compressed: true });
+                            let snapTs = Date.now();
+                            const stampMatch = oldText.match(/id=['"]anchor['"][^>]*>\s*(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})/);
+                            if (stampMatch) {
+                                const parsedTs = new Date(
+                                    Number(stampMatch[1]), Number(stampMatch[2]) - 1, Number(stampMatch[3]),
+                                    Number(stampMatch[4]), Number(stampMatch[5]), Number(stampMatch[6])
+                                ).getTime();
+                                if (Number.isFinite(parsedTs) && parsedTs > 0) snapTs = parsedTs;
+                            }
+                            history.push({ text: compressedData, ts: snapTs, compressed: true });
                             if (history.length > MAX_HTML_SNAPSHOT_HISTORY) {
                                 history = history.slice(history.length - MAX_HTML_SNAPSHOT_HISTORY);
                             }
@@ -261,7 +284,7 @@ self.addEventListener('install', event => {
                 const putPromises = [];
 
                 for (const url of bundleUpdates) {
-                    if (bundleData[url]) {
+                    if (bundleData && Object.prototype.hasOwnProperty.call(bundleData, url)) {
                         let contentType = 'text/plain; charset=utf-8';
                         if (url.endsWith('.html') || url === '/') contentType = 'text/html; charset=utf-8';
                         else if (url.endsWith('.css')) contentType = 'text/css; charset=utf-8';
@@ -272,6 +295,8 @@ self.addEventListener('install', event => {
                             headers: { 'Content-Type': contentType }
                         });
                         putPromises.push(newCache.put(url, fakeRes).then(() => cachedUrls.add(url)));
+                    } else {
+                        standaloneUpdates.push(url);
                     }
                 }
                 await Promise.all(putPromises);
@@ -319,6 +344,13 @@ self.addEventListener('install', event => {
         for (const url of cachedUrls) {
             if (FILE_MANIFEST[url]) committedManifest[url] = FILE_MANIFEST[url];
         }
+        if (typeof FILE_MANIFEST === 'object' && FILE_MANIFEST) {
+            for (const k of Object.keys(FILE_MANIFEST)) {
+                if (k.startsWith('/src/js/data/fat_data_') && k.endsWith('.json')) {
+                    committedManifest[k] = FILE_MANIFEST[k];
+                }
+            }
+        }
         const manifestSaveUrl = new URL('/sw-manifest.json', self.location.origin).href;
         await newCache.put(manifestSaveUrl, new Response(JSON.stringify(committedManifest), {
             headers: { 'Content-Type': 'application/json' }
@@ -365,7 +397,7 @@ self.addEventListener('fetch', event => {
                             .filter(k => k.startsWith('/src/js/data/fat_data_') && k.endsWith('.json'))
                             .map(k => k.slice('/src/js/data/'.length))
                             .sort();
-                        const fallbackJS = `window.BUILD_VERSION = 'offline'; window.FILE_MANIFEST = ${JSON.stringify(manifestObj)}; window.dataIndex = ${JSON.stringify(dataIndex)};`;
+                        const fallbackJS = `window.BUILD_VERSION = 'offline'; window._isOfflineDataFallback = true; window.FILE_MANIFEST = ${JSON.stringify(manifestObj)}; window.dataIndex = ${JSON.stringify(dataIndex)};`;
                         return new Response(fallbackJS, {
                             status: 200,
                             headers: { 'Content-Type': 'application/javascript; charset=utf-8' }
@@ -375,7 +407,7 @@ self.addEventListener('fetch', event => {
                     console.error("❌ [SW] Offline mock failed", err);
                 }
 
-                return new Response('window.FILE_MANIFEST = {}; window.dataIndex = [];', {
+                return new Response('window._isOfflineDataFallback = true; window.FILE_MANIFEST = {}; window.dataIndex = [];', {
                     status: 200,
                     headers: { 'Content-Type': 'application/javascript; charset=utf-8' }
                 });
@@ -434,9 +466,17 @@ self.addEventListener('fetch', event => {
         );
     } else {
         event.respondWith(
-            caches.match(event.request, { ignoreSearch: true }).then(cached => {
+            (async () => {
+                const reqVer = url.searchParams.get('v');
+                const manifestEntry = (typeof FILE_MANIFEST === 'object' && FILE_MANIFEST) ? FILE_MANIFEST[url.pathname] : null;
+                if (reqVer && manifestEntry && String(manifestEntry.hash) !== String(reqVer)) {
+                    try {
+                        return await fetchWithLock(event.request);
+                    } catch (_) { }
+                }
+                const cached = await caches.match(event.request, { ignoreSearch: true });
                 return cached || fetchWithLock(event.request);
-            })
+            })()
         );
     }
 });

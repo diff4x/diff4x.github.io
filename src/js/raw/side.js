@@ -129,6 +129,15 @@ BUS.addEventListener("message", e => {
             break;
         }
 
+        case "SYNC_CURRENT": {
+            if (payload) {
+                const el = document.querySelector(`a[data-path="${CSS.escape(payload)}"]`);
+                if (el) setCurrent(el);
+                recordHistory(payload);
+            }
+            break;
+        }
+
         case "show_current":
             show_current();
             break;
@@ -338,6 +347,10 @@ async function mark() {
 
                 req.onsuccess = e => {
                     this.db = e.target.result;
+                    this.db.onversionchange = () => {
+                        this.db.close();
+                        this.db = null;
+                    };
 
                     const legacy = store.ss_marks_lifepod;
                     const mode = legacy ? "readwrite" : "readonly";

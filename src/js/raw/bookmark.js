@@ -40,8 +40,11 @@ window.addEventListener('DOMContentLoaded', () => {
     store.bookmark_links = links;
 
     if (store.online_flag === "0") {
+        let lockTicks = 0;
         const checkLock = setInterval(() => {
-            if (store.bookmarkhtml_modifing !== "1") {
+            lockTicks++;
+            if (store.bookmarkhtml_modifing !== "1" || lockTicks > 50) {
+                if (store.bookmarkhtml_modifing === "1") store.bookmarkhtml_modifing = "0";
                 clearInterval(checkLock);
                 setupDragAndDrop();
             }
@@ -212,6 +215,10 @@ function collectFaviconTargets() {
 }
 
 function loadFaviconsWhenIdle() {
+    if (!navigator.onLine) {
+        window.addEventListener('online', () => loadFaviconsWhenIdle(), { once: true });
+        return;
+    }
     const runIdle = window.requestIdleCallback
         ? (cb) => window.requestIdleCallback(cb, { timeout: 2000 })
         : (cb) => setTimeout(() => cb({ timeRemaining: () => 0, didTimeout: true }), 300);
@@ -426,15 +433,28 @@ function fillWallpaperListItems(config, tooltip) {
         item.className = 'wp-item';
 
         const isCurrent = idx === config.currentIndex;
-        item.innerHTML = `
-            <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:180px; ${isCurrent ? 'color:#60a5fa; font-weight:bold;' : ''}" title="${url}">
-                ${isCurrent ? '📌 ' : ''}${idx + 1}. ${url.split('/').pop() || url}
-            </span>
-            <span>
-                <button class="wp-set-btn" data-idx="${idx}" style="font-size:10px; cursor:pointer;" title="设为当前">设为当前</button>
-                <button class="wp-del-btn" data-idx="${idx}" style="font-size:10px; cursor:pointer; color:#ef4444;" title="删除">🗑️</button>
-            </span>
-        `;
+        const titleSpan = document.createElement('span');
+        titleSpan.style.cssText = `overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:180px; ${isCurrent ? 'color:#60a5fa; font-weight:bold;' : ''}`;
+        titleSpan.title = url;
+        titleSpan.textContent = `${isCurrent ? '📌 ' : ''}${idx + 1}. ${url.split('/').pop() || url}`;
+
+        const actionSpan = document.createElement('span');
+        const setBtn = document.createElement('button');
+        setBtn.className = 'wp-set-btn';
+        setBtn.dataset.idx = String(idx);
+        setBtn.style.cssText = 'font-size:10px; cursor:pointer;';
+        setBtn.title = '设为当前';
+        setBtn.textContent = '设为当前';
+
+        const delBtn = document.createElement('button');
+        delBtn.className = 'wp-del-btn';
+        delBtn.dataset.idx = String(idx);
+        delBtn.style.cssText = 'font-size:10px; cursor:pointer; color:#ef4444; margin-left:4px;';
+        delBtn.title = '删除';
+        delBtn.textContent = '🗑️';
+
+        actionSpan.append(setBtn, delBtn);
+        item.append(titleSpan, actionSpan);
 
         item.onmouseenter = (e) => {
             tooltip.style.backgroundImage = `url("../../${url}")`;
