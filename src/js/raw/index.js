@@ -1881,6 +1881,10 @@ function search_box() {
             alert("🔒 访问受限：仅限本地查阅。");
             return;
         }
+        const activeKw = window._currentRenderedKeyword || (elSearchInput ? elSearchInput.value.trim() : "");
+        if (activeKw && !isActionCommand(activeKw)) {
+            store.keyword = activeKw;
+        }
         var type = option.dataset.type;
         var title = option.dataset.title;
         var path = option.dataset.path;
@@ -2671,7 +2675,7 @@ function clearSearchOverlays() {
     snippetCache.clear();
 }
 
-const SEARCH_ALGO_VER = 8;
+const SEARCH_ALGO_VER = 9;
 
 function hashText(str) {
     let h1 = 0x811c9dc5, h2 = 0x1b873593;
@@ -2828,6 +2832,7 @@ function applyPageOverlay(results, keyword) {
 
     const adsMode = isAdsQuery(keyword);
     const out = results.slice();
+    const removed = new Set();
     const added = [];
     let latest = null;
     for (const e of entries.values()) {
@@ -2835,7 +2840,11 @@ function applyPageOverlay(results, keyword) {
         const i = indexByPath.get(e.path);
         if (adsMode) {
             if (i !== undefined) {
-                out[i] = Object.assign({}, out[i], { viaComment: !!e.viaComment });
+                if (e.matched) {
+                    out[i] = Object.assign({}, out[i], { viaComment: !!e.viaComment });
+                } else {
+                    removed.add(i);
+                }
             } else if (e.matched) {
                 added.push({
                     title: e.title,
@@ -2856,9 +2865,14 @@ function applyPageOverlay(results, keyword) {
         }
     }
     const li = latest ? indexByPath.get(latest.path) : undefined;
-    if (li !== undefined && li !== 0) out.unshift(out.splice(li, 1)[0]);
-
-    return added.length ? added.reverse().concat(out) : out;
+    if (li !== undefined && !removed.has(li) && li !== 0) {
+        const latestItem = out[li];
+        const filtered = out.filter((_, idx) => idx !== li && !removed.has(idx));
+        filtered.unshift(latestItem);
+        return added.length ? added.reverse().concat(filtered) : filtered;
+    }
+    const filtered = removed.size > 0 ? out.filter((_, idx) => !removed.has(idx)) : out;
+    return added.length ? added.reverse().concat(filtered) : filtered;
 }
 
 function buildAdsPositiveTerms(kw) {
@@ -4769,6 +4783,8 @@ async function applyCommentSnapshot(snap) {
     commentModel.ready = true;
     commentModel.ver++;
 
+    termSpecsCache.clear();
+    snippetCache.clear();
     window.commentCounts = counts;
     emitEvent('COMMENT_COUNTS', counts, 'side');
     pushCommentIndexToWorker();

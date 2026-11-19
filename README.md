@@ -24,6 +24,7 @@
  ┣ 📂 jar                              # 数据清洗
  ┣ 📂 rs                               # 编译
  ┣ 📂 secrets                          # 凭据,任务,流水
+ ┣ 📂 synonyms                         # 近义词库
  ┣ 📂 woff2_split                      # 字体切片
  ┣ 📜 CLI.bat                          # 构建入口
  ┗ 📜 config.properties                # 配置

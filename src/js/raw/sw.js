@@ -1,6 +1,6 @@
-importScripts('/src/js/core-list.js?v=1795091173893');
+importScripts('/src/js/core-list.js?v=1795101767261');
 
-self.SW_VERSION = '1795091173893';
+self.SW_VERSION = '1795101767261';
 self.EMERGENCY = 'repair_command_id=2';
 
 const CACHE_NAME_CORE = 'core-cache-' + BUILD_VERSION;
@@ -165,28 +165,19 @@ self.addEventListener('install', event => {
         let bundleUpdates = [];
         let standaloneUpdates = [];
         const deferredJobs = [];
+        let needSearchCacheClear = false;
 
         for (const url of allFilesToCache) {
             const meta = FILE_MANIFEST[url];
             const oldMeta = oldManifest[url];
 
-            if (url.endsWith('synonyms.js')) {
+            if (
+                url.endsWith('synonyms.js') ||
+                url.endsWith('.wasm') ||
+                url.endsWith('compute_intensive_task_processor.min.js')
+            ) {
                 if (!oldMeta || oldMeta.hash !== meta.hash) {
-                    deferredJobs.push(async () => {
-                        try {
-                            const db = await openMainDB();
-                            if (db.objectStoreNames.contains('sys_state')) {
-                                const tx = db.transaction('sys_state', 'readwrite');
-                                const done = new Promise(resolve => {
-                                    tx.oncomplete = tx.onerror = tx.onabort = () => resolve();
-                                });
-                                tx.objectStore('sys_state').put(BUILD_VERSION, 'pending_search_cache_clear');
-                                await done;
-                            }
-                        } catch (err) {
-                            console.warn("⚠️ [SW] 标记 search_cache 待清理失败:", err);
-                        }
-                    });
+                    needSearchCacheClear = true;
                 }
             }
 
@@ -263,6 +254,24 @@ self.addEventListener('install', event => {
             } else {
                 standaloneUpdates.push(url);
             }
+        }
+
+        if (needSearchCacheClear) {
+            deferredJobs.push(async () => {
+                try {
+                    const db = await openMainDB();
+                    if (db.objectStoreNames.contains('sys_state')) {
+                        const tx = db.transaction('sys_state', 'readwrite');
+                        const done = new Promise(resolve => {
+                            tx.oncomplete = tx.onerror = tx.onabort = () => resolve();
+                        });
+                        tx.objectStore('sys_state').put(BUILD_VERSION, 'pending_search_cache_clear');
+                        await done;
+                    }
+                } catch (err) {
+                    console.warn("⚠️ [SW] 标记 search_cache 待清理失败:", err);
+                }
+            });
         }
 
         let needBundle = false;
@@ -449,6 +458,7 @@ self.addEventListener('fetch', event => {
         url.pathname.endsWith('/src/js/worker.js') ||
         url.pathname.endsWith('/src/js/synonyms.js') ||
         url.pathname.endsWith('compute_intensive_task_processor.min.js') ||
+        url.pathname.endsWith('compute_intensive_task_processor_bg.wasm') ||
         url.pathname.endsWith('compute_intensive_task_processor.wasm')
     ) {
         event.respondWith(

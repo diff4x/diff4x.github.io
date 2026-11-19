@@ -43,6 +43,9 @@ public class Gen {
                     case "stamp":
                         Stamper.run(toolArgs);
                         break;
+                    case "synonyms":
+                        SynonymBuilder.runStandalone();
+                        break;
                     default:
                         logger.warn("Unknown tool entry: {}", toolName);
                         break;

@@ -107,26 +107,7 @@ function buildContentTermSpecs(keyword, synonymsEnabled) {
     const raw = String(keyword || '');
     const compact = raw.replace(/\s+/g, '');
     if (!compact) return [];
-    const expandQueryFn = (window.top && window.top.expandQuery) || (() => ({ variants: [] }));
-    const expanded = synonymsEnabled ? expandQueryFn(raw) : { variants: [] };
-    if (wasmSupportsWeighted) {
-        if (Array.isArray(expanded.items) && expanded.items.length > 0) {
-            return [{ text: compact, weight: 100, tier: 0 }, ...expanded.items];
-        }
-        if (Array.isArray(expanded.variants) && expanded.variants.length > 0) {
-            return [
-                { text: compact, weight: 100, tier: 0 },
-                ...expanded.variants.map(v => ({
-                    text: v,
-                    weight: 70,
-                    maxNoise: v.length <= 3 ? 0 : 1,
-                    tier: 1
-                }))
-            ];
-        }
-        return [{ text: compact, weight: 100, tier: 0 }];
-    }
-    return [compact, ...(expanded.variants || [])];
+    return wasmSupportsWeighted ? [{ text: compact, weight: 100, tier: 0 }] : [compact];
 }
 
 function ensureSearchHighlightStyle() {
@@ -262,6 +243,7 @@ BUS.addEventListener('message', (e) => {
             break;
 
         case "DESTROY_HIGHLIGHT":
+            _searchSeq++;
             if (CSS.highlights) {
                 CSS.highlights.clear();
             }
@@ -628,13 +610,17 @@ function analyzePageMatches(globalText, rawKeyword) {
     };
 }
 
+let _searchSeq = 0;
+
 async function search(preserveScroll = false) {
     if (store.jump_from_search_ex !== "1") return;
     store.jump_from_search_ex = "0";
 
     const rawKeyword = (store.keyword || "").trim();
     if (!rawKeyword || !wasmEngineReady) return;
+    const mySeq = ++_searchSeq;
     await ensureContentTermSpecs(rawKeyword);
+    if (mySeq !== _searchSeq) return;
 
     const contentRoot =
         document.querySelector('pre:not(#diff-pre)') ||
@@ -690,7 +676,13 @@ async function search(preserveScroll = false) {
     const totalReportCount = totalMatches + (titleHits || 0);
 
     if (matches.length === 0) {
+        if (CSS.highlights) CSS.highlights.clear();
+        resetSearchHighlights();
+        if (window._searchMatchRanges) window._searchMatchRanges.clear();
+        clearActiveSearchBorders();
         hideSearchMinimap();
+        const nav = $("#s_nav");
+        if (nav) nav.innerHTML = "";
         emitEvent("LOCAL_SEARCH_RESULT", { keyword: rawKeyword, count: totalReportCount, adsBodyHits, title: document.title }, "index");
         return;
     }

@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
+import org.jsoup.nodes.Element;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -44,8 +45,9 @@ public class Generator {
         ObjectNode coreBundle = Utils.JSON_MAPPER.createObjectNode();
         Map<Integer, String> fatDataMap = new TreeMap<>();
         Map<Integer, String> shadowDataMap = new TreeMap<>();
+        Map<Integer, String> publicDocsForDf = new TreeMap<>();
 
-        processHtmlFilesAndImages(coreBundle, records, currentTitles, maxId, fatDataMap, shadowDataMap);
+        processHtmlFilesAndImages(coreBundle, records, currentTitles, maxId, fatDataMap, shadowDataMap, publicDocsForDf);
 
         orphanIds.removeAll();
         for (JsonNode r : records) if (!currentTitles.contains(r.get("title").asText())) orphanIds.add(r.get("id").asInt());
@@ -55,6 +57,9 @@ public class Generator {
 
         List<String> generatedDataFiles = generateLiteAndFatData(fatDataMap, String.valueOf(Config.dataDir), Config.sliceSize);
         if (!shadowDataMap.isEmpty()) { generateShadowData(shadowDataMap, String.valueOf(Config.dataDir), Config.sliceSize); }
+
+        // 在生成清单前按公开语料 DF 与现代词配置按需更新 synonyms.js，确保新哈希同轮写入 core-list.js
+        SynonymBuilder.buildIfNeeded(publicDocsForDf, liteDataTree);
 
         String newBuildVersion = generateManifest(Config.htmlDir, Config.dataDir, projectRootPath(), coreBundle, generatedDataFiles);
         if (newBuildVersion != null) {
@@ -118,7 +123,7 @@ public class Generator {
         } catch (IOException e) { logger.warn("无法读取 .gitignore", e); }
     }
 
-    private static void processHtmlFilesAndImages(ObjectNode coreBundle, ArrayNode records, Set<String> currentTitles, int[] maxId, Map<Integer, String> fatDataMap, Map<Integer, String> shadowDataMap) {
+    private static void processHtmlFilesAndImages(ObjectNode coreBundle, ArrayNode records, Set<String> currentTitles, int[] maxId, Map<Integer, String> fatDataMap, Map<Integer, String> shadowDataMap, Map<Integer, String> publicDocsForDf) {
         Set<String> imageSet = buildGalleryImageSet();
         Set<String> usedImagesSet = new HashSet<>();
         Pattern fullImgPattern = Pattern.compile("^\\s*(\\.\\./gallery/[^\\s\"'<>]+\\.(?:jpg|jpeg|png|gif|webp))\\s*$", Pattern.CASE_INSENSITIVE);
@@ -194,6 +199,13 @@ public class Generator {
 
                         if (!isGitIgnored && !isExcludedData) {
                             fatDataMap.put(currentRecordId, cleanText);
+                            String dfText = cleanText;
+                            Element anchorInSearch = searchDoc.getElementById("anchor");
+                            if (anchorInSearch != null) {
+                                anchorInSearch.remove();
+                                dfText = searchDoc.body().text().replaceAll("\r\n|\r|\n", " ").replaceAll(" +", " ");
+                            }
+                            publicDocsForDf.put(currentRecordId, title + " " + dfText);
                         } else if (isGitIgnored) {
                             fatDataMap.put(currentRecordId, "localOnly");
                             shadowDataMap.put(currentRecordId, cleanText);

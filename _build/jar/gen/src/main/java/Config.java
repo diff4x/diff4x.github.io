@@ -53,8 +53,12 @@ public class Config {
     public static Path dataDir;
     public static Path indexHtml;
     public static Path jsInputDir;
+    public static Path jsOutputDir;
     public static File cmtMapper;
-    public static Path tempDir;
+    public static Path synonymsDir;
+    public static Path cilinFile;
+    public static Path synonymsCustomFile;
+    public static String esbuildPath;
 
     public static List<Pattern> excludePatterns;
     public static List<String> galleryDirExcludeDirs;
@@ -92,8 +96,13 @@ public class Config {
         dataDir = buildRoot.resolve(props.getProperty("dataDir"));
         indexHtml = buildRoot.resolve(props.getProperty("indexHtml"));
         jsInputDir = buildRoot.resolve(props.getProperty("js_input_dir"));
+        jsOutputDir = buildRoot.resolve(props.getProperty("js_output_dir", "../src/js"));
         cmtMapper = buildRoot.resolve(props.getProperty("cmt_mapper")).toFile();
-        tempDir = buildRoot.resolve(props.getProperty("tempDir", "temp"));
+        synonymsDir = buildRoot.resolve(props.getProperty("synonymsDir", "synonyms"));
+        cilinFile = buildRoot.resolve(props.getProperty("cilin_file", "cilin.txt"));
+        synonymsCustomFile = buildRoot.resolve(props.getProperty("synonyms_custom_file", "synonyms_custom.json"));
+        String eb = props.getProperty("esbuild_path", "").trim();
+        esbuildPath = eb.isEmpty() ? "" : buildRoot.resolve(eb).normalize().toAbsolutePath().toString();
 
         urlToCheck = props.getProperty("URL_TO_CHECK", "http://diff4x.github.io/ping.txt");
         cwebpPath = buildRoot.resolve(props.getProperty("cwebpPath")).normalize().toAbsolutePath().toString();

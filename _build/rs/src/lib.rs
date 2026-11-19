@@ -9,19 +9,23 @@ use serde_json::Value;
 use similar::{Algorithm, DiffOp, capture_diff_slices};
 use js_sys::{Uint32Array, Object};
 
-const BLOOM_WORDS: usize = 32768; // 256 KB = 2,097,152 bits
-const BLOOM_MASK: u64 = (BLOOM_WORDS as u64 * 64) - 1;
+const CORPUS_BLOOM_WORDS: usize = 131072; // 1 MB = 8,388,608 bits
+const COMMENT_BLOOM_WORDS: usize = 32768; // 256 KB = 2,097,152 bits
 const SYN_HL_TIER_SHIFT: usize = 8;
 
 struct CorpusBloom {
     bits: Vec<u64>,
+    mask: u64,
+    words: usize,
     ready: bool,
 }
 
 impl CorpusBloom {
-    fn new() -> Self {
+    fn new(words: usize) -> Self {
         Self {
             bits: Vec::new(),
+            mask: (words as u64 * 64) - 1,
+            words,
             ready: false,
         }
     }
@@ -40,7 +44,7 @@ impl CorpusBloom {
     fn insert_pair(&mut self, a: char, b: char) {
         let (h1, h2) = Self::hashes(a, b);
         for k in 0..4u64 {
-            let idx = (h1.wrapping_add(k.wrapping_mul(h2)) & BLOOM_MASK) as usize;
+            let idx = (h1.wrapping_add(k.wrapping_mul(h2)) & self.mask) as usize;
             self.bits[idx >> 6] |= 1u64 << (idx & 63);
         }
     }
@@ -49,7 +53,7 @@ impl CorpusBloom {
     fn has_pair(&self, a: char, b: char) -> bool {
         let (h1, h2) = Self::hashes(a, b);
         for k in 0..4u64 {
-            let idx = (h1.wrapping_add(k.wrapping_mul(h2)) & BLOOM_MASK) as usize;
+            let idx = (h1.wrapping_add(k.wrapping_mul(h2)) & self.mask) as usize;
             if (self.bits[idx >> 6] & (1u64 << (idx & 63))) == 0 {
                 return false;
             }
@@ -58,11 +62,10 @@ impl CorpusBloom {
     }
 
     // 与 try_match_at(eff_noise = 0) 严格对齐：允许中间隔至多 1 个非硬断行空白
-    fn feed_text(&mut self, text: &str) {
+    fn feed_chars(&mut self, chars: &[char]) {
         let mut prev: Option<char> = None;
         let mut ws_run = 0usize;
-        for raw in text.chars() {
-            let ch = fold_char(raw);
+        for &ch in chars {
             if is_hard_break(ch) {
                 prev = None;
                 ws_run = 0;
@@ -81,31 +84,26 @@ impl CorpusBloom {
         }
     }
 
-    fn rebuild(&mut self, pool: &[String]) {
+    fn rebuild_from_docs(&mut self, docs: &[IndexedDoc]) {
         self.bits.clear();
-        self.bits.resize(BLOOM_WORDS, 0);
-        let mut i = 0usize;
-        while i + 3 < pool.len() {
-            self.feed_text(&pool[i]);
-            let raw = &pool[i + 1];
-            let content = raw.strip_prefix("localOnly").unwrap_or(raw.as_str());
-            self.feed_text(content);
-            let res_type = pool[i + 3].as_str();
-            if res_type != "html" && res_type != "image" {
-                self.feed_text(strip_type_root(&pool[i + 2]));
+        self.bits.resize(self.words, 0);
+        for d in docs {
+            self.feed_chars(&d.title_chars);
+            self.feed_chars(&d.content_chars);
+            if !d.path_chars.is_empty() {
+                self.feed_chars(&d.path_chars);
             }
-            i += 4;
         }
         self.ready = true;
     }
 
-    fn rebuild_comments(&mut self, docs: &[CommentDoc]) {
+    fn rebuild_from_comments(&mut self, docs: &[IndexedCommentDoc]) {
         self.bits.clear();
-        self.bits.resize(BLOOM_WORDS, 0);
+        self.bits.resize(self.words, 0);
         for d in docs {
-            for t in &d.texts {
-                if !t.is_empty() {
-                    self.feed_text(t);
+            for chars in &d.texts_chars {
+                if !chars.is_empty() {
+                    self.feed_chars(chars);
                 }
             }
         }
@@ -122,6 +120,181 @@ impl CorpusBloom {
             }
         }
         true
+    }
+}
+
+struct DocFilter {
+    uni_bits: Vec<u64>,
+    uni_mask: u64,
+    bi_bits: Vec<u64>,
+    bi_mask: u64,
+}
+
+impl DocFilter {
+    fn empty() -> Self {
+        Self {
+            uni_bits: Vec::new(),
+            uni_mask: 0,
+            bi_bits: Vec::new(),
+            bi_mask: 0,
+        }
+    }
+
+    #[inline]
+    fn hash_uni(c: char) -> (u64, u64) {
+        let mut x = (c as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15);
+        x = (x ^ (x >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        let h1 = x ^ (x >> 27);
+        let h2 = h1.wrapping_mul(0x94d0_49bb_1331_11eb) | 1;
+        (h1, h2)
+    }
+
+    fn from_folded(chars: &[char]) -> Self {
+        let n = chars.len();
+        if n == 0 {
+            return Self::empty();
+        }
+        let (uni_words, bi_words) = if n <= 64 {
+            (4usize, 4usize)
+        } else if n <= 512 {
+            (16, 16)
+        } else if n <= 4096 {
+            (32, 64)
+        } else {
+            (64, 256)
+        };
+        let mut f = Self {
+            uni_bits: vec![0u64; uni_words],
+            uni_mask: (uni_words as u64 * 64) - 1,
+            bi_bits: vec![0u64; bi_words],
+            bi_mask: (bi_words as u64 * 64) - 1,
+        };
+        let mut prev: Option<char> = None;
+        let mut ws_run = 0usize;
+        for &ch in chars {
+            if is_hard_break(ch) {
+                prev = None;
+                ws_run = 0;
+            } else if ch.is_whitespace() {
+                ws_run += 1;
+                if ws_run > 1 {
+                    prev = None;
+                }
+            } else {
+                let (u1, u2) = Self::hash_uni(ch);
+                for k in 0..2u64 {
+                    let idx = (u1.wrapping_add(k.wrapping_mul(u2)) & f.uni_mask) as usize;
+                    f.uni_bits[idx >> 6] |= 1u64 << (idx & 63);
+                }
+                if let Some(p) = prev {
+                    let (b1, b2) = CorpusBloom::hashes(p, ch);
+                    for k in 0..2u64 {
+                        let idx = (b1.wrapping_add(k.wrapping_mul(b2)) & f.bi_mask) as usize;
+                        f.bi_bits[idx >> 6] |= 1u64 << (idx & 63);
+                    }
+                }
+                prev = Some(ch);
+                ws_run = 0;
+            }
+        }
+        f
+    }
+
+    #[inline]
+    fn might_match(&self, kw_chars: &[char], eff_noise: usize, has_hard_break: bool) -> bool {
+        if self.uni_bits.is_empty() || kw_chars.is_empty() {
+            return false;
+        }
+        for &ch in kw_chars {
+            if is_hard_break(ch) {
+                continue;
+            }
+            let (u1, u2) = Self::hash_uni(ch);
+            for k in 0..2u64 {
+                let idx = (u1.wrapping_add(k.wrapping_mul(u2)) & self.uni_mask) as usize;
+                if (self.uni_bits[idx >> 6] & (1u64 << (idx & 63))) == 0 {
+                    return false;
+                }
+            }
+        }
+        if eff_noise == 0 && kw_chars.len() >= 2 && !has_hard_break {
+            for w in kw_chars.windows(2) {
+                let (b1, b2) = CorpusBloom::hashes(w[0], w[1]);
+                for k in 0..2u64 {
+                    let idx = (b1.wrapping_add(k.wrapping_mul(b2)) & self.bi_mask) as usize;
+                    if (self.bi_bits[idx >> 6] & (1u64 << (idx & 63))) == 0 {
+                        return false;
+                    }
+                }
+            }
+        }
+        true
+    }
+}
+
+struct IndexedDoc {
+    title_chars: Vec<char>,
+    content_chars: Vec<char>,
+    path_chars: Vec<char>,
+    title_filter: DocFilter,
+    content_filter: DocFilter,
+    path_filter: DocFilter,
+    is_local_only: bool,
+}
+
+struct IndexedCommentDoc {
+    texts_chars: Vec<Vec<char>>,
+    filters: Vec<DocFilter>,
+}
+
+struct PatternEntry {
+    kw_idx: usize,
+    eff_noise: usize,
+    has_hard_break: bool,
+}
+
+struct ScanPlan {
+    entries: Vec<PatternEntry>,
+    first_mask: [u64; 4],
+    by_first: HashMap<char, Vec<usize>>,
+}
+
+impl ScanPlan {
+    fn build(kws: &[CompiledKw], active: &[usize], noise_level: usize) -> Self {
+        let mut entries = Vec::with_capacity(active.len());
+        let mut first_mask = [0u64; 4];
+        let mut by_first: HashMap<char, Vec<usize>> = HashMap::new();
+        for &kw_idx in active {
+            let kw = &kws[kw_idx];
+            if kw.chars.is_empty() {
+                continue;
+            }
+            let eff_noise = effective_noise(kw.chars.len(), noise_level.min(kw.max_noise));
+            let has_hard_break = kw.chars.iter().any(|&c| is_hard_break(c));
+            let e_idx = entries.len();
+            entries.push(PatternEntry {
+                kw_idx,
+                eff_noise,
+                has_hard_break,
+            });
+            let first = kw.chars[0];
+            let (h, _) = DocFilter::hash_uni(first);
+            let bit = (h & 255) as usize;
+            first_mask[bit >> 6] |= 1u64 << (bit & 63);
+            by_first.entry(first).or_default().push(e_idx);
+        }
+        Self {
+            entries,
+            first_mask,
+            by_first,
+        }
+    }
+
+    #[inline]
+    fn first_might_hit(&self, ch: char) -> bool {
+        let (h, _) = DocFilter::hash_uni(ch);
+        let bit = (h & 255) as usize;
+        (self.first_mask[bit >> 6] & (1u64 << (bit & 63))) != 0
     }
 }
 
@@ -155,22 +328,24 @@ pub fn bloom_might_match(text: &str) -> bool {
 
 struct PreparedSearch {
     kws: Vec<CompiledKw>,
-    active: Vec<usize>,
-    noise: usize,
+    plan: ScanPlan,
 }
 
 struct PreparedAds {
     plan: AdsPlan,
-    active_body: Vec<Vec<usize>>,
+    body_plans: Vec<ScanPlan>,
+    cmt_plans: Vec<ScanPlan>,
 }
 
 thread_local! {
     static GLOBAL_DATA: RefCell<Vec<String>> = RefCell::new(Vec::new());
+    static INDEXED_DOCS: RefCell<Vec<IndexedDoc>> = RefCell::new(Vec::new());
     static PATH_INDEX: RefCell<HashMap<String, usize>> = RefCell::new(HashMap::new());
-    static CORPUS_BLOOM: RefCell<CorpusBloom> = RefCell::new(CorpusBloom::new());
+    static CORPUS_BLOOM: RefCell<CorpusBloom> = RefCell::new(CorpusBloom::new(CORPUS_BLOOM_WORDS));
     static COMMENTS: RefCell<Vec<CommentDoc>> = RefCell::new(Vec::new());
+    static INDEXED_COMMENTS: RefCell<Vec<IndexedCommentDoc>> = RefCell::new(Vec::new());
     static COMMENT_INDEX: RefCell<HashMap<String, usize>> = RefCell::new(HashMap::new());
-    static COMMENT_BLOOM: RefCell<CorpusBloom> = RefCell::new(CorpusBloom::new());
+    static COMMENT_BLOOM: RefCell<CorpusBloom> = RefCell::new(CorpusBloom::new(COMMENT_BLOOM_WORDS));
     static PREPARED_SEARCH: RefCell<Option<PreparedSearch>> = RefCell::new(None);
     static PREPARED_ADS: RefCell<Option<PreparedAds>> = RefCell::new(None);
     static PREPARED_COMMENT: RefCell<Option<PreparedSearch>> = RefCell::new(None);
@@ -268,18 +443,58 @@ pub fn format_markdown(text: &str) -> String {
     out_lines.join("\n")
 }
 
+#[inline]
+fn fold_str_to_chars(s: &str) -> Vec<char> {
+    s.chars().map(fold_char).collect()
+}
+
 fn install_data(local_vec: Vec<String>) {
-    let mut index: HashMap<String, usize> = HashMap::with_capacity(local_vec.len() / 4);
+    let doc_cap = local_vec.len() / 4;
+    let mut index: HashMap<String, usize> = HashMap::with_capacity(doc_cap);
+    let mut indexed_docs: Vec<IndexedDoc> = Vec::with_capacity(doc_cap);
     let mut i = 0usize;
     while i + 3 < local_vec.len() {
-        index.insert(local_vec[i + 2].clone(), i);
+        let title = &local_vec[i];
+        let raw_content = &local_vec[i + 1];
+        let path = &local_vec[i + 2];
+        let res_type = local_vec[i + 3].as_str();
+        index.insert(path.clone(), i);
+
+        let (is_local_only, searchable_content) = match raw_content.strip_prefix("localOnly") {
+            Some(rest) => (true, rest),
+            None => (false, raw_content.as_str()),
+        };
+
+        let title_chars = fold_str_to_chars(title);
+        let content_chars = fold_str_to_chars(searchable_content);
+        let path_chars = if res_type != "html" && res_type != "image" {
+            fold_str_to_chars(strip_type_root(path))
+        } else {
+            Vec::new()
+        };
+        let title_filter = DocFilter::from_folded(&title_chars);
+        let content_filter = DocFilter::from_folded(&content_chars);
+        let path_filter = DocFilter::from_folded(&path_chars);
+
+        indexed_docs.push(IndexedDoc {
+            title_chars,
+            content_chars,
+            path_chars,
+            title_filter,
+            content_filter,
+            path_filter,
+            is_local_only,
+        });
         i += 4;
     }
     CORPUS_BLOOM.with(|b| {
-        b.borrow_mut().rebuild(&local_vec);
+        b.borrow_mut().rebuild_from_docs(&indexed_docs);
     });
     GLOBAL_DATA.with(|data| {
         *data.borrow_mut() = local_vec;
+    });
+    INDEXED_DOCS.with(|d| {
+        *d.borrow_mut() = indexed_docs;
     });
     PATH_INDEX.with(|p| {
         *p.borrow_mut() = index;
@@ -935,11 +1150,138 @@ const CONTENT_NOISE_STEP: usize = 10;
 const PATH_HIT_SCORE: usize = 50;
 const PATH_NOISE_STEP: usize = 5;
 
-// 精确命中优先保底 + tier>=1 同义词计分封顶 + 次线性词频饱和
+// 精确命中优先保底（按最小噪值阶梯奖励） + 合理化 tier>=1 同义词计分封顶 + 次线性词频饱和
 const EXACT_DOC_BONUS: usize = 10_000;
-const TITLE_SYN_CAP: usize = 2_000;
-const CONTENT_SYN_CAP: usize = 60;
-const PATH_SYN_CAP: usize = 35;
+const TITLE_SYN_CAP: usize = 4_500;
+const CONTENT_SYN_CAP: usize = 450;
+const PATH_SYN_CAP: usize = 120;
+
+#[inline]
+fn min_opt(a: Option<usize>, b: Option<usize>) -> Option<usize> {
+    match (a, b) {
+        (Some(x), Some(y)) => Some(x.min(y)),
+        (Some(x), None) | (None, Some(x)) => Some(x),
+        (None, None) => None,
+    }
+}
+
+#[inline]
+fn tier0_doc_bonus(min_tier0_noise: Option<usize>) -> usize {
+    match min_tier0_noise {
+        Some(0) => EXACT_DOC_BONUS,
+        Some(1) => 3_000,
+        Some(2) => 2_200,
+        Some(3) => 1_500,
+        Some(4) => 900,
+        Some(_) => 500,
+        None => 0,
+    }
+}
+
+#[inline]
+fn try_match_at_slice(chars: &[char], i: usize, kw: &[char], eff_noise: usize) -> Option<(usize, usize)> {
+    let at = |j: usize| chars[j];
+    try_match_at(&at, chars.len(), i, kw, eff_noise)
+}
+
+fn collect_plan_matches_fast(
+    chars: &[char],
+    filter: &DocFilter,
+    kws: &[CompiledKw],
+    plan: &ScanPlan,
+    out: &mut Vec<TaggedHit>,
+) {
+    if chars.is_empty() || plan.entries.is_empty() {
+        return;
+    }
+    let mut mask_u64 = 0u64;
+    let mut survivors_vec: Vec<bool> = Vec::new();
+    let use_u64 = plan.entries.len() <= 64;
+    let mut count = 0usize;
+    let mut only_idx = 0usize;
+
+    if !use_u64 {
+        survivors_vec.resize(plan.entries.len(), false);
+    }
+    for (ei, e) in plan.entries.iter().enumerate() {
+        if filter.might_match(&kws[e.kw_idx].chars, e.eff_noise, e.has_hard_break) {
+            if use_u64 {
+                mask_u64 |= 1u64 << ei;
+            } else {
+                survivors_vec[ei] = true;
+            }
+            only_idx = ei;
+            count += 1;
+        }
+    }
+    if count == 0 {
+        return;
+    }
+    if count == 1 {
+        let e = &plan.entries[only_idx];
+        let kw = &kws[e.kw_idx];
+        let first = kw.chars[0];
+        for i in 0..chars.len() {
+            if chars[i] != first {
+                continue;
+            }
+            if let Some((last, noise)) = try_match_at_slice(chars, i, &kw.chars, e.eff_noise) {
+                out.push((i, last + 1, noise, kw.weight_pct, kw.tier));
+            }
+        }
+        return;
+    }
+    for i in 0..chars.len() {
+        let ch = chars[i];
+        if !plan.first_might_hit(ch) {
+            continue;
+        }
+        if let Some(bucket) = plan.by_first.get(&ch) {
+            for &ei in bucket {
+                let alive = if use_u64 {
+                    (mask_u64 & (1u64 << ei)) != 0
+                } else {
+                    survivors_vec[ei]
+                };
+                if !alive {
+                    continue;
+                }
+                let e = &plan.entries[ei];
+                let kw = &kws[e.kw_idx];
+                if let Some((last, noise)) = try_match_at_slice(chars, i, &kw.chars, e.eff_noise) {
+                    out.push((i, last + 1, noise, kw.weight_pct, kw.tier));
+                }
+            }
+        }
+    }
+}
+
+fn has_plan_match_fast(
+    chars: &[char],
+    filter: &DocFilter,
+    kws: &[CompiledKw],
+    plan: &ScanPlan,
+) -> bool {
+    if chars.is_empty() || plan.entries.is_empty() {
+        return false;
+    }
+    for e in &plan.entries {
+        let kw = &kws[e.kw_idx];
+        if !filter.might_match(&kw.chars, e.eff_noise, e.has_hard_break) {
+            continue;
+        }
+        let first = kw.chars[0];
+        for i in 0..chars.len() {
+            if chars[i] != first {
+                continue;
+            }
+            if try_match_at_slice(chars, i, &kw.chars, e.eff_noise).is_some() {
+                return true;
+            }
+        }
+    }
+    false
+}
 
 fn weigh_section_hits(
     hits: &[TaggedHit],
@@ -947,19 +1289,21 @@ fn weigh_section_hits(
     step: usize,
     syn_cap: usize,
     sat_k: usize,
-) -> (usize, bool) {
+) -> (usize, Option<usize>) {
     if hits.is_empty() {
-        return (0, false);
+        return (0, None);
     }
     let max_penalty = base - base / 10;
     let mut exact_vals: Vec<usize> = Vec::new();
     let mut syn_vals: Vec<usize> = Vec::new();
+    let mut min_t0_noise: Option<usize> = None;
 
     for h in hits {
         let raw = base - (h.2 * step).min(max_penalty);
         let val = (raw * (h.3 as usize)) / 100;
         if h.4 == 0 {
             exact_vals.push(val);
+            min_t0_noise = min_opt(min_t0_noise, Some(h.2));
         } else {
             syn_vals.push(val);
         }
@@ -980,52 +1324,49 @@ fn weigh_section_hits(
         .sum();
     let syn_score = syn_raw.min(syn_cap);
 
-    (exact_score + syn_score, !exact_vals.is_empty())
+    (exact_score + syn_score, min_t0_noise)
 }
 
 fn scan_docs<'a>(
     pool: &'a [String],
+    indexed: &[IndexedDoc],
     kws: &[CompiledKw],
-    active: &[usize],
-    noise: usize,
+    scan_plan: &ScanPlan,
     from_doc: usize,
     to_doc: usize,
 ) -> Vec<SearchResult<'a>> {
     let mut results: Vec<SearchResult<'a>> = Vec::new();
-    let mut title_buf: Vec<(usize, usize, char)> = Vec::new();
-    let mut content_buf: Vec<(usize, usize, char)> = Vec::new();
+    let mut raw_hits: Vec<TaggedHit> = Vec::new();
 
-    let doc_total = pool.len() / 4;
+    let doc_total = (pool.len() / 4).min(indexed.len());
     let end_doc = if to_doc < doc_total { to_doc } else { doc_total };
     let mut d = from_doc;
 
     while d < end_doc {
         let i = d * 4;
+        let idoc = &indexed[d];
         d += 1;
 
-        let raw_content = &pool[i + 1];
-        let path = &pool[i + 2];
-        let res_type = &pool[i + 3];
-        let title = pool[i].as_str();
-
-        let mut is_local_only = false;
-        let searchable_content: &str = if raw_content.starts_with("localOnly") {
-            is_local_only = true;
-            &raw_content[9..]
+        raw_hits.clear();
+        collect_plan_matches_fast(&idoc.title_chars, &idoc.title_filter, kws, scan_plan, &mut raw_hits);
+        let title_m = if raw_hits.is_empty() {
+            Vec::new()
         } else {
-            raw_content.as_str()
+            merge_tagged_hits(std::mem::take(&mut raw_hits))
         };
 
-        fill_chars(&mut title_buf, title);
-        let title_m = get_multi_matches_tagged(&title_buf, kws, Some(active), noise);
-
-        fill_chars(&mut content_buf, searchable_content);
-        let content_m = get_multi_matches_tagged(&content_buf, kws, Some(active), noise);
+        raw_hits.clear();
+        collect_plan_matches_fast(&idoc.content_chars, &idoc.content_filter, kws, scan_plan, &mut raw_hits);
+        let content_m = if raw_hits.is_empty() {
+            Vec::new()
+        } else {
+            merge_tagged_hits(std::mem::take(&mut raw_hits))
+        };
 
         let mut count = title_m.len() + content_m.len();
-        let (ts, t_exact) =
+        let (ts, t_t0) =
             weigh_section_hits(&title_m, TITLE_HIT_SCORE, TITLE_NOISE_STEP, TITLE_SYN_CAP, 1);
-        let (cs, c_exact) = weigh_section_hits(
+        let (cs, c_t0) = weigh_section_hits(
             &content_m,
             CONTENT_HIT_SCORE,
             CONTENT_NOISE_STEP,
@@ -1033,32 +1374,33 @@ fn scan_docs<'a>(
             4,
         );
         let mut score = ts + cs;
-        let mut has_exact = t_exact || c_exact;
+        let mut best_t0 = min_opt(t_t0, c_t0);
 
-        if count == 0 && res_type.as_str() != "html" && res_type.as_str() != "image" {
-            fill_chars(&mut title_buf, strip_type_root(path));
-            let path_m = get_multi_matches_tagged(&title_buf, kws, Some(active), noise);
-            count = path_m.len();
-            let (ps, p_exact) =
-                weigh_section_hits(&path_m, PATH_HIT_SCORE, PATH_NOISE_STEP, PATH_SYN_CAP, 1);
-            score = ps;
-            has_exact = p_exact;
+        if count == 0 && !idoc.path_chars.is_empty() {
+            raw_hits.clear();
+            collect_plan_matches_fast(&idoc.path_chars, &idoc.path_filter, kws, scan_plan, &mut raw_hits);
+            if !raw_hits.is_empty() {
+                let path_m = merge_tagged_hits(std::mem::take(&mut raw_hits));
+                count = path_m.len();
+                let (ps, p_t0) =
+                    weigh_section_hits(&path_m, PATH_HIT_SCORE, PATH_NOISE_STEP, PATH_SYN_CAP, 1);
+                score = ps;
+                best_t0 = p_t0;
+            }
         }
 
         if count == 0 {
             continue;
         }
-        if has_exact {
-            score += EXACT_DOC_BONUS;
-        }
+        score += tier0_doc_bonus(best_t0);
 
         results.push(SearchResult {
-            title,
+            title: pool[i].as_str(),
             count,
             score,
-            res_type: res_type.as_str(),
-            path: path.as_str(),
-            local_only: is_local_only,
+            res_type: pool[i + 3].as_str(),
+            path: pool[i + 2].as_str(),
+            local_only: idoc.is_local_only,
             via_comment: false,
         });
     }
@@ -1082,12 +1424,9 @@ pub fn prepare_search(keywords_val: JsValue, noise_level: usize) -> bool {
         PREPARED_SEARCH.with(|p| *p.borrow_mut() = None);
         return false;
     }
+    let plan = ScanPlan::build(&kws, &active, noise_level);
     PREPARED_SEARCH.with(|p| {
-        *p.borrow_mut() = Some(PreparedSearch {
-            kws,
-            active,
-            noise: noise_level,
-        });
+        *p.borrow_mut() = Some(PreparedSearch { kws, plan });
     });
     true
 }
@@ -1098,9 +1437,12 @@ pub fn scan_prepared_range(from_doc: usize, to_doc: usize) -> JsValue {
         let ps_ref = ps.borrow();
         match ps_ref.as_ref() {
             Some(prep) => GLOBAL_DATA.with(|data| {
-                let pool = data.borrow();
-                let results = scan_docs(&pool, &prep.kws, &prep.active, prep.noise, from_doc, to_doc);
-                serde_wasm_bindgen::to_value(&results).unwrap()
+                INDEXED_DOCS.with(|idocs| {
+                    let pool = data.borrow();
+                    let indexed = idocs.borrow();
+                    let results = scan_docs(&pool, &indexed, &prep.kws, &prep.plan, from_doc, to_doc);
+                    serde_wasm_bindgen::to_value(&results).unwrap()
+                })
             }),
             None => serde_wasm_bindgen::to_value(&Vec::<SearchResult>::new()).unwrap(),
         }
@@ -1123,11 +1465,15 @@ pub fn search_multi_range(
     if active.is_empty() {
         return serde_wasm_bindgen::to_value(&Vec::<SearchResult>::new()).unwrap();
     }
+    let scan_plan = ScanPlan::build(&kws, &active, noise_level);
 
     GLOBAL_DATA.with(|data| {
-        let pool = data.borrow();
-        let results = scan_docs(&pool, &kws, &active, noise_level, from_doc, to_doc);
-        serde_wasm_bindgen::to_value(&results).unwrap()
+        INDEXED_DOCS.with(|idocs| {
+            let pool = data.borrow();
+            let indexed = idocs.borrow();
+            let results = scan_docs(&pool, &indexed, &kws, &scan_plan, from_doc, to_doc);
+            serde_wasm_bindgen::to_value(&results).unwrap()
+        })
     })
 }
 
@@ -1288,60 +1634,14 @@ fn parse_ads_plan(val: JsValue) -> Option<AdsPlan> {
     })
 }
 
-#[inline]
-fn check_one_kw(chars: &[(usize, usize, char)], kw: &CompiledKw, noise_level: usize) -> bool {
-    let kw_len = kw.chars.len();
-    if kw_len == 0 {
-        return false;
-    }
-    let len = chars.len();
-    let at = |j: usize| chars[j].2;
-    let eff_noise = effective_noise(kw_len, noise_level.min(kw.max_noise));
-    let first = kw.chars[0];
-    for i in 0..len {
-        if chars[i].2 != first {
-            continue;
-        }
-        if try_match_at(&at, len, i, &kw.chars, eff_noise).is_some() {
-            return true;
-        }
-    }
-    false
-}
-
-fn has_match_chars(
-    chars: &[(usize, usize, char)],
-    keywords: &[CompiledKw],
-    active_indices: Option<&[usize]>,
-    noise_level: usize,
-) -> bool {
-    if chars.is_empty() {
-        return false;
-    }
-    match active_indices {
-        Some(indices) => indices
-            .iter()
-            .any(|&idx| check_one_kw(chars, &keywords[idx], noise_level)),
-        None => keywords
-            .iter()
-            .any(|kw| check_one_kw(chars, kw, noise_level)),
-    }
-}
-
 struct AdsScratch {
-    title_buf: Vec<(usize, usize, char)>,
-    content_buf: Vec<(usize, usize, char)>,
-    path_buf: Vec<(usize, usize, char)>,
-    cm_buf: Vec<(usize, usize, char)>,
     body: Vec<u8>,
     cmt: Vec<u8>,
 }
 
 struct AdsDoc<'a> {
-    path: &'a str,
-    path_searchable: bool,
-    path_ready: bool,
-    comments: Option<&'a CommentDoc>,
+    idoc: &'a IndexedDoc,
+    comments: Option<&'a IndexedCommentDoc>,
     comment_used: bool,
 }
 
@@ -1350,28 +1650,23 @@ fn ads_term_hit(
     use_comments: bool,
     mark_comment: bool,
     terms: &[AdsTerm],
-    active_body: &[Vec<usize>],
+    body_plans: &[ScanPlan],
+    cmt_plans: &[ScanPlan],
     s: &mut AdsScratch,
     doc: &mut AdsDoc,
 ) -> bool {
     let term = &terms[idx];
+    let bplan = &body_plans[idx];
     // s.body[idx]: 0=未检, 1=未命中, 2=标题命中, 3=仅正文命中, 4=仅路径命中
     if s.body[idx] == 0 {
-        let act = Some(active_body[idx].as_slice());
-        if has_match_chars(&s.title_buf, &term.kws, act, term.noise) {
+        if has_plan_match_fast(&doc.idoc.title_chars, &doc.idoc.title_filter, &term.kws, bplan) {
             s.body[idx] = 2;
-        } else if has_match_chars(&s.content_buf, &term.kws, act, term.noise) {
+        } else if has_plan_match_fast(&doc.idoc.content_chars, &doc.idoc.content_filter, &term.kws, bplan) {
             s.body[idx] = 3;
-        } else if doc.path_searchable {
-            if !doc.path_ready {
-                fill_chars(&mut s.path_buf, strip_type_root(doc.path));
-                doc.path_ready = true;
-            }
-            s.body[idx] = if has_match_chars(&s.path_buf, &term.kws, act, term.noise) {
-                4
-            } else {
-                1
-            };
+        } else if !doc.idoc.path_chars.is_empty()
+            && has_plan_match_fast(&doc.idoc.path_chars, &doc.idoc.path_filter, &term.kws, bplan)
+        {
+            s.body[idx] = 4;
         } else {
             s.body[idx] = 1;
         }
@@ -1384,15 +1679,17 @@ fn ads_term_hit(
     }
     if s.cmt[idx] == 0 {
         let mut hit = false;
-        if let Some(cd) = doc.comments {
-            for t in cd.texts.iter() {
-                if t.is_empty() {
-                    continue;
-                }
-                fill_chars(&mut s.cm_buf, t);
-                if has_match_chars(&s.cm_buf, &term.kws, None, term.noise) {
-                    hit = true;
-                    break;
+        let cplan = &cmt_plans[idx];
+        if !cplan.entries.is_empty() {
+            if let Some(cd) = doc.comments {
+                for (chars, filter) in cd.texts_chars.iter().zip(cd.filters.iter()) {
+                    if chars.is_empty() {
+                        continue;
+                    }
+                    if has_plan_match_fast(chars, filter, &term.kws, cplan) {
+                        hit = true;
+                        break;
+                    }
                 }
             }
         }
@@ -1411,21 +1708,22 @@ fn ads_eval(
     n: &AdsNode,
     use_comments: bool,
     terms: &[AdsTerm],
-    active_body: &[Vec<usize>],
+    body_plans: &[ScanPlan],
+    cmt_plans: &[ScanPlan],
     s: &mut AdsScratch,
     doc: &mut AdsDoc,
 ) -> bool {
     match n {
         AdsNode::Term { idx, neg } => {
             if *neg {
-                !ads_term_hit(*idx, use_comments, false, terms, active_body, s, doc)
+                !ads_term_hit(*idx, use_comments, false, terms, body_plans, cmt_plans, s, doc)
             } else {
-                ads_term_hit(*idx, use_comments, true, terms, active_body, s, doc)
+                ads_term_hit(*idx, use_comments, true, terms, body_plans, cmt_plans, s, doc)
             }
         }
         AdsNode::And(v) => {
             for c in v {
-                if !ads_eval(c, use_comments, terms, active_body, s, doc) {
+                if !ads_eval(c, use_comments, terms, body_plans, cmt_plans, s, doc) {
                     return false;
                 }
             }
@@ -1433,7 +1731,7 @@ fn ads_eval(
         }
         AdsNode::Or(v) => {
             for c in v {
-                if ads_eval(c, use_comments, terms, active_body, s, doc) {
+                if ads_eval(c, use_comments, terms, body_plans, cmt_plans, s, doc) {
                     return true;
                 }
             }
@@ -1442,49 +1740,61 @@ fn ads_eval(
     }
 }
 
+fn build_ads_scan_plans(plan: &AdsPlan) -> (Vec<ScanPlan>, Vec<ScanPlan>) {
+    let body_plans: Vec<ScanPlan> = CORPUS_BLOOM.with(|b| {
+        let bloom = b.borrow();
+        plan.terms
+            .iter()
+            .map(|t| {
+                let active = filter_kws_by_bloom(&t.kws, t.noise, &bloom);
+                ScanPlan::build(&t.kws, &active, t.noise)
+            })
+            .collect()
+    });
+    let cmt_plans: Vec<ScanPlan> = COMMENT_BLOOM.with(|b| {
+        let bloom = b.borrow();
+        plan.terms
+            .iter()
+            .map(|t| {
+                let active = filter_kws_by_bloom(&t.kws, t.noise, &bloom);
+                ScanPlan::build(&t.kws, &active, t.noise)
+            })
+            .collect()
+    });
+    (body_plans, cmt_plans)
+}
+
 fn scan_docs_ads<'a>(
     pool: &'a [String],
-    comments: &[CommentDoc],
+    indexed: &[IndexedDoc],
+    indexed_comments: &[IndexedCommentDoc],
     comment_index: &HashMap<String, usize>,
     plan: &AdsPlan,
-    active_body: &[Vec<usize>],
+    body_plans: &[ScanPlan],
+    cmt_plans: &[ScanPlan],
     from_doc: usize,
     to_doc: usize,
 ) -> Vec<SearchResult<'a>> {
     let mut results: Vec<SearchResult<'a>> = Vec::new();
     let term_count = plan.terms.len();
     let mut s = AdsScratch {
-        title_buf: Vec::new(),
-        content_buf: Vec::new(),
-        path_buf: Vec::new(),
-        cm_buf: Vec::new(),
         body: vec![0u8; term_count],
         cmt: vec![0u8; term_count],
     };
 
-    let doc_total = pool.len() / 4;
+    let doc_total = (pool.len() / 4).min(indexed.len());
     let end_doc = if to_doc < doc_total { to_doc } else { doc_total };
     let mut d = from_doc;
 
     while d < end_doc {
         let i = d * 4;
+        let idoc = &indexed[d];
         d += 1;
 
-        let raw_content = &pool[i + 1];
-        let path = &pool[i + 2];
+        let path = pool[i + 2].as_str();
         let res_type = pool[i + 3].as_str();
         let title = pool[i].as_str();
 
-        let mut is_local_only = false;
-        let searchable_content: &str = if raw_content.starts_with("localOnly") {
-            is_local_only = true;
-            &raw_content[9..]
-        } else {
-            raw_content.as_str()
-        };
-
-        fill_chars(&mut s.title_buf, title);
-        fill_chars(&mut s.content_buf, searchable_content);
         for x in s.body.iter_mut() {
             *x = 0;
         }
@@ -1493,21 +1803,19 @@ fn scan_docs_ads<'a>(
         }
 
         let mut doc = AdsDoc {
-            path: path.as_str(),
-            path_searchable: res_type != "html" && res_type != "image",
-            path_ready: false,
+            idoc,
             comments: comment_index
-                .get(path.as_str())
-                .and_then(|&ci| comments.get(ci)),
+                .get(path)
+                .and_then(|&ci| indexed_comments.get(ci)),
             comment_used: false,
         };
 
-        if !ads_eval(&plan.expr, true, &plan.terms, active_body, &mut s, &mut doc) {
+        if !ads_eval(&plan.expr, true, &plan.terms, body_plans, cmt_plans, &mut s, &mut doc) {
             continue;
         }
 
         let via_comment = doc.comment_used
-            && !ads_eval(&plan.expr, false, &plan.terms, active_body, &mut s, &mut doc);
+            && !ads_eval(&plan.expr, false, &plan.terms, body_plans, cmt_plans, &mut s, &mut doc);
 
         // 汇总全部正向词项命中后统一做跨词项区间去重，消除重复计分
         let mut raw_title_hits: Vec<TaggedHit> = Vec::new();
@@ -1516,7 +1824,7 @@ fn scan_docs_ads<'a>(
         let mut comment_only_terms = 0usize;
 
         for &idx in &plan.positives {
-            if !ads_term_hit(idx, true, false, &plan.terms, active_body, &mut s, &mut doc) {
+            if !ads_term_hit(idx, true, false, &plan.terms, body_plans, cmt_plans, &mut s, &mut doc) {
                 continue;
             }
             let body_state = s.body[idx];
@@ -1525,18 +1833,14 @@ fn scan_docs_ads<'a>(
                 continue;
             }
             let term = &plan.terms[idx];
-            let act = Some(active_body[idx].as_slice());
+            let bplan = &body_plans[idx];
             if body_state == 4 {
-                if !doc.path_ready {
-                    fill_chars(&mut s.path_buf, strip_type_root(doc.path));
-                    doc.path_ready = true;
-                }
                 let before = raw_path_hits.len();
-                collect_multi_matches_tagged(
-                    &s.path_buf,
+                collect_plan_matches_fast(
+                    &idoc.path_chars,
+                    &idoc.path_filter,
                     &term.kws,
-                    act,
-                    term.noise,
+                    bplan,
                     &mut raw_path_hits,
                 );
                 if raw_path_hits.len() == before {
@@ -1544,19 +1848,19 @@ fn scan_docs_ads<'a>(
                 }
             } else {
                 if body_state == 2 {
-                    collect_multi_matches_tagged(
-                        &s.title_buf,
+                    collect_plan_matches_fast(
+                        &idoc.title_chars,
+                        &idoc.title_filter,
                         &term.kws,
-                        act,
-                        term.noise,
+                        bplan,
                         &mut raw_title_hits,
                     );
                 }
-                collect_multi_matches_tagged(
-                    &s.content_buf,
+                collect_plan_matches_fast(
+                    &idoc.content_chars,
+                    &idoc.content_filter,
                     &term.kws,
-                    act,
-                    term.noise,
+                    bplan,
                     &mut raw_content_hits,
                 );
             }
@@ -1567,29 +1871,27 @@ fn scan_docs_ads<'a>(
         let merged_path = merge_tagged_hits(raw_path_hits);
 
         let count = merged_title.len() + merged_content.len() + merged_path.len();
-        let (ts, t_exact) =
+        let (ts, t_t0) =
             weigh_section_hits(&merged_title, TITLE_HIT_SCORE, TITLE_NOISE_STEP, TITLE_SYN_CAP, 1);
-        let (cs, c_exact) = weigh_section_hits(
+        let (cs, c_t0) = weigh_section_hits(
             &merged_content,
             CONTENT_HIT_SCORE,
             CONTENT_NOISE_STEP,
             CONTENT_SYN_CAP,
             4,
         );
-        let (ps, p_exact) =
+        let (ps, p_t0) =
             weigh_section_hits(&merged_path, PATH_HIT_SCORE, PATH_NOISE_STEP, PATH_SYN_CAP, 1);
-        let mut score = ts + cs + ps + comment_only_terms * CONTENT_HIT_SCORE;
-        if t_exact || c_exact || p_exact {
-            score += EXACT_DOC_BONUS;
-        }
+        let best_t0 = min_opt(min_opt(t_t0, c_t0), p_t0);
+        let score = ts + cs + ps + comment_only_terms * CONTENT_HIT_SCORE + tier0_doc_bonus(best_t0);
 
         results.push(SearchResult {
             title,
             count,
             score,
             res_type,
-            path: path.as_str(),
-            local_only: is_local_only,
+            path,
+            local_only: idoc.is_local_only,
             via_comment,
         });
     }
@@ -1605,15 +1907,13 @@ pub fn prepare_ads_search(plan_val: JsValue) -> bool {
             return false;
         }
     };
-    let active_body: Vec<Vec<usize>> = CORPUS_BLOOM.with(|b| {
-        let bloom = b.borrow();
-        plan.terms
-            .iter()
-            .map(|t| filter_kws_by_bloom(&t.kws, t.noise, &bloom))
-            .collect()
-    });
+    let (body_plans, cmt_plans) = build_ads_scan_plans(&plan);
     PREPARED_ADS.with(|p| {
-        *p.borrow_mut() = Some(PreparedAds { plan, active_body });
+        *p.borrow_mut() = Some(PreparedAds {
+            plan,
+            body_plans,
+            cmt_plans,
+        });
     });
     true
 }
@@ -1624,21 +1924,26 @@ pub fn scan_prepared_ads_range(from_doc: usize, to_doc: usize) -> JsValue {
         let pa_ref = pa.borrow();
         match pa_ref.as_ref() {
             Some(prep) => GLOBAL_DATA.with(|data| {
-                COMMENTS.with(|c| {
-                    COMMENT_INDEX.with(|m| {
-                        let pool = data.borrow();
-                        let docs = c.borrow();
-                        let index = m.borrow();
-                        let results = scan_docs_ads(
-                            &pool,
-                            &docs,
-                            &index,
-                            &prep.plan,
-                            &prep.active_body,
-                            from_doc,
-                            to_doc,
-                        );
-                        serde_wasm_bindgen::to_value(&results).unwrap()
+                INDEXED_DOCS.with(|idocs| {
+                    INDEXED_COMMENTS.with(|ic| {
+                        COMMENT_INDEX.with(|m| {
+                            let pool = data.borrow();
+                            let indexed = idocs.borrow();
+                            let ic_docs = ic.borrow();
+                            let index = m.borrow();
+                            let results = scan_docs_ads(
+                                &pool,
+                                &indexed,
+                                &ic_docs,
+                                &index,
+                                &prep.plan,
+                                &prep.body_plans,
+                                &prep.cmt_plans,
+                                from_doc,
+                                to_doc,
+                            );
+                            serde_wasm_bindgen::to_value(&results).unwrap()
+                        })
                     })
                 })
             }),
@@ -1654,23 +1959,29 @@ pub fn search_ads_range(plan_val: JsValue, from_doc: usize, to_doc: usize) -> Js
         None => return serde_wasm_bindgen::to_value(&Vec::<SearchResult>::new()).unwrap(),
     };
 
-    let active_body: Vec<Vec<usize>> = CORPUS_BLOOM.with(|b| {
-        let bloom = b.borrow();
-        plan.terms
-            .iter()
-            .map(|t| filter_kws_by_bloom(&t.kws, t.noise, &bloom))
-            .collect()
-    });
+    let (body_plans, cmt_plans) = build_ads_scan_plans(&plan);
 
     GLOBAL_DATA.with(|data| {
-        COMMENTS.with(|c| {
-            COMMENT_INDEX.with(|m| {
-                let pool = data.borrow();
-                let docs = c.borrow();
-                let index = m.borrow();
-                let results =
-                    scan_docs_ads(&pool, &docs, &index, &plan, &active_body, from_doc, to_doc);
-                serde_wasm_bindgen::to_value(&results).unwrap()
+        INDEXED_DOCS.with(|idocs| {
+            INDEXED_COMMENTS.with(|ic| {
+                COMMENT_INDEX.with(|m| {
+                    let pool = data.borrow();
+                    let indexed = idocs.borrow();
+                    let ic_docs = ic.borrow();
+                    let index = m.borrow();
+                    let results = scan_docs_ads(
+                        &pool,
+                        &indexed,
+                        &ic_docs,
+                        &index,
+                        &plan,
+                        &body_plans,
+                        &cmt_plans,
+                        from_doc,
+                        to_doc,
+                    );
+                    serde_wasm_bindgen::to_value(&results).unwrap()
+                })
             })
         })
     })
@@ -1680,19 +1991,42 @@ pub fn search_ads_range(plan_val: JsValue, from_doc: usize, to_doc: usize) -> Js
 pub fn set_comments(val: JsValue) {
     let docs: Vec<CommentDoc> = serde_wasm_bindgen::from_value(val).unwrap_or_default();
     let mut index: HashMap<String, usize> = HashMap::with_capacity(docs.len());
+    let mut indexed_comments: Vec<IndexedCommentDoc> = Vec::with_capacity(docs.len());
     for (i, d) in docs.iter().enumerate() {
         index.insert(d.path.clone(), i);
+        let mut texts_chars = Vec::with_capacity(d.texts.len());
+        let mut filters = Vec::with_capacity(d.texts.len());
+        for t in &d.texts {
+            let chars = if t.is_empty() {
+                Vec::new()
+            } else {
+                fold_str_to_chars(t)
+            };
+            let filter = DocFilter::from_folded(&chars);
+            texts_chars.push(chars);
+            filters.push(filter);
+        }
+        indexed_comments.push(IndexedCommentDoc {
+            texts_chars,
+            filters,
+        });
     }
     COMMENT_BLOOM.with(|b| {
-        b.borrow_mut().rebuild_comments(&docs);
+        b.borrow_mut().rebuild_from_comments(&indexed_comments);
     });
     COMMENTS.with(|c| {
         *c.borrow_mut() = docs;
+    });
+    INDEXED_COMMENTS.with(|ic| {
+        *ic.borrow_mut() = indexed_comments;
     });
     COMMENT_INDEX.with(|m| {
         *m.borrow_mut() = index;
     });
     PREPARED_COMMENT.with(|p| {
+        *p.borrow_mut() = None;
+    });
+    PREPARED_ADS.with(|p| {
         *p.borrow_mut() = None;
     });
 }
@@ -1706,41 +2040,43 @@ struct CommentHit<'a> {
 
 fn scan_comments_slice<'a>(
     docs: &'a [CommentDoc],
+    indexed_comments: &[IndexedCommentDoc],
     kws: &[CompiledKw],
-    active: &[usize],
-    noise_level: usize,
+    scan_plan: &ScanPlan,
     from_doc: usize,
     to_doc: usize,
 ) -> Vec<CommentHit<'a>> {
-    let end_doc = to_doc.min(docs.len());
-    let mut buf: Vec<(usize, usize, char)> = Vec::new();
+    let total = docs.len().min(indexed_comments.len());
+    let end_doc = to_doc.min(total);
+    let mut raw_hits: Vec<TaggedHit> = Vec::new();
     let mut hits: Vec<CommentHit<'a>> = Vec::new();
 
-    for d in &docs[from_doc.min(end_doc)..end_doc] {
+    for idx in from_doc.min(end_doc)..end_doc {
+        let d = &docs[idx];
+        let ic = &indexed_comments[idx];
         let mut matched_comments = 0usize;
         let mut all_hits: Vec<TaggedHit> = Vec::new();
-        for t in d.texts.iter() {
-            if t.is_empty() {
+        for (chars, filter) in ic.texts_chars.iter().zip(ic.filters.iter()) {
+            if chars.is_empty() {
                 continue;
             }
-            fill_chars(&mut buf, t);
-            let cm = get_multi_matches_tagged(&buf, kws, Some(active), noise_level);
-            if !cm.is_empty() {
+            raw_hits.clear();
+            collect_plan_matches_fast(chars, filter, kws, scan_plan, &mut raw_hits);
+            if !raw_hits.is_empty() {
+                let cm = merge_tagged_hits(std::mem::take(&mut raw_hits));
                 matched_comments += 1;
                 all_hits.extend(cm);
             }
         }
         if matched_comments > 0 {
-            let (mut score, has_exact) = weigh_section_hits(
+            let (base_score, c_t0) = weigh_section_hits(
                 &all_hits,
                 CONTENT_HIT_SCORE,
                 CONTENT_NOISE_STEP,
                 CONTENT_SYN_CAP,
                 4,
             );
-            if has_exact {
-                score += EXACT_DOC_BONUS;
-            }
+            let score = base_score + tier0_doc_bonus(c_t0);
             hits.push(CommentHit {
                 path: d.path.as_str(),
                 count: matched_comments,
@@ -1768,12 +2104,9 @@ pub fn prepare_comment_search(keywords_val: JsValue, noise_level: usize) -> bool
         PREPARED_COMMENT.with(|p| *p.borrow_mut() = None);
         return false;
     }
+    let plan = ScanPlan::build(&kws, &active, noise_level);
     PREPARED_COMMENT.with(|p| {
-        *p.borrow_mut() = Some(PreparedSearch {
-            kws,
-            active,
-            noise: noise_level,
-        });
+        *p.borrow_mut() = Some(PreparedSearch { kws, plan });
     });
     true
 }
@@ -1784,16 +2117,19 @@ pub fn scan_prepared_comments_range(from_doc: usize, to_doc: usize) -> JsValue {
         let pc_ref = pc.borrow();
         match pc_ref.as_ref() {
             Some(prep) => COMMENTS.with(|c| {
-                let docs = c.borrow();
-                let hits = scan_comments_slice(
-                    &docs,
-                    &prep.kws,
-                    &prep.active,
-                    prep.noise,
-                    from_doc,
-                    to_doc,
-                );
-                serde_wasm_bindgen::to_value(&hits).unwrap()
+                INDEXED_COMMENTS.with(|ic| {
+                    let docs = c.borrow();
+                    let ic_docs = ic.borrow();
+                    let hits = scan_comments_slice(
+                        &docs,
+                        &ic_docs,
+                        &prep.kws,
+                        &prep.plan,
+                        from_doc,
+                        to_doc,
+                    );
+                    serde_wasm_bindgen::to_value(&hits).unwrap()
+                })
             }),
             None => serde_wasm_bindgen::to_value(&Vec::<CommentHit>::new()).unwrap(),
         }
@@ -1810,17 +2146,21 @@ pub fn search_comments(keywords_val: JsValue, noise_level: usize) -> JsValue {
     if active.is_empty() {
         return serde_wasm_bindgen::to_value(&Vec::<CommentHit>::new()).unwrap();
     }
+    let scan_plan = ScanPlan::build(&kws, &active, noise_level);
 
     COMMENTS.with(|c| {
-        let docs = c.borrow();
-        let mut hits = scan_comments_slice(&docs, &kws, &active, noise_level, 0, docs.len());
-        hits.sort_by(|a, b| {
-            b.score
-                .cmp(&a.score)
-                .then(b.count.cmp(&a.count))
-                .then(a.path.cmp(&b.path))
-        });
-        serde_wasm_bindgen::to_value(&hits).unwrap()
+        INDEXED_COMMENTS.with(|ic| {
+            let docs = c.borrow();
+            let ic_docs = ic.borrow();
+            let mut hits = scan_comments_slice(&docs, &ic_docs, &kws, &scan_plan, 0, docs.len());
+            hits.sort_by(|a, b| {
+                b.score
+                    .cmp(&a.score)
+                    .then(b.count.cmp(&a.count))
+                    .then(a.path.cmp(&b.path))
+            });
+            serde_wasm_bindgen::to_value(&hits).unwrap()
+        })
     })
 }
 

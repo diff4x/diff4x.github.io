@@ -1,0 +1,127 @@
+# 本地新词雷达报告 (oov_report.txt) — 仅本地参考，请勿提交或发布
+# 生成时间: 2026-11-20 00:04:07 | 公开统计文档数: 195 | 筛选阈值: DF >= 2, TF >= 3
+# 用法: 挑出值得扩展的高频词，补入 synonyms_custom.json 的 groups 或 aliases 后重新运行 gen 即可。
+
+== [1] 高频未收录英文/技术术语 Top 60 ==
+ 1. printf                   DF=14   TF=384
+ 2. include                  DF=10   TF=254
+ 3. sizeof                   DF=9    TF=92
+ 4. define                   DF=7    TF=155
+ 5. double                   DF=7    TF=145
+ 6. unsigned                 DF=7    TF=53
+ 7. malloc                   DF=7    TF=45
+ 8. free                     DF=7    TF=33
+ 9. i++                      DF=6    TF=45
+10. input                    DF=6    TF=38
+11. quit                     DF=6    TF=37
+12. stdio                    DF=6    TF=30
+13. Please                   DF=6    TF=21
+14. Node                     DF=5    TF=121
+15. next                     DF=5    TF=105
+16. count                    DF=5    TF=87
+17. scanf                    DF=5    TF=86
+18. Enter                    DF=5    TF=78
+19. SIZE                     DF=5    TF=74
+20. long                     DF=5    TF=55
+21. extern                   DF=5    TF=45
+22. number                   DF=5    TF=40
+23. typedef                  DF=5    TF=40
+24. age                      DF=5    TF=35
+25. case                     DF=5    TF=35
+26. Windows                  DF=5    TF=35
+27. putchar                  DF=5    TF=34
+28. arr                      DF=5    TF=32
+29. EOF                      DF=5    TF=30
+30. Hello                    DF=5    TF=25
+31. global                   DF=5    TF=20
+32. ASCII                    DF=5    TF=18
+33. C++                      DF=5    TF=16
+34. ID                       DF=4    TF=73
+35. static                   DF=4    TF=58
+36. last                     DF=4    TF=38
+37. foo                      DF=4    TF=32
+38. Person                   DF=4    TF=32
+39. strlen                   DF=4    TF=30
+40. num                      DF=4    TF=29
+41. string                   DF=4    TF=29
+42. find                     DF=4    TF=26
+43. red                      DF=4    TF=19
+44. gcc                      DF=4    TF=18
+45. size_t                   DF=4    TF=18
+46. cat                      DF=4    TF=15
+47. code                     DF=4    TF=14
+48. count++                  DF=4    TF=14
+49. output                   DF=4    TF=14
+50. ifdef                    DF=4    TF=13
+51. Date                     DF=4    TF=10
+52. left                     DF=4    TF=10
+53. ANSI                     DF=4    TF=9
+54. msg                      DF=4    TF=9
+55. release                  DF=4    TF=9
+56. local                    DF=4    TF=8
+57. Unix                     DF=4    TF=7
+58. high                     DF=4    TF=5
+59. shell                    DF=4    TF=4
+60. Text                     DF=4    TF=4
+
+== [2] 高频未收录中文候选词 Top 60 ==
+ 1. 苏轼         DF=27   TF=63
+ 2. 陆游         DF=23   TF=33
+ 3. 武帝         DF=22   TF=66
+ 4. 答曰         DF=19   TF=40
+ 5. 幼学琼        DF=16   TF=20
+ 6. 剑南诗        DF=15   TF=22
+ 7. 叹曰         DF=15   TF=21
+ 8. 剑南诗稿       DF=14   TF=21
+ 9. 笑曰         DF=14   TF=21
+10. 聊斋         DF=14   TF=21
+11. 龙文鞭        DF=14   TF=18
+12. 韩愈         DF=13   TF=52
+13. 曹操         DF=13   TF=23
+14. 御览         DF=13   TF=19
+15. 聊斋志异       DF=12   TF=16
+16. 陶潜         DF=11   TF=18
+17. 谓曰         DF=11   TF=13
+18. 侍御         DF=10   TF=16
+19. 弃疾         DF=10   TF=16
+20. 辛弃疾        DF=10   TF=15
+21. 裴松         DF=10   TF=14
+22. 蒲松         DF=10   TF=12
+23. 帝纪         DF=10   TF=11
+24. 字符         DF=9    TF=158
+25. 李瀚         DF=9    TF=17
+26. 韩诗         DF=9    TF=16
+27. 曹丕         DF=9    TF=14
+28. 臣闻         DF=9    TF=12
+29. 李晖吉        DF=9    TF=10
+30. 刘孝         DF=9    TF=9
+31. 妻曰         DF=8    TF=24
+32. 李善         DF=8    TF=11
+33. 松之注        DF=8    TF=10
+34. 陶渊         DF=8    TF=10
+35. 帝曹         DF=8    TF=9
+36. 萧良         DF=8    TF=8
+37. 杜牧         DF=7    TF=12
+38. 李善注        DF=7    TF=10
+39. 徐灒         DF=7    TF=9
+40. 搜神         DF=7    TF=9
+41. 娶妻         DF=7    TF=8
+42. 吕氏         DF=7    TF=8
+43. 佩文韵        DF=7    TF=7
+44. 骆宾         DF=7    TF=7
+45. 柳宗         DF=7    TF=7
+46. 延寿         DF=6    TF=16
+47. 伍子胥        DF=6    TF=12
+48. 禹锡         DF=6    TF=10
+49. 齐侯         DF=6    TF=10
+50. 刘禹锡        DF=6    TF=9
+51. 诛杀         DF=6    TF=9
+52. 汉刘         DF=6    TF=9
+53. 裴松之注       DF=6    TF=8
+54. 言曰         DF=6    TF=8
+55. 松龄         DF=6    TF=8
+56. 酒酣         DF=6    TF=8
+57. 阮籍         DF=6    TF=8
+58. 蒲松龄        DF=6    TF=7
+59. 李商隐        DF=6    TF=7
+60. 顾谓         DF=6    TF=7
