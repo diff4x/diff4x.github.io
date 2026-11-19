@@ -1,6 +1,17 @@
 /* @ts-self-types="./compute_intensive_task_processor.d.ts" */
 
 /**
+ * @param {string} text
+ * @returns {boolean}
+ */
+export function bloom_might_match(text) {
+    const ptr0 = passStringToWasm0(text, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.bloom_might_match(ptr0, len0);
+    return ret !== 0;
+}
+
+/**
  * @param {any} lite_val
  * @param {any} fat_val
  * @param {any} shadow_val
@@ -22,6 +33,14 @@ export function build_and_set_data(lite_val, fat_val, shadow_val, is_offline) {
 export function build_flat_data(lite_val, fat_val, shadow_val, is_offline) {
     const ret = wasm.build_flat_data(addHeapObject(lite_val), addHeapObject(fat_val), addHeapObject(shadow_val), is_offline);
     return takeObject(ret);
+}
+
+/**
+ * @returns {number}
+ */
+export function comment_doc_count() {
+    const ret = wasm.comment_doc_count();
+    return ret >>> 0;
 }
 
 /**
@@ -104,6 +123,65 @@ export function get_snippets_ads(path, ads_terms_val, max_body, max_comments) {
     const ptr0 = passStringToWasm0(path, wasm.__wbindgen_export, wasm.__wbindgen_export2);
     const len0 = WASM_VECTOR_LEN;
     const ret = wasm.get_snippets_ads(ptr0, len0, addHeapObject(ads_terms_val), max_body, max_comments);
+    return takeObject(ret);
+}
+
+/**
+ * @param {any} plan_val
+ * @returns {boolean}
+ */
+export function prepare_ads_search(plan_val) {
+    const ret = wasm.prepare_ads_search(addHeapObject(plan_val));
+    return ret !== 0;
+}
+
+/**
+ * @param {any} keywords_val
+ * @param {number} noise_level
+ * @returns {boolean}
+ */
+export function prepare_comment_search(keywords_val, noise_level) {
+    const ret = wasm.prepare_comment_search(addHeapObject(keywords_val), noise_level);
+    return ret !== 0;
+}
+
+/**
+ * @param {any} keywords_val
+ * @param {number} noise_level
+ * @returns {boolean}
+ */
+export function prepare_search(keywords_val, noise_level) {
+    const ret = wasm.prepare_search(addHeapObject(keywords_val), noise_level);
+    return ret !== 0;
+}
+
+/**
+ * @param {number} from_doc
+ * @param {number} to_doc
+ * @returns {any}
+ */
+export function scan_prepared_ads_range(from_doc, to_doc) {
+    const ret = wasm.scan_prepared_ads_range(from_doc, to_doc);
+    return takeObject(ret);
+}
+
+/**
+ * @param {number} from_doc
+ * @param {number} to_doc
+ * @returns {any}
+ */
+export function scan_prepared_comments_range(from_doc, to_doc) {
+    const ret = wasm.scan_prepared_comments_range(from_doc, to_doc);
+    return takeObject(ret);
+}
+
+/**
+ * @param {number} from_doc
+ * @param {number} to_doc
+ * @returns {any}
+ */
+export function scan_prepared_range(from_doc, to_doc) {
+    const ret = wasm.scan_prepared_range(from_doc, to_doc);
     return takeObject(ret);
 }
 

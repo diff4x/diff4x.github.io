@@ -11,7 +11,7 @@ use js_sys::{Uint32Array, Object};
 
 const BLOOM_WORDS: usize = 32768; // 256 KB = 2,097,152 bits
 const BLOOM_MASK: u64 = (BLOOM_WORDS as u64 * 64) - 1;
-const SYN_HL_BIT: usize = 0x100;
+const SYN_HL_TIER_SHIFT: usize = 8;
 
 struct CorpusBloom {
     bits: Vec<u64>,
@@ -99,6 +99,19 @@ impl CorpusBloom {
         self.ready = true;
     }
 
+    fn rebuild_comments(&mut self, docs: &[CommentDoc]) {
+        self.bits.clear();
+        self.bits.resize(BLOOM_WORDS, 0);
+        for d in docs {
+            for t in &d.texts {
+                if !t.is_empty() {
+                    self.feed_text(t);
+                }
+            }
+        }
+        self.ready = true;
+    }
+
     fn might_match_exact(&self, chars: &[char]) -> bool {
         if !self.ready || chars.len() < 2 {
             return true;
@@ -117,12 +130,50 @@ pub fn supports_weighted_keywords() -> bool {
     true
 }
 
+#[wasm_bindgen]
+pub fn bloom_might_match(text: &str) -> bool {
+    let chars: Vec<char> = text
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .map(fold_char)
+        .collect();
+    if chars.len() < 2 || chars.iter().any(|&c| is_hard_break(c)) {
+        return true;
+    }
+    CORPUS_BLOOM.with(|cb| {
+        let corpus = cb.borrow();
+        COMMENT_BLOOM.with(|mb| {
+            let comments = mb.borrow();
+            if !corpus.ready && !comments.ready {
+                return true;
+            }
+            (corpus.ready && corpus.might_match_exact(&chars))
+                || (comments.ready && comments.might_match_exact(&chars))
+        })
+    })
+}
+
+struct PreparedSearch {
+    kws: Vec<CompiledKw>,
+    active: Vec<usize>,
+    noise: usize,
+}
+
+struct PreparedAds {
+    plan: AdsPlan,
+    active_body: Vec<Vec<usize>>,
+}
+
 thread_local! {
     static GLOBAL_DATA: RefCell<Vec<String>> = RefCell::new(Vec::new());
     static PATH_INDEX: RefCell<HashMap<String, usize>> = RefCell::new(HashMap::new());
     static CORPUS_BLOOM: RefCell<CorpusBloom> = RefCell::new(CorpusBloom::new());
     static COMMENTS: RefCell<Vec<CommentDoc>> = RefCell::new(Vec::new());
     static COMMENT_INDEX: RefCell<HashMap<String, usize>> = RefCell::new(HashMap::new());
+    static COMMENT_BLOOM: RefCell<CorpusBloom> = RefCell::new(CorpusBloom::new());
+    static PREPARED_SEARCH: RefCell<Option<PreparedSearch>> = RefCell::new(None);
+    static PREPARED_ADS: RefCell<Option<PreparedAds>> = RefCell::new(None);
+    static PREPARED_COMMENT: RefCell<Option<PreparedSearch>> = RefCell::new(None);
 }
 
 #[derive(Deserialize)]
@@ -232,6 +283,12 @@ fn install_data(local_vec: Vec<String>) {
     });
     PATH_INDEX.with(|p| {
         *p.borrow_mut() = index;
+    });
+    PREPARED_SEARCH.with(|p| {
+        *p.borrow_mut() = None;
+    });
+    PREPARED_ADS.with(|p| {
+        *p.borrow_mut() = None;
     });
 }
 
@@ -594,6 +651,11 @@ fn is_hard_break(ch: char) -> bool {
 
 #[inline]
 fn fold_char(c: char) -> char {
+    let c = match c {
+        '\u{3000}' => ' ',
+        '\u{FF01}'..='\u{FF5E}' => char::from_u32(c as u32 - 0xFEE0).unwrap_or(c),
+        _ => c,
+    };
     if c.is_ascii() {
         c.to_ascii_lowercase()
     } else {
@@ -750,11 +812,12 @@ fn merge_tagged_hits(mut all_hits: Vec<TaggedHit>) -> Vec<TaggedHit> {
             if hit.0 < last.1 {
                 let last_len = last.1 - last.0;
                 let hit_len = hit.1 - hit.0;
-                let better = (hit.2 < last.2)
-                    || (hit.2 == last.2 && hit.4 < last.4)
-                    || (hit.2 == last.2 && hit.4 == last.4 && hit.3 > last.3)
-                    || (hit.2 == last.2
-                        && hit.4 == last.4
+                // 统一区间裁决优先级：tier(原词 > 1-hop > 双槽) > noise > weight > 覆盖长度
+                let better = (hit.4 < last.4)
+                    || (hit.4 == last.4 && hit.2 < last.2)
+                    || (hit.4 == last.4 && hit.2 == last.2 && hit.3 > last.3)
+                    || (hit.4 == last.4
+                        && hit.2 == last.2
                         && hit.3 == last.3
                         && hit_len > last_len);
                 if better {
@@ -833,7 +896,13 @@ fn get_multi_matches_tagged(
 
 #[inline]
 fn pack_hl_noise(noise: usize, tier: u8) -> usize {
-    noise.min(0xff) | if tier > 0 { SYN_HL_BIT } else { 0 }
+    noise.min(0xff) | ((tier.min(3) as usize) << SYN_HL_TIER_SHIFT)
+}
+
+// 供 content.js 使用：低 10 位完全兼容既有高亮样式，高 8 位透传 weight 供 ADS 合并裁决
+#[inline]
+fn pack_hl_meta(noise: usize, tier: u8, weight: u16) -> usize {
+    pack_hl_noise(noise, tier) | (((weight.min(100) as usize) & 0xff) << 16)
 }
 
 fn get_multi_matches(
@@ -843,30 +912,8 @@ fn get_multi_matches(
 ) -> Vec<(usize, usize, usize)> {
     get_multi_matches_tagged(text_chars, keywords, None, noise_level)
         .into_iter()
-        .map(|(s, e, n, _, t)| (s, e, pack_hl_noise(n, t)))
+        .map(|(s, e, n, w, t)| (s, e, pack_hl_meta(n, t, w)))
         .collect()
-}
-
-fn has_any_match(chars: &[char], keywords: &[CompiledKw], noise_level: usize) -> bool {
-    let len = chars.len();
-    let at = |j: usize| chars[j];
-    for kw in keywords {
-        let kw_len = kw.chars.len();
-        if kw_len == 0 {
-            continue;
-        }
-        let eff_noise = effective_noise(kw_len, noise_level.min(kw.max_noise));
-        let first = kw.chars[0];
-        for i in 0..len {
-            if chars[i] != first {
-                continue;
-            }
-            if try_match_at(&at, len, i, &kw.chars, eff_noise).is_some() {
-                return true;
-            }
-        }
-    }
-    false
 }
 
 const TYPE_ROOT_PREFIXES: [&str; 5] = ["html/", "gallery/", "video/", "audio/", "ebook/"];
@@ -888,14 +935,52 @@ const CONTENT_NOISE_STEP: usize = 10;
 const PATH_HIT_SCORE: usize = 50;
 const PATH_NOISE_STEP: usize = 5;
 
-fn weigh_hits(hits: &[TaggedHit], base: usize, step: usize) -> usize {
+// 精确命中优先保底 + tier>=1 同义词计分封顶 + 次线性词频饱和
+const EXACT_DOC_BONUS: usize = 10_000;
+const TITLE_SYN_CAP: usize = 2_000;
+const CONTENT_SYN_CAP: usize = 60;
+const PATH_SYN_CAP: usize = 35;
+
+fn weigh_section_hits(
+    hits: &[TaggedHit],
+    base: usize,
+    step: usize,
+    syn_cap: usize,
+    sat_k: usize,
+) -> (usize, bool) {
+    if hits.is_empty() {
+        return (0, false);
+    }
     let max_penalty = base - base / 10;
-    hits.iter()
-        .map(|h| {
-            let raw = base - (h.2 * step).min(max_penalty);
-            (raw * (h.3 as usize)) / 100
-        })
-        .sum::<usize>()
+    let mut exact_vals: Vec<usize> = Vec::new();
+    let mut syn_vals: Vec<usize> = Vec::new();
+
+    for h in hits {
+        let raw = base - (h.2 * step).min(max_penalty);
+        let val = (raw * (h.3 as usize)) / 100;
+        if h.4 == 0 {
+            exact_vals.push(val);
+        } else {
+            syn_vals.push(val);
+        }
+    }
+
+    exact_vals.sort_unstable_by(|a, b| b.cmp(a));
+    syn_vals.sort_unstable_by(|a, b| b.cmp(a));
+
+    let exact_score: usize = exact_vals
+        .iter()
+        .enumerate()
+        .map(|(idx, &v)| (v * sat_k) / (sat_k + idx))
+        .sum();
+    let syn_raw: usize = syn_vals
+        .iter()
+        .enumerate()
+        .map(|(idx, &v)| (v * sat_k) / (sat_k + idx))
+        .sum();
+    let syn_score = syn_raw.min(syn_cap);
+
+    (exact_score + syn_score, !exact_vals.is_empty())
 }
 
 fn scan_docs<'a>(
@@ -938,18 +1023,33 @@ fn scan_docs<'a>(
         let content_m = get_multi_matches_tagged(&content_buf, kws, Some(active), noise);
 
         let mut count = title_m.len() + content_m.len();
-        let mut score = weigh_hits(&title_m, TITLE_HIT_SCORE, TITLE_NOISE_STEP)
-            + weigh_hits(&content_m, CONTENT_HIT_SCORE, CONTENT_NOISE_STEP);
+        let (ts, t_exact) =
+            weigh_section_hits(&title_m, TITLE_HIT_SCORE, TITLE_NOISE_STEP, TITLE_SYN_CAP, 1);
+        let (cs, c_exact) = weigh_section_hits(
+            &content_m,
+            CONTENT_HIT_SCORE,
+            CONTENT_NOISE_STEP,
+            CONTENT_SYN_CAP,
+            4,
+        );
+        let mut score = ts + cs;
+        let mut has_exact = t_exact || c_exact;
 
         if count == 0 && res_type.as_str() != "html" && res_type.as_str() != "image" {
             fill_chars(&mut title_buf, strip_type_root(path));
             let path_m = get_multi_matches_tagged(&title_buf, kws, Some(active), noise);
             count = path_m.len();
-            score = weigh_hits(&path_m, PATH_HIT_SCORE, PATH_NOISE_STEP);
+            let (ps, p_exact) =
+                weigh_section_hits(&path_m, PATH_HIT_SCORE, PATH_NOISE_STEP, PATH_SYN_CAP, 1);
+            score = ps;
+            has_exact = p_exact;
         }
 
         if count == 0 {
             continue;
+        }
+        if has_exact {
+            score += EXACT_DOC_BONUS;
         }
 
         results.push(SearchResult {
@@ -968,6 +1068,43 @@ fn scan_docs<'a>(
 #[wasm_bindgen]
 pub fn doc_count() -> usize {
     GLOBAL_DATA.with(|d| d.borrow().len() / 4)
+}
+
+#[wasm_bindgen]
+pub fn prepare_search(keywords_val: JsValue, noise_level: usize) -> bool {
+    let kws = parse_keywords(keywords_val);
+    if kws.is_empty() {
+        PREPARED_SEARCH.with(|p| *p.borrow_mut() = None);
+        return false;
+    }
+    let active = CORPUS_BLOOM.with(|b| filter_kws_by_bloom(&kws, noise_level, &b.borrow()));
+    if active.is_empty() {
+        PREPARED_SEARCH.with(|p| *p.borrow_mut() = None);
+        return false;
+    }
+    PREPARED_SEARCH.with(|p| {
+        *p.borrow_mut() = Some(PreparedSearch {
+            kws,
+            active,
+            noise: noise_level,
+        });
+    });
+    true
+}
+
+#[wasm_bindgen]
+pub fn scan_prepared_range(from_doc: usize, to_doc: usize) -> JsValue {
+    PREPARED_SEARCH.with(|ps| {
+        let ps_ref = ps.borrow();
+        match ps_ref.as_ref() {
+            Some(prep) => GLOBAL_DATA.with(|data| {
+                let pool = data.borrow();
+                let results = scan_docs(&pool, &prep.kws, &prep.active, prep.noise, from_doc, to_doc);
+                serde_wasm_bindgen::to_value(&results).unwrap()
+            }),
+            None => serde_wasm_bindgen::to_value(&Vec::<SearchResult>::new()).unwrap(),
+        }
+    })
 }
 
 #[wasm_bindgen]
@@ -1218,20 +1355,28 @@ fn ads_term_hit(
     doc: &mut AdsDoc,
 ) -> bool {
     let term = &terms[idx];
+    // s.body[idx]: 0=未检, 1=未命中, 2=标题命中, 3=仅正文命中, 4=仅路径命中
     if s.body[idx] == 0 {
         let act = Some(active_body[idx].as_slice());
-        let mut hit = has_match_chars(&s.title_buf, &term.kws, act, term.noise)
-            || has_match_chars(&s.content_buf, &term.kws, act, term.noise);
-        if !hit && doc.path_searchable {
+        if has_match_chars(&s.title_buf, &term.kws, act, term.noise) {
+            s.body[idx] = 2;
+        } else if has_match_chars(&s.content_buf, &term.kws, act, term.noise) {
+            s.body[idx] = 3;
+        } else if doc.path_searchable {
             if !doc.path_ready {
                 fill_chars(&mut s.path_buf, strip_type_root(doc.path));
                 doc.path_ready = true;
             }
-            hit = has_match_chars(&s.path_buf, &term.kws, act, term.noise);
+            s.body[idx] = if has_match_chars(&s.path_buf, &term.kws, act, term.noise) {
+                4
+            } else {
+                1
+            };
+        } else {
+            s.body[idx] = 1;
         }
-        s.body[idx] = if hit { 2 } else { 1 };
     }
-    if s.body[idx] == 2 {
+    if s.body[idx] >= 2 {
         return true;
     }
     if !use_comments {
@@ -1364,35 +1509,78 @@ fn scan_docs_ads<'a>(
         let via_comment = doc.comment_used
             && !ads_eval(&plan.expr, false, &plan.terms, active_body, &mut s, &mut doc);
 
-        let mut count = 0usize;
-        let mut score = 0usize;
+        // 汇总全部正向词项命中后统一做跨词项区间去重，消除重复计分
+        let mut raw_title_hits: Vec<TaggedHit> = Vec::new();
+        let mut raw_content_hits: Vec<TaggedHit> = Vec::new();
+        let mut raw_path_hits: Vec<TaggedHit> = Vec::new();
+        let mut comment_only_terms = 0usize;
+
         for &idx in &plan.positives {
             if !ads_term_hit(idx, true, false, &plan.terms, active_body, &mut s, &mut doc) {
                 continue;
             }
+            let body_state = s.body[idx];
+            if body_state == 1 {
+                comment_only_terms += 1;
+                continue;
+            }
             let term = &plan.terms[idx];
             let act = Some(active_body[idx].as_slice());
-            let tm = get_multi_matches_tagged(&s.title_buf, &term.kws, act, term.noise);
-            let cm = get_multi_matches_tagged(&s.content_buf, &term.kws, act, term.noise);
-            if !tm.is_empty() || !cm.is_empty() {
-                count += tm.len() + cm.len();
-                score += weigh_hits(&tm, TITLE_HIT_SCORE, TITLE_NOISE_STEP)
-                    + weigh_hits(&cm, CONTENT_HIT_SCORE, CONTENT_NOISE_STEP);
-            } else if doc.path_searchable {
+            if body_state == 4 {
                 if !doc.path_ready {
                     fill_chars(&mut s.path_buf, strip_type_root(doc.path));
                     doc.path_ready = true;
                 }
-                let pm = get_multi_matches_tagged(&s.path_buf, &term.kws, act, term.noise);
-                if !pm.is_empty() {
-                    count += pm.len();
-                    score += weigh_hits(&pm, PATH_HIT_SCORE, PATH_NOISE_STEP);
-                } else {
-                    score += CONTENT_HIT_SCORE;
+                let before = raw_path_hits.len();
+                collect_multi_matches_tagged(
+                    &s.path_buf,
+                    &term.kws,
+                    act,
+                    term.noise,
+                    &mut raw_path_hits,
+                );
+                if raw_path_hits.len() == before {
+                    comment_only_terms += 1;
                 }
             } else {
-                score += CONTENT_HIT_SCORE;
+                if body_state == 2 {
+                    collect_multi_matches_tagged(
+                        &s.title_buf,
+                        &term.kws,
+                        act,
+                        term.noise,
+                        &mut raw_title_hits,
+                    );
+                }
+                collect_multi_matches_tagged(
+                    &s.content_buf,
+                    &term.kws,
+                    act,
+                    term.noise,
+                    &mut raw_content_hits,
+                );
             }
+        }
+
+        let merged_title = merge_tagged_hits(raw_title_hits);
+        let merged_content = merge_tagged_hits(raw_content_hits);
+        let merged_path = merge_tagged_hits(raw_path_hits);
+
+        let count = merged_title.len() + merged_content.len() + merged_path.len();
+        let (ts, t_exact) =
+            weigh_section_hits(&merged_title, TITLE_HIT_SCORE, TITLE_NOISE_STEP, TITLE_SYN_CAP, 1);
+        let (cs, c_exact) = weigh_section_hits(
+            &merged_content,
+            CONTENT_HIT_SCORE,
+            CONTENT_NOISE_STEP,
+            CONTENT_SYN_CAP,
+            4,
+        );
+        let (ps, p_exact) =
+            weigh_section_hits(&merged_path, PATH_HIT_SCORE, PATH_NOISE_STEP, PATH_SYN_CAP, 1);
+        let mut score = ts + cs + ps + comment_only_terms * CONTENT_HIT_SCORE;
+        if t_exact || c_exact || p_exact {
+            score += EXACT_DOC_BONUS;
         }
 
         results.push(SearchResult {
@@ -1406,6 +1594,57 @@ fn scan_docs_ads<'a>(
         });
     }
     results
+}
+
+#[wasm_bindgen]
+pub fn prepare_ads_search(plan_val: JsValue) -> bool {
+    let plan = match parse_ads_plan(plan_val) {
+        Some(p) => p,
+        None => {
+            PREPARED_ADS.with(|p| *p.borrow_mut() = None);
+            return false;
+        }
+    };
+    let active_body: Vec<Vec<usize>> = CORPUS_BLOOM.with(|b| {
+        let bloom = b.borrow();
+        plan.terms
+            .iter()
+            .map(|t| filter_kws_by_bloom(&t.kws, t.noise, &bloom))
+            .collect()
+    });
+    PREPARED_ADS.with(|p| {
+        *p.borrow_mut() = Some(PreparedAds { plan, active_body });
+    });
+    true
+}
+
+#[wasm_bindgen]
+pub fn scan_prepared_ads_range(from_doc: usize, to_doc: usize) -> JsValue {
+    PREPARED_ADS.with(|pa| {
+        let pa_ref = pa.borrow();
+        match pa_ref.as_ref() {
+            Some(prep) => GLOBAL_DATA.with(|data| {
+                COMMENTS.with(|c| {
+                    COMMENT_INDEX.with(|m| {
+                        let pool = data.borrow();
+                        let docs = c.borrow();
+                        let index = m.borrow();
+                        let results = scan_docs_ads(
+                            &pool,
+                            &docs,
+                            &index,
+                            &prep.plan,
+                            &prep.active_body,
+                            from_doc,
+                            to_doc,
+                        );
+                        serde_wasm_bindgen::to_value(&results).unwrap()
+                    })
+                })
+            }),
+            None => serde_wasm_bindgen::to_value(&Vec::<SearchResult>::new()).unwrap(),
+        }
+    })
 }
 
 #[wasm_bindgen]
@@ -1444,11 +1683,17 @@ pub fn set_comments(val: JsValue) {
     for (i, d) in docs.iter().enumerate() {
         index.insert(d.path.clone(), i);
     }
+    COMMENT_BLOOM.with(|b| {
+        b.borrow_mut().rebuild_comments(&docs);
+    });
     COMMENTS.with(|c| {
         *c.borrow_mut() = docs;
     });
     COMMENT_INDEX.with(|m| {
         *m.borrow_mut() = index;
+    });
+    PREPARED_COMMENT.with(|p| {
+        *p.borrow_mut() = None;
     });
 }
 
@@ -1456,6 +1701,103 @@ pub fn set_comments(val: JsValue) {
 struct CommentHit<'a> {
     path: &'a str,
     count: usize,
+    score: usize,
+}
+
+fn scan_comments_slice<'a>(
+    docs: &'a [CommentDoc],
+    kws: &[CompiledKw],
+    active: &[usize],
+    noise_level: usize,
+    from_doc: usize,
+    to_doc: usize,
+) -> Vec<CommentHit<'a>> {
+    let end_doc = to_doc.min(docs.len());
+    let mut buf: Vec<(usize, usize, char)> = Vec::new();
+    let mut hits: Vec<CommentHit<'a>> = Vec::new();
+
+    for d in &docs[from_doc.min(end_doc)..end_doc] {
+        let mut matched_comments = 0usize;
+        let mut all_hits: Vec<TaggedHit> = Vec::new();
+        for t in d.texts.iter() {
+            if t.is_empty() {
+                continue;
+            }
+            fill_chars(&mut buf, t);
+            let cm = get_multi_matches_tagged(&buf, kws, Some(active), noise_level);
+            if !cm.is_empty() {
+                matched_comments += 1;
+                all_hits.extend(cm);
+            }
+        }
+        if matched_comments > 0 {
+            let (mut score, has_exact) = weigh_section_hits(
+                &all_hits,
+                CONTENT_HIT_SCORE,
+                CONTENT_NOISE_STEP,
+                CONTENT_SYN_CAP,
+                4,
+            );
+            if has_exact {
+                score += EXACT_DOC_BONUS;
+            }
+            hits.push(CommentHit {
+                path: d.path.as_str(),
+                count: matched_comments,
+                score,
+            });
+        }
+    }
+    hits
+}
+
+#[wasm_bindgen]
+pub fn comment_doc_count() -> usize {
+    COMMENTS.with(|c| c.borrow().len())
+}
+
+#[wasm_bindgen]
+pub fn prepare_comment_search(keywords_val: JsValue, noise_level: usize) -> bool {
+    let kws = parse_keywords(keywords_val);
+    if kws.is_empty() {
+        PREPARED_COMMENT.with(|p| *p.borrow_mut() = None);
+        return false;
+    }
+    let active = COMMENT_BLOOM.with(|b| filter_kws_by_bloom(&kws, noise_level, &b.borrow()));
+    if active.is_empty() {
+        PREPARED_COMMENT.with(|p| *p.borrow_mut() = None);
+        return false;
+    }
+    PREPARED_COMMENT.with(|p| {
+        *p.borrow_mut() = Some(PreparedSearch {
+            kws,
+            active,
+            noise: noise_level,
+        });
+    });
+    true
+}
+
+#[wasm_bindgen]
+pub fn scan_prepared_comments_range(from_doc: usize, to_doc: usize) -> JsValue {
+    PREPARED_COMMENT.with(|pc| {
+        let pc_ref = pc.borrow();
+        match pc_ref.as_ref() {
+            Some(prep) => COMMENTS.with(|c| {
+                let docs = c.borrow();
+                let hits = scan_comments_slice(
+                    &docs,
+                    &prep.kws,
+                    &prep.active,
+                    prep.noise,
+                    from_doc,
+                    to_doc,
+                );
+                serde_wasm_bindgen::to_value(&hits).unwrap()
+            }),
+            None => serde_wasm_bindgen::to_value(&Vec::<CommentHit>::new()).unwrap(),
+        }
+    })
 }
 
 #[wasm_bindgen]
@@ -1464,33 +1806,20 @@ pub fn search_comments(keywords_val: JsValue, noise_level: usize) -> JsValue {
     if kws.is_empty() {
         return serde_wasm_bindgen::to_value(&Vec::<CommentHit>::new()).unwrap();
     }
+    let active = COMMENT_BLOOM.with(|b| filter_kws_by_bloom(&kws, noise_level, &b.borrow()));
+    if active.is_empty() {
+        return serde_wasm_bindgen::to_value(&Vec::<CommentHit>::new()).unwrap();
+    }
 
     COMMENTS.with(|c| {
         let docs = c.borrow();
-        let mut buf: Vec<char> = Vec::new();
-        let mut hits: Vec<CommentHit> = Vec::new();
-
-        for d in docs.iter() {
-            let mut n = 0usize;
-            for t in d.texts.iter() {
-                if t.is_empty() {
-                    continue;
-                }
-                buf.clear();
-                buf.extend(t.chars().map(fold_char));
-                if has_any_match(&buf, &kws, noise_level) {
-                    n += 1;
-                }
-            }
-            if n > 0 {
-                hits.push(CommentHit {
-                    path: d.path.as_str(),
-                    count: n,
-                });
-            }
-        }
-
-        hits.sort_by(|a, b| b.count.cmp(&a.count).then(a.path.cmp(&b.path)));
+        let mut hits = scan_comments_slice(&docs, &kws, &active, noise_level, 0, docs.len());
+        hits.sort_by(|a, b| {
+            b.score
+                .cmp(&a.score)
+                .then(b.count.cmp(&a.count))
+                .then(a.path.cmp(&b.path))
+        });
         serde_wasm_bindgen::to_value(&hits).unwrap()
     })
 }

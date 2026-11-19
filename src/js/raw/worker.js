@@ -7,9 +7,30 @@ const {
 const get_snippets_ads = wasm.get_snippets_ads;
 const build_and_set_data = wasm.build_and_set_data;
 const search_ads_range = wasm.search_ads_range;
+const bloom_might_match = wasm.bloom_might_match;
+const prepare_search = wasm.prepare_search;
+const scan_prepared_range = wasm.scan_prepared_range;
+const prepare_ads_search = wasm.prepare_ads_search;
+const scan_prepared_ads_range = wasm.scan_prepared_ads_range;
+const comment_doc_count = wasm.comment_doc_count;
+const prepare_comment_search = wasm.prepare_comment_search;
+const scan_prepared_comments_range = wasm.scan_prepared_comments_range;
 
 let wasmReady = false;
 let wasmSupportsWeighted = false;
+let synReady = false;
+let synMod = null;
+
+function toHalfwidth(str) {
+    let out = "";
+    for (let i = 0; i < str.length; i++) {
+        const code = str.charCodeAt(i);
+        if (code === 0x3000) out += " ";
+        else if (code >= 0xFF01 && code <= 0xFF5E) out += String.fromCharCode(code - 0xFEE0);
+        else out += str.charAt(i);
+    }
+    return out;
+}
 
 function adaptKeywordsForWasm(kws) {
     if (!Array.isArray(kws)) return [];
@@ -28,17 +49,20 @@ function adaptAdsPlanForWasm(plan) {
     if (wasmSupportsWeighted) return plan;
     return { terms: adaptAdsTermsForWasm(plan.terms), expr: plan.expr };
 }
+
 let messageQueue = [];
 let lastSavedKw = "";
 let dataReady = false;
 let pendingSearch = null;
 let dataGen = 0;
+let commentGen = 0;
 
 let latestToken = 0;
 const SLICE_MS = 8;
 const MIN_SLICE = 16;
 const MAX_SLICE = 4096;
 let sliceDocs = 256;
+let commentSliceDocs = 128;
 
 const yieldWaiters = [];
 const yieldChan = new MessageChannel();
@@ -61,13 +85,83 @@ function compareResults(a, b) {
         || (a.title < b.title ? -1 : a.title > b.title ? 1 : 0);
 }
 
+function compareCommentHits(a, b) {
+    const sa = typeof a.score === 'number' ? a.score : 0;
+    const sb = typeof b.score === 'number' ? b.score : 0;
+    return (sb - sa)
+        || (b.count - a.count)
+        || (a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
+}
+
+function expandTermSpecs(rawText, useSyn) {
+    const str = toHalfwidth(String(rawText || ""));
+    const clean = str.replace(/\s+/g, "");
+    if (!clean) return [];
+    const specs = [{ text: clean, weight: 100, tier: 0 }];
+    if (useSyn && synReady && synMod && typeof synMod.expandQuery === 'function') {
+        const existsInCorpus = (dataReady && typeof bloom_might_match === 'function')
+            ? (w) => !!bloom_might_match(w)
+            : null;
+        const res = synMod.expandQuery(str, {
+            existsInCorpus,
+            cacheTag: (dataReady ? dataGen : 0) + ':' + commentGen
+        });
+        if (Array.isArray(res.items) && res.items.length > 0) {
+            for (let i = 0; i < res.items.length; i++) specs.push(res.items[i]);
+        } else if (Array.isArray(res.variants) && res.variants.length > 0) {
+            for (let i = 0; i < res.variants.length; i++) {
+                specs.push({ text: res.variants[i], weight: 65, maxNoise: 0, tier: 1 });
+            }
+        }
+    }
+    return specs;
+}
+
+function resolvePayloadTermSpecs(payload) {
+    if (payload.synonymsEnabled !== undefined) {
+        return expandTermSpecs(payload.keyword, !!payload.synonymsEnabled);
+    }
+    if (Array.isArray(payload.searchKeywords) && payload.searchKeywords.length > 0) {
+        return payload.searchKeywords;
+    }
+    return expandTermSpecs(payload.keyword, false);
+}
+
+function resolveAdsTerms(rawTerms) {
+    if (!Array.isArray(rawTerms)) return [];
+    return rawTerms.map(t => {
+        if (!t) return null;
+        const noise = t.noise !== undefined ? t.noise : 5;
+        if (typeof t.text === 'string' && (!Array.isArray(t.keywords) || t.keywords.length === 0)) {
+            return {
+                text: t.text,
+                like: !!t.like,
+                noise,
+                keywords: expandTermSpecs(t.text, !!t.like)
+            };
+        }
+        return {
+            text: typeof t.text === 'string' ? t.text : '',
+            like: !!t.like,
+            noise,
+            keywords: Array.isArray(t.keywords) ? t.keywords : []
+        };
+    }).filter(t => t && t.keywords.length > 0);
+}
+
 function mergeRanges(dst, src) {
-    const seen = new Set(dst.map(r => r[0] + ',' + r[1]));
+    const bySpan = new Map();
+    for (let i = 0; i < dst.length; i++) {
+        bySpan.set(dst[i][0] + ',' + dst[i][1], i);
+    }
     for (const r of src || []) {
         const k = r[0] + ',' + r[1];
-        if (!seen.has(k)) {
-            seen.add(k);
+        const idx = bySpan.get(k);
+        if (idx === undefined) {
+            bySpan.set(k, dst.length);
             dst.push(r);
+        } else if (r[2] < dst[idx][2]) {
+            dst[idx] = r;
         }
     }
     dst.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
@@ -152,9 +246,8 @@ function mergeAdsSnippets(parts, maxBody, maxComments) {
 function getAdsSnippets(payload) {
     const maxBody = payload.maxBody !== undefined ? payload.maxBody : 40;
     const maxComments = payload.maxComments !== undefined ? payload.maxComments : 30;
-    const terms = adaptAdsTermsForWasm((payload.adsTerms || []).filter(
-        t => t && Array.isArray(t.keywords) && t.keywords.length > 0
-    ));
+    const resolved = resolveAdsTerms(payload.adsTerms);
+    const terms = adaptAdsTermsForWasm(resolved.map(t => ({ noise: t.noise, keywords: t.keywords })));
     if (terms.length === 0) return null;
 
     if (typeof get_snippets_ads === 'function') {
@@ -215,9 +308,13 @@ function fingerprintFlat(raw, isOffline) {
     return (h1 >>> 0).toString(16) + (h2 >>> 0).toString(16) + '.' + raw.length;
 }
 
-async function scanAll(token, scan) {
+async function scanAll(token, prepare, scan) {
     for (; ;) {
         const gen = dataGen;
+        if (token !== latestToken) return null;
+        if (typeof prepare === 'function' && !prepare()) {
+            return [];
+        }
         const total = doc_count();
         const results = [];
         let restart = false;
@@ -249,22 +346,81 @@ async function scanAll(token, scan) {
     }
 }
 
+async function runCommentSearch(token, searchKeywords, noise) {
+    if (token !== undefined && token !== latestToken) return null;
+    const hasChunked = typeof comment_doc_count === 'function'
+        && typeof prepare_comment_search === 'function'
+        && typeof scan_prepared_comments_range === 'function';
+
+    if (!hasChunked) {
+        const hits = search_comments(searchKeywords, noise) || [];
+        if (token !== undefined && token !== latestToken) return null;
+        return hits;
+    }
+
+    for (; ;) {
+        const gen = commentGen;
+        if (token !== undefined && token !== latestToken) return null;
+        if (!prepare_comment_search(searchKeywords, noise)) {
+            return [];
+        }
+        const total = comment_doc_count();
+        const hits = [];
+        let restart = false;
+
+        for (let from = 0; from < total;) {
+            if (token !== undefined && token !== latestToken) return null;
+            if (gen !== commentGen) {
+                restart = true;
+                break;
+            }
+
+            const to = Math.min(total, from + commentSliceDocs);
+            const t0 = performance.now();
+            const part = scan_prepared_comments_range(from, to);
+            const dt = performance.now() - t0;
+            for (let i = 0; i < part.length; i++) hits.push(part[i]);
+            from = to;
+
+            const ratio = Math.min(2, Math.max(0.5, SLICE_MS / Math.max(dt, 0.5)));
+            commentSliceDocs = Math.min(MAX_SLICE, Math.max(MIN_SLICE, Math.round(commentSliceDocs * ratio)));
+
+            if (from < total) await yieldToQueue();
+        }
+        if (restart || gen !== commentGen) continue;
+        if (token !== undefined && token !== latestToken) return null;
+
+        hits.sort(compareCommentHits);
+        return hits;
+    }
+}
+
 async function runSearch(payload) {
     if (payload.ads) return runAdsSearch(payload);
 
     const kw = payload.keyword;
     const token = payload.token;
     const noise = payload.noise !== undefined ? payload.noise : 5;
-    const searchKeywords = adaptKeywordsForWasm(payload.searchKeywords || [kw]);
+    const useSyn = payload.synonymsEnabled !== undefined ? !!payload.synonymsEnabled : false;
+    const termSpecs = resolvePayloadTermSpecs(payload);
+    const searchKeywords = adaptKeywordsForWasm(termSpecs);
+    const synApplied = !useSyn || synReady;
 
-    const results = await scanAll(token, (from, to) =>
-        search_multi_range(searchKeywords, noise, from, to)
+    const usePrepared = typeof prepare_search === 'function' && typeof scan_prepared_range === 'function';
+    const results = await scanAll(
+        token,
+        usePrepared ? () => !!prepare_search(searchKeywords, noise) : null,
+        usePrepared
+            ? (from, to) => scan_prepared_range(from, to)
+            : (from, to) => search_multi_range(searchKeywords, noise, from, to)
     );
     if (results === null) return;
 
     let commentHits = [];
     try {
-        commentHits = search_comments(searchKeywords, noise);
+        const ch = await runCommentSearch(token, searchKeywords, noise);
+        if (ch === null) return;
+        commentHits = ch;
     } catch (err) {
         console.error("[Worker] 评论搜索失败:", err);
     }
@@ -276,16 +432,24 @@ async function runSearch(payload) {
         keyword: kw,
         token,
         ns: payload.ns || '',
-        commentHits
+        commentHits,
+        termSpecs,
+        synApplied
     });
 }
 
 async function runAdsSearch(payload) {
     const kw = payload.keyword;
     const token = payload.token;
-    const plan = adaptAdsPlanForWasm(payload.plan || { terms: [], expr: null });
+    const rawPlan = payload.plan || { terms: [], expr: null };
+    const resolvedTerms = resolveAdsTerms(rawPlan.terms);
+    const synApplied = resolvedTerms.every(t => !t.like) || synReady;
+    const wasmPlan = adaptAdsPlanForWasm({
+        terms: resolvedTerms.map(t => ({ noise: t.noise, keywords: t.keywords })),
+        expr: rawPlan.expr
+    });
 
-    if (typeof search_ads_range !== 'function') {
+    if (typeof search_ads_range !== 'function' && typeof scan_prepared_ads_range !== 'function') {
         console.error("[Worker] 当前 wasm 没有 search_ads_range，请用新版 lib.rs 重新编译");
         self.postMessage({
             type: 'SEARCH_RESULTS',
@@ -297,7 +461,14 @@ async function runAdsSearch(payload) {
         return;
     }
 
-    const results = await scanAll(token, (from, to) => search_ads_range(plan, from, to));
+    const usePrepared = typeof prepare_ads_search === 'function' && typeof scan_prepared_ads_range === 'function';
+    const results = await scanAll(
+        token,
+        usePrepared ? () => !!prepare_ads_search(wasmPlan) : null,
+        usePrepared
+            ? (from, to) => scan_prepared_ads_range(from, to)
+            : (from, to) => search_ads_range(wasmPlan, from, to)
+    );
     if (results === null) return;
 
     self.postMessage({
@@ -305,7 +476,9 @@ async function runAdsSearch(payload) {
         results,
         keyword: kw,
         token,
-        ns: payload.ns || ''
+        ns: payload.ns || '',
+        adsTermSpecs: resolvedTerms,
+        synApplied
     });
 }
 
@@ -320,7 +493,29 @@ function flushPendingSearch() {
     startSearch(p);
 }
 
+async function loadSynonymsInWorker() {
+    try {
+        const mod = await import('./synonyms.js');
+        synMod = mod;
+        synReady = true;
+        const idx = mod.synonymIndex || {};
+        self.postMessage({
+            type: 'SYNONYMS_READY',
+            payload: {
+                version: idx.version || '',
+                sig: idx.sig || '',
+                groups: Array.isArray(idx.groups) ? idx.groups : [],
+                stats: idx.stats || null
+            }
+        });
+    } catch (err) {
+        console.error("[Worker] synonyms.js 加载失败，近义搜索将保持停用状态:", err);
+    }
+}
+
 async function initWorker() {
+    // 并行在 Worker 线程加载词库，完全释放主线程阻塞与内存
+    loadSynonymsInWorker();
     try {
         await init();
         wasmSupportsWeighted = typeof wasm.supports_weighted_keywords === 'function' && !!wasm.supports_weighted_keywords();
@@ -344,7 +539,9 @@ initWorker();
 
 self.onmessage = function (e) {
     const data = e.data;
-    if (data && data.payload) bumpToken(data.payload.token);
+    if (data && data.payload && (data.type === 'SEARCH' || data.type === 'SEARCH_ADS' || data.type === 'CANCEL' || data.type === 'SEARCH_COMMENTS')) {
+        bumpToken(data.payload.token);
+    }
 
     if (!wasmReady) {
         if (data.type === 'SEARCH' || data.type === 'SEARCH_ADS') {
@@ -379,6 +576,9 @@ function processMessage(data) {
 
                 dataGen++;
                 dataReady = true;
+                if (synMod && typeof synMod.clearSynonymCache === 'function') {
+                    synMod.clearSynonymCache();
+                }
 
                 self.postMessage({ type: 'DATA_READY', payload: { data: slim, fp } });
                 flushPendingSearch();
@@ -414,24 +614,45 @@ function processMessage(data) {
                 path: d.path,
                 texts: (d.texts || []).map(t => (typeof t === 'string' ? t : ''))
             })));
+            commentGen++;
+            if (synMod && typeof synMod.clearSynonymCache === 'function') {
+                synMod.clearSynonymCache();
+            }
             break;
         }
 
         case 'SEARCH_COMMENTS': {
-            let hits = [];
-            try {
-                hits = search_comments(
-                    adaptKeywordsForWasm(payload.searchKeywords || [payload.keyword]),
-                    payload.noise !== undefined ? payload.noise : 5
-                );
-            } catch (err) {
+            const token = payload.token;
+            const noise = payload.noise !== undefined ? payload.noise : 5;
+            const searchKeywords = adaptKeywordsForWasm(resolvePayloadTermSpecs(payload));
+            runCommentSearch(token, searchKeywords, noise).then(hits => {
+                if (hits === null) return;
+                if (token !== undefined && token !== latestToken) return;
+                self.postMessage({
+                    type: 'COMMENT_HITS',
+                    keyword: payload.keyword,
+                    token,
+                    commentHits: hits
+                });
+            }).catch(err => {
                 console.error("[Worker] 评论搜索失败:", err);
-            }
+            });
+            break;
+        }
+
+        case 'EXPAND_QUERY': {
+            const reqId = payload && payload.reqId;
+            const items = Array.isArray(payload && payload.items) ? payload.items : [];
+            const results = items.map(it => ({
+                text: it && typeof it.text === 'string' ? it.text : '',
+                like: !!(it && it.like),
+                specs: expandTermSpecs(it && it.text, !!(it && it.like))
+            }));
             self.postMessage({
-                type: 'COMMENT_HITS',
-                keyword: payload.keyword,
-                token: payload.token,
-                commentHits: hits
+                type: 'EXPAND_RESULT',
+                reqId,
+                synReady,
+                results
             });
             break;
         }
@@ -442,9 +663,10 @@ function processMessage(data) {
                 if (Array.isArray(payload.adsTerms) && payload.adsTerms.length > 0) {
                     snippets = getAdsSnippets(payload);
                 } else {
+                    const searchKeywords = adaptKeywordsForWasm(resolvePayloadTermSpecs(payload));
                     snippets = get_snippets(
                         payload.path,
-                        adaptKeywordsForWasm(payload.searchKeywords || [payload.keyword]),
+                        searchKeywords,
                         payload.noise !== undefined ? payload.noise : 5,
                         payload.maxBody !== undefined ? payload.maxBody : 40,
                         payload.maxComments !== undefined ? payload.maxComments : 30

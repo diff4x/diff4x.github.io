@@ -876,5 +876,5 @@ function hover_func() {
 if (window.top?.lite_data) {
     buildCatalogFromLiteData(window.top.lite_data);
 } else {
-    emitEvent("index", "REQUEST_CATALOG", null);
+    emitEvent("REQUEST_CATALOG", null, "index");
 }

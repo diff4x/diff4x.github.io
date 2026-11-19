@@ -1,6 +1,6 @@
-importScripts('/src/js/core-list.js?v=1795073514602');
+importScripts('/src/js/core-list.js?v=1795091173893');
 
-self.SW_VERSION = '1795073514602';
+self.SW_VERSION = '1795091173893';
 self.EMERGENCY = 'repair_command_id=2';
 
 const CACHE_NAME_CORE = 'core-cache-' + BUILD_VERSION;
@@ -175,21 +175,16 @@ self.addEventListener('install', event => {
                     deferredJobs.push(async () => {
                         try {
                             const db = await openMainDB();
-                            const stores = [];
-                            if (db.objectStoreNames.contains('search_cache')) stores.push('search_cache');
-                            if (db.objectStoreNames.contains('sys_state')) stores.push('sys_state');
-                            if (stores.length > 0) {
-                                const tx = db.transaction(stores, 'readwrite');
+                            if (db.objectStoreNames.contains('sys_state')) {
+                                const tx = db.transaction('sys_state', 'readwrite');
                                 const done = new Promise(resolve => {
                                     tx.oncomplete = tx.onerror = tx.onabort = () => resolve();
                                 });
-                                if (stores.includes('search_cache')) tx.objectStore('search_cache').clear();
-                                if (stores.includes('sys_state')) tx.objectStore('sys_state').put([], 'search_cache_lru');
+                                tx.objectStore('sys_state').put(BUILD_VERSION, 'pending_search_cache_clear');
                                 await done;
-                                console.warn(`🧹 [SW] 检测到 ${url} 变更，已清空旧的 search_cache 与 LRU 索引`);
                             }
                         } catch (err) {
-                            console.warn("⚠️ [SW] 清理 search_cache 失败:", err);
+                            console.warn("⚠️ [SW] 标记 search_cache 待清理失败:", err);
                         }
                     });
                 }
@@ -368,6 +363,32 @@ self.addEventListener('activate', event => {
                     }
                 })
             );
+        }).then(async () => {
+            try {
+                const db = await openMainDB();
+                if (db.objectStoreNames.contains('sys_state')) {
+                    const pending = await new Promise(resolve => {
+                        const r = db.transaction('sys_state', 'readonly').objectStore('sys_state').get('pending_search_cache_clear');
+                        r.onsuccess = () => resolve(r.result);
+                        r.onerror = () => resolve(null);
+                    });
+                    if (pending) {
+                        const stores = ['sys_state'];
+                        if (db.objectStoreNames.contains('search_cache')) stores.push('search_cache');
+                        const tx = db.transaction(stores, 'readwrite');
+                        const done = new Promise(resolve => {
+                            tx.oncomplete = tx.onerror = tx.onabort = () => resolve();
+                        });
+                        if (stores.includes('search_cache')) tx.objectStore('search_cache').clear();
+                        tx.objectStore('sys_state').put([], 'search_cache_lru');
+                        tx.objectStore('sys_state').delete('pending_search_cache_clear');
+                        await done;
+                        console.warn('🧹 [SW] 激活阶段已清空旧的 search_cache 与 LRU 索引');
+                    }
+                }
+            } catch (err) {
+                console.warn('⚠️ [SW] activate 清理 search_cache 失败:', err);
+            }
         }).then(() => self.clients.claim())
     );
 });
@@ -426,6 +447,7 @@ self.addEventListener('fetch', event => {
 
     if (
         url.pathname.endsWith('/src/js/worker.js') ||
+        url.pathname.endsWith('/src/js/synonyms.js') ||
         url.pathname.endsWith('compute_intensive_task_processor.min.js') ||
         url.pathname.endsWith('compute_intensive_task_processor.wasm')
     ) {
