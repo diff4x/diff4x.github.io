@@ -1,5 +1,5 @@
 /**
- * synonyms.js —— 全量原版词林 + 受控双跳（Two-Hop）近义扩展引擎 (v2.0)
+ * synonyms.js —— 全量原版词林 + 受控双跳（Two-Hop）近义扩展引擎 (v3.0)
  * 特性：
  * 1. 全量保留原版 '=' (同义)、'#' (同类/并列)、'@' (独立) 与完整 7 位分类码。
  * 2. 近义变体上限扩展至 16，配合超串冗余剪枝与动态阈值，最大化有效召回。
@@ -10,7 +10,7 @@
 (function (global) {
     "use strict";
 
-    const SYN_ALGO_VERSION = "cilin-full-2hop-v2-max16";
+    const SYN_ALGO_VERSION = "cilin-full-2hop-v3-max16";
     const MAX_VARIANTS = 16;
     const MAX_BRIDGE_DEGREE = 8;
     const LRU_CAPACITY = 256;
@@ -17836,26 +17836,57 @@ La06D02@|岂敢
 La06D03=|过奖 过誉`;
 
     const CJK_CHAR_RE = /[\u4e00-\u9fff]/;
+    const ASCII_ALNUM_RE = /[a-z0-9]/;
+    const MAX_BRIDGE_POS = 10;
+
+    // 已知误归类 '=' 整行剔除（反义配对 / 事实错误 / 明显异类）
+    const CILIN_DROP_EQ_CODES = new Set([
+        "Bj01A04", // 抗体 抗原
+        "Ca23A15", // 双日 单日
+        "Ca23A17", // 半日 全天
+        "Ba01E02", // 碳酸钠 大苏打
+        "Bp12B02", // 乒乓球 台球
+        "Af01C05", // 投保人 股民
+        "Af04A04", // 经营者 纳税人
+        "Bi07C02", // 野兔 野猫
+        "Br06B23"  // 咸鱼 鲍鱼
+    ]);
+
+    // 特定行内离群词 / 原始词林粘连错词剔除
+    const CILIN_PRUNE_WORDS = {
+        Aa01A06: new Set(["家伙", "东西", "小子"]),
+        Db06B10: new Set(["物理"]),
+        Ba03A18: new Set(["佳品奶制品"]),
+        Bn21B03: new Set(["候车亭电话亭"]),
+        Bh13B15: new Set(["棉桃腰果仁"]),
+        Bg07A40: new Set(["汽笛声声"])
+    };
 
     // =========================================================================
-    // 1. 索引数据结构构建（单次线性扫描，全量 7.7 万词约 20~40ms）
+    // 1. 索引构建（流式扫行 + 顺手算数据指纹，不再常驻 rawLines 与冗余字段）
     // =========================================================================
-    // groups 保持扁平字符串数组，兼容 index.js 中 bindSynonymsNamespace() 的 JSON.stringify 哈希
-    const rawLines = CILIN_RAW_DATA ? CILIN_RAW_DATA.split("\n") : [];
-
-    // 仅存储 '=' 同义行（含自定义词组），供一跳与双跳检索
-    // eqGroups[id] = { code: "Aa01A01", c5: "Aa01A", c4: "Aa01", c2: "Aa", c1: "A", words: string[], custom: boolean }
+    // eqGroups[id] = { code: "Aa01A01", c5: "Aa01A", c1: "A", words: string[], custom: boolean }
     const eqGroups = [];
-    // word -> Array<{ gid: number, pos: number }>
+    // lowerWord -> Array<{ gid: number, pos: number }>
     const wordToEq = new Map();
-    // word -> Set<number>（所在 '#' 同类并列行 ID，用于排斥非同义同类词）
+    // lowerWord -> Set<number>（所在 '#' 同类并列行 ID，用于排斥非同义同类词）
     const wordToHash = new Map();
     // 全词表（= / # / @ / custom）：lowerWord -> { eq: boolean, codes5: string[] }
     const lexicon = new Map();
-    // 英文/大小写规范化映射（针对 GFW 等自定义词）
-    const lowerToCanonical = new Map();
 
     let maxLexLen = 1;
+    let rawLineCount = 0;
+
+    // 双 32 位 FNV 哈希：替代主线程对 1.8 万行原始数组做 JSON.stringify
+    let sigH1 = 0x811c9dc5;
+    let sigH2 = 0x1b873593;
+    function feedSig(str) {
+        for (let i = 0; i < str.length; i++) {
+            const c = str.charCodeAt(i);
+            sigH1 = Math.imul(sigH1 ^ c, 0x01000193);
+            sigH2 = Math.imul(sigH2 ^ c, 0x85ebca6b) ^ (sigH2 >>> 15);
+        }
+    }
 
     function addLexCode(word, code5, isEq) {
         const key = word.toLowerCase();
@@ -17870,7 +17901,6 @@ La06D03=|过奖 过誉`;
                 entry.codes5.push(code5);
             }
         }
-        if (!lowerToCanonical.has(key)) lowerToCanonical.set(key, word);
     }
 
     function registerEqGroup(code7, words, isCustom) {
@@ -17879,8 +17909,6 @@ La06D03=|过奖 过誉`;
         eqGroups.push({
             code: code7,
             c5,
-            c4: code7.slice(0, 4),
-            c2: code7.slice(0, 2),
             c1: code7.charAt(0),
             words,
             custom: !!isCustom
@@ -17913,59 +17941,80 @@ La06D03=|过奖 过誉`;
             cleaned.push(w);
         }
         if (cleaned.length >= 2) {
+            feedSig(cleaned.join("|"));
             registerEqGroup("Zz00Z" + String(i).padStart(2, "0"), cleaned, true);
         }
     }
 
-    // 1.2 加载完整原版词林
+    // 1.2 流式加载原版词林（含脏数据过滤，不保留 1.8 万元素 rawLines 数组）
     let hashLineId = 0;
-    for (let i = 0; i < rawLines.length; i++) {
-        const line = rawLines[i];
-        if (!line) continue;
-        const sep = line.indexOf("|");
-        if (sep < 8) continue;
-        const code7 = line.slice(0, 7);
-        const rel = line.charAt(7);
-        const c5 = code7.slice(0, 5);
-        const words = line.slice(sep + 1).split(" ");
-        if (words.length === 0) continue;
+    const rawStr = CILIN_RAW_DATA || "";
+    const rawLen = rawStr.length;
+    feedSig(String(rawLen));
 
-        if (rel === "=" && words.length >= 2) {
-            registerEqGroup(code7, words, false);
-        } else if (rel === "#") {
-            const hid = ++hashLineId;
-            for (let j = 0; j < words.length; j++) {
-                const w = words[j];
-                if (!w) continue;
-                const key = w.toLowerCase();
-                let set = wordToHash.get(key);
-                if (!set) {
-                    set = new Set();
-                    wordToHash.set(key, set);
+    let lineStart = 0;
+    while (lineStart < rawLen) {
+        let lineEnd = rawStr.indexOf("\n", lineStart);
+        if (lineEnd === -1) lineEnd = rawLen;
+        let end = lineEnd;
+        if (end > lineStart && rawStr.charCodeAt(end - 1) === 13) end--;
+
+        if (end > lineStart) {
+            const line = rawStr.slice(lineStart, end);
+            rawLineCount++;
+            feedSig(line);
+
+            const sep = line.indexOf("|");
+            if (sep >= 8) {
+                const code7 = line.slice(0, 7);
+                const rel = line.charAt(7);
+                const c5 = code7.slice(0, 5);
+                const rawWords = line.slice(sep + 1).split(" ");
+
+                if (rel === "=" && CILIN_DROP_EQ_CODES.has(code7)) {
+                    for (let j = 0; j < rawWords.length; j++) {
+                        if (rawWords[j]) addLexCode(rawWords[j], c5, false);
+                    }
+                    lineStart = lineEnd + 1;
+                    continue;
                 }
-                set.add(hid);
-                addLexCode(w, c5, false);
-            }
-        } else {
-            // '@' 孤立词行：注册进全词表做分词保护与语义上下文锚定
-            for (let j = 0; j < words.length; j++) {
-                if (words[j]) addLexCode(words[j], c5, false);
+
+                const pruneSet = CILIN_PRUNE_WORDS[code7];
+                const words = pruneSet ? rawWords.filter(w => w && !pruneSet.has(w)) : rawWords;
+
+                if (rel === "=" && words.length >= 2) {
+                    registerEqGroup(code7, words, false);
+                } else if (rel === "#") {
+                    const hid = ++hashLineId;
+                    for (let j = 0; j < words.length; j++) {
+                        const w = words[j];
+                        if (!w) continue;
+                        const key = w.toLowerCase();
+                        let set = wordToHash.get(key);
+                        if (!set) {
+                            set = new Set();
+                            wordToHash.set(key, set);
+                        }
+                        set.add(hid);
+                        addLexCode(w, c5, false);
+                    }
+                } else {
+                    for (let j = 0; j < words.length; j++) {
+                        if (words[j]) addLexCode(words[j], c5, false);
+                    }
+                }
             }
         }
+        lineStart = lineEnd + 1;
     }
 
-    // =========================================================================
-    // 2. 语义树距离、桥词权重与排斥判定辅助函数
-    // =========================================================================
-    function isSingleCjk(word) {
-        return word.length === 1 && CJK_CHAR_RE.test(word);
-    }
+    const DATA_SIG = SYN_ALGO_VERSION + ":" + (sigH1 >>> 0).toString(36) + (sigH2 >>> 0).toString(36);
 
+    // =========================================================================
+    // 2. 语义树距离、对称度、语素与排斥判定辅助函数
+    // =========================================================================
     function isValidVariantWord(word) {
-        if (!word) return false;
-        // 禁止单汉字作为变体或桥词（避免全文高亮与双跳语义爆炸）
-        if (word.length < 2) return false;
-        return true;
+        return !!word && word.length >= 2;
     }
 
     // 计算两个 5 位词林编码的 LCA 层级（0 / 1 / 2 / 4 / 5）
@@ -17977,17 +18026,22 @@ La06D03=|过奖 过誉`;
         return 2;
     }
 
-    // 行内纲领词位权：词林越靠前的词越典型
+    function lcaToFactor(lca) {
+        if (lca >= 5) return 1.0;
+        if (lca >= 4) return 0.72;
+        if (lca >= 2) return 0.42;
+        if (lca >= 1) return 0.20;
+        return 0.14;
+    }
+
     function posSalience(pos) {
         return 1 / (1 + 0.12 * pos);
     }
 
-    // 行内凝聚度：过长的同义行平均紧密度较低
     function groupCohesion(len) {
         return 1 / Math.log(Math.E + 0.32 * len);
     }
 
-    // 判断两个词是否为 '#' 同类并列词（且不在任何同一 '=' 行）
     function isCoordinateSibling(keyA, keyB) {
         const ha = wordToHash.get(keyA);
         if (!ha) return false;
@@ -17999,7 +18053,6 @@ La06D03=|过奖 过誉`;
         return false;
     }
 
-    // 获取某词的一跳 '=' 邻居集合（用于双向邻域对称度计算，带小型缓存）
     const neighborCache = new Map();
     function getEqNeighbors(key) {
         let cached = neighborCache.get(key);
@@ -18021,7 +18074,6 @@ La06D03=|过奖 过誉`;
         return set;
     }
 
-    // 双向邻域余弦重叠度：衡量 c 的语义场回指 w 的紧密度
     function neighborhoodCosine(keyA, keyB) {
         const na = getEqNeighbors(keyA);
         const nb = getEqNeighbors(keyB);
@@ -18034,18 +18086,19 @@ La06D03=|过奖 过誉`;
         return inter / Math.sqrt(na.size * nb.size);
     }
 
-    // 共享语素字微加权（如 "医院"/"卫生院"、"修改"/"改动"）
+    // 共享语素字微加权（对叠字去重，仅用于 1-hop）
     function sharedCjkRatio(a, b) {
         if (a.length < 2 || b.length < 2) return 0;
         let hit = 0;
         for (let i = 0; i < a.length; i++) {
             const ch = a[i];
+            if (a.indexOf(ch) !== i) continue;
             if (CJK_CHAR_RE.test(ch) && b.indexOf(ch) !== -1) hit++;
         }
         return hit / Math.max(a.length, b.length);
     }
 
-    // 上下文语义树加成：利用查询中其他词的 5 位分类码为多义词消歧
+    // 上下文消歧：仅在同中类及以上（best >= 2）加成，跨大类/同大类不同中类保持中性 1.0
     function contextLcaBoost(c5, ctxCodes5) {
         if (!ctxCodes5 || ctxCodes5.length === 0) return 1.0;
         let best = 0;
@@ -18057,8 +18110,7 @@ La06D03=|过奖 过誉`;
         if (best >= 5) return 1.85;
         if (best >= 4) return 1.45;
         if (best >= 2) return 1.18;
-        if (best >= 1) return 1.05;
-        return 0.92;
+        return 1.0;
     }
 
     // =========================================================================
@@ -18071,6 +18123,7 @@ La06D03=|过奖 过誉`;
 
         const srcGids = new Set();
         const srcSenseWeights = new Map();
+        let hasDisambiguateBoost = false;
 
         // 3.1 计算原词在每个 '=' 义项行中的消歧权重
         for (let i = 0; i < refs.length; i++) {
@@ -18078,17 +18131,28 @@ La06D03=|过奖 过誉`;
             const g = eqGroups[gid];
             srcGids.add(gid);
 
-            let wSense = g.custom ? 4.0 : (posSalience(pos) * groupCohesion(g.words.length));
-            // 非整词查询时，对 K 类虚词（助词/连词/副词）强降权
+            let wSense = g.custom ? 1.5 : (posSalience(pos) * groupCohesion(g.words.length));
             if (!isWholeQuery && g.c1 === "K") wSense *= 0.22;
-            // 多义词依据同句上下文编码消歧
             if (ctxCodes5 && ctxCodes5.length > 0 && !g.custom) {
-                wSense *= contextLcaBoost(g.c5, ctxCodes5);
+                const boost = contextLcaBoost(g.c5, ctxCodes5);
+                if (boost > 1.0) hasDisambiguateBoost = true;
+                wSense *= boost;
             }
             srcSenseWeights.set(gid, wSense);
         }
 
-        // 候选累加器：candKey -> record
+        // 复合短语中未获有效消歧的高多义槽位词：约束发散度，防义项泛滥
+        const unDisambiguatedPolysemy = !isWholeQuery && refs.length >= 4 && !hasDisambiguateBoost;
+        const effLimit = unDisambiguatedPolysemy ? Math.min(limit, 4) : limit;
+        if (unDisambiguatedPolysemy) {
+            for (let i = 0; i < refs.length; i++) {
+                const { gid, pos } = refs[i];
+                if (!eqGroups[gid].custom && pos > 2) {
+                    srcSenseWeights.set(gid, srcSenseWeights.get(gid) * 0.45);
+                }
+            }
+        }
+
         const cands = new Map();
         function getRec(candWord) {
             const ck = candWord.toLowerCase();
@@ -18102,16 +18166,17 @@ La06D03=|过奖 过誉`;
                     custom: false,
                     bridges: new Set(),
                     bestLca: 0,
-                    minPos: 999
+                    minPos: 999,
+                    bestGid: -1,
+                    bestGidContrib: 0
                 };
                 cands.set(ck, rec);
             }
             return rec;
         }
 
-        // 3.2 一跳展开 + 收集双跳候选桥词
-        // bridgeEntries: Array<{ bKey, bWord, g1, wSense1, bSal1 }>
-        const bridgeList = [];
+        // 3.2 一跳展开 + 按桥词去重收集代表性桥词（每行限前 MAX_BRIDGE_POS 个词）
+        const bridgeMap = new Map();
         for (let i = 0; i < refs.length; i++) {
             const { gid } = refs[i];
             const g1 = eqGroups[gid];
@@ -18127,32 +18192,33 @@ La06D03=|过奖 过誉`;
                 const rec = getRec(cw);
                 if (g1.custom) rec.custom = true;
                 const sal = posSalience(j);
-                rec.hop1 += wSense1 * (g1.custom ? 1.5 : sal);
+                const contrib = wSense1 * (g1.custom ? 1.2 : sal);
+                rec.hop1 += contrib;
                 rec.bestLca = 5;
                 if (j < rec.minPos) rec.minPos = j;
+                if (contrib > rec.bestGidContrib) {
+                    rec.bestGidContrib = contrib;
+                    rec.bestGid = gid;
+                }
 
-                // 若该一跳词在词林中属于其他 '=' 行且不是超高歧义枢纽词，加入双跳桥词表
-                if (!g1.custom && g1.c1 !== "K") {
+                if (!g1.custom && g1.c1 !== "K" && j < MAX_BRIDGE_POS) {
                     const bRefs = wordToEq.get(ck);
                     if (bRefs && bRefs.length >= 2 && bRefs.length <= MAX_BRIDGE_DEGREE) {
-                        bridgeList.push({
-                            bKey: ck,
-                            g1,
-                            wSense1,
-                            bSal1: sal,
-                            bRefs
-                        });
+                        let bEntry = bridgeMap.get(ck);
+                        if (!bEntry) {
+                            bEntry = { bKey: ck, bRefs, sources: [{ c5: g1.c5, weight: wSense1 * sal }] };
+                            bridgeMap.set(ck, bEntry);
+                        } else {
+                            bEntry.sources.push({ c5: g1.c5, weight: wSense1 * sal });
+                        }
                     }
                 }
             }
         }
 
-        // 3.3 受控双跳传播（同时承担：一跳三角闭环印证 + 高可信跨行扩展）
-        for (let i = 0; i < bridgeList.length; i++) {
-            const { bKey, g1, wSense1, bSal1, bRefs } = bridgeList[i];
-            // Adamic-Adar 风格的度数阻尼：桥词义项越专一，传递越可信
-            const deg = bRefs.length;
-            const hubDamp = 1 / Math.pow(deg, 1.35);
+        // 3.3 受控双跳传播（1-hop 三角闭环印证 + 多桥收敛跨行扩展）
+        for (const { bKey, bRefs, sources } of bridgeMap.values()) {
+            const hubDamp = 1 / Math.pow(bRefs.length, 1.35);
 
             for (let r = 0; r < bRefs.length; r++) {
                 const { gid: gid2, pos: bPos2 } = bRefs[r];
@@ -18160,18 +18226,17 @@ La06D03=|过奖 过誉`;
                 const g2 = eqGroups[gid2];
                 if (g2.custom || g2.c1 === "K") continue;
 
-                const lca = lcaLevel5(g1.c5, g2.c5);
-                // LCA 语义树围栏系数
-                let lcaFactor;
-                if (lca >= 5) lcaFactor = 1.0;
-                else if (lca >= 4) lcaFactor = 0.72;
-                else if (lca >= 2) lcaFactor = 0.42;
-                else if (lca >= 1) lcaFactor = 0.20;
-                else lcaFactor = 0.14; // 跨大类仅靠多桥收敛放行
+                let srcWeighted = 0;
+                let bestLca = 0;
+                for (let s = 0; s < sources.length; s++) {
+                    const lca = lcaLevel5(sources[s].c5, g2.c5);
+                    if (lca > bestLca) bestLca = lca;
+                    srcWeighted += sources[s].weight * lcaToFactor(lca);
+                }
 
                 const bSal2 = posSalience(bPos2);
                 const coh2 = groupCohesion(g2.words.length);
-                const pathBase = wSense1 * bSal1 * bSal2 * hubDamp * lcaFactor * coh2;
+                const pathBase = srcWeighted * bSal2 * hubDamp * coh2;
 
                 const ws2 = g2.words;
                 for (let k = 0; k < ws2.length; k++) {
@@ -18183,62 +18248,57 @@ La06D03=|过奖 过誉`;
                     const rec = getRec(cw2);
                     rec.hop2 += pathBase * posSalience(k);
                     rec.bridges.add(bKey);
-                    if (lca > rec.bestLca) rec.bestLca = lca;
+                    if (bestLca > rec.bestLca) rec.bestLca = bestLca;
                     if (k < rec.minPos) rec.minPos = k;
                 }
             }
         }
 
-        // 3.4 综合精排、双向对称度校验与 '#' 并列词排斥
+        // 3.4 综合精排：自定义词与连续分值解耦；纯双跳强制多桥收敛防漂移
         const scored = [];
         for (const rec of cands.values()) {
             const bridgeCount = rec.bridges.size;
 
-            // 自定义同义词无条件保留最高分
             if (rec.custom) {
                 scored.push({
                     word: rec.word,
                     key: rec.key,
-                    score: 100 + rec.hop1,
+                    score: Math.min(2.0, 1.5 + rec.hop1 * 0.25),
+                    custom: true,
                     hop: 1,
                     bridges: bridgeCount,
-                    lca: 5
+                    lca: 5,
+                    gid: rec.bestGid
                 });
                 continue;
             }
 
-            // 纯双跳候选的严格准入防线
             if (rec.hop1 === 0) {
-                // 排斥 '#' 同类并列词（如 星期一 vs 星期二、中国 vs 美国）
+                // 排斥 '#' 同类并列词
                 if (isCoordinateSibling(key, rec.key)) continue;
-
-                // 跨大类或同大类跨中类：必须满足多桥收敛 (>=2 条独立桥词)
-                if (rec.bestLca < 2 && bridgeCount < 2) continue;
-                // 同中类跨小类：要求多桥收敛或强双跳得分
-                if (rec.bestLca === 2 && bridgeCount < 2 && rec.hop2 < 0.065) continue;
-                // 同小类/同词群单桥：过滤掉过弱的边缘尾词
-                if (rec.bestLca >= 4 && bridgeCount < 2 && rec.hop2 < 0.035) continue;
+                // 核心防漂移规则：纯 2-hop 一律要求多桥收敛（>=2 条独立桥词），单桥仅用于 1-hop 闭环印证
+                if (bridgeCount < 2) continue;
+                // 跨大类/同大类跨中类：要求更强收敛
+                if (rec.bestLca < 2 && (bridgeCount < 3 || rec.hop2 < 0.05)) continue;
+                if (rec.bestLca === 2 && rec.hop2 < 0.04) continue;
+                if (rec.bestLca >= 4 && rec.hop2 < 0.025) continue;
             }
 
-            // 双向邻域余弦对称度（验证候选词语义场与原词语义场的互认程度）
             const recip = neighborhoodCosine(key, rec.key);
 
             let finalScore;
             if (rec.hop1 > 0) {
-                // 一跳候选：获得双跳三角闭环印证加成 + 双向对称度加成
                 const cliqueBoost = 1 + 0.18 * Math.min(bridgeCount, 4);
                 finalScore = (rec.hop1 * cliqueBoost + rec.hop2 * 0.45) * (0.75 + 0.55 * recip);
+                // 语素共享微加权仅施用于 1-hop，避免助推异类并列词
+                finalScore *= (1 + 0.14 * sharedCjkRatio(rawWord, rec.word));
             } else {
-                // 纯双跳候选：多桥收敛获得显著加权，且天然低于同等质量的一跳核心词
-                const convBoost = bridgeCount >= 2 ? (1.28 + 0.14 * Math.min(bridgeCount - 2, 3)) : 0.85;
-                finalScore = rec.hop2 * convBoost * (0.60 + 0.80 * recip) * 0.92;
-                // 双跳仍需满足最低双向对称度，杜绝偶然单路径漂移
-                if (bridgeCount < 2 && recip < 0.08) continue;
+                if (recip < 0.10) continue;
+                if (rec.bestLca < 2 && recip < 0.16) continue;
+                const convBoost = 1.25 + 0.14 * Math.min(bridgeCount - 2, 3);
+                finalScore = rec.hop2 * convBoost * (0.60 + 0.80 * recip) * 0.90;
             }
 
-            // 语素共享微加权 & 长度差异惩罚（避免 2 字词被过长 4+ 字冷僻成语霸榜）
-            const morph = sharedCjkRatio(rawWord, rec.word);
-            finalScore *= (1 + 0.14 * morph);
             const lenDiff = Math.abs(rec.word.length - rawWord.length);
             if (rawWord.length <= 2 && rec.word.length >= 4) {
                 finalScore *= 0.82;
@@ -18252,74 +18312,116 @@ La06D03=|过奖 过誉`;
                 word: rec.word,
                 key: rec.key,
                 score: finalScore,
+                custom: false,
                 hop: rec.hop1 > 0 ? 1 : 2,
                 bridges: bridgeCount,
                 lca: rec.bestLca,
-                recip: Number(recip.toFixed(3))
+                recip: Number(recip.toFixed(3)),
+                gid: rec.bestGid
             });
         }
 
         scored.sort((a, b) =>
+            ((b.custom ? 1 : 0) - (a.custom ? 1 : 0)) ||
             (b.score - a.score) ||
             (a.hop - b.hop) ||
             (b.bridges - a.bridges) ||
             (a.word.length - b.word.length)
         );
 
-        // 3.5 动态相对阈值 + 超串冗余剪枝
-        const topScore = scored.length > 0 ? scored[0].score : 0;
-        const minAccept = topScore > 50 ? 0.02 : topScore * 0.12;
+        // 3.5 动态相对阈值（同时修剪 1-hop 臃肿行冷僻尾词）+ 多义行配额 + 双向超串剪枝
+        let topRegular = 0;
+        for (let i = 0; i < scored.length; i++) {
+            if (!scored[i].custom) {
+                topRegular = scored[i].score;
+                break;
+            }
+        }
+        const minAccept1 = topRegular * 0.14;
+        const minAccept2 = topRegular * 0.16;
+        const maxPerGroup = refs.length >= 2 ? Math.max(4, Math.ceil(effLimit * 0.6)) : effLimit;
+        const groupCounts = new Map();
         const picked = [];
-        const pickedKeys = [key];
 
-        for (let i = 0; i < scored.length && picked.length < limit; i++) {
+        for (let i = 0; i < scored.length && picked.length < effLimit; i++) {
             const item = scored[i];
-            if (item.hop === 2 && item.score < minAccept) continue;
-            // 超串剪枝：若候选词已包含原词或已选出的更优变体，在子串/容噪检索中属于冗余
+            if (!item.custom) {
+                if (item.hop === 2 && item.score < minAccept2) continue;
+                if (item.hop === 1 && item.score < minAccept1) continue;
+                if (item.gid >= 0 && (groupCounts.get(item.gid) || 0) >= maxPerGroup) continue;
+            }
+
+            // 正向超串剪枝：跳过包含原词或已选更短优词的超串
+            if (item.key.indexOf(key) !== -1) continue;
             let redundant = false;
-            for (let p = 0; p < pickedKeys.length; p++) {
-                if (item.key.indexOf(pickedKeys[p]) !== -1) {
+            for (let p = 0; p < picked.length; p++) {
+                if (item.key.indexOf(picked[p].key) !== -1) {
                     redundant = true;
                     break;
                 }
             }
             if (redundant) continue;
 
+            // 反向超串剪枝：当更短且非更弱跳层的词入选时，剔除先前已选的它的超串
+            for (let p = picked.length - 1; p >= 0; p--) {
+                const prev = picked[p];
+                if (
+                    prev.key.indexOf(item.key) !== -1 &&
+                    (!prev.custom || item.custom) &&
+                    item.hop <= prev.hop
+                ) {
+                    picked.splice(p, 1);
+                    if (prev.gid >= 0) {
+                        groupCounts.set(prev.gid, Math.max(0, (groupCounts.get(prev.gid) || 1) - 1));
+                    }
+                }
+            }
+
             picked.push(item);
-            pickedKeys.push(item.key);
+            if (item.gid >= 0) {
+                groupCounts.set(item.gid, (groupCounts.get(item.gid) || 0) + 1);
+            }
         }
 
         return picked;
     }
 
     // =========================================================================
-    // 4. 全词表 DP 最优分词（支持复合词边界保护 + 跨词上下文消歧）
+    // 4. 全词表 DP 最优分词（2+2 优于 3+1 + 空格硬边界 + 英文词边界保护）
     // =========================================================================
-    function segmentQueryDP(query) {
-        const lower = query.toLowerCase();
+    function hasValidAsciiBoundary(lower, start, end) {
+        if (ASCII_ALNUM_RE.test(lower.charAt(start)) && start > 0 && ASCII_ALNUM_RE.test(lower.charAt(start - 1))) {
+            return false;
+        }
+        if (ASCII_ALNUM_RE.test(lower.charAt(end - 1)) && end < lower.length && ASCII_ALNUM_RE.test(lower.charAt(end))) {
+            return false;
+        }
+        return true;
+    }
+
+    function segmentChunkDP(chunk, offset) {
+        const lower = chunk.toLowerCase();
         const n = lower.length;
-        // dp[i] = 到位置 i 为止的最大切分得分
         const dp = new Float64Array(n + 1);
         const prev = new Int32Array(n + 1);
-        const prevType = new Int8Array(n + 1); // 0=单字未登录, 1=非'='词(#/@), 2='='词
+        const prevType = new Int8Array(n + 1); // 0=跳过单字, 1=非'='词(#/@), 2='='词
         prev.fill(-1);
 
         for (let i = 0; i < n; i++) {
-            // 选项 1：跳过当前单字
             if (dp[i] >= dp[i + 1]) {
                 dp[i + 1] = dp[i];
                 prev[i + 1] = i;
                 prevType[i + 1] = 0;
             }
-            // 选项 2：匹配全词表（= / # / @ / custom）中的长度 >= 2 的词
             const maxEnd = Math.min(n, i + maxLexLen);
             for (let j = i + 2; j <= maxEnd; j++) {
+                if (!hasValidAsciiBoundary(lower, i, j)) continue;
                 const sub = lower.slice(i, j);
                 const lex = lexicon.get(sub);
                 if (!lex) continue;
                 const len = j - i;
-                // 优先切出更长的完整词；同长时 '=' 略优于 '#'/'@'
-                const gain = len * len + (lex.eq ? 0.45 : 0.15);
+                // 线性+超线性收益：保证 2+2(10.2) > 3+1(7.9)，同时 4(#)(10.5) > 2+2(10.2)
+                const gain = len * 2.0 + (len - 1) * 0.8 + (lex.eq ? 0.30 : 0.10);
                 const cand = dp[i] + gain;
                 if (cand > dp[j]) {
                     dp[j] = cand;
@@ -18335,11 +18437,11 @@ La06D03=|过奖 过誉`;
             const p = prev[cur];
             if (p < 0) break;
             if (prevType[cur] > 0) {
-                const text = query.slice(p, cur);
+                const text = chunk.slice(p, cur);
                 const lex = lexicon.get(text.toLowerCase());
                 spans.push({
-                    start: p,
-                    end: cur,
+                    start: offset + p,
+                    end: offset + cur,
                     text,
                     eq: prevType[cur] === 2,
                     codes5: lex ? lex.codes5 : []
@@ -18351,42 +18453,71 @@ La06D03=|过奖 过誉`;
         return spans;
     }
 
+    function segmentQueryChunksDP(chunks) {
+        const spans = [];
+        let offset = 0;
+        for (let i = 0; i < chunks.length; i++) {
+            const chunk = chunks[i];
+            const part = segmentChunkDP(chunk, offset);
+            for (let j = 0; j < part.length; j++) spans.push(part[j]);
+            offset += chunk.length;
+        }
+        return spans;
+    }
+
     // =========================================================================
-    // 5. 顶层查询扩展入口（带 256 条 LRU 缓存）
+    // 5. 顶层查询扩展入口（带 256 条归一化 LRU 缓存与分级权重输出）
     // =========================================================================
     const queryCache = new Map();
 
-    function computeExpand(rawQuery, maxVariants) {
-        const clean = String(rawQuery || "").replace(/\s+/g, "");
-        if (!clean || clean.length < 2) {
-            return { variants: [], detail: [] };
+    function toWeightedSpecs(detail) {
+        let topReg = 0;
+        for (let i = 0; i < detail.length; i++) {
+            if (!detail[i].custom && detail[i].score > topReg) topReg = detail[i].score;
         }
+        return detail.map(it => {
+            if (it.custom) {
+                return { text: it.word, weight: 95, maxNoise: 2, tier: 1 };
+            }
+            const rel = topReg > 0 ? Math.min(1, Math.max(0, it.score / topReg)) : 0.5;
+            if (it.hop === 1) {
+                return { text: it.word, weight: Math.round(72 + 16 * rel), maxNoise: 1, tier: 1 };
+            }
+            // 2-hop 强制精确匹配（maxNoise = 0），防止“语义漂移 × 模糊容噪”双重放大
+            return { text: it.word, weight: Math.round(45 + 20 * rel), maxNoise: 0, tier: 2 };
+        });
+    }
+
+    function computeExpand(rawQuery, maxVariants) {
+        const trimmed = String(rawQuery || "").trim();
+        if (!trimmed) return { variants: [], items: [], detail: [] };
+
+        const chunks = trimmed.split(/\s+/).filter(Boolean);
+        const clean = chunks.join("");
+        if (clean.length < 2) return { variants: [], items: [], detail: [] };
         const cleanLower = clean.toLowerCase();
 
-        // 情况 A：整词直接命中 '=' 或自定义词库
-        if (wordToEq.has(cleanLower)) {
+        // 情况 A：单块整词直接命中 '=' 或自定义词库
+        if (chunks.length === 1 && wordToEq.has(cleanLower)) {
             const items = expandSingleWord(clean, null, true, maxVariants);
             return {
                 variants: items.map(x => x.word),
+                items: toWeightedSpecs(items),
                 detail: items
             };
         }
 
-        // 情况 B：整词恰好是一个 '#' 或 '@' 完整专名/独立词（如 "摩托车"、"红烧肉"）
-        // 不再拆开乱扩内部子词，避免高噪误匹配
-        if (lexicon.has(cleanLower)) {
-            return { variants: [], detail: [] };
+        // 情况 B：单块整词恰好是 '#' 或 '@' 独立词/专名，保护边界不拆开乱扩
+        if (chunks.length === 1 && lexicon.has(cleanLower)) {
+            return { variants: [], items: [], detail: [] };
         }
 
-        // 情况 C：复合短语，使用全词表 DP 最优切分 + 上下文消歧
-        const spans = segmentQueryDP(clean);
+        // 情况 C：按空白分块执行 DP 最优切分 + 全句共享上下文消歧
+        const spans = segmentQueryChunksDP(chunks);
         const expandable = spans.filter(s => s.eq);
-        if (expandable.length === 0) {
-            return { variants: [], detail: [] };
-        }
+        if (expandable.length === 0) return { variants: [], items: [], detail: [] };
 
-        // 为每个可展开词收集其余所有词块（含 '#' / '@' 词块）的分类码作为消歧上下文
-        const perSpanCands = expandable.map((sp, idx) => {
+        const perSpanCands = expandable.map(sp => {
             const ctxCodes = [];
             for (let i = 0; i < spans.length; i++) {
                 if (spans[i] === sp) continue;
@@ -18398,9 +18529,7 @@ La06D03=|过奖 过誉`;
             return { span: sp, items };
         }).filter(x => x.items.length > 0);
 
-        if (perSpanCands.length === 0) {
-            return { variants: [], detail: [] };
-        }
+        if (perSpanCands.length === 0) return { variants: [], items: [], detail: [] };
 
         const composed = [];
         // C.1 单槽替换（最高精度）
@@ -18412,7 +18541,9 @@ La06D03=|过奖 过誉`;
                 const it = items[j];
                 composed.push({
                     word: prefix + it.word + suffix,
+                    key: (prefix + it.word + suffix).toLowerCase(),
                     score: it.score * (1 + 0.08 * span.text.length),
+                    custom: !!it.custom,
                     hop: it.hop,
                     bridges: it.bridges,
                     lca: it.lca,
@@ -18421,20 +18552,43 @@ La06D03=|过奖 过誉`;
             }
         }
 
-        // C.2 双槽联合替换（当有 >=2 个可展开词块时，取各自 Top-3 组合补齐召回）
+        // C.2 双槽联合替换：从多槽中选出最具代表性的两个核心槽位（同分偏好右侧中心词）
         if (perSpanCands.length >= 2) {
-            const a = perSpanCands[0];
-            const b = perSpanCands[1];
+            const ranked = perSpanCands
+                .map((entry, idx) => ({
+                    entry,
+                    idx,
+                    priority:
+                        entry.span.text.length * 0.5 +
+                        Math.min(entry.items[0].score, 2.0) +
+                        (entry.items[0].custom ? 0.6 : 0)
+                }))
+                .sort((x, y) => (y.priority - x.priority) || (y.idx - x.idx));
+
+            let a = ranked[0].entry;
+            let b = ranked[1].entry;
+            if (a.span.start > b.span.start) {
+                const tmp = a;
+                a = b;
+                b = tmp;
+            }
+
             const topA = a.items.slice(0, 3);
             const topB = b.items.slice(0, 3);
             const p1 = clean.slice(0, a.span.start);
             const mid = clean.slice(a.span.end, b.span.start);
             const p3 = clean.slice(b.span.end);
+
             for (let i = 0; i < topA.length; i++) {
                 for (let j = 0; j < topB.length; j++) {
+                    const w = p1 + topA[i].word + mid + topB[j].word + p3;
+                    const sA = Math.min(topA[i].score, 2.0);
+                    const sB = Math.min(topB[j].score, 2.0);
                     composed.push({
-                        word: p1 + topA[i].word + mid + topB[j].word + p3,
-                        score: Math.sqrt(topA[i].score * topB[j].score) * 0.72,
+                        word: w,
+                        key: w.toLowerCase(),
+                        score: Math.sqrt(sA * sB) * 0.72,
+                        custom: !!(topA[i].custom && topB[j].custom),
                         hop: Math.max(topA[i].hop, topB[j].hop),
                         bridges: Math.min(topA[i].bridges, topB[j].bridges),
                         lca: Math.min(topA[i].lca, topB[j].lca),
@@ -18444,28 +18598,44 @@ La06D03=|过奖 过誉`;
             }
         }
 
-        composed.sort((x, y) => y.score - x.score);
+        composed.sort((x, y) =>
+            ((y.custom ? 1 : 0) - (x.custom ? 1 : 0)) ||
+            (y.score - x.score) ||
+            (x.hop - y.hop)
+        );
 
-        // 去重与超串剪枝，截断至 maxVariants (16)
+        // 去重 + 双向超串剪枝
         const picked = [];
-        const pickedKeys = [cleanLower];
         for (let i = 0; i < composed.length && picked.length < maxVariants; i++) {
             const c = composed[i];
-            const ck = c.word.toLowerCase();
+            if (c.key === cleanLower || c.key.indexOf(cleanLower) !== -1) continue;
+
             let dup = false;
-            for (let p = 0; p < pickedKeys.length; p++) {
-                if (ck === pickedKeys[p] || ck.indexOf(pickedKeys[p]) !== -1) {
+            for (let p = 0; p < picked.length; p++) {
+                if (c.key === picked[p].key || c.key.indexOf(picked[p].key) !== -1) {
                     dup = true;
                     break;
                 }
             }
             if (dup) continue;
+
+            for (let p = picked.length - 1; p >= 0; p--) {
+                const prev = picked[p];
+                if (
+                    prev.key.indexOf(c.key) !== -1 &&
+                    (!prev.custom || c.custom) &&
+                    c.hop <= prev.hop
+                ) {
+                    picked.splice(p, 1);
+                }
+            }
+
             picked.push(c);
-            pickedKeys.push(ck);
         }
 
         return {
             variants: picked.map(x => x.word),
+            items: toWeightedSpecs(picked),
             detail: picked
         };
     }
@@ -18474,37 +18644,37 @@ La06D03=|过奖 过誉`;
         const limit = (options && typeof options.maxVariants === "number" && options.maxVariants > 0)
             ? Math.min(32, Math.floor(options.maxVariants))
             : MAX_VARIANTS;
-        const cacheKey = limit + "|" + String(query || "").trim();
+        const norm = String(query || "").trim().toLowerCase().replace(/\s+/g, " ");
+        const cacheKey = limit + "|" + norm;
         const hit = queryCache.get(cacheKey);
         if (hit) {
             queryCache.delete(cacheKey);
             queryCache.set(cacheKey, hit);
-            return { variants: hit.variants.slice() };
+            return { variants: hit.variants.slice(), items: hit.items.slice() };
         }
         const res = computeExpand(query, limit);
         queryCache.set(cacheKey, res);
         if (queryCache.size > LRU_CAPACITY) {
             queryCache.delete(queryCache.keys().next().value);
         }
-        return { variants: res.variants.slice() };
+        return { variants: res.variants.slice(), items: res.items.slice() };
     }
 
     function debugExpandQuery(query, maxVariants = MAX_VARIANTS) {
         return computeExpand(query, maxVariants);
     }
 
-    // 导出全局接口（完全兼容 index.js 与 content.js）
     global.expandQuery = expandQuery;
     global.debugExpandQuery = debugExpandQuery;
     global.synonymIndex = {
         version: SYN_ALGO_VERSION,
         maxVariants: MAX_VARIANTS,
-        // 兼容 index.js 中 bindSynonymsNamespace() 的 JSON.stringify(window.synonymIndex.groups)
-        groups: [SYN_ALGO_VERSION, ...rawLines],
+        // 轻量指纹数组：完全兼容 index.js 的 JSON.stringify(window.synonymIndex.groups)
+        groups: [DATA_SIG],
         stats: {
             eqGroups: eqGroups.length,
             lexiconSize: lexicon.size,
-            rawLines: rawLines.length
+            rawLines: rawLineCount
         }
     };
 })(typeof window !== "undefined" ? window : self);

@@ -153,6 +153,14 @@ export function set_comments(val) {
 export function set_data(data_val) {
     wasm.set_data(addHeapObject(data_val));
 }
+
+/**
+ * @returns {boolean}
+ */
+export function supports_weighted_keywords() {
+    const ret = wasm.supports_weighted_keywords();
+    return ret !== 0;
+}
 function __wbg_get_imports() {
     const import0 = {
         __proto__: null,

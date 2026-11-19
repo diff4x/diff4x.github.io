@@ -9,9 +9,118 @@ use serde_json::Value;
 use similar::{Algorithm, DiffOp, capture_diff_slices};
 use js_sys::{Uint32Array, Object};
 
+const BLOOM_WORDS: usize = 32768; // 256 KB = 2,097,152 bits
+const BLOOM_MASK: u64 = (BLOOM_WORDS as u64 * 64) - 1;
+const SYN_HL_BIT: usize = 0x100;
+
+struct CorpusBloom {
+    bits: Vec<u64>,
+    ready: bool,
+}
+
+impl CorpusBloom {
+    fn new() -> Self {
+        Self {
+            bits: Vec::new(),
+            ready: false,
+        }
+    }
+
+    #[inline]
+    fn hashes(a: char, b: char) -> (u64, u64) {
+        let mut x = ((a as u64) << 32) | (b as u64);
+        x = (x ^ (x >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        x = (x ^ (x >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        let h1 = x ^ (x >> 31);
+        let h2 = h1.wrapping_mul(0x9e37_79b9_7f4a_7c15) | 1;
+        (h1, h2)
+    }
+
+    #[inline]
+    fn insert_pair(&mut self, a: char, b: char) {
+        let (h1, h2) = Self::hashes(a, b);
+        for k in 0..4u64 {
+            let idx = (h1.wrapping_add(k.wrapping_mul(h2)) & BLOOM_MASK) as usize;
+            self.bits[idx >> 6] |= 1u64 << (idx & 63);
+        }
+    }
+
+    #[inline]
+    fn has_pair(&self, a: char, b: char) -> bool {
+        let (h1, h2) = Self::hashes(a, b);
+        for k in 0..4u64 {
+            let idx = (h1.wrapping_add(k.wrapping_mul(h2)) & BLOOM_MASK) as usize;
+            if (self.bits[idx >> 6] & (1u64 << (idx & 63))) == 0 {
+                return false;
+            }
+        }
+        true
+    }
+
+    // 与 try_match_at(eff_noise = 0) 严格对齐：允许中间隔至多 1 个非硬断行空白
+    fn feed_text(&mut self, text: &str) {
+        let mut prev: Option<char> = None;
+        let mut ws_run = 0usize;
+        for raw in text.chars() {
+            let ch = fold_char(raw);
+            if is_hard_break(ch) {
+                prev = None;
+                ws_run = 0;
+            } else if ch.is_whitespace() {
+                ws_run += 1;
+                if ws_run > 1 {
+                    prev = None;
+                }
+            } else {
+                if let Some(p) = prev {
+                    self.insert_pair(p, ch);
+                }
+                prev = Some(ch);
+                ws_run = 0;
+            }
+        }
+    }
+
+    fn rebuild(&mut self, pool: &[String]) {
+        self.bits.clear();
+        self.bits.resize(BLOOM_WORDS, 0);
+        let mut i = 0usize;
+        while i + 3 < pool.len() {
+            self.feed_text(&pool[i]);
+            let raw = &pool[i + 1];
+            let content = raw.strip_prefix("localOnly").unwrap_or(raw.as_str());
+            self.feed_text(content);
+            let res_type = pool[i + 3].as_str();
+            if res_type != "html" && res_type != "image" {
+                self.feed_text(strip_type_root(&pool[i + 2]));
+            }
+            i += 4;
+        }
+        self.ready = true;
+    }
+
+    fn might_match_exact(&self, chars: &[char]) -> bool {
+        if !self.ready || chars.len() < 2 {
+            return true;
+        }
+        for w in chars.windows(2) {
+            if !self.has_pair(w[0], w[1]) {
+                return false;
+            }
+        }
+        true
+    }
+}
+
+#[wasm_bindgen]
+pub fn supports_weighted_keywords() -> bool {
+    true
+}
+
 thread_local! {
     static GLOBAL_DATA: RefCell<Vec<String>> = RefCell::new(Vec::new());
     static PATH_INDEX: RefCell<HashMap<String, usize>> = RefCell::new(HashMap::new());
+    static CORPUS_BLOOM: RefCell<CorpusBloom> = RefCell::new(CorpusBloom::new());
     static COMMENTS: RefCell<Vec<CommentDoc>> = RefCell::new(Vec::new());
     static COMMENT_INDEX: RefCell<HashMap<String, usize>> = RefCell::new(HashMap::new());
 }
@@ -115,6 +224,9 @@ fn install_data(local_vec: Vec<String>) {
         index.insert(local_vec[i + 2].clone(), i);
         i += 4;
     }
+    CORPUS_BLOOM.with(|b| {
+        b.borrow_mut().rebuild(&local_vec);
+    });
     GLOBAL_DATA.with(|data| {
         *data.borrow_mut() = local_vec;
     });
@@ -545,35 +657,106 @@ fn fill_chars(buf: &mut Vec<(usize, usize, char)>, text: &str) {
     buf.extend(text.char_indices().map(|(b, c)| (b, c.len_utf8(), fold_char(c))));
 }
 
-fn normalize_keywords(keywords: &[String]) -> Vec<Vec<char>> {
-    keywords
-        .iter()
-        .map(|k| {
-            k.chars()
-                .filter(|c| !c.is_whitespace())
-                .map(fold_char)
-                .collect::<Vec<char>>()
-        })
-        .filter(|v| !v.is_empty())
-        .collect()
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum KeywordIn {
+    Plain(String),
+    Spec {
+        text: String,
+        #[serde(default)]
+        weight: Option<u16>,
+        #[serde(rename = "maxNoise", default)]
+        max_noise: Option<usize>,
+        #[serde(default)]
+        tier: Option<u8>,
+    },
 }
 
-fn parse_keywords(val: JsValue) -> Vec<Vec<char>> {
-    let keywords: Vec<String> = serde_wasm_bindgen::from_value(val).unwrap_or_default();
-    normalize_keywords(&keywords)
+struct CompiledKw {
+    chars: Vec<char>,
+    weight_pct: u16,
+    max_noise: usize,
+    tier: u8, // 0 = 原词, 1 = 自定义/1-hop, 2 = 2-hop
 }
 
-fn merge_tagged_hits(mut all_hits: Vec<(usize, usize, usize, bool)>) -> Vec<(usize, usize, usize, bool)> {
+fn compile_keywords(raw: Vec<KeywordIn>) -> Vec<CompiledKw> {
+    let mut out = Vec::with_capacity(raw.len());
+    for (idx, item) in raw.into_iter().enumerate() {
+        let (text, weight_pct, max_noise, tier) = match item {
+            KeywordIn::Plain(s) => {
+                if idx == 0 {
+                    (s, 100, usize::MAX, 0)
+                } else {
+                    (s, 70, usize::MAX, 1)
+                }
+            }
+            KeywordIn::Spec {
+                text,
+                weight,
+                max_noise,
+                tier,
+            } => {
+                let default_tier = if idx == 0 { 0 } else { 1 };
+                let t = tier.unwrap_or(default_tier);
+                let w = weight.unwrap_or(if t == 0 { 100 } else { 70 }).clamp(10, 100);
+                (text, w, max_noise.unwrap_or(usize::MAX), t)
+            }
+        };
+        let chars: Vec<char> = text
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .map(fold_char)
+            .collect();
+        if !chars.is_empty() {
+            out.push(CompiledKw {
+                chars,
+                weight_pct,
+                max_noise,
+                tier,
+            });
+        }
+    }
+    out
+}
+
+fn parse_keywords(val: JsValue) -> Vec<CompiledKw> {
+    let raw: Vec<KeywordIn> = serde_wasm_bindgen::from_value(val).unwrap_or_default();
+    compile_keywords(raw)
+}
+
+fn filter_kws_by_bloom(kws: &[CompiledKw], noise_level: usize, bloom: &CorpusBloom) -> Vec<usize> {
+    let mut active = Vec::with_capacity(kws.len());
+    for (idx, kw) in kws.iter().enumerate() {
+        let eff = effective_noise(kw.chars.len(), noise_level.min(kw.max_noise));
+        if eff == 0
+            && !kw.chars.iter().any(|&c| is_hard_break(c))
+            && !bloom.might_match_exact(&kw.chars)
+        {
+            continue;
+        }
+        active.push(idx);
+    }
+    active
+}
+
+// Hit tuple: (start_byte, end_byte, noise, weight_pct, tier)
+type TaggedHit = (usize, usize, usize, u16, u8);
+
+fn merge_tagged_hits(mut all_hits: Vec<TaggedHit>) -> Vec<TaggedHit> {
     all_hits.sort_by(|a, b| a.0.cmp(&b.0).then(b.1.cmp(&a.1)));
-    let mut merged = Vec::<(usize, usize, usize, bool)>::new();
+    let mut merged = Vec::<TaggedHit>::new();
     for hit in all_hits {
         if let Some(last) = merged.last_mut() {
             if hit.0 < last.1 {
                 let last_len = last.1 - last.0;
                 let hit_len = hit.1 - hit.0;
                 let better = (hit.2 < last.2)
-                    || (hit.2 == last.2 && !hit.3 && last.3)
-                    || (hit.2 == last.2 && hit.3 == last.3 && hit_len > last_len);
+                    || (hit.2 == last.2 && hit.4 < last.4)
+                    || (hit.2 == last.2 && hit.4 == last.4 && hit.3 > last.3)
+                    || (hit.2 == last.2
+                        && hit.4 == last.4
+                        && hit.3 == last.3
+                        && hit_len > last_len);
                 if better {
                     *last = hit;
                 }
@@ -585,76 +768,100 @@ fn merge_tagged_hits(mut all_hits: Vec<(usize, usize, usize, bool)>) -> Vec<(usi
     merged
 }
 
-fn collect_multi_matches_tagged(
+#[inline]
+fn collect_one_kw(
     text_chars: &[(usize, usize, char)],
-    keywords: &[Vec<char>],
+    kw: &CompiledKw,
     noise_level: usize,
-    out: &mut Vec<(usize, usize, usize, bool)>,
+    out: &mut Vec<TaggedHit>,
 ) {
+    let kw_len = kw.chars.len();
+    if kw_len == 0 {
+        return;
+    }
     let text_len = text_chars.len();
     let at = |j: usize| text_chars[j].2;
+    let eff_noise = effective_noise(kw_len, noise_level.min(kw.max_noise));
+    let first = kw.chars[0];
 
-    for (kw_idx, kw_chars) in keywords.iter().enumerate() {
-        let kw_len = kw_chars.len();
-        if kw_len == 0 {
+    let mut i = 0usize;
+    while i < text_len {
+        if text_chars[i].2 != first {
+            i += 1;
             continue;
         }
-        let is_syn = kw_idx > 0;
-        let eff_noise = effective_noise(kw_len, noise_level);
-        let first = kw_chars[0];
+        if let Some((last, noise)) = try_match_at(&at, text_len, i, &kw.chars, eff_noise) {
+            let start_byte = text_chars[i].0;
+            let end_byte = text_chars[last].0 + text_chars[last].1;
+            out.push((start_byte, end_byte, noise, kw.weight_pct, kw.tier));
+        }
+        i += 1;
+    }
+}
 
-        let mut i = 0usize;
-        while i < text_len {
-            if text_chars[i].2 != first {
-                i += 1;
-                continue;
+fn collect_multi_matches_tagged(
+    text_chars: &[(usize, usize, char)],
+    keywords: &[CompiledKw],
+    active_indices: Option<&[usize]>,
+    noise_level: usize,
+    out: &mut Vec<TaggedHit>,
+) {
+    match active_indices {
+        Some(indices) => {
+            for &idx in indices {
+                collect_one_kw(text_chars, &keywords[idx], noise_level, out);
             }
-            if let Some((last, noise)) = try_match_at(&at, text_len, i, kw_chars, eff_noise) {
-                let start_byte = text_chars[i].0;
-                let end_byte = text_chars[last].0 + text_chars[last].1;
-                out.push((start_byte, end_byte, noise, is_syn));
+        }
+        None => {
+            for kw in keywords {
+                collect_one_kw(text_chars, kw, noise_level, out);
             }
-            i += 1;
         }
     }
 }
 
 fn get_multi_matches_tagged(
     text_chars: &[(usize, usize, char)],
-    keywords: &[Vec<char>],
+    keywords: &[CompiledKw],
+    active_indices: Option<&[usize]>,
     noise_level: usize,
-) -> Vec<(usize, usize, usize, bool)> {
-    let mut all_hits: Vec<(usize, usize, usize, bool)> = Vec::new();
-    collect_multi_matches_tagged(text_chars, keywords, noise_level, &mut all_hits);
+) -> Vec<TaggedHit> {
+    let mut all_hits: Vec<TaggedHit> = Vec::new();
+    collect_multi_matches_tagged(text_chars, keywords, active_indices, noise_level, &mut all_hits);
     merge_tagged_hits(all_hits)
+}
+
+#[inline]
+fn pack_hl_noise(noise: usize, tier: u8) -> usize {
+    noise.min(0xff) | if tier > 0 { SYN_HL_BIT } else { 0 }
 }
 
 fn get_multi_matches(
     text_chars: &[(usize, usize, char)],
-    keywords: &[Vec<char>],
+    keywords: &[CompiledKw],
     noise_level: usize,
 ) -> Vec<(usize, usize, usize)> {
-    get_multi_matches_tagged(text_chars, keywords, noise_level)
+    get_multi_matches_tagged(text_chars, keywords, None, noise_level)
         .into_iter()
-        .map(|(s, e, n, _)| (s, e, n))
+        .map(|(s, e, n, _, t)| (s, e, pack_hl_noise(n, t)))
         .collect()
 }
 
-fn has_any_match(chars: &[char], keywords: &[Vec<char>], noise_level: usize) -> bool {
+fn has_any_match(chars: &[char], keywords: &[CompiledKw], noise_level: usize) -> bool {
     let len = chars.len();
     let at = |j: usize| chars[j];
     for kw in keywords {
-        let kw_len = kw.len();
+        let kw_len = kw.chars.len();
         if kw_len == 0 {
             continue;
         }
-        let eff_noise = effective_noise(kw_len, noise_level);
-        let first = kw[0];
+        let eff_noise = effective_noise(kw_len, noise_level.min(kw.max_noise));
+        let first = kw.chars[0];
         for i in 0..len {
             if chars[i] != first {
                 continue;
             }
-            if try_match_at(&at, len, i, kw, eff_noise).is_some() {
+            if try_match_at(&at, len, i, &kw.chars, eff_noise).is_some() {
                 return true;
             }
         }
@@ -681,19 +888,20 @@ const CONTENT_NOISE_STEP: usize = 10;
 const PATH_HIT_SCORE: usize = 50;
 const PATH_NOISE_STEP: usize = 5;
 
-fn weigh_hits(hits: &[(usize, usize, usize, bool)], base: usize, step: usize) -> usize {
+fn weigh_hits(hits: &[TaggedHit], base: usize, step: usize) -> usize {
     let max_penalty = base - base / 10;
     hits.iter()
         .map(|h| {
             let raw = base - (h.2 * step).min(max_penalty);
-            if h.3 { raw * 7 / 10 } else { raw }
+            (raw * (h.3 as usize)) / 100
         })
         .sum::<usize>()
 }
 
 fn scan_docs<'a>(
     pool: &'a [String],
-    kws: &[Vec<char>],
+    kws: &[CompiledKw],
+    active: &[usize],
     noise: usize,
     from_doc: usize,
     to_doc: usize,
@@ -724,10 +932,10 @@ fn scan_docs<'a>(
         };
 
         fill_chars(&mut title_buf, title);
-        let title_m = get_multi_matches_tagged(&title_buf, kws, noise);
+        let title_m = get_multi_matches_tagged(&title_buf, kws, Some(active), noise);
 
         fill_chars(&mut content_buf, searchable_content);
-        let content_m = get_multi_matches_tagged(&content_buf, kws, noise);
+        let content_m = get_multi_matches_tagged(&content_buf, kws, Some(active), noise);
 
         let mut count = title_m.len() + content_m.len();
         let mut score = weigh_hits(&title_m, TITLE_HIT_SCORE, TITLE_NOISE_STEP)
@@ -735,7 +943,7 @@ fn scan_docs<'a>(
 
         if count == 0 && res_type.as_str() != "html" && res_type.as_str() != "image" {
             fill_chars(&mut title_buf, strip_type_root(path));
-            let path_m = get_multi_matches_tagged(&title_buf, kws, noise);
+            let path_m = get_multi_matches_tagged(&title_buf, kws, Some(active), noise);
             count = path_m.len();
             score = weigh_hits(&path_m, PATH_HIT_SCORE, PATH_NOISE_STEP);
         }
@@ -774,9 +982,14 @@ pub fn search_multi_range(
         return serde_wasm_bindgen::to_value(&Vec::<SearchResult>::new()).unwrap();
     }
 
+    let active = CORPUS_BLOOM.with(|b| filter_kws_by_bloom(&kws, noise_level, &b.borrow()));
+    if active.is_empty() {
+        return serde_wasm_bindgen::to_value(&Vec::<SearchResult>::new()).unwrap();
+    }
+
     GLOBAL_DATA.with(|data| {
         let pool = data.borrow();
-        let results = scan_docs(&pool, &kws, noise_level, from_doc, to_doc);
+        let results = scan_docs(&pool, &kws, &active, noise_level, from_doc, to_doc);
         serde_wasm_bindgen::to_value(&results).unwrap()
     })
 }
@@ -786,7 +999,7 @@ struct AdsTermIn {
     #[serde(default)]
     noise: usize,
     #[serde(default)]
-    keywords: Vec<String>,
+    keywords: Vec<KeywordIn>,
 }
 
 #[derive(Deserialize)]
@@ -810,7 +1023,7 @@ struct AdsPlanIn {
 
 struct AdsTerm {
     noise: usize,
-    kws: Vec<Vec<char>>,
+    kws: Vec<CompiledKw>,
 }
 
 enum AdsNode {
@@ -870,7 +1083,7 @@ fn ads_rank(n: &AdsNode, terms: &[AdsTerm]) -> (u8, usize, usize) {
             (
                 if *neg { 2 } else { 0 },
                 t.noise,
-                usize::MAX - t.kws[0].len(),
+                usize::MAX - t.kws[0].chars.len(),
             )
         }
         _ => (1, 0, 0),
@@ -913,7 +1126,7 @@ fn parse_ads_plan(val: JsValue) -> Option<AdsPlan> {
     let raw: AdsPlanIn = serde_wasm_bindgen::from_value(val).ok()?;
     let mut terms: Vec<AdsTerm> = Vec::with_capacity(raw.terms.len());
     for t in raw.terms {
-        let kws = normalize_keywords(&t.keywords);
+        let kws = compile_keywords(t.keywords);
         if kws.is_empty() {
             return None;
         }
@@ -938,33 +1151,44 @@ fn parse_ads_plan(val: JsValue) -> Option<AdsPlan> {
     })
 }
 
-fn has_match_chars(
-    chars: &[(usize, usize, char)],
-    keywords: &[Vec<char>],
-    noise_level: usize,
-) -> bool {
-    let len = chars.len();
-    if len == 0 {
+#[inline]
+fn check_one_kw(chars: &[(usize, usize, char)], kw: &CompiledKw, noise_level: usize) -> bool {
+    let kw_len = kw.chars.len();
+    if kw_len == 0 {
         return false;
     }
+    let len = chars.len();
     let at = |j: usize| chars[j].2;
-    for kw in keywords {
-        let kw_len = kw.len();
-        if kw_len == 0 {
+    let eff_noise = effective_noise(kw_len, noise_level.min(kw.max_noise));
+    let first = kw.chars[0];
+    for i in 0..len {
+        if chars[i].2 != first {
             continue;
         }
-        let eff_noise = effective_noise(kw_len, noise_level);
-        let first = kw[0];
-        for i in 0..len {
-            if chars[i].2 != first {
-                continue;
-            }
-            if try_match_at(&at, len, i, kw, eff_noise).is_some() {
-                return true;
-            }
+        if try_match_at(&at, len, i, &kw.chars, eff_noise).is_some() {
+            return true;
         }
     }
     false
+}
+
+fn has_match_chars(
+    chars: &[(usize, usize, char)],
+    keywords: &[CompiledKw],
+    active_indices: Option<&[usize]>,
+    noise_level: usize,
+) -> bool {
+    if chars.is_empty() {
+        return false;
+    }
+    match active_indices {
+        Some(indices) => indices
+            .iter()
+            .any(|&idx| check_one_kw(chars, &keywords[idx], noise_level)),
+        None => keywords
+            .iter()
+            .any(|kw| check_one_kw(chars, kw, noise_level)),
+    }
 }
 
 struct AdsScratch {
@@ -989,19 +1213,21 @@ fn ads_term_hit(
     use_comments: bool,
     mark_comment: bool,
     terms: &[AdsTerm],
+    active_body: &[Vec<usize>],
     s: &mut AdsScratch,
     doc: &mut AdsDoc,
 ) -> bool {
     let term = &terms[idx];
     if s.body[idx] == 0 {
-        let mut hit = has_match_chars(&s.title_buf, &term.kws, term.noise)
-            || has_match_chars(&s.content_buf, &term.kws, term.noise);
+        let act = Some(active_body[idx].as_slice());
+        let mut hit = has_match_chars(&s.title_buf, &term.kws, act, term.noise)
+            || has_match_chars(&s.content_buf, &term.kws, act, term.noise);
         if !hit && doc.path_searchable {
             if !doc.path_ready {
                 fill_chars(&mut s.path_buf, strip_type_root(doc.path));
                 doc.path_ready = true;
             }
-            hit = has_match_chars(&s.path_buf, &term.kws, term.noise);
+            hit = has_match_chars(&s.path_buf, &term.kws, act, term.noise);
         }
         s.body[idx] = if hit { 2 } else { 1 };
     }
@@ -1019,7 +1245,7 @@ fn ads_term_hit(
                     continue;
                 }
                 fill_chars(&mut s.cm_buf, t);
-                if has_match_chars(&s.cm_buf, &term.kws, term.noise) {
+                if has_match_chars(&s.cm_buf, &term.kws, None, term.noise) {
                     hit = true;
                     break;
                 }
@@ -1040,20 +1266,21 @@ fn ads_eval(
     n: &AdsNode,
     use_comments: bool,
     terms: &[AdsTerm],
+    active_body: &[Vec<usize>],
     s: &mut AdsScratch,
     doc: &mut AdsDoc,
 ) -> bool {
     match n {
         AdsNode::Term { idx, neg } => {
             if *neg {
-                !ads_term_hit(*idx, use_comments, false, terms, s, doc)
+                !ads_term_hit(*idx, use_comments, false, terms, active_body, s, doc)
             } else {
-                ads_term_hit(*idx, use_comments, true, terms, s, doc)
+                ads_term_hit(*idx, use_comments, true, terms, active_body, s, doc)
             }
         }
         AdsNode::And(v) => {
             for c in v {
-                if !ads_eval(c, use_comments, terms, s, doc) {
+                if !ads_eval(c, use_comments, terms, active_body, s, doc) {
                     return false;
                 }
             }
@@ -1061,7 +1288,7 @@ fn ads_eval(
         }
         AdsNode::Or(v) => {
             for c in v {
-                if ads_eval(c, use_comments, terms, s, doc) {
+                if ads_eval(c, use_comments, terms, active_body, s, doc) {
                     return true;
                 }
             }
@@ -1075,6 +1302,7 @@ fn scan_docs_ads<'a>(
     comments: &[CommentDoc],
     comment_index: &HashMap<String, usize>,
     plan: &AdsPlan,
+    active_body: &[Vec<usize>],
     from_doc: usize,
     to_doc: usize,
 ) -> Vec<SearchResult<'a>> {
@@ -1129,22 +1357,23 @@ fn scan_docs_ads<'a>(
             comment_used: false,
         };
 
-        if !ads_eval(&plan.expr, true, &plan.terms, &mut s, &mut doc) {
+        if !ads_eval(&plan.expr, true, &plan.terms, active_body, &mut s, &mut doc) {
             continue;
         }
 
-        let via_comment =
-            doc.comment_used && !ads_eval(&plan.expr, false, &plan.terms, &mut s, &mut doc);
+        let via_comment = doc.comment_used
+            && !ads_eval(&plan.expr, false, &plan.terms, active_body, &mut s, &mut doc);
 
         let mut count = 0usize;
         let mut score = 0usize;
         for &idx in &plan.positives {
-            if !ads_term_hit(idx, true, false, &plan.terms, &mut s, &mut doc) {
+            if !ads_term_hit(idx, true, false, &plan.terms, active_body, &mut s, &mut doc) {
                 continue;
             }
             let term = &plan.terms[idx];
-            let tm = get_multi_matches_tagged(&s.title_buf, &term.kws, term.noise);
-            let cm = get_multi_matches_tagged(&s.content_buf, &term.kws, term.noise);
+            let act = Some(active_body[idx].as_slice());
+            let tm = get_multi_matches_tagged(&s.title_buf, &term.kws, act, term.noise);
+            let cm = get_multi_matches_tagged(&s.content_buf, &term.kws, act, term.noise);
             if !tm.is_empty() || !cm.is_empty() {
                 count += tm.len() + cm.len();
                 score += weigh_hits(&tm, TITLE_HIT_SCORE, TITLE_NOISE_STEP)
@@ -1154,7 +1383,7 @@ fn scan_docs_ads<'a>(
                     fill_chars(&mut s.path_buf, strip_type_root(doc.path));
                     doc.path_ready = true;
                 }
-                let pm = get_multi_matches_tagged(&s.path_buf, &term.kws, term.noise);
+                let pm = get_multi_matches_tagged(&s.path_buf, &term.kws, act, term.noise);
                 if !pm.is_empty() {
                     count += pm.len();
                     score += weigh_hits(&pm, PATH_HIT_SCORE, PATH_NOISE_STEP);
@@ -1186,13 +1415,22 @@ pub fn search_ads_range(plan_val: JsValue, from_doc: usize, to_doc: usize) -> Js
         None => return serde_wasm_bindgen::to_value(&Vec::<SearchResult>::new()).unwrap(),
     };
 
+    let active_body: Vec<Vec<usize>> = CORPUS_BLOOM.with(|b| {
+        let bloom = b.borrow();
+        plan.terms
+            .iter()
+            .map(|t| filter_kws_by_bloom(&t.kws, t.noise, &bloom))
+            .collect()
+    });
+
     GLOBAL_DATA.with(|data| {
         COMMENTS.with(|c| {
             COMMENT_INDEX.with(|m| {
                 let pool = data.borrow();
                 let docs = c.borrow();
                 let index = m.borrow();
-                let results = scan_docs_ads(&pool, &docs, &index, &plan, from_doc, to_doc);
+                let results =
+                    scan_docs_ads(&pool, &docs, &index, &plan, &active_body, from_doc, to_doc);
                 serde_wasm_bindgen::to_value(&results).unwrap()
             })
         })
@@ -1368,7 +1606,11 @@ fn build_snippets(text: &str, hits: &[(usize, usize, usize)], comment: Option<u3
 
 fn select_snippets(mut items: Vec<SnipOut>, limit: usize) -> (Vec<SnipOut>, usize) {
     items.sort_by_key(|s| s.n);
-    let more = if items.len() > limit { items.len() - limit } else { 0 };
+    let more = if items.len() > limit {
+        items.len() - limit
+    } else {
+        0
+    };
     if more > 0 {
         items.truncate(limit);
     }
@@ -1405,17 +1647,18 @@ fn extract_snippets_with_terms(
             };
             let mut buf: Vec<(usize, usize, char)> = Vec::new();
             fill_chars(&mut buf, content);
-            let mut raw_hits: Vec<(usize, usize, usize, bool)> = Vec::new();
+            let mut raw_hits: Vec<TaggedHit> = Vec::new();
             for term in terms {
-                collect_multi_matches_tagged(&buf, &term.kws, term.noise, &mut raw_hits);
+                collect_multi_matches_tagged(&buf, &term.kws, None, term.noise, &mut raw_hits);
             }
             let merged: Vec<(usize, usize, usize)> = merge_tagged_hits(raw_hits)
                 .into_iter()
-                .map(|(s, e, n, _)| (s, e, n))
+                .map(|(s, e, n, _, t)| (s, e, pack_hl_noise(n, t)))
                 .collect();
             out.body.hits = merged.len();
             if !merged.is_empty() {
-                let (items, more) = select_snippets(build_snippets(content, &merged, None), max_body);
+                let (items, more) =
+                    select_snippets(build_snippets(content, &merged, None), max_body);
                 out.body.items = items;
                 out.body.more = more;
             }
@@ -1434,13 +1677,19 @@ fn extract_snippets_with_terms(
                         continue;
                     }
                     fill_chars(&mut buf, text);
-                    let mut raw_hits: Vec<(usize, usize, usize, bool)> = Vec::new();
+                    let mut raw_hits: Vec<TaggedHit> = Vec::new();
                     for term in terms {
-                        collect_multi_matches_tagged(&buf, &term.kws, term.noise, &mut raw_hits);
+                        collect_multi_matches_tagged(
+                            &buf,
+                            &term.kws,
+                            None,
+                            term.noise,
+                            &mut raw_hits,
+                        );
                     }
                     let merged: Vec<(usize, usize, usize)> = merge_tagged_hits(raw_hits)
                         .into_iter()
-                        .map(|(s, e, n, _)| (s, e, n))
+                        .map(|(s, e, n, _, t)| (s, e, pack_hl_noise(n, t)))
                         .collect();
                     if merged.is_empty() {
                         continue;
@@ -1471,7 +1720,10 @@ pub fn get_snippets(
     let terms = if kws.is_empty() {
         Vec::new()
     } else {
-        vec![AdsTerm { noise: noise_level, kws }]
+        vec![AdsTerm {
+            noise: noise_level,
+            kws,
+        }]
     };
     let out = extract_snippets_with_terms(path, &terms, max_body, max_comments);
     serde_wasm_bindgen::to_value(&out).unwrap()
@@ -1484,15 +1736,19 @@ pub fn get_snippets_ads(
     max_body: usize,
     max_comments: usize,
 ) -> JsValue {
-    let raw_terms: Vec<AdsTermIn> = serde_wasm_bindgen::from_value(ads_terms_val).unwrap_or_default();
+    let raw_terms: Vec<AdsTermIn> =
+        serde_wasm_bindgen::from_value(ads_terms_val).unwrap_or_default();
     let terms: Vec<AdsTerm> = raw_terms
         .into_iter()
         .filter_map(|t| {
-            let kws = normalize_keywords(&t.keywords);
+            let kws = compile_keywords(t.keywords);
             if kws.is_empty() {
                 None
             } else {
-                Some(AdsTerm { noise: t.noise, kws })
+                Some(AdsTerm {
+                    noise: t.noise,
+                    kws,
+                })
             }
         })
         .collect();
@@ -1501,7 +1757,11 @@ pub fn get_snippets_ads(
 }
 
 #[wasm_bindgen]
-pub fn find_content_matches_multi(global_text: &str, keywords_val: JsValue, noise_level: usize) -> JsValue {
+pub fn find_content_matches_multi(
+    global_text: &str,
+    keywords_val: JsValue,
+    noise_level: usize,
+) -> JsValue {
     let kws = parse_keywords(keywords_val);
     let mut raw_match_data: Vec<u32> = Vec::new();
 
@@ -1534,7 +1794,11 @@ pub fn find_content_matches_multi(global_text: &str, keywords_val: JsValue, nois
     matches.copy_from(&raw_match_data);
 
     let res = Object::new();
-    let _ = js_sys::Reflect::set(&res, &JsValue::from_str("count"), &JsValue::from_f64((raw_match_data.len() / 3) as f64));
+    let _ = js_sys::Reflect::set(
+        &res,
+        &JsValue::from_str("count"),
+        &JsValue::from_f64((raw_match_data.len() / 3) as f64),
+    );
     let _ = js_sys::Reflect::set(&res, &JsValue::from_str("matches"), &matches);
     res.into()
 }

@@ -9,6 +9,25 @@ const build_and_set_data = wasm.build_and_set_data;
 const search_ads_range = wasm.search_ads_range;
 
 let wasmReady = false;
+let wasmSupportsWeighted = false;
+
+function adaptKeywordsForWasm(kws) {
+    if (!Array.isArray(kws)) return [];
+    if (wasmSupportsWeighted) return kws;
+    return kws.map(k => (typeof k === 'string' ? k : (k && typeof k.text === 'string' ? k.text : ''))).filter(Boolean);
+}
+
+function adaptAdsTermsForWasm(terms) {
+    if (!Array.isArray(terms)) return [];
+    if (wasmSupportsWeighted) return terms;
+    return terms.map(t => Object.assign({}, t, { keywords: adaptKeywordsForWasm(t.keywords) }));
+}
+
+function adaptAdsPlanForWasm(plan) {
+    if (!plan || !Array.isArray(plan.terms)) return plan;
+    if (wasmSupportsWeighted) return plan;
+    return { terms: adaptAdsTermsForWasm(plan.terms), expr: plan.expr };
+}
 let messageQueue = [];
 let lastSavedKw = "";
 let dataReady = false;
@@ -133,9 +152,9 @@ function mergeAdsSnippets(parts, maxBody, maxComments) {
 function getAdsSnippets(payload) {
     const maxBody = payload.maxBody !== undefined ? payload.maxBody : 40;
     const maxComments = payload.maxComments !== undefined ? payload.maxComments : 30;
-    const terms = (payload.adsTerms || []).filter(
+    const terms = adaptAdsTermsForWasm((payload.adsTerms || []).filter(
         t => t && Array.isArray(t.keywords) && t.keywords.length > 0
-    );
+    ));
     if (terms.length === 0) return null;
 
     if (typeof get_snippets_ads === 'function') {
@@ -236,7 +255,7 @@ async function runSearch(payload) {
     const kw = payload.keyword;
     const token = payload.token;
     const noise = payload.noise !== undefined ? payload.noise : 5;
-    const searchKeywords = payload.searchKeywords || [kw];
+    const searchKeywords = adaptKeywordsForWasm(payload.searchKeywords || [kw]);
 
     const results = await scanAll(token, (from, to) =>
         search_multi_range(searchKeywords, noise, from, to)
@@ -264,7 +283,7 @@ async function runSearch(payload) {
 async function runAdsSearch(payload) {
     const kw = payload.keyword;
     const token = payload.token;
-    const plan = payload.plan || { terms: [], expr: null };
+    const plan = adaptAdsPlanForWasm(payload.plan || { terms: [], expr: null });
 
     if (typeof search_ads_range !== 'function') {
         console.error("[Worker] 当前 wasm 没有 search_ads_range，请用新版 lib.rs 重新编译");
@@ -304,6 +323,7 @@ function flushPendingSearch() {
 async function initWorker() {
     try {
         await init();
+        wasmSupportsWeighted = typeof wasm.supports_weighted_keywords === 'function' && !!wasm.supports_weighted_keywords();
         wasmReady = true;
 
         const queue = messageQueue;
@@ -401,7 +421,7 @@ function processMessage(data) {
             let hits = [];
             try {
                 hits = search_comments(
-                    payload.searchKeywords || [payload.keyword],
+                    adaptKeywordsForWasm(payload.searchKeywords || [payload.keyword]),
                     payload.noise !== undefined ? payload.noise : 5
                 );
             } catch (err) {
@@ -424,7 +444,7 @@ function processMessage(data) {
                 } else {
                     snippets = get_snippets(
                         payload.path,
-                        payload.searchKeywords || [payload.keyword],
+                        adaptKeywordsForWasm(payload.searchKeywords || [payload.keyword]),
                         payload.noise !== undefined ? payload.noise : 5,
                         payload.maxBody !== undefined ? payload.maxBody : 40,
                         payload.maxComments !== undefined ? payload.maxComments : 30
