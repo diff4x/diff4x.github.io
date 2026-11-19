@@ -308,9 +308,10 @@ function fingerprintFlat(raw, isOffline) {
     return (h1 >>> 0).toString(16) + (h2 >>> 0).toString(16) + '.' + raw.length;
 }
 
-async function scanAll(token, prepare, scan) {
+async function scanAll(token, prepare, scan, getGen) {
+    const readGen = typeof getGen === 'function' ? getGen : () => dataGen;
     for (; ;) {
-        const gen = dataGen;
+        const gen = readGen();
         if (token !== latestToken) return null;
         if (typeof prepare === 'function' && !prepare()) {
             return [];
@@ -321,7 +322,7 @@ async function scanAll(token, prepare, scan) {
 
         for (let from = 0; from < total;) {
             if (token !== latestToken) return null;
-            if (gen !== dataGen) {
+            if (gen !== readGen()) {
                 restart = true;
                 break;
             }
@@ -338,7 +339,7 @@ async function scanAll(token, prepare, scan) {
 
             if (from < total) await yieldToQueue();
         }
-        if (restart || gen !== dataGen) continue;
+        if (restart || gen !== readGen()) continue;
         if (token !== latestToken) return null;
 
         results.sort(compareResults);
@@ -467,7 +468,8 @@ async function runAdsSearch(payload) {
         usePrepared ? () => !!prepare_ads_search(wasmPlan) : null,
         usePrepared
             ? (from, to) => scan_prepared_ads_range(from, to)
-            : (from, to) => search_ads_range(wasmPlan, from, to)
+            : (from, to) => search_ads_range(wasmPlan, from, to),
+        () => dataGen + ':' + commentGen
     );
     if (results === null) return;
 

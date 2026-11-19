@@ -1,11 +1,38 @@
-importScripts('/src/js/core-list.js?v=1795101767261');
+importScripts('/src/js/core-list.js?v=1795130135361');
 
-self.SW_VERSION = '1795101767261';
+self.SW_VERSION = '1795130135361';
 self.EMERGENCY = 'repair_command_id=2';
 
 const CACHE_NAME_CORE = 'core-cache-' + BUILD_VERSION;
 const CACHE_NAME_MEDIA = 'media-cache';
 const MAX_HTML_SNAPSHOT_HISTORY = 10;
+
+function sortFatDataFiles(names) {
+    return names.slice().sort((a, b) => {
+        const ma = /fat_data_(\d+)\.json$/.exec(a);
+        const mb = /fat_data_(\d+)\.json$/.exec(b);
+        if (ma && mb) return Number(ma[1]) - Number(mb[1]);
+        return a < b ? -1 : a > b ? 1 : 0;
+    });
+}
+
+function buildCoreListResponse(manifestObj, version, isOfflineFallback) {
+    const fatFiles = sortFatDataFiles(
+        Object.keys(manifestObj || {})
+            .filter(k => k.startsWith('/src/js/data/fat_data_') && k.endsWith('.json'))
+            .map(k => k.slice('/src/js/data/'.length))
+    );
+    const dataIndex = ['lite_data.js', ...fatFiles];
+    const body =
+        `window.BUILD_VERSION = ${JSON.stringify(String(version || 'offline'))};` +
+        `window._isOfflineDataFallback = ${isOfflineFallback ? 'true' : 'false'};` +
+        `window.FILE_MANIFEST = ${JSON.stringify(manifestObj || {})};` +
+        `window.dataIndex = ${JSON.stringify(dataIndex)};`;
+    return new Response(body, {
+        status: 200,
+        headers: { 'Content-Type': 'application/javascript; charset=utf-8' }
+    });
+}
 const IS_LOCAL_MODE = (
     self.location.hostname === 'localhost' ||
     self.location.hostname === '127.0.0.1' ||
@@ -73,10 +100,13 @@ self.addEventListener('install', event => {
     event.waitUntil((async () => {
         const newCache = await caches.open(CACHE_NAME_CORE);
         const cacheNames = await caches.keys();
-        const lastCacheName = cacheNames
+        let lastCacheName = cacheNames
             .filter(n => n.startsWith('core-cache-') && n !== CACHE_NAME_CORE)
             .sort()
             .pop();
+        if (!lastCacheName && cacheNames.includes(CACHE_NAME_CORE)) {
+            lastCacheName = CACHE_NAME_CORE;
+        }
 
         let oldManifest = {};
         if (lastCacheName) {
@@ -101,6 +131,7 @@ self.addEventListener('install', event => {
             '/src/js/worker.js'
         ]);
         const cachedUrls = new Set();
+        const fallbackUrls = new Set();
 
         const fetchWithConcurrency = async (urls, maxConcurrent) => {
             const results = [];
@@ -134,6 +165,7 @@ self.addEventListener('install', event => {
                                 if (fallbackRes) {
                                     await newCache.put(url, fallbackRes);
                                     cachedUrls.add(url);
+                                    fallbackUrls.add(url);
                                 }
                             } catch (_) { }
                         }
@@ -219,12 +251,22 @@ self.addEventListener('install', event => {
                                 ).getTime();
                                 if (Number.isFinite(parsedTs) && parsedTs > 0) snapTs = parsedTs;
                             }
-                            history.push({ text: compressedData, ts: snapTs, compressed: true });
-                            if (history.length > MAX_HTML_SNAPSHOT_HISTORY) {
-                                history = history.slice(history.length - MAX_HTML_SNAPSHOT_HISTORY);
+                            const dupByTs = history.some(item => item && item.ts === snapTs);
+                            const lastSnap = history.length > 0 ? history[history.length - 1] : null;
+                            let dupByBytes = false;
+                            if (lastSnap && lastSnap.text instanceof Uint8Array && lastSnap.text.length === compressedData.length) {
+                                dupByBytes = true;
+                                for (let bi = 0; bi < compressedData.length; bi++) {
+                                    if (lastSnap.text[bi] !== compressedData[bi]) { dupByBytes = false; break; }
+                                }
                             }
-
-                            store.put({ history }, url);
+                            if (!dupByTs && !dupByBytes) {
+                                history.push({ text: compressedData, ts: snapTs, compressed: true });
+                                if (history.length > MAX_HTML_SNAPSHOT_HISTORY) {
+                                    history = history.slice(history.length - MAX_HTML_SNAPSHOT_HISTORY);
+                                }
+                                store.put({ history }, url);
+                            }
                             await new Promise(resolve => {
                                 tx.oncomplete = tx.onerror = tx.onabort = () => resolve();
                             });
@@ -346,7 +388,11 @@ self.addEventListener('install', event => {
 
         const committedManifest = {};
         for (const url of cachedUrls) {
-            if (FILE_MANIFEST[url]) committedManifest[url] = FILE_MANIFEST[url];
+            if (fallbackUrls.has(url) && oldManifest[url]) {
+                committedManifest[url] = oldManifest[url];
+            } else if (FILE_MANIFEST[url]) {
+                committedManifest[url] = FILE_MANIFEST[url];
+            }
         }
         if (typeof FILE_MANIFEST === 'object' && FILE_MANIFEST) {
             for (const k of Object.keys(FILE_MANIFEST)) {
@@ -414,43 +460,41 @@ self.addEventListener('fetch', event => {
     if (url.origin !== self.location.origin) return;
     if (url.pathname.endsWith('sw.js')) return;
 
-    if (url.pathname.endsWith('core-list.js')) {
+    if (IS_LOCAL_MODE) {
         event.respondWith(
-            fetch(event.request).catch(async () => {
-                try {
-                    const cache = await caches.open(CACHE_NAME_CORE);
-                    const manifestRes = await cache.match(new URL('/sw-manifest.json', self.location.origin).href);
-
-                    if (manifestRes) {
-                        const manifestObj = await manifestRes.json();
-                        const dataIndex = Object.keys(manifestObj)
-                            .filter(k => k.startsWith('/src/js/data/fat_data_') && k.endsWith('.json'))
-                            .map(k => k.slice('/src/js/data/'.length))
-                            .sort();
-                        const fallbackJS = `window.BUILD_VERSION = 'offline'; window._isOfflineDataFallback = true; window.FILE_MANIFEST = ${JSON.stringify(manifestObj)}; window.dataIndex = ${JSON.stringify(dataIndex)};`;
-                        return new Response(fallbackJS, {
-                            status: 200,
-                            headers: { 'Content-Type': 'application/javascript; charset=utf-8' }
-                        });
-                    }
-                } catch (err) {
-                    console.error("❌ [SW] Offline mock failed", err);
-                }
-
-                return new Response('window._isOfflineDataFallback = true; window.FILE_MANIFEST = {}; window.dataIndex = [];', {
-                    status: 200,
-                    headers: { 'Content-Type': 'application/javascript; charset=utf-8' }
-                });
-            })
+            fetch(event.request, { cache: 'no-store' })
+                .catch(async () => {
+                    const coreCache = await caches.open(CACHE_NAME_CORE);
+                    return (await coreCache.match(event.request, { ignoreSearch: true }))
+                        || (await caches.match(event.request));
+                })
         );
         return;
     }
 
-    if (IS_LOCAL_MODE) {
-        event.respondWith(
-            fetch(event.request, { cache: 'no-store' })
-                .catch(() => caches.match(event.request))
-        );
+    // 线上模式：core-list.js 严格与当前激活 SW 的 BUILD_VERSION / FILE_MANIFEST 对齐，
+    // 防止新版 SW waiting 期间旧页面拉回新清单造成“旧代码 + 新数据”版本撕裂
+    if (url.pathname.endsWith('core-list.js')) {
+        event.respondWith((async () => {
+            if (typeof FILE_MANIFEST === 'object' && FILE_MANIFEST && Object.keys(FILE_MANIFEST).length > 0) {
+                return buildCoreListResponse(FILE_MANIFEST, BUILD_VERSION, false);
+            }
+            try {
+                const cache = await caches.open(CACHE_NAME_CORE);
+                const manifestRes = await cache.match(new URL('/sw-manifest.json', self.location.origin).href);
+                if (manifestRes) {
+                    const manifestObj = await manifestRes.json();
+                    return buildCoreListResponse(manifestObj, BUILD_VERSION, true);
+                }
+            } catch (err) {
+                console.error("❌ [SW] Manifest fallback failed", err);
+            }
+            try {
+                return await fetch(event.request);
+            } catch (_) {
+                return buildCoreListResponse({}, 'offline', true);
+            }
+        })());
         return;
     }
 
@@ -486,14 +530,14 @@ self.addEventListener('fetch', event => {
         url.pathname.match(/\.(woff|woff2|eot|ttf|svg)$/)
     ) {
         event.respondWith(
-            caches.match(event.request).then(cached => {
-                return cached || fetch(event.request).then(response => {
-                    if (response && response.status === 200) {
-                        const resClone = response.clone();
-                        caches.open(CACHE_NAME_MEDIA).then(cache => cache.put(event.request, resClone));
-                    }
-                    return response;
-                });
+            caches.open(CACHE_NAME_MEDIA).then(async (cache) => {
+                const cached = await cache.match(event.request);
+                if (cached) return cached;
+                const response = await fetch(event.request);
+                if (response && response.status === 200) {
+                    cache.put(event.request, response.clone());
+                }
+                return response;
             })
         );
     } else {
@@ -506,7 +550,8 @@ self.addEventListener('fetch', event => {
                         return await fetchWithLock(event.request);
                     } catch (_) { }
                 }
-                const cached = await caches.match(event.request, { ignoreSearch: true });
+                const coreCache = await caches.open(CACHE_NAME_CORE);
+                const cached = await coreCache.match(event.request, { ignoreSearch: true });
                 return cached || fetchWithLock(event.request);
             })()
         );

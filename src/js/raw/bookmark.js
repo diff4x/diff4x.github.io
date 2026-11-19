@@ -43,7 +43,7 @@ window.addEventListener('DOMContentLoaded', () => {
         let lockTicks = 0;
         const checkLock = setInterval(() => {
             lockTicks++;
-            if (store.bookmarkhtml_modifing !== "1" || lockTicks > 50) {
+            if (store.bookmarkhtml_modifing !== "1" || lockTicks > 310) {
                 if (store.bookmarkhtml_modifing === "1") store.bookmarkhtml_modifing = "0";
                 clearInterval(checkLock);
                 setupDragAndDrop();
@@ -103,6 +103,10 @@ document.addEventListener('keydown', (e) => {
     }
 });
 
+function getTabId() {
+    try { return (window.top && window.top.__TAB_ID__) || ''; } catch (_) { return ''; }
+}
+
 function emitEvent(type, payload, target = '*') {
     if (!window.__LITE_BUS__) return;
     try {
@@ -110,7 +114,8 @@ function emitEvent(type, payload, target = '*') {
             type,
             payload,
             from: ctxId,
-            target
+            target,
+            tabId: getTabId()
         });
     } catch (e) { }
 }

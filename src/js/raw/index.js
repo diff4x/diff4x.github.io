@@ -21,6 +21,11 @@ window.sharedWasm = {
 };
 window._tpZoom = 1;
 
+const TAB_ID = window.__TAB_ID__ || (window.__TAB_ID__ = (
+    typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+        ? crypto.randomUUID()
+        : ('t_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2))
+));
 const BUS = window.__LITE_BUS__;
 const ctxId = window.top === window.self ? 'index' : window.childId;
 const isLocalEnv = (location.hostname === 'localhost' || location.hostname === '127.0.0.1' || location.protocol === 'file:') && location.port !== '9000';
@@ -317,13 +322,27 @@ if ('serviceWorker' in navigator) {
     });
 }
 
-if (window._globalWatchdog) {
-    clearTimeout(window._globalWatchdog);
-    window._globalWatchdog = null;
+function clearDataWatchdog() {
+    if (window._globalWatchdog) {
+        clearTimeout(window._globalWatchdog);
+        window._globalWatchdog = null;
+    }
 }
-window._globalWatchdog = setTimeout(() => {
-    executeSelfHealing("核心数据组装严重超时 (疑似 IDB/Wasm 崩溃)");
-}, 60000);
+function armDataWatchdog(ms, reason) {
+    clearDataWatchdog();
+    window._globalWatchdog = setTimeout(() => {
+        window._globalWatchdog = null;
+        if (window._dataReady) return;
+        console.warn("⚠️ " + reason);
+        window._engineError = reason + "（可尝试刷新或访问 ?repair=1 修复）";
+        if (typeof sfPaintStatus === 'function') {
+            sfPaintStatus(window._currentRenderedKeyword || ($("#searchInput") && $("#searchInput").value) || '');
+        }
+        if (navigator.onLine && confirm(`⚠️ ${reason}\n\n是否清理浏览器缓存并尝试修复站点？\n（注意：重置将清空本地缓存及快照历史，点“取消”可继续等待）`)) {
+            executeSelfHealing(reason);
+        }
+    }, ms);
+}
 
 window.addEventListener('pagehide', (e) => {
     if (e.persisted) return;
@@ -340,7 +359,8 @@ window.addEventListener('pagehide', () => {
 });
 
 BUS.addEventListener('message', async (e) => {
-    const { type, payload, target, from } = e.data || {};
+    const { type, payload, target, from, tabId } = e.data || {};
+    if (tabId && tabId !== TAB_ID && type !== 'SEARCH_CACHE_CLEARED') return;
     if (target !== '*' && target !== ctxId) return;
 
     switch (type) {
@@ -420,7 +440,7 @@ BUS.addEventListener('message', async (e) => {
                 }
             } finally {
                 store.bookmarkhtml_modifing = "0";
-                if ('caches' in window) {
+                if (store.online_flag !== "0" && 'caches' in window) {
                     try {
                         const keys = await caches.keys();
                         for (const key of keys) {
@@ -512,6 +532,12 @@ BUS.addEventListener('message', async (e) => {
         case "quick_search":
             $("#searchInput").focus();
             break;
+
+        case "CLEAR_SEARCH": {
+            const clearBtn = $("#clear");
+            if (clearBtn) clearBtn.click();
+            break;
+        }
 
         case "load_comments":
             const commentTitle = (payload && typeof payload === 'object') ? payload.title : payload;
@@ -778,7 +804,8 @@ function emitEvent(type, payload, target = '*') {
             type,
             payload,
             from: ctxId,
-            target
+            target,
+            tabId: TAB_ID
         });
     } catch (e) { }
 }
@@ -1250,12 +1277,21 @@ function createDBProxy(dbName, storeName) {
                 req.onsuccess = () => resolve(req.result || []);
                 req.onerror = () => reject(req.error);
             });
+        },
+
+        close() {
+            if (dbInstance) {
+                try { dbInstance.close(); } catch (_) { }
+                dbInstance = null;
+            }
+            initPromise = null;
         }
     };
 }
 
 async function loadScripts(concurrency) {
     console.time("⏱️ loadScripts 总耗时");
+    armDataWatchdog(90000, "核心数据同步与索引构建超时");
 
     window.isDataSyncing = true;
     prewarmSearchWorker();
@@ -1329,10 +1365,6 @@ async function loadScripts(concurrency) {
         consumeRefreshCelebration();
     } finally {
         window.isDataSyncing = false;
-        if (window._globalWatchdog) {
-            clearTimeout(window._globalWatchdog);
-            window._globalWatchdog = null;
-        }
     }
 
     console.timeEnd("⏱️ loadScripts 总耗时");
@@ -1435,6 +1467,7 @@ function createSearchWorker() {
                 termSpecs: e.data.termSpecs || null
             });
         } else if (type === 'DATA_READY') {
+            clearDataWatchdog();
             window._engineError = '';
             invalidateSearch();
             const slim = Array.isArray(payload) ? payload : ((payload && payload.data) || []);
@@ -1497,12 +1530,14 @@ async function loadDataInBatches(files, now, concurrency) {
     }
 
     const filesToFetch = [];
-    files.forEach(src => {
-        const webPath = "/src/js/data/" + src;
-        const newHash = FILE_MANIFEST[webPath] ? FILE_MANIFEST[webPath].hash : null;
-        if (cachedMap.get(src) !== newHash)
-            filesToFetch.push(src);
-    });
+    if (!window._isOfflineDataFallback && navigator.onLine !== false) {
+        files.forEach(src => {
+            const webPath = "/src/js/data/" + src;
+            const newHash = FILE_MANIFEST[webPath] ? FILE_MANIFEST[webPath].hash : null;
+            if (cachedMap.get(src) !== newHash)
+                filesToFetch.push(src);
+        });
+    }
 
     if (!searchWorker) {
         searchWorker = _pendingWorker || createSearchWorker();
@@ -1531,6 +1566,7 @@ async function loadDataInBatches(files, now, concurrency) {
         try {
             const isOffline = store.online_flag === "0";
 
+            armDataWatchdog(45000, "搜索引擎 Wasm 索引构建超时");
             searchWorker.postMessage({
                 type: 'BUILD_DATA',
                 payload: {
@@ -1638,6 +1674,7 @@ function consumeRefreshCelebration() {
 }
 
 async function finalizeDataLoad() {
+    clearDataWatchdog();
     try {
         if (!window._isOfflineDataFallback && Array.isArray(window.data) && window.data.length > 0) {
             const currentMediaPaths = new Set();
@@ -1758,6 +1795,7 @@ function sw() {
                 window._swMsgBound = true;
                 BUS.addEventListener('message', (e) => {
                     if (e.data && e.data.type === 'execute_update') {
+                        if (e.data.tabId && e.data.tabId !== TAB_ID) return;
                         const latestWaitingWorker = reg.waiting;
                         if (latestWaitingWorker) {
                             latestWaitingWorker.postMessage({ type: 'SKIP_WAITING' });
@@ -2044,13 +2082,13 @@ function search_box() {
         if (e.keyCode === 40 || e.keyCode === 13 || e.key === "Enter") {
             e.preventDefault();
             if (val === "@bomb") {
-                import('./deferred-features.js').then(m => m.bomb({ iframes }));
+                import('./deferred-features.js').then(m => m.bomb({ iframes, dbProxy, takeSnapshot }));
                 this.value = "";
                 initHistoryBox(0);
                 return;
             }
             if (val === "@rebirth") {
-                import('./deferred-features.js').then(m => m.rebirth({ iframes }));
+                import('./deferred-features.js').then(m => m.rebirth({ iframes, dbProxy, takeSnapshot }));
                 this.value = "";
                 initHistoryBox(0);
                 return;
@@ -2675,7 +2713,7 @@ function clearSearchOverlays() {
     snippetCache.clear();
 }
 
-const SEARCH_ALGO_VER = 9;
+const SEARCH_ALGO_VER = 11;
 
 function hashText(str) {
     let h1 = 0x811c9dc5, h2 = 0x1b873593;
@@ -4024,7 +4062,12 @@ function updateSearchResults(results, keyword) {
             const prefix = isPrivate ? (store.online_flag === "1" ? "🔒 " : "🔓 ") : "";
             if (prefix) option.appendChild(document.createTextNode(prefix));
 
-            const titleRanges = computeTitleMatchRanges(title, keyword);
+            let matchTitle = title;
+            if (result.type !== "html") {
+                const dotIdx = title.lastIndexOf('.');
+                if (dotIdx > 0) matchTitle = title.slice(0, dotIdx);
+            }
+            const titleRanges = computeTitleMatchRanges(matchTitle, keyword);
             if (titleRanges.length === 0) {
                 option.appendChild(document.createTextNode(title));
             } else {
@@ -4246,6 +4289,7 @@ function takeSnapshot(reload = false) {
         window.location.reload();
     }
 }
+window.takeSnapshot = takeSnapshot;
 
 function snap() {
     if ('serviceWorker' in navigator) {
@@ -4480,8 +4524,11 @@ async function restore_snap() {
     try {
         if (state.search_kw) {
             await AsyncUtils.waitFor(() => window.data && window.data.length > 0, 15000);
-            $('#searchInput').value = state.search_kw;
-            search(state.search_kw);
+            const inp = $('#searchInput');
+            if (inp && inp.value.trim() === '') {
+                inp.value = state.search_kw;
+                search(state.search_kw);
+            }
         }
     } catch (e) {
         console.warn("搜索框恢复中止:", e.message);
@@ -4639,25 +4686,29 @@ function audio(_song, _level) {
 
 function cmt_mapper() {
     if (store.online_flag !== "1") return;
-    const maxRetries = 300;
+    const maxRetries = 30;
     let attempts = 0;
     const targetUrl = new URL('/src/cmt_mapper.json', window.location.origin).href;
     const checkAndLoad = async () => {
         try {
-            const cachedRes = await caches.match(targetUrl, { ignoreSearch: true });
-            if (cachedRes && cachedRes.ok) {
-                const data = await cachedRes.json();
+            let res = ('caches' in window) ? await caches.match(targetUrl, { ignoreSearch: true }) : null;
+            if (!res || !res.ok) {
+                if (!navigator.serviceWorker || !navigator.serviceWorker.controller || attempts >= 2) {
+                    res = await fetch(targetUrl, { cache: 'no-cache' });
+                }
+            }
+            if (res && res.ok) {
+                const data = await res.json();
                 records = data.records || [];
                 return;
-            } else {
-                throw new Error("Cache Miss");
             }
+            throw new Error("Cache Miss");
         } catch (e) {
             attempts++;
             if (attempts < maxRetries) {
                 setTimeout(checkAndLoad, 2000);
             } else {
-                console.error(`[Giscus] 🔴 评论映射表读取超时0`);
+                console.error(`[Giscus] 🔴 评论映射表读取超时`);
             }
         }
     };
@@ -5115,29 +5166,36 @@ function createAsyncUtils() {
     };
 }
 
-function loadPinyinData(maxRetries = 300) {
+function loadPinyinData(maxRetries = 30) {
     let attempts = 0;
+    const targetUrl = new URL('/src/js/pinyinData.js', window.location.origin).href;
     const checkAndLoad = async () => {
         try {
-            const targetUrl = new URL('/src/js/pinyinData.js', window.location.origin).href;
-            const cachedRes = await caches.match(targetUrl, { ignoreSearch: true });
-            if (cachedRes && cachedRes.ok) {
-                const scriptText = await cachedRes.text();
+            let res = (store.online_flag !== "0" && 'caches' in window)
+                ? await caches.match(targetUrl, { ignoreSearch: true })
+                : null;
+            if (!res || !res.ok) {
+                if (store.online_flag === "0" || !navigator.serviceWorker || !navigator.serviceWorker.controller || attempts >= 2) {
+                    res = await fetch(targetUrl, { cache: store.online_flag === "0" ? 'no-store' : 'no-cache' });
+                }
+            }
+            if (res && res.ok) {
+                const scriptText = await res.text();
                 const pinyinScript = document.createElement("script");
                 pinyinScript.type = "text/javascript";
                 pinyinScript.charset = "UTF-8";
                 pinyinScript.textContent = scriptText;
                 document.body.appendChild(pinyinScript);
                 pinyinScript.remove();
-            } else {
-                throw new Error("Cache Miss");
+                return;
             }
+            throw new Error("Cache Miss");
         } catch (e) {
             attempts++;
             if (attempts < maxRetries) {
                 setTimeout(checkAndLoad, 2000);
             } else {
-                console.error("❌ pinyinData.js 等待 SW 下载超时");
+                console.error("❌ pinyinData.js 加载超时");
             }
         }
     };

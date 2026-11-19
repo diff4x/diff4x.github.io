@@ -25,13 +25,13 @@ import java.util.stream.Stream;
  * 2. 仅基于公开、非排除的 HTML（标题 + 去 #anchor 正文）与公开媒体标题做词表 FMM 分词统计 DF，
  *    绝对不触碰 shadowDataMap（__ 私有页面），保护隐私且防止私密更新引起公网缓存抖动。
  * 3. 将 DF 按文档占比量化为 :1..:6 分桶后缀（方案 A 软加权，不删词林行，私密页与评论靠 Bloom 兜底）。
- * 4. 双重哈希防抖（temp/synonyms.sha256）：仅在源码或目标产物变化时重编译并调用 esbuild 压缩至 src/js/synonyms.js。
- * 5. 生成纯本地诊断报告 temp/oov_report.txt（高频未收录英文技术词与中文 OOV 候选词）。
+ * 4. 双重哈希防抖（synonyms.sha256）：仅在源码或目标产物变化时重编译并调用 esbuild 压缩至 src/js/synonyms.js。
+ * 5. 生成纯本地诊断报告 oov_report.txt（高频未收录英文技术词与中文 OOV 候选词）。
  */
 public class SynonymBuilder {
     private static final Logger logger = LoggerFactory.getLogger(SynonymBuilder.class);
 
-    public static final String SYN_ALGO_VERSION = "cilin-1hop-df-v5.0";
+    public static final String SYN_ALGO_VERSION = "cilin-1hop-df-v5.1";
     private static final Pattern WHITESPACE_SPLIT = Pattern.compile("[\\s\\u3000]+");
     private static final Pattern TAIL_LATIN_SUFFIX = Pattern.compile("^([\\u4e00-\\u9fff]+)[a-z\\.]$");
     private static final Pattern ANCHOR_PREFIX = Pattern.compile("^\\d{14}-\\S+\\s*");
@@ -127,6 +127,29 @@ public class SynonymBuilder {
      * 直接从已生成的 fat_data_*.json 与 lite_data.js 统计公开 DF 并按需重建 synonyms.js。
      */
     public static void runStandalone() {
+        Map<String, Object> liteTree = null;
+        Map<Integer, String> idToTitle = new HashMap<Integer, String>();
+        Map<Integer, String> idToAnchor = new HashMap<Integer, String>();
+
+        if (Config.dataDir != null) {
+            Path liteFile = Config.dataDir.resolve(Config.FILE_LITE_DATA);
+            if (Files.exists(liteFile)) {
+                try {
+                    String raw = new String(Files.readAllBytes(liteFile), StandardCharsets.UTF_8);
+                    int s = raw.indexOf('{');
+                    int e = raw.lastIndexOf('}');
+                    if (s >= 0 && e > s) {
+                        @SuppressWarnings("unchecked")
+                        Map<String, Object> parsed = Utils.JSON_MAPPER.readValue(raw.substring(s, e + 1), Map.class);
+                        liteTree = parsed;
+                        collectHtmlMetaForStandalone(liteTree.get("html"), idToTitle, idToAnchor);
+                    }
+                } catch (Exception ex) {
+                    logger.warn("[Synonyms] 读取 lite_data.js 失败，将回退到正则剥离锚点", ex);
+                }
+            }
+        }
+
         Map<Integer, String> publicDocs = new TreeMap<Integer, String>();
         if (Config.dataDir != null && Files.exists(Config.dataDir)) {
             try (Stream<Path> files = Files.list(Config.dataDir)) {
@@ -142,9 +165,17 @@ public class SynonymBuilder {
                                 Map.Entry<String, JsonNode> e = it.next();
                                 String val = e.getValue().asText("");
                                 if (val.isEmpty() || "localOnly".equals(val)) continue;
-                                String cleaned = ANCHOR_PREFIX.matcher(val).replaceFirst("");
                                 try {
-                                    publicDocs.put(Integer.parseInt(e.getKey()), cleaned);
+                                    int docId = Integer.parseInt(e.getKey());
+                                    String anchor = idToAnchor.get(docId);
+                                    String cleaned;
+                                    if (anchor != null && !anchor.isEmpty() && val.startsWith(anchor)) {
+                                        cleaned = val.substring(anchor.length()).trim();
+                                    } else {
+                                        cleaned = ANCHOR_PREFIX.matcher(val).replaceFirst("");
+                                    }
+                                    String title = idToTitle.get(docId);
+                                    publicDocs.put(docId, (title != null && !title.isEmpty()) ? (title + " " + cleaned) : cleaned);
                                 } catch (NumberFormatException ignored) { }
                             }
                         }
@@ -157,26 +188,43 @@ public class SynonymBuilder {
             }
         }
 
-        Map<String, Object> liteTree = null;
-        if (Config.dataDir != null) {
-            Path liteFile = Config.dataDir.resolve(Config.FILE_LITE_DATA);
-            if (Files.exists(liteFile)) {
-                try {
-                    String raw = new String(Files.readAllBytes(liteFile), StandardCharsets.UTF_8);
-                    int s = raw.indexOf('{');
-                    int e = raw.lastIndexOf('}');
-                    if (s >= 0 && e > s) {
-                        @SuppressWarnings("unchecked")
-                        Map<String, Object> parsed = Utils.JSON_MAPPER.readValue(raw.substring(s, e + 1), Map.class);
-                        liteTree = parsed;
-                    }
-                } catch (Exception ex) {
-                    logger.warn("[Synonyms] 读取 lite_data.js 失败，跳过媒体标题补充", ex);
+        buildIfNeeded(publicDocs, liteTree);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static void collectHtmlMetaForStandalone(
+            Object nodeObj,
+            Map<Integer, String> idToTitle,
+            Map<Integer, String> idToAnchor) {
+        if (!(nodeObj instanceof Map)) return;
+        Map<String, Object> map = (Map<String, Object>) nodeObj;
+        Object fObj = map.get("_f");
+        if (fObj instanceof List) {
+            for (Object itemObj : (List<?>) fObj) {
+                if (!(itemObj instanceof List)) continue;
+                List<?> lst = (List<?>) itemObj;
+                if (lst.size() < 2) continue;
+                String fileName = lst.get(0) != null ? String.valueOf(lst.get(0)) : "";
+                String info = (lst.size() > 3 && lst.get(3) != null) ? String.valueOf(lst.get(3)) : "";
+                if (info.contains("localOnly")) continue;
+                int docId = -1;
+                Object idObj = lst.get(1);
+                if (idObj instanceof Number) {
+                    docId = ((Number) idObj).intValue();
+                } else if (idObj != null) {
+                    try { docId = Integer.parseInt(String.valueOf(idObj)); } catch (NumberFormatException ignored) { }
                 }
+                if (docId < 0) continue;
+                String title = fileName.endsWith(".html") ? fileName.substring(0, fileName.length() - 5) : fileName;
+                if (!title.isEmpty()) idToTitle.put(docId, title);
+                if (!info.isEmpty()) idToAnchor.put(docId, info);
             }
         }
-
-        buildIfNeeded(publicDocs, liteTree);
+        for (Map.Entry<String, Object> e : map.entrySet()) {
+            if (!"_f".equals(e.getKey())) {
+                collectHtmlMetaForStandalone(e.getValue(), idToTitle, idToAnchor);
+            }
+        }
     }
 
     /**
@@ -321,7 +369,7 @@ public class SynonymBuilder {
                 }
             }
 
-            // 5. 写入本地新词诊断报告 temp/oov_report.txt
+            // 5. 写入本地新词诊断报告 oov_report.txt
             writeOovReport(totalPublicDocs, asciiOov, cjkOov);
 
             // 6. 拼装带 :1..:6 分桶 DF 标记的 CILIN_RAW_DATA
@@ -858,7 +906,7 @@ public class SynonymBuilder {
 
     private static void appendJsTemplatePart1(StringBuilder sb) {
         sb.append("/**\n");
-        sb.append(" * synonyms.js —— 语料 DF 软加权 + 现代词覆盖近义扩展引擎 (v5.0，运行于 Worker 线程)\n");
+        sb.append(" * synonyms.js —— 语料 DF 软加权 + 现代词覆盖近义扩展引擎 (v5.1，运行于 Worker 线程)\n");
         sb.append(" * 由 gen.jar (SynonymBuilder) 从 cilin.txt + synonyms_custom.json + 公开语料 DF 自动构建。\n");
         sb.append(" */\n");
         sb.append("\n");
@@ -891,6 +939,10 @@ public class SynonymBuilder {
         sb.append("        }\n");
         sb.append("    }\n");
         sb.append("    return out;\n");
+        sb.append("}\n");
+        sb.append("\n");
+        sb.append("function compactKey(str) {\n");
+        sb.append("    return toHalfwidth(String(str || \"\")).replace(/\\s+/g, \"\").toLowerCase();\n");
         sb.append("}\n");
         sb.append("\n");
         sb.append("// =========================================================================\n");
@@ -933,7 +985,7 @@ public class SynonymBuilder {
         sb.append("}\n");
         sb.append("\n");
         sb.append("function addLexCode(word, code5, isEq) {\n");
-        sb.append("    const key = word.toLowerCase();\n");
+        sb.append("    const key = compactKey(word);\n");
         sb.append("    if (key.length < 2) return;\n");
         sb.append("    if (key.length > maxLexLen && key.length <= 12) maxLexLen = key.length;\n");
         sb.append("    let entry = lexicon.get(key);\n");
@@ -959,7 +1011,7 @@ public class SynonymBuilder {
         sb.append("    });\n");
         sb.append("    for (let pos = 0; pos < words.length; pos++) {\n");
         sb.append("        const w = words[pos];\n");
-        sb.append("        const key = w.toLowerCase();\n");
+        sb.append("        const key = compactKey(w);\n");
         sb.append("        let arr = wordToEq.get(key);\n");
         sb.append("        if (!arr) {\n");
         sb.append("            arr = [];\n");
@@ -982,8 +1034,8 @@ public class SynonymBuilder {
         sb.append("    const seen = new Set();\n");
         sb.append("    for (let j = 0; j < grp.length; j++) {\n");
         sb.append("        const w = toHalfwidth(String(grp[j] || \"\")).trim();\n");
-        sb.append("        if (w.length < 2) continue;\n");
-        sb.append("        const k = w.toLowerCase();\n");
+        sb.append("        const k = compactKey(w);\n");
+        sb.append("        if (k.length < 2) continue;\n");
         sb.append("        if (seen.has(k)) continue;\n");
         sb.append("        seen.add(k);\n");
         sb.append("        cleaned.push(w);\n");
@@ -999,16 +1051,16 @@ public class SynonymBuilder {
         sb.append("    const aliasKeys = Object.keys(CUSTOM_ONEWAY_ALIASES);\n");
         sb.append("    for (let i = 0; i < aliasKeys.length; i++) {\n");
         sb.append("        const rawSrc = toHalfwidth(String(aliasKeys[i] || \"\")).trim();\n");
-        sb.append("        if (rawSrc.length < 2) continue;\n");
-        sb.append("        const sk = rawSrc.toLowerCase();\n");
+        sb.append("        const sk = compactKey(rawSrc);\n");
+        sb.append("        if (sk.length < 2) continue;\n");
         sb.append("        const rawTargets = CUSTOM_ONEWAY_ALIASES[aliasKeys[i]];\n");
         sb.append("        if (!Array.isArray(rawTargets) || rawTargets.length === 0) continue;\n");
         sb.append("        const cleaned = [];\n");
         sb.append("        const seen = new Set();\n");
         sb.append("        for (let j = 0; j < rawTargets.length; j++) {\n");
         sb.append("            const tw = toHalfwidth(String(rawTargets[j] || \"\")).trim();\n");
-        sb.append("            if (tw.length < 2) continue;\n");
-        sb.append("            const tk = tw.toLowerCase();\n");
+        sb.append("            const tk = compactKey(tw);\n");
+        sb.append("            if (tk.length < 2) continue;\n");
         sb.append("            if (tk === sk || seen.has(tk)) continue;\n");
         sb.append("            seen.add(tk);\n");
         sb.append("            cleaned.push(tw);\n");
@@ -1143,7 +1195,7 @@ public class SynonymBuilder {
         sb.append("// 3. 单词一跳扩展核心（DF 义项消歧 + DF 候选软加权 + 单向别名 + K/L 降权）\n");
         sb.append("// =========================================================================\n");
         sb.append("function expandSingleWord(rawWord, ctxCodes5, isWholeQuery, limit, existsInCorpus) {\n");
-        sb.append("    const key = rawWord.toLowerCase();\n");
+        sb.append("    const key = compactKey(rawWord);\n");
         sb.append("    const refs = wordToEq.get(key) || [];\n");
         sb.append("    const aliasTargets = wordToAlias.get(key) || null;\n");
         sb.append("    if (refs.length === 0 && (!aliasTargets || aliasTargets.length === 0)) return [];\n");
@@ -1208,7 +1260,7 @@ public class SynonymBuilder {
         sb.append("    if (aliasTargets && aliasTargets.length > 0) {\n");
         sb.append("        for (let j = 0; j < aliasTargets.length; j++) {\n");
         sb.append("            const tw = aliasTargets[j];\n");
-        sb.append("            const tk = tw.toLowerCase();\n");
+        sb.append("            const tk = compactKey(tw);\n");
         sb.append("            if (tk === key) continue;\n");
         sb.append("            cands.set(tk, {\n");
         sb.append("                word: tw,\n");
@@ -1231,8 +1283,8 @@ public class SynonymBuilder {
         sb.append("\n");
         sb.append("        for (let j = 0; j < ws.length; j++) {\n");
         sb.append("            const cw = ws[j];\n");
-        sb.append("            if (cw.length < 2) continue;\n");
-        sb.append("            const ck = cw.toLowerCase();\n");
+        sb.append("            const ck = compactKey(cw);\n");
+        sb.append("            if (ck.length < 2) continue;\n");
         sb.append("            if (ck === key) continue;\n");
         sb.append("\n");
         sb.append("            let rec = cands.get(ck);\n");
@@ -1491,8 +1543,8 @@ public class SynonymBuilder {
         sb.append("    if (clean.length < 2) return { variants: [], items: [], detail: [] };\n");
         sb.append("    const cleanLower = clean.toLowerCase();\n");
         sb.append("\n");
-        sb.append("    // 情况 A：单块整词直接命中 '='、自定义词库或单向别名\n");
-        sb.append("    if (chunks.length === 1 && (wordToEq.has(cleanLower) || wordToAlias.has(cleanLower))) {\n");
+        sb.append("    // 情况 A：整串（含带空格的英文/多词短语）直接命中 '='、自定义词库或单向别名\n");
+        sb.append("    if (wordToEq.has(cleanLower) || wordToAlias.has(cleanLower)) {\n");
         sb.append("        const items = expandSingleWord(clean, null, true, maxVariants, existsInCorpus);\n");
         sb.append("        return {\n");
         sb.append("            variants: items.map(x => x.word),\n");
@@ -1536,7 +1588,7 @@ public class SynonymBuilder {
         sb.append("        for (let j = 0; j < items.length; j++) {\n");
         sb.append("            const it = items[j];\n");
         sb.append("            const w = prefix + it.word + suffix;\n");
-        sb.append("            const k = w.toLowerCase();\n");
+        sb.append("            const k = compactKey(w);\n");
         sb.append("            if (hasCorpusCheck) {\n");
         sb.append("                if (!lexicon.has(k) && !existsInCorpus(w)) continue;\n");
         sb.append("            } else if (!it.custom && it.score < 0.25 && !lexicon.has(k)) {\n");
@@ -1585,7 +1637,7 @@ public class SynonymBuilder {
         sb.append("        for (let i = 0; i < topA.length; i++) {\n");
         sb.append("            for (let j = 0; j < topB.length; j++) {\n");
         sb.append("                const w = p1 + topA[i].word + mid + topB[j].word + p3;\n");
-        sb.append("                const k = w.toLowerCase();\n");
+        sb.append("                const k = compactKey(w);\n");
         sb.append("                if (!lexicon.has(k) && !(hasCorpusCheck && existsInCorpus(w))) continue;\n");
         sb.append("                const sA = Math.min(topA[i].score, 1.0);\n");
         sb.append("                const sB = Math.min(topB[j].score, 1.0);\n");

@@ -36,8 +36,12 @@ if (window.top && window.top.VirtualCursor) {
         const DB_NAME = "AlignDrafts";
         const STORE_NAME = "draft_texts";
 
+        let _db = null;
+        let _dbPromise = null;
         function initDB() {
-            return new Promise((resolve, reject) => {
+            if (_db) return Promise.resolve(_db);
+            if (_dbPromise) return _dbPromise;
+            _dbPromise = new Promise((resolve, reject) => {
                 const req = indexedDB.open(DB_NAME, 1);
                 req.onupgradeneeded = e => {
                     if (!e.target.result.objectStoreNames.contains(STORE_NAME)) {
@@ -46,12 +50,22 @@ if (window.top && window.top.VirtualCursor) {
                 };
                 req.onsuccess = e => {
                     const db = e.target.result;
-                    db.onversionchange = () => db.close();
+                    _db = db;
+                    _dbPromise = null;
+                    db.onversionchange = () => { db.close(); if (_db === db) _db = null; };
+                    db.onclose = () => { if (_db === db) _db = null; };
                     resolve(db);
                 };
-                req.onerror = e => reject(e);
+                req.onerror = e => {
+                    _dbPromise = null;
+                    reject(e);
+                };
             });
+            return _dbPromise;
         }
+        window.addEventListener('pagehide', () => {
+            if (_db) { try { _db.close(); } catch (_) { } _db = null; }
+        });
 
         async function saveDraft(text) {
             const db = await initDB();
@@ -172,7 +186,7 @@ if (window.top && window.top.VirtualCursor) {
 
         bootstrap();
 
-        saveBtn.addEventListener('click', () => {
+        saveBtn.addEventListener('click', async () => {
             clearTimeout(debounceTimer);
 
             const htmlClone = document.documentElement.cloneNode(true);
@@ -205,7 +219,12 @@ if (window.top && window.top.VirtualCursor) {
                 '#search-hl-static',
                 '#content-init-fade',
                 '.active-search-border',
-                '.lightbox'
+                '.lightbox',
+                '.code-tools',
+                '.code-line-highlighter',
+                '#diff-pre',
+                'link[href*="prism.css"]',
+                'script[src*="prism.js"]'
             ];
             garbageSelectors.forEach(selector => {
                 htmlClone.querySelectorAll(selector).forEach(el => el.remove());
@@ -250,12 +269,59 @@ if (window.top && window.top.VirtualCursor) {
 
             const safeTitle = document.title.trim() || "Unknown";
             const protocolUrl = proto + `://5{` + encodeURIComponent(safeTitle);
-            window.location.href = protocolUrl;
 
-            destroyDraft();
+            let baselineHtml = "";
+            try {
+                const res = await fetch(location.href, { cache: 'no-store' });
+                if (res.ok) baselineHtml = await res.text();
+            } catch (_) { }
+
+            try { await destroyDraft(); } catch (_) { }
 
             lockScreen.style.display = "flex";
-            lockScreen.innerHTML = "⌛固化中..";
+            lockScreen.style.flexDirection = "column";
+            lockScreen.style.gap = "12px";
+            lockScreen.innerHTML = `<div id="bil-lock-text">⌛固化中..</div>`;
+
+            window.location.href = protocolUrl;
+
+            let pollCount = 0;
+            let unlocked = false;
+            const unlockTimer = setTimeout(() => {
+                if (unlocked) return;
+                const btn = document.createElement('button');
+                btn.textContent = '解除锁定 / 刷新检查';
+                btn.style.cssText = 'padding:6px 14px;cursor:pointer;font-size:13px;';
+                btn.onclick = () => {
+                    unlocked = true;
+                    clearInterval(pollTimer);
+                    lockScreen.style.display = "none";
+                };
+                lockScreen.appendChild(btn);
+            }, 8000);
+
+            const pollTimer = setInterval(async () => {
+                if (unlocked) { clearInterval(pollTimer); return; }
+                pollCount++;
+                if (pollCount > 28) {
+                    clearInterval(pollTimer);
+                    const lbl = document.getElementById('bil-lock-text');
+                    if (lbl) lbl.textContent = '⚠️ 等待固化超时，请确认外部终端完成后手动刷新';
+                    return;
+                }
+                try {
+                    const r = await fetch(location.href + (location.search ? '&' : '?') + '_t=' + Date.now(), { cache: 'no-store' });
+                    if (r.ok) {
+                        const latest = await r.text();
+                        if (baselineHtml && latest && latest !== baselineHtml) {
+                            unlocked = true;
+                            clearTimeout(unlockTimer);
+                            clearInterval(pollTimer);
+                            location.reload();
+                        }
+                    }
+                } catch (_) { }
+            }, 1500);
         });
     }
 })();

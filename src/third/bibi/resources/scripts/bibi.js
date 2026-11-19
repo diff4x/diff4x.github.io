@@ -93,6 +93,10 @@ window.addEventListener('pagehide', (e) => {
 
 const ctxId = window.top === window.self ? 'index' : window.childId; 
 
+function getTabId() {
+    try { return (window.top && window.top.__TAB_ID__) || ''; } catch (_) { return ''; }
+}
+
 function emitEvent(type, payload, target = '*') {
     if (!window.__LITE_BUS__) return;
     try {
@@ -100,9 +104,10 @@ function emitEvent(type, payload, target = '*') {
             type,
             payload,
             from: ctxId,
-            target
+            target,
+            tabId: getTabId()
         });
-    } catch (e) {}
+    } catch (e) { }
 }
 function initExcerptTrigger() {
     let btn = document.getElementById('excerpt-pop-btn');

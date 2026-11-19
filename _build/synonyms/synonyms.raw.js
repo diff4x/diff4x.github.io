@@ -1,9 +1,9 @@
 /**
- * synonyms.js —— 语料 DF 软加权 + 现代词覆盖近义扩展引擎 (v5.0，运行于 Worker 线程)
+ * synonyms.js —— 语料 DF 软加权 + 现代词覆盖近义扩展引擎 (v5.1，运行于 Worker 线程)
  * 由 gen.jar (SynonymBuilder) 从 cilin.txt + synonyms_custom.json + 公开语料 DF 自动构建。
  */
 
-const SYN_ALGO_VERSION = "cilin-1hop-df-v5.0";
+const SYN_ALGO_VERSION = "cilin-1hop-df-v5.1";
 const MAX_VARIANTS = 16;
 const LRU_CAPACITY = 256;
 const MIN_ABS_SCORE = 0.15;
@@ -17555,6 +17555,10 @@ function toHalfwidth(str) {
     return out;
 }
 
+function compactKey(str) {
+    return toHalfwidth(String(str || "")).replace(/\s+/g, "").toLowerCase();
+}
+
 // =========================================================================
 // 1. 索引构建（流式扫行 + DF 分桶解析 + 单向别名 + FNV 指纹）
 // =========================================================================
@@ -17595,7 +17599,7 @@ function parseWordAndDf(tok) {
 }
 
 function addLexCode(word, code5, isEq) {
-    const key = word.toLowerCase();
+    const key = compactKey(word);
     if (key.length < 2) return;
     if (key.length > maxLexLen && key.length <= 12) maxLexLen = key.length;
     let entry = lexicon.get(key);
@@ -17621,7 +17625,7 @@ function registerEqGroup(code7, c5, words, isCustom) {
     });
     for (let pos = 0; pos < words.length; pos++) {
         const w = words[pos];
-        const key = w.toLowerCase();
+        const key = compactKey(w);
         let arr = wordToEq.get(key);
         if (!arr) {
             arr = [];
@@ -17644,8 +17648,8 @@ for (let i = 0; i < CUSTOM_SYNONYM_GROUPS.length; i++) {
     const seen = new Set();
     for (let j = 0; j < grp.length; j++) {
         const w = toHalfwidth(String(grp[j] || "")).trim();
-        if (w.length < 2) continue;
-        const k = w.toLowerCase();
+        const k = compactKey(w);
+        if (k.length < 2) continue;
         if (seen.has(k)) continue;
         seen.add(k);
         cleaned.push(w);
@@ -17661,16 +17665,16 @@ if (CUSTOM_ONEWAY_ALIASES && typeof CUSTOM_ONEWAY_ALIASES === "object") {
     const aliasKeys = Object.keys(CUSTOM_ONEWAY_ALIASES);
     for (let i = 0; i < aliasKeys.length; i++) {
         const rawSrc = toHalfwidth(String(aliasKeys[i] || "")).trim();
-        if (rawSrc.length < 2) continue;
-        const sk = rawSrc.toLowerCase();
+        const sk = compactKey(rawSrc);
+        if (sk.length < 2) continue;
         const rawTargets = CUSTOM_ONEWAY_ALIASES[aliasKeys[i]];
         if (!Array.isArray(rawTargets) || rawTargets.length === 0) continue;
         const cleaned = [];
         const seen = new Set();
         for (let j = 0; j < rawTargets.length; j++) {
             const tw = toHalfwidth(String(rawTargets[j] || "")).trim();
-            if (tw.length < 2) continue;
-            const tk = tw.toLowerCase();
+            const tk = compactKey(tw);
+            if (tk.length < 2) continue;
             if (tk === sk || seen.has(tk)) continue;
             seen.add(tk);
             cleaned.push(tw);
@@ -17805,7 +17809,7 @@ function contextLcaBoost(c5, ctxCodes5) {
 // 3. 单词一跳扩展核心（DF 义项消歧 + DF 候选软加权 + 单向别名 + K/L 降权）
 // =========================================================================
 function expandSingleWord(rawWord, ctxCodes5, isWholeQuery, limit, existsInCorpus) {
-    const key = rawWord.toLowerCase();
+    const key = compactKey(rawWord);
     const refs = wordToEq.get(key) || [];
     const aliasTargets = wordToAlias.get(key) || null;
     if (refs.length === 0 && (!aliasTargets || aliasTargets.length === 0)) return [];
@@ -17870,7 +17874,7 @@ function expandSingleWord(rawWord, ctxCodes5, isWholeQuery, limit, existsInCorpu
     if (aliasTargets && aliasTargets.length > 0) {
         for (let j = 0; j < aliasTargets.length; j++) {
             const tw = aliasTargets[j];
-            const tk = tw.toLowerCase();
+            const tk = compactKey(tw);
             if (tk === key) continue;
             cands.set(tk, {
                 word: tw,
@@ -17893,8 +17897,8 @@ function expandSingleWord(rawWord, ctxCodes5, isWholeQuery, limit, existsInCorpu
 
         for (let j = 0; j < ws.length; j++) {
             const cw = ws[j];
-            if (cw.length < 2) continue;
-            const ck = cw.toLowerCase();
+            const ck = compactKey(cw);
+            if (ck.length < 2) continue;
             if (ck === key) continue;
 
             let rec = cands.get(ck);
@@ -18150,8 +18154,8 @@ function computeExpand(rawQuery, maxVariants, existsInCorpus) {
     if (clean.length < 2) return { variants: [], items: [], detail: [] };
     const cleanLower = clean.toLowerCase();
 
-    // 情况 A：单块整词直接命中 '='、自定义词库或单向别名
-    if (chunks.length === 1 && (wordToEq.has(cleanLower) || wordToAlias.has(cleanLower))) {
+    // 情况 A：整串（含带空格的英文/多词短语）直接命中 '='、自定义词库或单向别名
+    if (wordToEq.has(cleanLower) || wordToAlias.has(cleanLower)) {
         const items = expandSingleWord(clean, null, true, maxVariants, existsInCorpus);
         return {
             variants: items.map(x => x.word),
@@ -18195,7 +18199,7 @@ function computeExpand(rawQuery, maxVariants, existsInCorpus) {
         for (let j = 0; j < items.length; j++) {
             const it = items[j];
             const w = prefix + it.word + suffix;
-            const k = w.toLowerCase();
+            const k = compactKey(w);
             if (hasCorpusCheck) {
                 if (!lexicon.has(k) && !existsInCorpus(w)) continue;
             } else if (!it.custom && it.score < 0.25 && !lexicon.has(k)) {
@@ -18244,7 +18248,7 @@ function computeExpand(rawQuery, maxVariants, existsInCorpus) {
         for (let i = 0; i < topA.length; i++) {
             for (let j = 0; j < topB.length; j++) {
                 const w = p1 + topA[i].word + mid + topB[j].word + p3;
-                const k = w.toLowerCase();
+                const k = compactKey(w);
                 if (!lexicon.has(k) && !(hasCorpusCheck && existsInCorpus(w))) continue;
                 const sA = Math.min(topA[i].score, 1.0);
                 const sB = Math.min(topB[j].score, 1.0);

@@ -659,6 +659,7 @@ const PROTOCOL_OPTIONS = [
     { key: 'layout', label: '侧栏宽度' },
     { key: 'positions', label: '滚动位置' },
     { key: 'searchHistory', label: '搜索历史' },
+    { key: 'prefs', label: '偏好与播控进度' },
     { key: 'pdfjs', label: 'PDF 阅读进度' },
     { key: 'bibi', label: 'EPUB 阅读进度' },
     { key: 'txt', label: 'TXT 阅读进度' },
@@ -709,6 +710,13 @@ const restoreData = async (data, selections) => {
     if (selections.includes('layout') && data.layout_side_flex !== undefined) store.layout_side_flex = data.layout_side_flex;
     if (selections.includes('positions') && data.positions !== undefined) store.positions = data.positions;
     if (selections.includes('searchHistory') && data.searchHistory !== undefined) store.searchHistory = data.searchHistory;
+    if (selections.includes('prefs')) {
+        if (data.wallpaper_config !== undefined) store.wallpaper_config = data.wallpaper_config;
+        if (data.media_positions !== undefined) store.media_positions = data.media_positions;
+        if (data.search_filter !== undefined) store.search_filter = data.search_filter;
+        if (data.noise_level !== undefined) store.noise_level = data.noise_level;
+        if (data.synonyms_enabled !== undefined) store.synonyms_enabled = data.synonyms_enabled;
+    }
     if (selections.includes('pdfjs') && data['pdfjs.history'] !== undefined) store['pdfjs.history'] = data['pdfjs.history'];
     if (selections.includes('bibi') && data.BibiBiscuits) for (const [k, v] of Object.entries(data.BibiBiscuits)) localStorage.setItem(k, v);
     if (selections.includes('txt') && data.txts) for (const [k, v] of Object.entries(data.txts)) localStorage.setItem(k, v);
@@ -731,22 +739,41 @@ export function bomb(ctx) {
             const doWipe = async () => {
                 window._isBombing = true;
                 try {
+                    if (ctx?.dbProxy && typeof ctx.dbProxy.close === 'function') ctx.dbProxy.close();
+                    if (typeof ExcerptsSys !== 'undefined' && typeof ExcerptsSys.close === 'function') ExcerptsSys.close();
+                    if (ctx?.iframes?.side?.contentWindow?.MarkSystem && typeof ctx.iframes.side.contentWindow.MarkSystem.close === 'function') {
+                        ctx.iframes.side.contentWindow.MarkSystem.close();
+                    }
                     if (ctx?.iframes?.content) ctx.iframes.content.src = 'about:blank';
                     if (ctx?.iframes?.side) ctx.iframes.side.src = 'about:blank';
                 } catch (_) { }
-                await new Promise(resolve => setTimeout(resolve, 80));
+                await new Promise(resolve => setTimeout(resolve, 120));
                 localStorage.clear(); sessionStorage.clear();
                 document.cookie.split(";").forEach(c => document.cookie = `${c.split("=")[0].trim()}=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/`);
                 const clearTasks = [];
-                if (window.indexedDB && indexedDB.databases) {
-                    clearTasks.push(indexedDB.databases().then(dbs => Promise.all(dbs.map(db => new Promise(res => {
-                        const r = indexedDB.deleteDatabase(db.name); r.onsuccess = res; r.onerror = res; r.onblocked = res;
-                    })))).catch(() => { }));
+                const deleteIdb = (name) => new Promise(res => {
+                    const timer = setTimeout(res, 2000);
+                    const done = () => { clearTimeout(timer); res(); };
+                    try {
+                        const r = indexedDB.deleteDatabase(name);
+                        r.onsuccess = done; r.onerror = done; r.onblocked = done;
+                    } catch (_) { done(); }
+                });
+                if (window.indexedDB) {
+                    if (typeof indexedDB.databases === 'function') {
+                        clearTasks.push(indexedDB.databases().then(dbs => {
+                            const names = new Set(['MainDB', 'ExcerptsDB', 'SideDB', 'AlignDrafts']);
+                            dbs.forEach(d => { if (d && d.name) names.add(d.name); });
+                            return Promise.all([...names].map(deleteIdb));
+                        }).catch(() => Promise.all(['MainDB', 'ExcerptsDB', 'SideDB', 'AlignDrafts'].map(deleteIdb))));
+                    } else {
+                        clearTasks.push(Promise.all(['MainDB', 'ExcerptsDB', 'SideDB', 'AlignDrafts'].map(deleteIdb)));
+                    }
                 }
                 if ('caches' in window) clearTasks.push(caches.keys().then(ks => Promise.all(ks.map(k => caches.delete(k)))));
                 if ('serviceWorker' in navigator) clearTasks.push(navigator.serviceWorker.getRegistrations().then(rs => Promise.all(rs.map(r => r.unregister()))));
                 await Promise.all(clearTasks);
-                await new Promise(resolve => setTimeout(resolve, 300));
+                await new Promise(resolve => setTimeout(resolve, 250));
             };
 
             const getSelectedData = async (selections) => {
@@ -767,6 +794,13 @@ export function bomb(ctx) {
                 if (selections.includes('layout')) { data.layout_content_flex = store.layout_content_flex; data.layout_side_flex = store.layout_side_flex; }
                 if (selections.includes('positions')) data.positions = store.positions || {};
                 if (selections.includes('searchHistory')) data.searchHistory = store.searchHistory || [];
+                if (selections.includes('prefs')) {
+                    if (store.wallpaper_config !== undefined) data.wallpaper_config = store.wallpaper_config;
+                    if (store.media_positions !== undefined) data.media_positions = store.media_positions;
+                    if (store.search_filter !== undefined) data.search_filter = store.search_filter;
+                    if (store.noise_level !== undefined) data.noise_level = store.noise_level;
+                    if (store.synonyms_enabled !== undefined) data.synonyms_enabled = store.synonyms_enabled;
+                }
                 if (selections.includes('pdfjs')) data['pdfjs.history'] = store['pdfjs.history'] || {};
                 if (selections.includes('bibi')) { data.BibiBiscuits = {}; for (let i = 0; i < localStorage.length; i++) { let k = localStorage.key(i); if (k.startsWith('BibiBiscuit')) data.BibiBiscuits[k] = localStorage.getItem(k); } }
                 if (selections.includes('txt')) { data.txts = {}; for (let i = 0; i < localStorage.length; i++) { let k = localStorage.key(i); if (k.startsWith('txt.history')) data.txts[k] = localStorage.getItem(k); } }
@@ -777,17 +811,19 @@ export function bomb(ctx) {
             box.querySelector('#btn-plan-a').onclick = async () => {
                 window._isBombing = true; lockButtons("正在保存选中数据...");
                 const selections = Array.from(box.querySelectorAll('input[type="checkbox"]:checked')).map(cb => cb.value);
+                const takeSnapFn = (ctx && typeof ctx.takeSnapshot === 'function') ? ctx.takeSnapshot : window.takeSnapshot;
+                let savedSnapStr = null;
+                if (selections.includes('last_li_a') && typeof takeSnapFn === 'function') {
+                    takeSnapFn(false);
+                    savedSnapStr = sessionStorage.getItem('ss_restore_strict');
+                }
                 const backupData = await getSelectedData(selections);
                 await doWipe();
-                const mockSelections = Object.keys(backupData).map(k => {
-                    if (k === 'BibiBiscuits') return 'bibi';
-                    if (k === 'txts') return 'txt';
-                    if (k === 'excerpts_backup') return 'excerpts';
-                    return k;
-                });
-                await restoreData(backupData, mockSelections);
-                if (selections.includes('last_li_a') && typeof takeSnapshot === 'function') takeSnapshot(true);
-                else window.location.reload();
+                await restoreData(backupData, selections);
+                if (savedSnapStr) {
+                    try { sessionStorage.setItem('ss_restore_strict', savedSnapStr); } catch (_) { }
+                }
+                window.location.reload();
             };
 
             box.querySelector('#btn-plan-b').onclick = async () => {
@@ -845,6 +881,7 @@ export function rebirth(ctx) {
                                 case 'layout': hasData = loadedData.layout_content_flex !== undefined; break;
                                 case 'positions': hasData = loadedData.positions !== undefined; break;
                                 case 'searchHistory': hasData = loadedData.searchHistory !== undefined; break;
+                                case 'prefs': hasData = (loadedData.wallpaper_config !== undefined || loadedData.media_positions !== undefined || loadedData.search_filter !== undefined || loadedData.noise_level !== undefined || loadedData.synonyms_enabled !== undefined); break;
                                 case 'pdfjs': hasData = loadedData['pdfjs.history'] !== undefined; break;
                                 case 'bibi': hasData = !!loadedData.BibiBiscuits; break;
                                 case 'txt': hasData = !!loadedData.txts; break;
@@ -868,7 +905,8 @@ export function rebirth(ctx) {
                 lockButtons("恢复中...");
                 if (typeof $ !== 'undefined' && $("#clear")) $("#clear").click();
                 await restoreData(loadedData, selections);
-                if (typeof takeSnapshot === 'function') takeSnapshot(true); else window.location.reload();
+                const takeSnapFn = (ctx && typeof ctx.takeSnapshot === 'function') ? ctx.takeSnapshot : window.takeSnapshot;
+                if (typeof takeSnapFn === 'function') takeSnapFn(true); else window.location.reload();
             };
         }
     });
@@ -898,6 +936,11 @@ export function initBackupReminder(ctx) {
                     data.layout_side_flex = store.layout_side_flex;
                     data.positions = store.positions || {};
                     data.searchHistory = store.searchHistory || [];
+                    if (store.wallpaper_config !== undefined) data.wallpaper_config = store.wallpaper_config;
+                    if (store.media_positions !== undefined) data.media_positions = store.media_positions;
+                    if (store.search_filter !== undefined) data.search_filter = store.search_filter;
+                    if (store.noise_level !== undefined) data.noise_level = store.noise_level;
+                    if (store.synonyms_enabled !== undefined) data.synonyms_enabled = store.synonyms_enabled;
                     data['pdfjs.history'] = store['pdfjs.history'] || {};
 
                     let marksArray = [];

@@ -90,9 +90,6 @@ impl CorpusBloom {
         for d in docs {
             self.feed_chars(&d.title_chars);
             self.feed_chars(&d.content_chars);
-            if !d.path_chars.is_empty() {
-                self.feed_chars(&d.path_chars);
-            }
         }
         self.ready = true;
     }
@@ -235,10 +232,8 @@ impl DocFilter {
 struct IndexedDoc {
     title_chars: Vec<char>,
     content_chars: Vec<char>,
-    path_chars: Vec<char>,
     title_filter: DocFilter,
     content_filter: DocFilter,
-    path_filter: DocFilter,
     is_local_only: bool,
 }
 
@@ -448,6 +443,14 @@ fn fold_str_to_chars(s: &str) -> Vec<char> {
     s.chars().map(fold_char).collect()
 }
 
+#[inline]
+fn strip_file_ext(name: &str) -> &str {
+    match name.rfind('.') {
+        Some(dot) if dot > 0 => &name[..dot],
+        _ => name,
+    }
+}
+
 fn install_data(local_vec: Vec<String>) {
     let doc_cap = local_vec.len() / 4;
     let mut index: HashMap<String, usize> = HashMap::with_capacity(doc_cap);
@@ -465,24 +468,22 @@ fn install_data(local_vec: Vec<String>) {
             None => (false, raw_content.as_str()),
         };
 
-        let title_chars = fold_str_to_chars(title);
-        let content_chars = fold_str_to_chars(searchable_content);
-        let path_chars = if res_type != "html" && res_type != "image" {
-            fold_str_to_chars(strip_type_root(path))
+        // 所有非 html 文件（含 gallery 图片及 video/audio/ebook），均仅用去后缀后的纯文件名参与匹配
+        let searchable_title = if res_type != "html" {
+            strip_file_ext(title.as_str())
         } else {
-            Vec::new()
+            title.as_str()
         };
+        let title_chars = fold_str_to_chars(searchable_title);
+        let content_chars = fold_str_to_chars(searchable_content);
         let title_filter = DocFilter::from_folded(&title_chars);
         let content_filter = DocFilter::from_folded(&content_chars);
-        let path_filter = DocFilter::from_folded(&path_chars);
 
         indexed_docs.push(IndexedDoc {
             title_chars,
             content_chars,
-            path_chars,
             title_filter,
             content_filter,
-            path_filter,
             is_local_only,
         });
         i += 4;
@@ -640,6 +641,7 @@ fn flatten_tree_recursive(node: &Value, prefix: &str, fat: &Value, shadow: &Valu
                                 title = title[..title.len()-5].to_string();
                             }
                             let is_private_flag = info.contains("localOnly");
+                            val1 = String::new();
                             if let Some(fat_info) = fat.get(&id).and_then(|v| v.as_str()) {
                                 val1 = fat_info.to_string();
                             }
@@ -1131,30 +1133,15 @@ fn get_multi_matches(
         .collect()
 }
 
-const TYPE_ROOT_PREFIXES: [&str; 5] = ["html/", "gallery/", "video/", "audio/", "ebook/"];
-
-#[inline]
-fn strip_type_root(path: &str) -> &str {
-    for &p in TYPE_ROOT_PREFIXES.iter() {
-        if let Some(rest) = path.strip_prefix(p) {
-            return rest;
-        }
-    }
-    path
-}
-
 const TITLE_HIT_SCORE: usize = 5000;
 const TITLE_NOISE_STEP: usize = 500;
 const CONTENT_HIT_SCORE: usize = 100;
 const CONTENT_NOISE_STEP: usize = 10;
-const PATH_HIT_SCORE: usize = 50;
-const PATH_NOISE_STEP: usize = 5;
 
 // 精确命中优先保底（按最小噪值阶梯奖励） + 合理化 tier>=1 同义词计分封顶 + 次线性词频饱和
 const EXACT_DOC_BONUS: usize = 10_000;
 const TITLE_SYN_CAP: usize = 4_500;
 const CONTENT_SYN_CAP: usize = 450;
-const PATH_SYN_CAP: usize = 120;
 
 #[inline]
 fn min_opt(a: Option<usize>, b: Option<usize>) -> Option<usize> {
@@ -1363,7 +1350,10 @@ fn scan_docs<'a>(
             merge_tagged_hits(std::mem::take(&mut raw_hits))
         };
 
-        let mut count = title_m.len() + content_m.len();
+        let count = title_m.len() + content_m.len();
+        if count == 0 {
+            continue;
+        }
         let (ts, t_t0) =
             weigh_section_hits(&title_m, TITLE_HIT_SCORE, TITLE_NOISE_STEP, TITLE_SYN_CAP, 1);
         let (cs, c_t0) = weigh_section_hits(
@@ -1373,26 +1363,8 @@ fn scan_docs<'a>(
             CONTENT_SYN_CAP,
             4,
         );
-        let mut score = ts + cs;
-        let mut best_t0 = min_opt(t_t0, c_t0);
-
-        if count == 0 && !idoc.path_chars.is_empty() {
-            raw_hits.clear();
-            collect_plan_matches_fast(&idoc.path_chars, &idoc.path_filter, kws, scan_plan, &mut raw_hits);
-            if !raw_hits.is_empty() {
-                let path_m = merge_tagged_hits(std::mem::take(&mut raw_hits));
-                count = path_m.len();
-                let (ps, p_t0) =
-                    weigh_section_hits(&path_m, PATH_HIT_SCORE, PATH_NOISE_STEP, PATH_SYN_CAP, 1);
-                score = ps;
-                best_t0 = p_t0;
-            }
-        }
-
-        if count == 0 {
-            continue;
-        }
-        score += tier0_doc_bonus(best_t0);
+        let best_t0 = min_opt(t_t0, c_t0);
+        let score = ts + cs + tier0_doc_bonus(best_t0);
 
         results.push(SearchResult {
             title: pool[i].as_str(),
@@ -1657,16 +1629,12 @@ fn ads_term_hit(
 ) -> bool {
     let term = &terms[idx];
     let bplan = &body_plans[idx];
-    // s.body[idx]: 0=未检, 1=未命中, 2=标题命中, 3=仅正文命中, 4=仅路径命中
+    // s.body[idx]: 0=未检, 1=未命中, 2=标题命中, 3=仅正文命中
     if s.body[idx] == 0 {
         if has_plan_match_fast(&doc.idoc.title_chars, &doc.idoc.title_filter, &term.kws, bplan) {
             s.body[idx] = 2;
         } else if has_plan_match_fast(&doc.idoc.content_chars, &doc.idoc.content_filter, &term.kws, bplan) {
             s.body[idx] = 3;
-        } else if !doc.idoc.path_chars.is_empty()
-            && has_plan_match_fast(&doc.idoc.path_chars, &doc.idoc.path_filter, &term.kws, bplan)
-        {
-            s.body[idx] = 4;
         } else {
             s.body[idx] = 1;
         }
@@ -1820,7 +1788,6 @@ fn scan_docs_ads<'a>(
         // 汇总全部正向词项命中后统一做跨词项区间去重，消除重复计分
         let mut raw_title_hits: Vec<TaggedHit> = Vec::new();
         let mut raw_content_hits: Vec<TaggedHit> = Vec::new();
-        let mut raw_path_hits: Vec<TaggedHit> = Vec::new();
         let mut comment_only_terms = 0usize;
 
         for &idx in &plan.positives {
@@ -1834,43 +1801,28 @@ fn scan_docs_ads<'a>(
             }
             let term = &plan.terms[idx];
             let bplan = &body_plans[idx];
-            if body_state == 4 {
-                let before = raw_path_hits.len();
+            if body_state == 2 {
                 collect_plan_matches_fast(
-                    &idoc.path_chars,
-                    &idoc.path_filter,
+                    &idoc.title_chars,
+                    &idoc.title_filter,
                     &term.kws,
                     bplan,
-                    &mut raw_path_hits,
-                );
-                if raw_path_hits.len() == before {
-                    comment_only_terms += 1;
-                }
-            } else {
-                if body_state == 2 {
-                    collect_plan_matches_fast(
-                        &idoc.title_chars,
-                        &idoc.title_filter,
-                        &term.kws,
-                        bplan,
-                        &mut raw_title_hits,
-                    );
-                }
-                collect_plan_matches_fast(
-                    &idoc.content_chars,
-                    &idoc.content_filter,
-                    &term.kws,
-                    bplan,
-                    &mut raw_content_hits,
+                    &mut raw_title_hits,
                 );
             }
+            collect_plan_matches_fast(
+                &idoc.content_chars,
+                &idoc.content_filter,
+                &term.kws,
+                bplan,
+                &mut raw_content_hits,
+            );
         }
 
         let merged_title = merge_tagged_hits(raw_title_hits);
         let merged_content = merge_tagged_hits(raw_content_hits);
-        let merged_path = merge_tagged_hits(raw_path_hits);
 
-        let count = merged_title.len() + merged_content.len() + merged_path.len();
+        let count = merged_title.len() + merged_content.len();
         let (ts, t_t0) =
             weigh_section_hits(&merged_title, TITLE_HIT_SCORE, TITLE_NOISE_STEP, TITLE_SYN_CAP, 1);
         let (cs, c_t0) = weigh_section_hits(
@@ -1880,10 +1832,8 @@ fn scan_docs_ads<'a>(
             CONTENT_SYN_CAP,
             4,
         );
-        let (ps, p_t0) =
-            weigh_section_hits(&merged_path, PATH_HIT_SCORE, PATH_NOISE_STEP, PATH_SYN_CAP, 1);
-        let best_t0 = min_opt(min_opt(t_t0, c_t0), p_t0);
-        let score = ts + cs + ps + comment_only_terms * CONTENT_HIT_SCORE + tier0_doc_bonus(best_t0);
+        let best_t0 = min_opt(t_t0, c_t0);
+        let score = ts + cs + comment_only_terms * CONTENT_HIT_SCORE + tier0_doc_bonus(best_t0);
 
         results.push(SearchResult {
             title,

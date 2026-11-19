@@ -42,10 +42,14 @@ function createStore(defaults = {}) {
     });
 }
 
+function getTabId() {
+    try { return (window.top && window.top.__TAB_ID__) || ""; } catch (_) { return ""; }
+}
+
 function emitEvent(type, payload, target = "*") {
     if (!window.__LITE_BUS__) return;
     try {
-        window.__LITE_BUS__.postMessage({ type, payload, from: ctxId, target });
+        window.__LITE_BUS__.postMessage({ type, payload, from: ctxId, target, tabId: getTabId() });
     } catch { }
 }
 
@@ -95,7 +99,9 @@ window.addEventListener('pagehide', (e) => {
 });
 
 BUS.addEventListener("message", e => {
-    const { type, payload, target, from } = e.data || {};
+    const { type, payload, target, from, tabId } = e.data || {};
+    const myTab = getTabId();
+    if (tabId && myTab && tabId !== myTab) return;
     if (target !== "*" && target !== ctxId) return;
 
     switch (type) {
@@ -148,6 +154,11 @@ BUS.addEventListener("message", e => {
 
         case "COMMENT_COUNTS":
             applyCommentCounts(payload);
+            break;
+
+        case "update_bookmark_menu":
+            document.querySelectorAll("a.current").forEach(a => a.classList.remove("current"));
+            emitEvent("mask", { op: "remove" }, "index");
             break;
 
         default:
@@ -374,12 +385,50 @@ async function mark() {
             });
         },
 
+        async ensureDB() {
+            if (this.db) return this.db;
+            return new Promise((resolve, reject) => {
+                const req = indexedDB.open(this.dbName, 1);
+                req.onupgradeneeded = e => {
+                    if (!e.target.result.objectStoreNames.contains(this.storeName)) {
+                        e.target.result.createObjectStore(this.storeName, { keyPath: "url" });
+                    }
+                };
+                req.onsuccess = e => {
+                    this.db = e.target.result;
+                    this.db.onversionchange = () => {
+                        this.db.close();
+                        this.db = null;
+                    };
+                    this.db.onclose = () => { this.db = null; };
+                    resolve(this.db);
+                };
+                req.onerror = () => reject(req.error);
+            });
+        },
+
+        close() {
+            if (this.db) {
+                try { this.db.close(); } catch (_) { }
+                this.db = null;
+            }
+        },
+
         async toggle(url) {
+            const db = await this.ensureDB();
             const exists = this.urls.has(url);
-            const os = this.db.transaction(this.storeName, "readwrite").objectStore(this.storeName);
-            if (exists) { this.urls.delete(url); os.delete(url); }
-            else { this.urls.add(url); os.put({ url }); }
-            return !exists;
+            return new Promise((resolve, reject) => {
+                const tx = db.transaction(this.storeName, "readwrite");
+                const os = tx.objectStore(this.storeName);
+                if (exists) { os.delete(url); }
+                else { os.put({ url }); }
+                tx.oncomplete = () => {
+                    if (exists) this.urls.delete(url);
+                    else this.urls.add(url);
+                    resolve(!exists);
+                };
+                tx.onerror = () => reject(tx.error);
+            });
         },
 
         restoreDOM() {

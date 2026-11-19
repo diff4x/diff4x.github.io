@@ -1416,7 +1416,7 @@ async function loadFX(retry = 1) {
     FX = rates; fxMeta = { source: 'api', approx: false };
     localStorage.setItem(FX_KEY, JSON.stringify({ ts: Date.now(), rates: FX }));
     console.log('[FX] updated from api');
-    restoreState(); // 原地状态刷新
+    refreshCurrencyTips(); // 原地无损刷新汇率浮窗，不冲毁筛选表单与滚动位置
   } catch (e) {
     console.warn('[FX] all api failed');
     if (retry > 0) {
@@ -1463,8 +1463,19 @@ function fmtTip(n, expr) {
       }).join('')}
   `;
 }
-function fmt(n, expr) { return withTip(fmtMain(n), fmtTip(n, expr)); }
+function fmt(n, expr) {
+  const exprAttr = expr ? ` data-expr="${escapeHtml(expr)}"` : '';
+  return `<span class="has-tip" data-amt="${n}"${exprAttr}>${fmtMain(n)}<span class="tip">${fmtTip(n, expr)}</span></span>`;
+}
 function withTip(innerHTML, tipHTML) { return `<span class="has-tip">${innerHTML}<span class="tip">${tipHTML}</span></span>`; }
+function refreshCurrencyTips() {
+  document.querySelectorAll('.has-tip[data-amt]').forEach(el => {
+    const amt = Number(el.dataset.amt);
+    if (!Number.isFinite(amt)) return;
+    const tip = el.querySelector('.tip');
+    if (tip) tip.innerHTML = fmtTip(amt, el.dataset.expr || undefined);
+  });
+}
 
 /*---------------
   本地环境自动加载及增强交互

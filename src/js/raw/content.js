@@ -187,6 +187,9 @@ window.addEventListener('pagehide', (e) => {
 });
 
 const ctxId = window.top === window.self ? 'index' : window.childId;
+function getTabId() {
+    try { return (window.top && window.top.__TAB_ID__) || ''; } catch (_) { return ''; }
+}
 function emitEvent(type, payload, target = '*') {
     if (!window.__LITE_BUS__) return;
     try {
@@ -194,7 +197,8 @@ function emitEvent(type, payload, target = '*') {
             type,
             payload,
             from: ctxId,
-            target
+            target,
+            tabId: getTabId()
         });
     } catch (e) { }
 }
@@ -216,7 +220,9 @@ if (document.readyState === "loading") {
 window._searchMatchRanges = new Map();
 
 BUS.addEventListener('message', (e) => {
-    const { type, payload, target, from } = e.data || {};
+    const { type, payload, target, from, tabId } = e.data || {};
+    const myTab = getTabId();
+    if (tabId && myTab && tabId !== myTab) return;
     if (target !== '*' && target !== ctxId) return;
 
     switch (type) {
@@ -270,6 +276,7 @@ BUS.addEventListener('message', (e) => {
 
         case "REFRESH_HIGHLIGHT":
             (async () => {
+                if (window._isDiffMode) return;
                 if (!payload || !payload.keyword) return;
                 if (!wasmEngineReady) await wasmInitPromise;
                 store.keyword = payload.keyword;
@@ -613,6 +620,7 @@ function analyzePageMatches(globalText, rawKeyword) {
 let _searchSeq = 0;
 
 async function search(preserveScroll = false) {
+    if (window._isDiffMode) return;
     if (store.jump_from_search_ex !== "1") return;
     store.jump_from_search_ex = "0";
 
@@ -754,7 +762,10 @@ async function search(preserveScroll = false) {
             destroyButton.id = "destroy";
             destroyButton.innerText = "destroy";
             destroyButton.onclick = function () {
+                _searchSeq++;
                 if (CSS.highlights) CSS.highlights.clear();
+                resetSearchHighlights();
+                if (window._searchMatchRanges) window._searchMatchRanges.clear();
                 clearActiveSearchBorders();
                 hideSearchMinimap();
                 const nav = $("#s_nav");
@@ -1881,6 +1892,25 @@ async function initDiffUI() {
         if (fromVal === toVal) {
             alert('⚠️ 对比起点和终点不能是同一个版本');
             return;
+        }
+
+        // 若搜索正处于当前页结果导航状态，立即清理高亮并通知主页面触发一次搜索 clear，避免与 diff 干扰
+        const sNav = document.getElementById('s_nav');
+        const isSearchNavActive =
+            (sNav && sNav.innerHTML.trim() !== '') ||
+            (window._searchMatchRanges && window._searchMatchRanges.size > 0) ||
+            (window._activeSearchBorders && window._activeSearchBorders.length > 0);
+        if (isSearchNavActive) {
+            _searchSeq++;
+            if (CSS.highlights) CSS.highlights.clear();
+            resetSearchHighlights();
+            if (window._searchMatchRanges) window._searchMatchRanges.clear();
+            clearActiveSearchBorders();
+            hideSearchMinimap();
+            if (sNav) sNav.innerHTML = "";
+            store.jump_from_search = "0";
+            store.jump_from_search_ex = "0";
+            emitEvent("CLEAR_SEARCH", null, "index");
         }
 
         window._diffBusy = true;

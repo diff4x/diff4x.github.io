@@ -4,7 +4,8 @@ import org.jsoup.nodes.Element;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardOpenOption;
+import java.nio.file.AtomicMoveNotSupportedException;
+import java.nio.file.StandardCopyOption;
 import java.util.Objects;
 
 public class BookmarkManager {
@@ -47,7 +48,6 @@ public class BookmarkManager {
                 if (next != null && next.tagName().equalsIgnoreCase("br")) {
                     next.remove();
                 }
-                Files.write(bookmarkHtml, doc.outerHtml().getBytes(StandardCharsets.UTF_8), StandardOpenOption.TRUNCATE_EXISTING);
             }
         } else {
             // 非删除操作，找到目标块
@@ -83,8 +83,15 @@ public class BookmarkManager {
             }
         }
 
-        // 写回文件，并更新 end_flag 强刷前端
+        // 更新 end_flag 并通过临时文件原子替换写回，避免前端轮询读到半写文件
         Objects.requireNonNull(doc.getElementById("end_flag")).attr("href", String.valueOf(System.currentTimeMillis()));
-        Files.write(bookmarkHtml, doc.outerHtml().getBytes(StandardCharsets.UTF_8), StandardOpenOption.TRUNCATE_EXISTING);
+        byte[] contentBytes = doc.outerHtml().getBytes(StandardCharsets.UTF_8);
+        Path tmpFile = bookmarkHtml.resolveSibling(bookmarkHtml.getFileName().toString() + ".tmp");
+        Files.write(tmpFile, contentBytes);
+        try {
+            Files.move(tmpFile, bookmarkHtml, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+        } catch (AtomicMoveNotSupportedException e) {
+            Files.move(tmpFile, bookmarkHtml, StandardCopyOption.REPLACE_EXISTING);
+        }
     }
 }

@@ -83,19 +83,44 @@ function copyTextFallback(text) {
 export const ExcerptsSys = {
     dbName: 'ExcerptsDB',
     storeName: 'books',
+    _db: null,
+    _initPromise: null,
     init: async function () {
-        return new Promise((resolve, reject) => {
+        if (this._db) return this._db;
+        if (this._initPromise) return this._initPromise;
+        this._initPromise = new Promise((resolve, reject) => {
             const req = indexedDB.open(this.dbName, 1);
             req.onupgradeneeded = (e) => {
-                e.target.result.createObjectStore(this.storeName);
+                if (!e.target.result.objectStoreNames.contains(this.storeName)) {
+                    e.target.result.createObjectStore(this.storeName);
+                }
             };
             req.onsuccess = (e) => {
                 const db = e.target.result;
-                db.onversionchange = () => db.close();
+                this._db = db;
+                this._initPromise = null;
+                db.onversionchange = () => {
+                    db.close();
+                    if (this._db === db) this._db = null;
+                };
+                db.onclose = () => {
+                    if (this._db === db) this._db = null;
+                };
                 resolve(db);
             };
-            req.onerror = () => reject(req.error);
+            req.onerror = () => {
+                this._initPromise = null;
+                reject(req.error);
+            };
         });
+        return this._initPromise;
+    },
+    close: function () {
+        if (this._db) {
+            try { this._db.close(); } catch (_) { }
+            this._db = null;
+        }
+        this._initPromise = null;
     },
     save: async function (bookName, text) {
         const db = await this.init();
@@ -125,22 +150,26 @@ export const ExcerptsSys = {
         return new Promise((resolve, reject) => {
             const tx = db.transaction(this.storeName, 'readonly');
             const store = tx.objectStore(this.storeName);
-            const req = store.getAllKeys();
-            req.onsuccess = async () => {
-                const keys = req.result;
+            let keys = null;
+            let vals = null;
+            const keysReq = store.getAllKeys();
+            const valsReq = store.getAll();
+            keysReq.onsuccess = () => { keys = keysReq.result || []; };
+            valsReq.onsuccess = () => { vals = valsReq.result || []; };
+            tx.oncomplete = () => {
                 const books = [];
-                for (let key of keys) {
-                    const data = await new Promise(res => {
-                        const r = store.get(key);
-                        r.onsuccess = () => res(r.result);
-                    });
+                const len = Math.min(keys ? keys.length : 0, vals ? vals.length : 0);
+                for (let i = 0; i < len; i++) {
+                    const data = vals[i];
                     if (data) {
-                        books.push({ name: key, createdAt: data.createdAt, updatedAt: data.updatedAt, count: data.excerpts.length });
+                        const count = Array.isArray(data.excerpts) ? data.excerpts.length : 0;
+                        books.push({ name: keys[i], createdAt: data.createdAt, updatedAt: data.updatedAt, count });
                     }
                 }
                 resolve(books);
             };
-            req.onerror = () => reject(req.error);
+            tx.onerror = () => reject(tx.error || keysReq.error || valsReq.error);
+            tx.onabort = () => reject(tx.error || new Error('Transaction aborted'));
         });
     },
     getBookData: async function (bookName) {

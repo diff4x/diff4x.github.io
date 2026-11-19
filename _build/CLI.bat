@@ -286,12 +286,12 @@ if not exist "%CSS_MAP_DIR%" mkdir "%CSS_MAP_DIR%"
 :: ---------------- JS 构建 ----------------
 for /r "%js_input_dir%" %%F in (*.js) do (
     set "rel=%%~nxF"
-    set "file_hash=%%~tF_%%~zF"
 
-    if not "!rel!"=="core-list.js" if not "!rel!"=="sw.js" (
+    if not "!rel!"=="core-list.js" if not "!rel!"=="sw.js" if not "!rel!"=="synonyms.js" (
+        call :CalcFileHash "%%F"
 
         set "do_build=1"
-        if exist "%modtime_list%" (
+        if exist "%modtime_list%" if exist "%js_output_dir%\!rel!" (
             findstr /L /x /c:"!rel!|!file_hash!" "%modtime_list%" >nul 2>&1
             if not errorlevel 1 set "do_build=0"
         )
@@ -303,7 +303,7 @@ for /r "%js_input_dir%" %%F in (*.js) do (
 
             if exist "%js_output_dir%\!rel!.map" (
                 move /y "%js_output_dir%\!rel!.map" "%JS_MAP_DIR%\!rel!.map" >nul
-                powershell -nologo -noprofile -command "$p='%js_output_dir%\!rel!'; $c=Get-Content $p -Raw; $c=$c.Replace('sourceMappingURL=source-map/','sourceMappingURL=').Replace('sourceMappingURL=','sourceMappingURL=source-map/'); [IO.File]::WriteAllText($p,$c)"
+                powershell -nologo -noprofile -command "$p='%js_output_dir%\!rel!'; $c=Get-Content -Path $p -Raw -Encoding UTF8; $c=$c.Replace('sourceMappingURL=source-map/','sourceMappingURL=').Replace('sourceMappingURL=','sourceMappingURL=source-map/'); [IO.File]::WriteAllText($p,$c)"
             )
         ) else (
             echo [JS] Skipped !rel!
@@ -316,12 +316,12 @@ for /r "%js_input_dir%" %%F in (*.js) do (
 :: ---------------- CSS 构建 ----------------
 for /r "%css_input_dir%" %%F in (*.css) do (
     set "rel=%%~nxF"
-    set "file_hash=%%~tF_%%~zF"
 
     if not "!rel!"=="font.css" (
+        call :CalcFileHash "%%F"
 
         set "do_build=1"
-        if exist "%modtime_list%" (
+        if exist "%modtime_list%" if exist "%css_output_dir%\!rel!" (
             findstr /L /x /c:"!rel!|!file_hash!" "%modtime_list%" >nul 2>&1
             if not errorlevel 1 set "do_build=0"
         )
@@ -333,7 +333,7 @@ for /r "%css_input_dir%" %%F in (*.css) do (
 
             if exist "%css_output_dir%\!rel!.map" (
                 move /y "%css_output_dir%\!rel!.map" "%CSS_MAP_DIR%\!rel!.map" >nul
-                powershell -nologo -noprofile -command "$p='%css_output_dir%\!rel!'; $c=Get-Content $p -Raw; $c=$c.Replace('sourceMappingURL=source-map/','sourceMappingURL=').Replace('sourceMappingURL=','sourceMappingURL=source-map/'); [IO.File]::WriteAllText($p,$c)"
+                powershell -nologo -noprofile -command "$p='%css_output_dir%\!rel!'; $c=Get-Content -Path $p -Raw -Encoding UTF8; $c=$c.Replace('sourceMappingURL=source-map/','sourceMappingURL=').Replace('sourceMappingURL=','sourceMappingURL=source-map/'); [IO.File]::WriteAllText($p,$c)"
             )
         ) else (
             echo [CSS] Skipped !rel!
@@ -346,10 +346,10 @@ for /r "%css_input_dir%" %%F in (*.css) do (
 set "raw_font_path=%B%src\css\font\font.css"
 if exist "!raw_font_path!" (
     for %%F in ("!raw_font_path!") do (
-        set "file_hash=%%~tF_%%~zF"
+        call :CalcFileHash "%%F"
         set "do_build=1"
 
-        if exist "%modtime_list%" (
+        if exist "%modtime_list%" if exist "%B%src\css\font.css" (
             findstr /L /x /c:"font.css|!file_hash!" "%modtime_list%" >nul 2>&1
             if not errorlevel 1 set "do_build=0"
         )
@@ -383,10 +383,12 @@ if not errorlevel 1 (
 
 for /r "%js_input_dir%" %%F in (core-list.js sw.js) do (
     set "rel=%%~nxF"
-    set "file_hash=%%~tF_%%~zF"
+    call :CalcFileHash "%%F"
     set "do_build=1"
-    
-    if exist "%modtime_list%" (
+    set "target_out=%js_output_dir%\!rel!"
+    if "!rel!"=="sw.js" set "target_out=%B%sw.js"
+
+    if exist "%modtime_list%" if exist "!target_out!" (
         findstr /L /x /c:"!rel!|!file_hash!" "%modtime_list%" >nul 2>&1
         if not errorlevel 1 set "do_build=0"
     )
@@ -403,9 +405,9 @@ for /r "%js_input_dir%" %%F in (core-list.js sw.js) do (
 
         if "!rel!"=="sw.js" (
             move /y "%js_output_dir%\!rel!" "%B%sw.js" >nul
-            powershell -nologo -noprofile -command "$p='%B%sw.js'; $c=Get-Content -Path $p -Raw; [IO.File]::WriteAllText($p, ($c -replace 'sourceMappingURL=sw.js.map', 'sourceMappingURL=src/js/source-map/sw.js.map'))"
+            powershell -nologo -noprofile -command "$p='%B%sw.js'; $c=Get-Content -Path $p -Raw -Encoding UTF8; [IO.File]::WriteAllText($p, ($c -replace 'sourceMappingURL=sw.js.map', 'sourceMappingURL=src/js/source-map/sw.js.map'))"
         ) else (
-            powershell -nologo -noprofile -command "$p='%js_output_dir%\!rel!'; $c=Get-Content $p -Raw; $c=$c.Replace('sourceMappingURL=source-map/','sourceMappingURL=').Replace('sourceMappingURL=','sourceMappingURL=source-map/'); [IO.File]::WriteAllText($p,$c)"
+            powershell -nologo -noprofile -command "$p='%js_output_dir%\!rel!'; $c=Get-Content -Path $p -Raw -Encoding UTF8; $c=$c.Replace('sourceMappingURL=source-map/','sourceMappingURL=').Replace('sourceMappingURL=','sourceMappingURL=source-map/'); [IO.File]::WriteAllText($p,$c)"
         )
     ) else (
         echo [JS] Skipped !rel!
@@ -691,3 +693,17 @@ exit /b
 :end
 @REM pause
 exit
+
+:: =====================================================
+:: 子程序：计算文件 SHA-256 哈希（替代分钟精度时间戳）
+:: =====================================================
+:CalcFileHash
+set "file_hash="
+for /f "skip=1 delims=" %%H in ('certutil -hashfile "%~1" SHA256 2^>nul') do (
+    if not defined file_hash set "file_hash=%%H"
+)
+if not defined file_hash (
+    for %%I in ("%~1") do set "file_hash=%%~tI_%%~zI"
+)
+set "file_hash=!file_hash: =!"
+goto :eof

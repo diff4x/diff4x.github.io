@@ -35,21 +35,28 @@ export const iframeCommonLogic = function () {
     });
 
     const ctxId = window.top === window.self ? 'index' : window.childId;
+    const getTabId = () => { try { return (window.top && window.top.__TAB_ID__) || ''; } catch (_) { return ''; } };
     window.emitEvent = function (type, payload, target = '*') {
-        BUS.postMessage({
-            type,
-            payload,
-            from: ctxId,
-            target
-        });
-    }
+        if (!window.__LITE_BUS__) return;
+        try {
+            window.__LITE_BUS__.postMessage({
+                type,
+                payload,
+                from: ctxId,
+                target,
+                tabId: getTabId()
+            });
+        } catch (_) { }
+    };
 
     if (window.top && window.top.VirtualCursor) {
         window.top.VirtualCursor.attach(window);
     }
 
     BUS.addEventListener('message', (e) => {
-        const { type, payload, target } = e.data || {};
+        const { type, payload, target, tabId } = e.data || {};
+        const myTab = getTabId();
+        if (tabId && myTab && tabId !== myTab) return;
         if (target !== '*' && target !== ctxId) return;
         if (type === 'SIM_POINTER') {
             window.handleSimPointer(payload);
