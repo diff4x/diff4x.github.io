@@ -95,6 +95,16 @@ window.addEventListener('DOMContentLoaded', () => {
     });
     
     createCalendar();
+
+    document.addEventListener('click', (e) => {
+        if (e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return;
+        const a = e.target.closest && e.target.closest('a');
+        if (!a || !/\bREADME\b/i.test((a.textContent || '').trim())) return;
+        e.preventDefault();
+        let hash = '';
+        try { const u = new URL(a.href, location.href); hash = decodeURIComponent((u.hash || '').slice(1)); } catch (_) { }
+        emitEvent("OPEN_MD_VIEWER", { hash }, "index");
+    });
 });
 
 document.addEventListener('keydown', (e) => {

@@ -1,1024 +1,2041 @@
 <!DOCTYPE html>
-<html>
-
+<html lang="zh-CN" data-ui="light">
 <head>
-    <meta charset="UTF-8">
-    <title>TXT Viewer</title>
-    <style>
-        @charset "UTF-8";
-        @import url("../css/font.css");
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>TXT Viewer</title>
+<style>
+@charset "UTF-8";
+@import url("../css/font.css");
 
-        :root {
-            --drawer-bg: rgba(30, 41, 59, 0.85);
-            --drawer-border: rgba(255, 255, 255, 0.1);
-            --text-main: #f8fafc;
-            --text-muted: #94a3b8;
-            --accent: #10b981;
-            --accent-hover: #059669;
-            --btn-bg: rgba(255, 255, 255, 0.1);
-            --btn-hover: rgba(255, 255, 255, 0.2);
-        }
+:root {
+    --reader-bg: #f7f5f0;
+    --reader-fg: #2c2a27;
+    --col-rule: rgba(44, 42, 39, 0.1);
+    --col-width: 440px;
+    --col-gap: 64px;
+    --font-size: 18px;
+    --line-height: 1.85;
 
-        html, body, pre, textarea {
-            font-family: 'Noto Serif SC';
-        }
+    --ui-bg: #fbfaf7;
+    --ui-fg: #2c2a27;
+    --ui-muted: #76716a;
+    --ui-border: #ddd8ce;
+    --ui-hover: #efece4;
+    --ui-active-bg: #2c2a27;
+    --ui-active-fg: #fbfaf7;
+    --ui-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
+    --progress-color: rgba(60, 54, 46, 0.36);
+    --scroll-thumb: rgba(60, 54, 46, 0.22);
+    --scroll-thumb-hover: rgba(60, 54, 46, 0.45);
+}
 
-        /* 彻底屏蔽原生外层滚动，由中心定位 */
-        html, body {
-            padding: 0;
-            margin: 0;
-            background-color: #0f172a !important; 
-            overflow: hidden; 
-        }
+:root[data-ui="dark"] {
+    --ui-bg: #22252a;
+    --ui-fg: #d6dae0;
+    --ui-muted: #8b929c;
+    --ui-border: #363a42;
+    --ui-hover: #2d3138;
+    --ui-active-bg: #d6dae0;
+    --ui-active-fg: #1b1d21;
+    --ui-shadow: 0 6px 20px rgba(0, 0, 0, 0.42);
+    --progress-color: rgba(214, 218, 224, 0.35);
+    --scroll-thumb: rgba(214, 218, 224, 0.2);
+    --scroll-thumb-hover: rgba(214, 218, 224, 0.42);
+}
 
-        body {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            height: 100vh;
-            width: 100vw;
-            position: relative;
-        }
+html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: var(--reader-bg);
+    color: var(--reader-fg);
+    font-family: 'Noto Serif SC', Georgia, "Songti SC", serif;
+    transition: background-color 0.2s ease, color 0.2s ease;
+}
 
-        /* 核心：固定逻辑分辨率，锁定为标准的双页书本尺寸 */
-        .book-container {
-            display: block;
-            width: 1131px;  /* 固定逻辑宽度 */
-            height: 800px;  /* 固定逻辑高度 */
-            
-            box-shadow: 0 15px 50px rgba(0,0,0,0.8);
-            border-radius: 4px;
-            padding: 40px 56px; 
-            box-sizing: border-box;
-            
-            /* 使用绝对定位使其居中，便于后续使用 transform 缩放 */
-            position: absolute;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%); /* 初始状态，JS 会动态补充 scale */
-            transform-origin: center center;
-            
-            transition: background-color 0.3s;
-        }
+/* 极简素色进度条 */
+#progressBar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    height: 2px;
+    width: 0%;
+    background: var(--progress-color);
+    z-index: 900;
+    pointer-events: none;
+    transition: width 0.08s linear;
+}
 
-        /* 书缝阴影保留，增加纸质感 */
-        .book-container::after {
-            content: '';
-            position: absolute;
-            top: 0; left: 50%;
-            width: 4px; height: 100%;
-            background: linear-gradient(to right, rgba(0,0,0,0.05) 0%, rgba(255,255,255,0.05) 50%, rgba(0,0,0,0.05) 100%);
-            transform: translateX(-50%);
-            box-shadow: 0 0 15px rgba(0,0,0,0.15);
-            pointer-events: none;
-            z-index: 10;
-        }
+#readerViewport {
+    position: fixed;
+    inset: 0;
+    padding: 30px 44px 30px 44px;
+    box-sizing: border-box;
+    overflow: hidden;
+}
 
-        /* 始终维持双列布局 */
-        pre {
-            width: 100%;
-            height: 100%;
-            margin: 0;
-            padding: 0 4px 15px 4px;
-            box-sizing: border-box;
-            
-            column-count: 2;         
-            column-gap: 80px;        
-            column-fill: auto;
-            overflow-y: hidden;
-            overflow-x: auto !important;      
-            white-space: pre-wrap;
-            word-wrap: break-word;
-            text-align: justify;     
-        }
+#readerStage {
+    width: 100%;
+    height: 100%;
+    box-sizing: border-box;
+    padding: 0 2px 10px 2px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    column-width: var(--col-width);
+    column-gap: var(--col-gap);
+    column-fill: auto;
+    column-rule: 1px solid var(--col-rule);
+    font-size: var(--font-size);
+    line-height: var(--line-height);
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    overflow-wrap: break-word;
+    text-align: justify;
+    outline: none;
+    scroll-behavior: auto;
+}
 
-        pre::-webkit-scrollbar {
-            height: 10px; 
-        }
-        pre::-webkit-scrollbar-track {
-            background: transparent; 
-        }
-        pre::-webkit-scrollbar-thumb {
-            background-color: rgba(148, 163, 184, 0.3); 
-            border-radius: 10px;
-            border: 2px solid transparent; 
-            background-clip: padding-box;
-        }
-        pre::-webkit-scrollbar-thumb:hover {
-            background-color: var(--accent); 
-        }
+#readerStage::-webkit-scrollbar {
+    height: 7px;
+}
+#readerStage::-webkit-scrollbar-track {
+    background: transparent;
+}
+#readerStage::-webkit-scrollbar-thumb {
+    background-color: var(--scroll-thumb);
+    border-radius: 4px;
+}
+#readerStage::-webkit-scrollbar-thumb:hover {
+    background-color: var(--scroll-thumb-hover);
+}
 
-        /* 顶部极简进度条 */
-        #processBar {
-            top: 0px;
-            height: 3px;
-            background: linear-gradient(90deg, #10b981, #6366f1);
-            width: 0%;
-            position: fixed;
-            z-index: 99999;
-            transition: width 0.1s ease-out;
-            box-shadow: 0 1px 5px rgba(16, 185, 129, 0.4);
-        }
+.txt-chunk {
+    display: block;
+    margin: 0;
+    padding: 0;
+}
 
-        /* 搜索高亮 */
-        mark {
-            background: yellow;
-            color: red;
-            border-radius: 3px;
-            padding: 0 2px;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.2);
-        }
+.txt-loading {
+    color: var(--ui-muted);
+    font-size: 15px;
+    padding: 12px 0;
+}
 
-        /* 拼音弹窗 */
-        .pinyin-tooltip {
-            position: absolute;
-            background: rgba(15, 23, 42, 0.9);
-            color: var(--accent);
-            padding: 6px 12px;
-            border-radius: 6px;
-            white-space: nowrap;
-            z-index: 100000;
-            display: none;
-            pointer-events: none;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
-            font-family: sans-serif;
-            font-weight: bold;
-            border: 1px solid var(--drawer-border);
-        }
+#statusHud {
+    position: fixed;
+    left: 44px;
+    right: 44px;
+    bottom: 6px;
+    height: 20px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 11.5px;
+    font-family: system-ui, -apple-system, "Microsoft YaHei", sans-serif;
+    color: var(--reader-fg);
+    opacity: 0.45;
+    pointer-events: none;
+    user-select: none;
+    z-index: 20;
+    gap: 16px;
+}
+#hudChapter {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+#hudRight {
+    flex-shrink: 0;
+    font-variant-numeric: tabular-nums;
+}
 
-        /* 抽屉 UI */
-        #drawer-trigger {
-            position: fixed;
-            right: 0;
-            top: 0;
-            width: 15px;
-            height: 100vh;
-            z-index: 999;
-            cursor: pointer;
-            display: flex;
-            align-items: center;
-            justify-content: flex-end;
-        }
-        #drawer-trigger:hover .trigger-line {
-            opacity: 1;
-            height: 60px;
-        }
-        .trigger-line {
-            width: 4px;
-            height: 30px;
-            background: var(--accent);
-            margin-right: 2px;
-            border-radius: 4px;
-            opacity: 0.3;
-            transition: all 0.3s ease;
-        }
+/* 焦点提示框（素雅暖琥珀） */
+.txt-hit-pulse {
+    position: fixed;
+    pointer-events: none;
+    border: 1.5px solid #c26d1f;
+    background: rgba(217, 119, 6, 0.16);
+    border-radius: 3px;
+    z-index: 950;
+    animation: txtHitPulse 1.05s ease-out forwards;
+}
+@keyframes txtHitPulse {
+    0% { transform: scale(1.14); opacity: 1; }
+    100% { transform: scale(1); opacity: 0; }
+}
 
-        #ui-drawer {
-            position: fixed;
-            right: 0;
-            top: 0;
-            width: 320px;
-            height: 100vh;
-            background: var(--drawer-bg);
-            backdrop-filter: blur(16px);
-            -webkit-backdrop-filter: blur(16px);
-            border-left: 1px solid var(--drawer-border);
-            z-index: 1000;
-            transform: translateX(100%);
-            transition: transform 0.4s cubic-bezier(0.16, 1, 0.3, 1);
-            display: flex;
-            flex-direction: column;
-            color: var(--text-main);
-            font-family: sans-serif;
-            box-shadow: -10px 0 30px rgba(0,0,0,0.5);
-            overflow-y: auto;
-        }
-        #ui-drawer.open {
-            transform: translateX(0);
-        }
+/* 拼音浮窗 & 摘抄按钮（纸墨素雅风） */
+#pinyinTooltip {
+    position: fixed;
+    display: none;
+    background: var(--ui-active-bg);
+    color: var(--ui-active-fg);
+    padding: 4px 10px;
+    border-radius: 4px;
+    font-family: system-ui, -apple-system, sans-serif;
+    font-size: 13px;
+    font-weight: 600;
+    white-space: nowrap;
+    pointer-events: none;
+    z-index: 10000;
+    box-shadow: var(--ui-shadow);
+}
 
-        #ui-drawer::-webkit-scrollbar { width: 6px; }
-        #ui-drawer::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.2); border-radius: 3px; }
+#excerptBtn {
+    position: fixed;
+    display: none;
+    background: var(--ui-bg);
+    color: var(--ui-fg);
+    border: 1px solid var(--ui-border);
+    padding: 3px 9px;
+    border-radius: 4px;
+    font-family: system-ui, -apple-system, "Microsoft YaHei", sans-serif;
+    font-size: 12px;
+    cursor: pointer;
+    z-index: 10001;
+    user-select: none;
+    box-shadow: var(--ui-shadow);
+}
+#excerptBtn:hover {
+    background: var(--ui-hover);
+}
 
-        .drawer-header {
-            padding: 20px;
-            border-bottom: 1px solid var(--drawer-border);
-            display: flex;
-            justify-content: space-between;
-            align-items: flex-start;
-        }
-        .file-meta { flex: 1; overflow: hidden; }
-        #fileTitle {
-            font-size: 16px;
-            font-weight: bold;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            margin-bottom: 4px;
-        }
-        #fileSize {
-            font-size: 12px;
-            color: var(--accent);
-        }
-        #closeDrawer {
-            background: transparent;
-            border: none;
-            color: var(--text-muted);
-            font-size: 24px;
-            cursor: pointer;
-            line-height: 1;
-            padding: 0 0 0 10px;
-            transition: color 0.2s;
-        }
-        #closeDrawer:hover { color: #ef4444; }
+/* 顶部呼出热区与把手 */
+#barTrigger {
+    position: fixed;
+    top: 0;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 140px;
+    height: 16px;
+    z-index: 960;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+#barTrigger .trigger-pill {
+    width: 44px;
+    height: 3px;
+    border-radius: 2px;
+    background: var(--progress-color);
+    opacity: 0.55;
+    transition: width 0.2s ease, opacity 0.2s ease;
+}
+#barTrigger:hover .trigger-pill {
+    width: 64px;
+    opacity: 1;
+}
 
-        .module {
-            padding: 20px;
-            border-bottom: 1px solid var(--drawer-border);
-        }
-        .module h3 {
-            margin: 0 0 15px 0;
-            font-size: 13px;
-            text-transform: uppercase;
-            letter-spacing: 1px;
-            color: var(--text-muted);
-        }
+/* 顶部横条控制栏 */
+#topBar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    background: var(--ui-bg);
+    color: var(--ui-fg);
+    border-bottom: 1px solid var(--ui-border);
+    box-shadow: var(--ui-shadow);
+    font-family: system-ui, -apple-system, "Microsoft YaHei", sans-serif;
+    font-size: 12.5px;
+    z-index: 980;
+    transform: translateY(-105%);
+    transition: transform 0.2s ease;
+    user-select: none;
+}
+#topBar.open {
+    transform: translateY(0);
+}
 
-        .control-group { margin-bottom: 15px; }
-        .control-group:last-child { margin-bottom: 0; }
-        .control-group label {
-            display: flex;
-            justify-content: space-between;
-            font-size: 13px;
-            margin-bottom: 8px;
-        }
-        .val-display { color: var(--accent); font-family: monospace; }
+.tb-inner {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px 10px;
+    padding: 7px 14px;
+}
 
-        input[type=range] {
-            -webkit-appearance: none;
-            width: 100%;
-            background: transparent;
-        }
-        input[type=range]::-webkit-slider-thumb {
-            -webkit-appearance: none;
-            height: 16px;
-            width: 16px;
-            border-radius: 50%;
-            background: var(--accent);
-            cursor: pointer;
-            margin-top: -6px;
-            box-shadow: 0 0 10px rgba(16, 185, 129, 0.5);
-        }
-        input[type=range]::-webkit-slider-runnable-track {
-            width: 100%;
-            height: 4px;
-            cursor: pointer;
-            background: rgba(255, 255, 255, 0.1);
-            border-radius: 2px;
-        }
+.tb-group {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+}
+.tb-sep {
+    width: 1px;
+    height: 16px;
+    background: var(--ui-border);
+    flex-shrink: 0;
+}
 
-        button {
-            background: var(--btn-bg);
-            border: 1px solid var(--drawer-border);
-            color: var(--text-main);
-            border-radius: 6px;
-            padding: 8px 12px;
-            cursor: pointer;
-            transition: all 0.2s;
-            font-size: 13px;
-        }
-        button:hover { background: var(--btn-hover); }
-        button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
-        button.primary:hover { background: var(--accent-hover); }
-        button.reset-btn { background: rgba(239, 68, 68, 0.1); border-color: rgba(239, 68, 68, 0.3); color: #fca5a5; width: 100%; padding: 10px; font-weight: bold; }
-        button.reset-btn:hover { background: rgba(239, 68, 68, 0.3); }
+.tb-meta {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 6px;
+    max-width: 210px;
+    min-width: 0;
+}
+#fileTitle {
+    font-weight: 600;
+    font-size: 13px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+#fileMetaSub {
+    font-size: 11px;
+    color: var(--ui-muted);
+    white-space: nowrap;
+    flex-shrink: 0;
+}
 
-        input[type="text"] {
-            width: 100%;
-            background: rgba(0,0,0,0.2);
-            border: 1px solid var(--drawer-border);
-            color: #fff;
-            padding: 8px 12px;
-            border-radius: 6px;
-            margin-bottom: 10px;
-            box-sizing: border-box;
-            outline: none;
-        }
-        input[type="text"]:focus { border-color: var(--accent); }
+.tb-btn {
+    font: inherit;
+    font-size: 12px;
+    line-height: 1.3;
+    padding: 3px 9px;
+    border-radius: 4px;
+    border: 1px solid var(--ui-border);
+    background: transparent;
+    color: var(--ui-fg);
+    cursor: pointer;
+    white-space: nowrap;
+}
+.tb-btn:hover {
+    background: var(--ui-hover);
+}
+.tb-btn.active {
+    background: var(--ui-active-bg);
+    color: var(--ui-active-fg);
+    border-color: var(--ui-active-bg);
+}
 
-        .flex-row { display: flex; gap: 10px; align-items: center; }
-        .flex-row > * { flex: 1; }
-        
-        .color-pickers { display: flex; gap: 15px; justify-content: space-between; }
-        .color-item { display: flex; flex-direction: column; align-items: center; gap: 5px; font-size: 12px; }
-        input[type="color"] {
-            -webkit-appearance: none;
-            border: none;
-            width: 32px;
-            height: 32px;
-            border-radius: 50%;
-            cursor: pointer;
-            padding: 0;
-            background: transparent;
-        }
-        input[type="color"]::-webkit-color-swatch-wrapper { padding: 0; }
-        input[type="color"]::-webkit-color-swatch { border: 2px solid var(--drawer-border); border-radius: 50%; }
+.tb-slider-wrap {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 12px;
+    color: var(--ui-muted);
+}
+.tb-slider-wrap input[type="range"] {
+    width: 68px;
+    height: 14px;
+    margin: 0;
+    cursor: pointer;
+    accent-color: var(--ui-fg);
+}
+.tb-val {
+    min-width: 32px;
+    font-size: 11.5px;
+    color: var(--ui-fg);
+    font-variant-numeric: tabular-nums;
+}
 
-        .theme-presets { display: flex; gap: 8px; margin-bottom: 15px; }
-        .theme-presets button { padding: 6px 0; font-size: 12px; }
+.tb-color {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    font-size: 12px;
+    color: var(--ui-muted);
+    cursor: pointer;
+}
+.tb-color input[type="color"] {
+    width: 20px;
+    height: 20px;
+    padding: 0;
+    border: 1px solid var(--ui-border);
+    border-radius: 3px;
+    background: transparent;
+    cursor: pointer;
+}
 
-        .search-actions { display: flex; gap: 5px; margin-bottom: 10px; }
-        .search-actions button { padding: 8px; flex: 1; }
-        .match-info { text-align: center; font-size: 12px; color: var(--accent); font-family: monospace; background: rgba(0,0,0,0.2); padding: 4px; border-radius: 4px; }
+select.tb-select {
+    font: inherit;
+    font-size: 12px;
+    padding: 2px 6px;
+    border-radius: 4px;
+    border: 1px solid var(--ui-border);
+    background: var(--ui-bg);
+    color: var(--ui-fg);
+    outline: none;
+    cursor: pointer;
+}
 
-        .nav-btns button { padding: 12px; font-weight: bold; letter-spacing: 1px; }
+.tb-right {
+    margin-left: auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
 
-    </style>
+/* 顶部横条下拉浮层（目录 / 书签共用） */
+.tb-popover {
+    position: fixed;
+    top: 44px;
+    width: 340px;
+    max-width: calc(100vw - 24px);
+    max-height: min(68vh, 520px);
+    background: var(--ui-bg);
+    color: var(--ui-fg);
+    border: 1px solid var(--ui-border);
+    border-radius: 6px;
+    box-shadow: var(--ui-shadow);
+    z-index: 985;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    font-family: system-ui, -apple-system, "Microsoft YaHei", sans-serif;
+    user-select: none;
+}
+.tb-popover[hidden] {
+    display: none;
+}
+
+.pop-head {
+    flex: none;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--ui-border);
+    font-size: 12.5px;
+    font-weight: 600;
+}
+.pop-search {
+    flex: 1;
+    min-width: 0;
+    padding: 4px 8px;
+    border-radius: 4px;
+    border: 1px solid var(--ui-border);
+    background: transparent;
+    color: var(--ui-fg);
+    font: inherit;
+    font-size: 12px;
+    font-weight: normal;
+    outline: none;
+}
+.pop-body {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 6px;
+}
+.pop-body::-webkit-scrollbar { width: 5px; }
+.pop-body::-webkit-scrollbar-thumb { background: var(--scroll-thumb); border-radius: 3px; }
+
+.pop-empty {
+    padding: 20px 10px;
+    text-align: center;
+    font-size: 12px;
+    color: var(--ui-muted);
+}
+
+.toc-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 8px;
+    border-radius: 4px;
+    font-size: 12.5px;
+    cursor: pointer;
+}
+.toc-item:hover { background: var(--ui-hover); }
+.toc-item.active {
+    background: var(--ui-hover);
+    font-weight: 600;
+}
+.toc-item-title {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.toc-item-pct {
+    flex-shrink: 0;
+    font-size: 11px;
+    color: var(--ui-muted);
+    font-variant-numeric: tabular-nums;
+}
+
+.bm-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 6px;
+    padding: 7px 8px;
+    border-radius: 4px;
+    cursor: pointer;
+    border-bottom: 1px dashed var(--ui-border);
+}
+.bm-item:last-child { border-bottom: 0; }
+.bm-item:hover { background: var(--ui-hover); }
+.bm-main {
+    flex: 1;
+    min-width: 0;
+}
+.bm-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    font-weight: 600;
+}
+.bm-ch {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.bm-pct {
+    flex-shrink: 0;
+    font-size: 11px;
+    font-weight: normal;
+    color: var(--ui-muted);
+    font-variant-numeric: tabular-nums;
+}
+.bm-excerpt {
+    margin-top: 3px;
+    font-size: 12px;
+    color: var(--ui-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.bm-time {
+    margin-top: 2px;
+    font-size: 10.5px;
+    color: var(--ui-muted);
+    opacity: 0.8;
+}
+.bm-del {
+    flex-shrink: 0;
+    border: 0;
+    background: transparent;
+    color: var(--ui-muted);
+    font-size: 15px;
+    line-height: 1;
+    padding: 2px 4px;
+    border-radius: 3px;
+    cursor: pointer;
+}
+.bm-del:hover {
+    background: var(--ui-border);
+    color: var(--ui-fg);
+}
+
+@media (max-width: 720px) {
+    #readerViewport { padding: 20px 18px 26px 18px; }
+    #statusHud { left: 18px; right: 18px; }
+}
+</style>
 </head>
-
 <body>
-    <div style='top:0;left:0;width:100%;'>
-        <div id='processBar'></div>
+    <div id="progressBar"></div>
+
+    <div id="readerViewport">
+        <div id="readerStage" tabindex="0"><div class="txt-loading">正在加载文档...</div></div>
     </div>
 
-    <div id="drawer-trigger" title="打开控制面板">
-        <div class="trigger-line"></div>
+    <div id="statusHud">
+        <span id="hudChapter"></span>
+        <span id="hudRight">0.0%</span>
     </div>
 
-    <div id="ui-drawer">
-        <div class="drawer-header">
-            <div class="file-meta">
-                <div id="fileTitle" title="loading...">Loading...</div>
-                <div id="fileSize">-- KB</div>
-            </div>
-            <button id="closeDrawer" title="关闭">&times;</button>
-        </div>
+    <div id="pinyinTooltip"></div>
+    <div id="excerptBtn">✏️ 摘抄</div>
 
-        <div class="module">
-            <h3>排版</h3>
-            <div class="control-group">
-                <label>Font Size <span id="fz-val" class="val-display">1.0em</span></label>
-                <input type="range" id="fontSizeSlider" min="0.8" max="4.0" step="0.1" value="1.0">
-            </div>
-            <div class="control-group">
-                <label>Line Height <span id="lh-val" class="val-display">1.7</span></label>
-                <input type="range" id="lineHeightSlider" min="1.0" max="3.5" step="0.1" value="1.7">
-            </div>
-        </div>
-
-        <div class="module">
-            <h3>色彩</h3>
-            <div class="theme-presets">
-                <button class="preset-btn" data-theme="parchment" style="background:#f4f1ea; color:#5f584e;">羊皮纸</button>
-                <button class="preset-btn" data-theme="dark" style="background:#1a1b1e; color:#c1c2c5;">黑夜</button>
-                <button class="preset-btn" data-theme="forest" style="background:#d0e8d0; color:#2d5a2d;">森林</button>
-            </div>
-            <div class="color-pickers">
-                <div class="color-item"><span>Text</span><input type="color" id="fgColor"></div>
-                <div class="color-item"><span>BG</span><input type="color" id="bgColor"></div>
-                <div class="color-item"><span>Mark</span><input type="color" id="highlightColor" value="#ffff00"></div>
-            </div>
-        </div>
-
-        <div class="module">
-            <h3>翻页</h3>
-            <div class="flex-row nav-btns">
-                <button id="prevPage">◀ Prev</button>
-                <button id="nextPage">Next ▶</button>
-            </div>
-        </div>
-
-        <div class="module">
-            <h3>搜索</h3>
-            <div>
-                <input type="text" id="searchInput" placeholder="Keyword / Regex...">
-                <div style="margin-bottom: 10px;">
-                    <label style="font-size:13px; cursor:pointer;"><input type="checkbox" id="regexToggle"> Use Regex</label>
-                </div>
-            </div>
-            <div class="search-actions">
-                <button id="searchBtn" class="primary">Find</button>
-                <button id="prevMatch" title="Previous">▲</button>
-                <button id="nextMatch" title="Next">▼</button>
-                <button id="clearHighlight" title="Clear">✖</button>
-            </div>
-            <div id="matchInfo" class="match-info">0 / 0</div>
-        </div>
-        
-        <div class="module" style="border-bottom: none;">
-            <button id="resetDefaults" class="reset-btn">恢复默认设置</button>
-        </div>
+    <div id="barTrigger" title="点击呼出顶部控制条">
+        <div class="trigger-pill"></div>
     </div>
 
-    <div id="bookContainer" class="book-container">
-        <pre id="fileContent"></pre>
+    <header id="topBar" aria-label="TXT 阅读控制条">
+        <div class="tb-inner">
+            <div class="tb-meta">
+                <span id="fileTitle">Loading...</span>
+                <span id="fileMetaSub">--</span>
+            </div>
+
+            <span class="tb-sep"></span>
+
+            <div class="tb-group">
+                <button id="tocBtn" class="tb-btn" type="button" title="打开目录">目录</button>
+                <button id="addBmBtn" class="tb-btn" type="button" title="为当前位置添加书签 (快捷键 B)">+ 书签</button>
+                <button id="bmListBtn" class="tb-btn" type="button" title="查看本书书签">书签 (0)</button>
+            </div>
+
+            <span class="tb-sep"></span>
+
+            <div class="tb-group">
+                <label class="tb-slider-wrap" title="调整字号">
+                    字号<input type="range" id="fontSizeSlider" min="13" max="34" step="1" value="18"><span id="fzVal" class="tb-val">18px</span>
+                </label>
+                <label class="tb-slider-wrap" title="调整行高">
+                    行高<input type="range" id="lineHeightSlider" min="1.3" max="2.6" step="0.05" value="1.85"><span id="lhVal" class="tb-val">1.85</span>
+                </label>
+                <label class="tb-slider-wrap" title="调整参考栏宽 (自动 1/2/3 栏)">
+                    栏宽<input type="range" id="colWidthSlider" min="280" max="680" step="20" value="440"><span id="cwVal" class="tb-val">440</span>
+                </label>
+            </div>
+
+            <span class="tb-sep"></span>
+
+            <div class="tb-group">
+                <button class="tb-btn preset-btn" data-theme="light" type="button">亮色</button>
+                <button class="tb-btn preset-btn" data-theme="dark" type="button">暗色</button>
+                <label class="tb-color" title="文字颜色">字<input type="color" id="fgColor"></label>
+                <label class="tb-color" title="背景颜色">底<input type="color" id="bgColor"></label>
+            </div>
+
+            <span class="tb-sep"></span>
+
+            <div class="tb-group">
+                <select id="encodingSelect" class="tb-select" title="文件编码">
+                    <option value="auto">编码: 自动</option>
+                    <option value="utf-8">UTF-8</option>
+                    <option value="gb18030">GB18030</option>
+                    <option value="big5">Big5</option>
+                    <option value="utf-16le">UTF-16LE</option>
+                    <option value="utf-16be">UTF-16BE</option>
+                </select>
+                <button id="scopeToggleBtn" class="tb-btn" type="button" title="切换主站搜索框为搜本书或搜全站">搜本书</button>
+            </div>
+
+            <div class="tb-right">
+                <button id="resetBtn" class="tb-btn" type="button" title="恢复默认排版与配色">重置</button>
+                <button id="closeBarBtn" class="tb-btn" type="button" title="收起横条 (Esc)">▲</button>
+            </div>
+        </div>
+    </header>
+
+    <div id="tocPopover" class="tb-popover" hidden>
+        <div class="pop-head">
+            <span>目录</span>
+            <input type="text" id="tocSearch" class="pop-search" placeholder="过滤章节...">
+        </div>
+        <div id="tocList" class="pop-body"></div>
+    </div>
+
+    <div id="bmPopover" class="tb-popover" hidden>
+        <div class="pop-head">
+            <span id="bmPopTitle">书签</span>
+            <button id="clearBmBtn" class="tb-btn" type="button" style="font-size:11px;padding:1px 6px;">清空</button>
+        </div>
+        <div id="bmList" class="pop-body"></div>
     </div>
 
     <script src="../third/other/encoding.min.js"></script>
-    <script>
-        const Utils = {
-            rgbToHex(rgb) {
-                if (!rgb) return '#000000';
-                if (rgb.startsWith('#')) return rgb;
-                const result = /^rgb\((\d+),\s*(\d+),\s*(\d+)\)$/.exec(rgb);
-                if (!result) return rgb;
-                return "#" + [1, 2, 3].map(i => parseInt(result[i]).toString(16).padStart(2, '0')).join('');
-            },
-            debounce(func, wait) {
-                let timeout;
-                return function (...args) {
-                    clearTimeout(timeout);
-                    timeout = setTimeout(() => func.apply(this, args), wait);
-                };
-            },
-            escapeHTML(str) {
-                return str.replace(/[&<>'"]/g, tag => ({
-                    '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;'
-                }[tag]));
-            },
-            escapeRegExp(string) {
-                return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-            }
-        };
+    <script type="module">
+        import {
+            searchHighlightSupported,
+            getSearchHighlight,
+            resetSearchHighlights,
+            publishSearchHighlights
+        } from '../js/shared-utils.js';
 
-        const Store = new Proxy({}, {
-            get(_, prop) {
-                try { return JSON.parse(localStorage.getItem(prop)); } 
-                catch { return null; }
-            },
-            set(_, prop, value) {
-                localStorage.setItem(prop, JSON.stringify(value));
-                return true;
-            }
-        });
-
-        const DEFAULTS = {
-            fontSize: 1.0,
-            lineHeight: 1.7,
-            color: '#5f584e',
-            backgroundColor: '#f4f1ea',
-            scrollX: 0, 
-            highlightColor: '#ffff00'
-        };
-
-        const State = {
-            lsKey: '',
-            rawText: '',
-            matches: [],
-            currentMatchIndex: -1,
-            settings: { ...DEFAULTS }
-        };
-
-        const UI = {
-            bookContainer: document.getElementById('bookContainer'),
-            content: document.getElementById('fileContent'),
-            title: document.getElementById('fileTitle'),
-            size: document.getElementById('fileSize'),
-            processBar: document.getElementById('processBar'),
-            
-            drawer: document.getElementById('ui-drawer'),
-            drawerTrigger: document.getElementById('drawer-trigger'),
-            closeDrawer: document.getElementById('closeDrawer'),
-            fontSlider: document.getElementById('fontSizeSlider'),
-            fzVal: document.getElementById('fz-val'),
-            lineSlider: document.getElementById('lineHeightSlider'),
-            lhVal: document.getElementById('lh-val'),
-
-            fgColor: document.getElementById('fgColor'),
-            bgColor: document.getElementById('bgColor'),
-            hlColor: document.getElementById('highlightColor'),
-            resetBtn: document.getElementById('resetDefaults'),
-            
-            searchInp: document.getElementById('searchInput'),
-            matchInfo: document.getElementById('matchInfo'),
-            regexToggle: document.getElementById('regexToggle')
-        };
-
-        const THEMES = {
-            parchment: { bg: '#f4f1ea', fg: '#5f584e' },
-            dark: { bg: '#1a1b1e', fg: '#c1c2c5' },
-            forest: { bg: '#d0e8d0', fg: '#2d5a2d' }
-        };
-
-        function triggerProgressBarUpdate() {
-            const el = UI.content;
-            const scrollWidth = el.scrollWidth - el.clientWidth;
-            const scrolled = scrollWidth === 0 ? 0 : (el.scrollLeft / scrollWidth) * 100;
-            UI.processBar.style.width = `${scrolled}%`;
+        if (window.top && window.top.VirtualCursor) {
+            try { window.top.VirtualCursor.attach(window); } catch (_) { }
         }
 
-        const Viewer = {
-            init(title, text, sizeKB) {
-                State.rawText = text;
-                State.lsKey = "txt.history_" + title;
-                
-                UI.title.textContent = title;
-                UI.title.title = title; 
-                UI.size.textContent = sizeKB + " KB";
-                UI.content.textContent = text; 
-
-                this.loadSettings();
-                this.bindEvents();
-                
-                window.addEventListener('message', (e) => {
-                    if (e.data && e.data.type === 'OPEN_EXCERPTS_NOTEBOOK') {
-                        ExcerptsUIManager.openAndRefresh();
-                    }
-                });
-            },
-
-            // GPU缩放：维持固定的高宽比，缩小适应视口
-            calibrateBookSize() {
-                const logicalWidth = 1131;
-                const logicalHeight = 800;
-                
-                const scaleX = (window.innerWidth * 0.94) / logicalWidth;
-                const scaleY = (window.innerHeight * 0.94) / logicalHeight;
-                const scale = Math.min(scaleX, scaleY);
-                
-                UI.bookContainer.style.transform = `translate(-50%, -50%) scale(${scale})`;
-            },
-
-            loadSettings() {
-                const saved = Store[State.lsKey];
-                if (saved) {
-                    State.settings = { ...State.settings, ...saved };
-                }
-
-                UI.fontSlider.value = State.settings.fontSize;
-                UI.fzVal.textContent = State.settings.fontSize + 'em';
-                UI.lineSlider.value = State.settings.lineHeight;
-                UI.lhVal.textContent = State.settings.lineHeight;
-                UI.fgColor.value = Utils.rgbToHex(State.settings.color);
-                UI.bgColor.value = Utils.rgbToHex(State.settings.backgroundColor);
-                UI.hlColor.value = State.settings.highlightColor;
-
-                this.calibrateBookSize();
-                this.applyStyles();
-
-                setTimeout(() => {
-                    UI.content.scrollLeft = State.settings.scrollX || 0;
-                    window.scrollTo(0, 0); 
-                }, 0);
-            },
-
-            applyStyles() {
-                UI.content.style.fontSize = State.settings.fontSize + 'em';
-                UI.content.style.lineHeight = State.settings.lineHeight + 'em';
-                UI.content.style.color = State.settings.color;
-                UI.bookContainer.style.backgroundColor = State.settings.backgroundColor;
-            },
-
-            saveSettings: Utils.debounce(() => {
-                if (!State.lsKey) return;
-                State.settings.scrollX = UI.content.scrollLeft;
-                Store[State.lsKey] = State.settings;
-            }, 500),
-
-            updateSetting(key, value) {
-                State.settings[key] = value;
-                this.applyStyles();
-                this.saveSettings();
-            },
-
-            resetToDefaults() {
-                this.updateSetting('fontSize', DEFAULTS.fontSize);
-                this.updateSetting('lineHeight', DEFAULTS.lineHeight);
-                this.updateSetting('color', DEFAULTS.color);
-                this.updateSetting('backgroundColor', DEFAULTS.backgroundColor);
-                
-                UI.fontSlider.value = DEFAULTS.fontSize;
-                UI.fzVal.textContent = DEFAULTS.fontSize + 'em';
-                UI.lineSlider.value = DEFAULTS.lineHeight;
-                UI.lhVal.textContent = DEFAULTS.lineHeight;
-                UI.fgColor.value = Utils.rgbToHex(DEFAULTS.color);
-                UI.bgColor.value = Utils.rgbToHex(DEFAULTS.backgroundColor);
-                
-                setTimeout(() => {
-                    this.calibrateBookSize();
-                    const gap = 80;
-                    const step = (UI.content.clientWidth - 8 + gap) / 2;
-                    let currentPage = Math.round(UI.content.scrollLeft / step);
-                    UI.content.scrollTo({ left: currentPage * step, behavior: 'instant' });
-                    triggerProgressBarUpdate();
-                }, 50);
-            },
-
-            bindEvents() {
-                const toggleDrawer = (forceOpen) => {
-                    const isOpen = UI.drawer.classList.contains('open');
-                    if (forceOpen === true || !isOpen) {
-                        UI.drawer.classList.add('open');
-                        UI.drawerTrigger.style.display = 'none';
-                    } else {
-                        UI.drawer.classList.remove('open');
-                        setTimeout(() => { UI.drawerTrigger.style.display = 'flex'; }, 300);
-                    }
-                };
-
-                UI.drawerTrigger.onclick = () => toggleDrawer(true);
-                UI.closeDrawer.onclick = () => toggleDrawer(false);
-
-                document.addEventListener('mousedown', (e) => {
-                    if (UI.drawer.classList.contains('open') && 
-                        !UI.drawer.contains(e.target) && 
-                        !UI.drawerTrigger.contains(e.target) &&
-                        !e.target.closest('.pinyin-tooltip') &&
-                        !e.target.closest('#excerpts-popup')) {
-                        toggleDrawer(false);
-                    }
-                });
-
-                UI.fontSlider.oninput = (e) => {
-                    const val = parseFloat(e.target.value).toFixed(1);
-                    UI.fzVal.textContent = val + 'em';
-                    this.updateSetting('fontSize', val);
-                    triggerProgressBarUpdate();
-                };
-
-                UI.lineSlider.oninput = (e) => {
-                    const val = parseFloat(e.target.value).toFixed(1);
-                    UI.lhVal.textContent = val;
-                    this.updateSetting('lineHeight', val);
-                    triggerProgressBarUpdate();
-                };
-                
-                UI.resetBtn.onclick = () => this.resetToDefaults();
-
-                document.querySelectorAll('.preset-btn').forEach(btn => {
-                    btn.onclick = (e) => {
-                        const themeKey = e.target.dataset.theme;
-                        const theme = THEMES[themeKey];
-                        if (theme) {
-                            UI.fgColor.value = theme.fg;
-                            UI.bgColor.value = theme.bg;
-                            this.updateSetting('color', theme.fg);
-                            this.updateSetting('backgroundColor', theme.bg);
-                        }
-                    };
-                });
-
-                UI.fgColor.oninput = (e) => this.updateSetting('color', e.target.value);
-                UI.bgColor.oninput = (e) => this.updateSetting('backgroundColor', e.target.value);
-                UI.hlColor.oninput = (e) => {
-                    State.settings.highlightColor = e.target.value;
-                    this.saveSettings();
-                    if (State.matches.length) Search.highlightAll(new RegExp(Utils.escapeRegExp(UI.searchInp.value.trim()), 'gi'));
-                };
-
-                const turnHorizontalPage = (direction) => {
-                    const gap = 80; 
-                    const step = (UI.content.clientWidth - 8 + gap) / 2; 
-                    
-                    let currentPage = Math.round(UI.content.scrollLeft / step);
-                    const maxScroll = UI.content.scrollWidth - UI.content.clientWidth;
-                    const maxPage = Math.ceil(maxScroll / step);
-                    
-                    currentPage += direction;
-                    if (currentPage < 0) currentPage = 0;
-                    if (currentPage > maxPage) currentPage = maxPage;
-                    
-                    UI.content.scrollTo({ left: currentPage * step, behavior: 'smooth' });
-                };
-
-                document.getElementById('nextPage').onclick = () => turnHorizontalPage(1);
-                document.getElementById('prevPage').onclick = () => turnHorizontalPage(-1);
-
-                let isPaging = false;
-                window.addEventListener('wheel', (e) => {
-                    if (UI.drawer.classList.contains('open') && e.target.closest('#ui-drawer')) return; 
-                    if (e.target.closest('#excerpts-popup')) return; 
-
-                    e.preventDefault();
-                    if (isPaging) return;
-
-                    const direction = Math.sign(e.deltaY || e.deltaX);
-                    if (direction === 0) return;
-
-                    turnHorizontalPage(direction);
-                    
-                    isPaging = true;
-                    setTimeout(() => { isPaging = false; }, 400); 
-                }, { passive: false });
-
-                // 响应视口改变，只调节 transform scale 缩放，不改变盒子逻辑尺寸避免卡顿
-                window.addEventListener('resize', Utils.debounce(() => {
-                    this.calibrateBookSize(); 
-                    
-                    const gap = 80;
-                    const step = (UI.content.clientWidth - 8 + gap) / 2; 
-                    const currScroll = UI.content.scrollLeft;
-                    const pageIndex = Math.round(currScroll / step);
-                    UI.content.scrollTo({ left: pageIndex * step, behavior: 'instant' });
-                    triggerProgressBarUpdate();
-                }, 50));
-
-                let ticking = false;
-                UI.content.addEventListener("scroll", () => {
-                    if (!ticking) { 
-                        window.requestAnimationFrame(() => { 
-                            triggerProgressBarUpdate(); 
-                            ticking = false; 
-                        }); 
-                        ticking = true; 
-                    }
-                    this.saveSettings(); 
-                }, { passive: true });
-            }
-        };
-
-        const Search = {
-            init() {
-                document.getElementById('searchBtn').onclick = () => {
-                    this.updateMatches(UI.searchInp.value.trim(), UI.regexToggle.checked);
-                    this.goNext();
-                };
-                UI.searchInp.onkeydown = (e) => {
-                    if (e.key === 'Enter') {
-                        e.preventDefault();
-                        document.getElementById('searchBtn').click();
-                    }
-                };
-
-                document.getElementById('nextMatch').onclick = () => this.goNext();
-                document.getElementById('prevMatch').onclick = () => this.goPrev();
-                document.getElementById('clearHighlight').onclick = () => this.clear();
-            },
-
-            updateMatches(keyword, useRegex) {
-                if (!keyword || keyword.length > 200) return this.clear();
-                let regex;
-                try {
-                    regex = useRegex ? new RegExp(keyword, 'gi') : new RegExp(Utils.escapeRegExp(keyword), 'gi');
-                } catch (e) {
-                    alert('Invalid regex'); return;
-                }
-
-                State.matches = [...State.rawText.matchAll(regex)];
-                State.currentMatchIndex = -1;
-                this.highlightAll(regex);
-            },
-
-            highlightAll(regex) {
-                if (!State.matches.length) return this.clear();
-
-                const hlColor = State.settings.highlightColor;
-                let result = '';
-                let lastIndex = 0;
-                let match;
-
-                regex.lastIndex = 0; 
-                while ((match = regex.exec(State.rawText)) !== null) {
-                    result += Utils.escapeHTML(State.rawText.substring(lastIndex, match.index));
-                    result += `<mark style="background:${hlColor};">${Utils.escapeHTML(match[0])}</mark>`;
-                    lastIndex = regex.lastIndex;
-                    if (match.index === regex.lastIndex) regex.lastIndex++; 
-                }
-                result += Utils.escapeHTML(State.rawText.substring(lastIndex));
-                
-                UI.content.innerHTML = result;
-                this.updateInfo();
-            },
-
-            updateInfo() {
-                UI.matchInfo.textContent = State.matches.length === 0 ? '0 / 0' : `${State.currentMatchIndex + 1} / ${State.matches.length}`;
-            },
-
-            scrollToCurrent() {
-                const marks = UI.content.querySelectorAll('mark');
-                const target = marks[State.currentMatchIndex];
-                if (target) {
-                    target.scrollIntoView({ block: 'center', inline: 'center', behavior: 'smooth' });
-                }
-            },
-
-            goNext() {
-                if (!State.matches.length) return;
-                State.currentMatchIndex = (State.currentMatchIndex + 1) % State.matches.length;
-                this.updateInfo();
-                this.scrollToCurrent();
-            },
-
-            goPrev() {
-                if (!State.matches.length) return;
-                State.currentMatchIndex = (State.currentMatchIndex - 1 + State.matches.length) % State.matches.length;
-                this.updateInfo();
-                this.scrollToCurrent();
-            },
-
-            clear() {
-                State.matches = [];
-                State.currentMatchIndex = -1;
-                UI.content.textContent = State.rawText; 
-                UI.matchInfo.textContent = '0 / 0';
-            }
-        };
-
-        const PinyinPlugin = {
-            init() {
-                this.tooltip = document.createElement("div");
-                this.tooltip.className = "pinyin-tooltip";
-                document.body.appendChild(this.tooltip);
-
-                document.addEventListener("mouseup", (e) => {
-                    const dict = window.top?.pinyinData; 
-                    if (!dict) return;
-
-                    const selection = window.getSelection().toString().trim();
-                    if (selection.length === 1 && dict[selection]) {
-                        this.tooltip.innerText = dict[selection];
-                        
-                        let leftPos = e.pageX;
-                        if (leftPos + 80 > window.innerWidth) {
-                            leftPos = window.innerWidth - 90;
-                        }
-                        
-                        this.tooltip.style.left = leftPos + "px";
-                        this.tooltip.style.top = (e.pageY - 35) + "px"; 
-                        this.tooltip.style.display = "block";
-                    } else {
-                        this.tooltip.style.display = "none";
-                    }
-                });
-
-                document.addEventListener("mousedown", (e) => {
-                    if(!e.target.closest('#ui-drawer')) {
-                        this.tooltip.style.display = "none";
-                    }
-                });
-            }
-        };
-
-const FullscreenControl = {
-    init() {
-        document.body.addEventListener("mousedown", (e) => {
-            if (e.button === 1 && !e.target.closest('#ui-drawer') && !e.target.closest('#excerpts-popup')) {
-                e.preventDefault();
-                const parentDoc = window.parent.document;
-                const isFullscreen = !!parentDoc.fullscreenElement;
-
-                if (!isFullscreen) {
-                    parentDoc.documentElement.requestFullscreen().catch(err => console.warn(err));
-                    emitEvent("lightbox", { status: "1" }, "index");
-                } else {
-                    if (parentDoc.exitFullscreen) parentDoc.exitFullscreen();
-                    emitEvent("lightbox", { status: "0" }, "index");
-                }
-            }
-        });
-    }
-};
-
-if (window.top && window.top.VirtualCursor) {
-    window.top.VirtualCursor.attach(window);
-}
-
+        // =====================================================================
+        // 1. BUS 通信与标签页隔离
+        // =====================================================================
         const childId = 'content';
         window.childId = childId;
-        if (window.__LITE_BUS__) {
-            window.__LITE_BUS__.close();
-        }
+        if (window.__LITE_BUS__) window.__LITE_BUS__.close();
         window.__LITE_BUS__ = new BroadcastChannel('bus');
         const BUS = window.__LITE_BUS__;
+        const ctxId = window.top === window.self ? 'index' : childId;
 
-        window.addEventListener('pagehide', (e) => {
-            if (e.persisted) return;
-            if (window.__LITE_BUS__) {
-                window.__LITE_BUS__.close();
-                window.__LITE_BUS__ = null;
-            }
-        });
-        
-        const ctxId = window.top === window.self ? 'index' : window.childId; 
-
-        function getTabId() {
+        const getTabId = () => {
             try { return (window.top && window.top.__TAB_ID__) || ''; } catch (_) { return ''; }
-        }
+        };
 
         function emitEvent(type, payload, target = '*') {
             if (!window.__LITE_BUS__) return;
             try {
-                window.__LITE_BUS__.postMessage({
-                    type,
-                    payload,
-                    from: ctxId,
-                    target,
-                    tabId: getTabId()
-                });
-            } catch (e) { }
+                window.__LITE_BUS__.postMessage({ type, payload, from: ctxId, target, tabId: getTabId() });
+            } catch (_) { }
         }
 
-        function initExcerptTrigger() {
-            let btn = document.getElementById('excerpt-pop-btn');
-            if (!btn) {
-                btn = document.createElement('div');
-                btn.id = 'excerpt-pop-btn';
-                btn.textContent = '✏️';
-                btn.style.cssText = 'position: fixed; background: #516194; color: rgb(255, 255, 255); padding: 0 5px; border-radius: 6px; cursor: pointer; z-index: 2147483647; box-shadow: rgba(0, 0, 0, 0.4) 0px 4px 12px; display: none; user-select: none; left: 938px; top: 240px;';
-                document.body.appendChild(btn);
+        BUS.addEventListener('message', (e) => {
+            const { type, payload, target, tabId } = e.data || {};
+            const myTab = getTabId();
+            if (tabId && myTab && tabId !== myTab) return;
+            if (target !== '*' && target !== ctxId) return;
+            if (type === 'SIM_POINTER' && typeof window.handleSimPointer === 'function') {
+                window.handleSimPointer(payload);
+            } else if (type === 'DESTROY_HIGHLIGHT') {
+                clearAllSearchHighlights();
+            }
+        });
 
-                const doExcerpt = () => {
-                    const sel = window.getSelection();
-                    const text = sel.toString().trim();
-                    if (text.length > 1) {
+        // =====================================================================
+        // 2. 存储与默认配置（仅亮色 / 暗色两套预设）
+        // =====================================================================
+        const PREFS_KEY = 'txt.history__prefs';
+        const THEMES = {
+            light: { bg: '#f7f5f0', fg: '#2c2a27' },
+            dark:  { bg: '#1b1d21', fg: '#c8cdd5' }
+        };
+        const DEFAULT_PREFS = {
+            fontSize: 18,
+            lineHeight: 1.85,
+            columnWidth: 440,
+            color: THEMES.light.fg,
+            backgroundColor: THEMES.light.bg,
+            theme: 'light'
+        };
 
-                        emitEvent('SAVE_EXCERPT', text, 'index');
+        const readJSON = (k) => {
+            try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : null; }
+            catch { return null; }
+        };
+        const writeJSON = (k, v) => {
+            try { localStorage.setItem(k, JSON.stringify(v)); } catch (_) { }
+        };
 
-                        const oldText = btn.textContent;
-                        btn.textContent = '✅ 已摘抄';
-                        btn.style.background = '#10b981';
-                        setTimeout(() => {
-                            btn.style.display = 'none';
-                            btn.textContent = oldText;
-                            btn.style.background = '#516194';
-                            sel.removeAllRanges(); 
-                            lastProcessedText = "";
-                        }, 800);
+        const $ = (s) => document.querySelector(s);
+        const stage = $('#readerStage');
+        const progressBar = $('#progressBar');
+        const hudChapter = $('#hudChapter');
+        const hudRight = $('#hudRight');
+        const pinyinTooltip = $('#pinyinTooltip');
+        const excerptBtn = $('#excerptBtn');
+        const topBar = $('#topBar');
+        const barTrigger = $('#barTrigger');
+        const tocPopover = $('#tocPopover');
+        const bmPopover = $('#bmPopover');
+        const scopeToggleBtn = $('#scopeToggleBtn');
+
+        const State = {
+            fileUrl: '',
+            title: '',
+            historyKey: '',
+            rawBytes: null,
+            detectedEncoding: 'utf-8',
+            rawText: '',
+            chapters: [],      // [{ index, title, startOffset, endOffset, percent }]
+            chunks: [],        // [{ index, chapterIdx, startOffset, endOffset, text, el, textNode }]
+            prefs: { ...DEFAULT_PREFS },
+            history: { charOffset: 0, scrollLeft: 0, percent: 0, encoding: 'auto', bookmarks: [] },
+            activeSearchToken: 0,
+            lastSearch: null,
+            searchScope: 'txt',
+            provider: null
+        };
+
+        function debounce(fn, wait) {
+            let t = null;
+            return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), wait); };
+        }
+
+        // =====================================================================
+        // 3. 中文多编码自动识别与解码
+        // =====================================================================
+        const SIMPLIFIED_MARKERS = new Set(Array.from('的是不了人在有我他这个们中来上大为和国地到以说时要就出会可也你对生能而子那得于着下自之年过发后作里用道行所然家种事成方多经么去法学如都同现当没动面起看定天分还进好小部其些主样理心她本前开但因只从想实日军者意无力它与长把机十民第公此已工使情明性知全三又关点正业外将两高间由问很最重并物手应战向头文体政美相见被利什二等产或新己制身果加西斯月话合回特代内信表化老给世位次度门任常先海通教儿原东声提立及比员解水名真论处走义各入几口认条平系气题活尔更别打女变四神总何电数安少报才结反受目太量再感建务做接必场件计管期市直德资命山金指克许统区保至队形社便空决治展马科司五基眼书非则听白却界达光放强即像难且权思王象完设式色路记南品住告类求据程北边死张该交规万取拉格望觉术领共确传师观清今切院让识候带导争运笑飞风步改收根干造言联持组每济车亲极林服快办议往元英士证近失转夫令准布始怎呢存未远叫台单影具罗字爱击流备兵连调深商算质团红集百需价花党华城石级整府离况亚请技际约示复病息究线似官火断精满支视消越器容照须九增研写称企八功吗包片史委乎查轻易早曾除农找装广显吧阿李标谈吃图念六引历首医局突专费号另周较注语仅考落青随选列武红'));
+        const TRADITIONAL_MARKERS = new Set(Array.from('這們為國時會來對個說發經過與學現動開實點業將兩間問點體產機經關從當還進種樣理無長張頭經變電數報結場計區隊達強難權設記類據領確傳觀識導爭運飛聯組濟車親極辦議證遠單影愛擊備調質團紅華級離況請際複斷滿視消器須研寫企易農裝廣顯標圖歷醫專費較註語僅考隨選'));
+        const CN_PUNCT = new Set(Array.from('，。、“”！？：；（）《》【】—…、'));
+
+        function scoreDecodedChinese(text, encodingName) {
+            let bad = 0, ctrl = 0, cjk = 0, punct = 0, simp = 0, trad = 0;
+            const len = Math.min(text.length, 16000);
+            for (let i = 0; i < len; i++) {
+                const code = text.charCodeAt(i);
+                if (code === 0xFFFD) { bad++; continue; }
+                if (code < 0x20 && code !== 0x09 && code !== 0x0A && code !== 0x0D) { ctrl++; continue; }
+                if (code >= 0x4E00 && code <= 0x9FFF) {
+                    cjk++;
+                    const ch = text[i];
+                    if (SIMPLIFIED_MARKERS.has(ch)) simp++;
+                    if (TRADITIONAL_MARKERS.has(ch)) trad++;
+                } else if (CN_PUNCT.has(text[i])) {
+                    punct++;
+                }
+            }
+            const langBonus = encodingName === 'gb18030' ? (simp * 2.2) : (trad * 2.6 + simp * 0.4);
+            return cjk * 3 + punct * 5 + langBonus - bad * 120 - ctrl * 35;
+        }
+
+        function decodeChineseBuffer(arrayBuffer, forcedEncoding = 'auto') {
+            const bytes = new Uint8Array(arrayBuffer);
+            const clean = (s) => s.replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n');
+
+            if (forcedEncoding && forcedEncoding !== 'auto') {
+                try {
+                    return { encoding: forcedEncoding, text: clean(new TextDecoder(forcedEncoding).decode(bytes)) };
+                } catch (_) { }
+            }
+
+            if (bytes.length >= 3 && bytes[0] === 0xEF && bytes[1] === 0xBB && bytes[2] === 0xBF) {
+                return { encoding: 'utf-8', text: clean(new TextDecoder('utf-8').decode(bytes)) };
+            }
+            if (bytes.length >= 2 && bytes[0] === 0xFF && bytes[1] === 0xFE) {
+                return { encoding: 'utf-16le', text: clean(new TextDecoder('utf-16le').decode(bytes)) };
+            }
+            if (bytes.length >= 2 && bytes[0] === 0xFE && bytes[1] === 0xFF) {
+                return { encoding: 'utf-16be', text: clean(new TextDecoder('utf-16be').decode(bytes)) };
+            }
+
+            try {
+                const utf8Text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+                return { encoding: 'utf-8', text: clean(utf8Text) };
+            } catch (_) { }
+
+            const probeLen = Math.min(bytes.length, 16384);
+            let evenZeros = 0, oddZeros = 0;
+            for (let i = 0; i < probeLen; i++) {
+                if (bytes[i] === 0) {
+                    if ((i & 1) === 0) evenZeros++;
+                    else oddZeros++;
+                }
+            }
+            const halfProbe = probeLen / 2;
+            if (halfProbe > 32) {
+                if (oddZeros / halfProbe > 0.25 && evenZeros / halfProbe < 0.03) {
+                    return { encoding: 'utf-16le', text: clean(new TextDecoder('utf-16le').decode(bytes)) };
+                }
+                if (evenZeros / halfProbe > 0.25 && oddZeros / halfProbe < 0.03) {
+                    return { encoding: 'utf-16be', text: clean(new TextDecoder('utf-16be').decode(bytes)) };
+                }
+            }
+
+            const sample = bytes.subarray(0, Math.min(bytes.length, 32768));
+            let bestEnc = 'gb18030';
+            let bestScore = -Infinity;
+            for (const enc of ['gb18030', 'big5']) {
+                try {
+                    const dec = new TextDecoder(enc).decode(sample);
+                    const sc = scoreDecodedChinese(dec, enc);
+                    if (sc > bestScore) { bestScore = sc; bestEnc = enc; }
+                } catch (_) { }
+            }
+            try {
+                return { encoding: bestEnc, text: clean(new TextDecoder(bestEnc).decode(bytes)) };
+            } catch (_) { }
+
+            if (window.Encoding) {
+                try {
+                    const detected = window.Encoding.detect(sample) || 'UTF8';
+                    const unicodeArr = window.Encoding.convert(bytes, { to: 'UNICODE', from: detected });
+                    return { encoding: String(detected).toLowerCase(), text: clean(window.Encoding.codeToString(unicodeArr)) };
+                } catch (_) { }
+            }
+            return { encoding: 'utf-8', text: clean(new TextDecoder('utf-8').decode(bytes)) };
+        }
+
+        // =====================================================================
+        // 4. 章节/分段解析与 DOM 分块渲染
+        // =====================================================================
+        const CHAPTER_RE = /^(?:(?:正文\s*)?第[零一二三四五六七八九十百千万两0-9]{1,9}[章回节卷部篇集幕话](?:[\s　:：·.\-—].{0,42})?|(?:卷[零一二三四五六七八九十百千万两0-9]{1,6}|Chapter\s*\d+|CHAPTER\s*\d+|Part\s*\d+|Section\s*\d+)(?:[\s　:：·.\-—].{0,42})?|(?:楔子|序章|序言|序幕|序|引子|前言|前记|尾声|终章|后记|番外(?:\s*[一二三四五六七八九十0-9]*)?)(?:[\s　:：·.\-—].{0,32})?)$/;
+
+        function parseChaptersAndBuildChunks(text) {
+            const totalLen = Math.max(1, text.length);
+            const rawChapters = [];
+            let lineStart = 0;
+
+            while (lineStart < text.length) {
+                let nl = text.indexOf('\n', lineStart);
+                if (nl === -1) nl = text.length;
+                const trimmed = text.slice(lineStart, nl).trim();
+                if (trimmed.length >= 1 && trimmed.length <= 48 && CHAPTER_RE.test(trimmed)) {
+                    rawChapters.push({ title: trimmed, startOffset: lineStart });
+                }
+                lineStart = nl + 1;
+            }
+
+            const chapters = [];
+            if (rawChapters.length >= 2) {
+                if (rawChapters[0].startOffset > 60) {
+                    chapters.push({ index: 0, title: '序 / 开头', startOffset: 0, endOffset: rawChapters[0].startOffset });
+                }
+                for (let i = 0; i < rawChapters.length; i++) {
+                    const start = rawChapters[i].startOffset;
+                    const end = i + 1 < rawChapters.length ? rawChapters[i + 1].startOffset : text.length;
+                    chapters.push({
+                        index: chapters.length,
+                        title: rawChapters[i].title,
+                        startOffset: start,
+                        endOffset: end
+                    });
+                }
+            } else {
+                const SEG_SIZE = 18000;
+                let pos = 0, segNo = 1;
+                while (pos < text.length) {
+                    let next = Math.min(text.length, pos + SEG_SIZE);
+                    if (next < text.length) {
+                        const nl = text.indexOf('\n', next);
+                        if (nl !== -1 && nl - next < 2000) next = nl + 1;
                     }
+                    const pct = ((pos / totalLen) * 100).toFixed(1) + '%';
+                    chapters.push({
+                        index: chapters.length,
+                        title: rawChapters.length === 1 && segNo === 1 ? rawChapters[0].title : `第 ${segNo} 段 (${pct})`,
+                        startOffset: pos,
+                        endOffset: next
+                    });
+                    pos = next;
+                    segNo++;
+                }
+            }
+
+            chapters.forEach(c => {
+                c.percent = ((c.startOffset / totalLen) * 100).toFixed(1) + '%';
+            });
+
+            const CHUNK_TARGET = 36000;
+            const chunks = [];
+            const frag = document.createDocumentFragment();
+
+            for (const ch of chapters) {
+                let pos = ch.startOffset;
+                while (pos < ch.endOffset) {
+                    let end = Math.min(ch.endOffset, pos + CHUNK_TARGET);
+                    if (end < ch.endOffset) {
+                        const nl = text.indexOf('\n', end);
+                        if (nl !== -1 && nl < ch.endOffset && nl - end < 3000) end = nl + 1;
+                    }
+                    const slice = text.slice(pos, end);
+                    const div = document.createElement('div');
+                    div.className = 'txt-chunk';
+                    const tn = document.createTextNode(slice);
+                    div.appendChild(tn);
+                    div.dataset.chunkIdx = String(chunks.length);
+                    frag.appendChild(div);
+                    chunks.push({
+                        index: chunks.length,
+                        chapterIdx: ch.index,
+                        startOffset: pos,
+                        endOffset: end,
+                        text: slice,
+                        el: div,
+                        textNode: tn
+                    });
+                    pos = end;
+                }
+            }
+
+            stage.replaceChildren(frag);
+            State.chapters = chapters;
+            State.chunks = chunks;
+            renderTocList();
+        }
+
+        // =====================================================================
+        // 5. 字符偏移锚定
+        // =====================================================================
+        function getChunkAtOffset(charOffset) {
+            const chunks = State.chunks;
+            if (!chunks.length) return null;
+            let lo = 0, hi = chunks.length - 1;
+            while (lo <= hi) {
+                const mid = (lo + hi) >> 1;
+                const c = chunks[mid];
+                if (charOffset < c.startOffset) hi = mid - 1;
+                else if (charOffset >= c.endOffset) lo = mid + 1;
+                else return c;
+            }
+            return chunks[Math.max(0, Math.min(chunks.length - 1, lo))];
+        }
+
+        function getChapterAtOffset(charOffset) {
+            const chs = State.chapters;
+            if (!chs.length) return null;
+            let lo = 0, hi = chs.length - 1, ans = chs[0];
+            while (lo <= hi) {
+                const mid = (lo + hi) >> 1;
+                if (chs[mid].startOffset <= charOffset) { ans = chs[mid]; lo = mid + 1; }
+                else hi = mid - 1;
+            }
+            return ans;
+        }
+
+        function captureCurrentCharOffset() {
+            const r = stage.getBoundingClientRect();
+            const probePoints = [
+                [r.left + 24, r.top + 28],
+                [r.left + 64, r.top + 64],
+                [r.left + 120, r.top + 100]
+            ];
+            for (const [px, py] of probePoints) {
+                let node = null, offset = 0;
+                if (document.caretRangeFromPoint) {
+                    const cr = document.caretRangeFromPoint(px, py);
+                    if (cr) { node = cr.startContainer; offset = cr.startOffset; }
+                } else if (document.caretPositionFromPoint) {
+                    const cp = document.caretPositionFromPoint(px, py);
+                    if (cp) { node = cp.offsetNode; offset = cp.offset; }
+                }
+                if (node && node.nodeType === Node.TEXT_NODE && node.parentElement && node.parentElement.classList.contains('txt-chunk')) {
+                    const cIdx = Number(node.parentElement.dataset.chunkIdx);
+                    const chunk = State.chunks[cIdx];
+                    if (chunk) return chunk.startOffset + Math.min(offset, chunk.text.length);
+                }
+            }
+            const maxScroll = Math.max(1, stage.scrollWidth - stage.clientWidth);
+            return Math.round((stage.scrollLeft / maxScroll) * State.rawText.length);
+        }
+
+        function scrollToCharOffset(charOffset, { smooth = false, align = 'left' } = {}) {
+            const chunk = getChunkAtOffset(Math.max(0, Math.min(State.rawText.length - 1, charOffset)));
+            if (!chunk || !chunk.textNode) return;
+            const localOff = Math.max(0, Math.min(chunk.text.length - 1, charOffset - chunk.startOffset));
+            try {
+                const range = document.createRange();
+                range.setStart(chunk.textNode, localOff);
+                range.setEnd(chunk.textNode, Math.min(chunk.text.length, localOff + 1));
+                const rect = range.getBoundingClientRect();
+                const sr = stage.getBoundingClientRect();
+                if (!rect || (rect.width === 0 && rect.height === 0)) return;
+                let target = stage.scrollLeft + (rect.left - sr.left);
+                if (align === 'center') target -= (sr.width - rect.width) / 2;
+                else target -= 12;
+                const maxScroll = Math.max(0, stage.scrollWidth - stage.clientWidth);
+                target = Math.max(0, Math.min(maxScroll, target));
+                if (smooth) animateHorizontalScrollTo(target);
+                else {
+                    cancelSmoothScroll();
+                    stage.scrollLeft = target;
+                    updateProgressHud();
+                }
+            } catch (_) { }
+        }
+
+        // =====================================================================
+        // 6. 横向无缝滚动引擎
+        // =====================================================================
+        let scrollAnimRaf = null;
+        let scrollTargetX = 0;
+
+        function cancelSmoothScroll() {
+            if (scrollAnimRaf) { cancelAnimationFrame(scrollAnimRaf); scrollAnimRaf = null; }
+            scrollTargetX = stage.scrollLeft;
+        }
+
+        function animateHorizontalScrollTo(targetX) {
+            const maxScroll = Math.max(0, stage.scrollWidth - stage.clientWidth);
+            scrollTargetX = Math.max(0, Math.min(maxScroll, targetX));
+            if (scrollAnimRaf) return;
+            const step = () => {
+                const diff = scrollTargetX - stage.scrollLeft;
+                if (Math.abs(diff) <= 0.8) {
+                    stage.scrollLeft = scrollTargetX;
+                    scrollAnimRaf = null;
+                    updateProgressHud();
+                    return;
+                }
+                stage.scrollLeft += diff * 0.24;
+                scrollAnimRaf = requestAnimationFrame(step);
+            };
+            scrollAnimRaf = requestAnimationFrame(step);
+        }
+
+        window.addEventListener('wheel', (e) => {
+            if (e.target && e.target.closest && e.target.closest('.tb-popover, #topBar')) return;
+            e.preventDefault();
+
+            let dx = e.deltaX || 0;
+            let dy = e.deltaY || 0;
+            if (e.deltaMode === 1) { dx *= 40; dy *= 40; }
+            else if (e.deltaMode === 2) { dx *= stage.clientWidth * 0.9; dy *= stage.clientWidth * 0.9; }
+
+            if (Math.abs(dx) >= Math.abs(dy) && Math.abs(dx) > 0) {
+                cancelSmoothScroll();
+                stage.scrollLeft += dx;
+            } else if (dy !== 0) {
+                const isDiscreteWheel = Math.abs(dy) >= 40;
+                if (isDiscreteWheel) {
+                    const base = scrollAnimRaf ? scrollTargetX : stage.scrollLeft;
+                    animateHorizontalScrollTo(base + dy * 1.35);
+                } else {
+                    cancelSmoothScroll();
+                    stage.scrollLeft += dy * 1.1;
+                }
+            }
+        }, { passive: false });
+
+        function scrollByScreen(dir) {
+            const base = scrollAnimRaf ? scrollTargetX : stage.scrollLeft;
+            const step = Math.max(240, stage.clientWidth * 0.92);
+            animateHorizontalScrollTo(base + dir * step);
+        }
+
+        document.addEventListener('keydown', (e) => {
+            if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA')) {
+                if (e.key === 'Escape') closeTopBarAndPopovers();
+                return;
+            }
+            if (e.key === 'Escape') {
+                if (topBar.classList.contains('open') || !tocPopover.hidden || !bmPopover.hidden) {
+                    closeTopBarAndPopovers();
+                }
+                return;
+            }
+            if (e.key === '\\') {
+                e.preventDefault();
+                emitEvent('quick_search', '', 'index');
+                return;
+            }
+            if ((e.key === 'b' || e.key === 'B') && !e.ctrlKey && !e.metaKey && !e.altKey) {
+                e.preventDefault();
+                addCurrentBookmark();
+                return;
+            }
+            if (e.key === 'ArrowRight') { e.preventDefault(); animateHorizontalScrollTo((scrollAnimRaf ? scrollTargetX : stage.scrollLeft) + 220); }
+            else if (e.key === 'ArrowLeft') { e.preventDefault(); animateHorizontalScrollTo((scrollAnimRaf ? scrollTargetX : stage.scrollLeft) - 220); }
+            else if (e.key === 'PageDown' || (e.code === 'Space' && !e.shiftKey)) { e.preventDefault(); scrollByScreen(1); }
+            else if (e.key === 'PageUp' || (e.code === 'Space' && e.shiftKey)) { e.preventDefault(); scrollByScreen(-1); }
+            else if (e.key === 'Home') { e.preventDefault(); animateHorizontalScrollTo(0); }
+            else if (e.key === 'End') { e.preventDefault(); animateHorizontalScrollTo(stage.scrollWidth); }
+        });
+
+        // =====================================================================
+        // 7. 进度 HUD 与状态持久化（含书签列表）
+        // =====================================================================
+        let hudRaf = 0;
+        let lastActiveChapterIdx = -1;
+
+        function updateProgressHud() {
+            hudRaf = 0;
+            const maxScroll = Math.max(0, stage.scrollWidth - stage.clientWidth);
+            const pct = maxScroll === 0 ? 0 : Math.min(100, Math.max(0, (stage.scrollLeft / maxScroll) * 100));
+            progressBar.style.width = pct.toFixed(2) + '%';
+            const approxPages = Math.max(1, Math.ceil(stage.scrollWidth / Math.max(1, stage.clientWidth)));
+            const curPage = Math.min(approxPages, Math.max(1, Math.round(stage.scrollLeft / Math.max(1, stage.clientWidth)) + 1));
+            hudRight.textContent = `${curPage}/${approxPages} · ${pct.toFixed(1)}%`;
+
+            const off = Math.round((pct / 100) * State.rawText.length);
+            const ch = getChapterAtOffset(off);
+            if (ch) {
+                hudChapter.textContent = ch.title;
+                if (ch.index !== lastActiveChapterIdx) {
+                    lastActiveChapterIdx = ch.index;
+                    highlightActiveTocItem(ch.index);
+                }
+            }
+        }
+
+        function saveBookHistoryNow() {
+            if (!State.historyKey || (window.top && window.top._isBombing)) return;
+            const maxScroll = Math.max(1, stage.scrollWidth - stage.clientWidth);
+            const charOffset = captureCurrentCharOffset();
+            State.history = {
+                charOffset,
+                scrollLeft: Math.round(stage.scrollLeft),
+                percent: Number(((stage.scrollLeft / maxScroll) * 100).toFixed(2)),
+                encoding: State.history.encoding || 'auto',
+                bookmarks: Array.isArray(State.history.bookmarks) ? State.history.bookmarks : [],
+                updatedAt: Date.now()
+            };
+            writeJSON(State.historyKey, State.history);
+        }
+
+        const saveBookHistoryDebounced = debounce(saveBookHistoryNow, 400);
+
+        stage.addEventListener('scroll', () => {
+            if (!hudRaf) hudRaf = requestAnimationFrame(updateProgressHud);
+            saveBookHistoryDebounced();
+        }, { passive: true });
+
+        // =====================================================================
+        // 8. 书签功能（存入 txt.history_<书名>.bookmarks，随 @bomb/@rebirth 同步备份）
+        // =====================================================================
+        function formatBmTime(ts) {
+            const d = new Date(ts);
+            const pad = (n) => String(n).padStart(2, '0');
+            return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+        }
+
+        function extractExcerptAt(charOffset) {
+            const text = State.rawText;
+            if (!text) return '';
+            let s = Math.max(0, Math.min(text.length, charOffset));
+            while (s < text.length && /\s/.test(text[s])) s++;
+            let e = Math.min(text.length, s + 36);
+            const nl = text.indexOf('\n', s);
+            if (nl !== -1 && nl < e && nl - s >= 6) e = nl;
+            const snippet = text.slice(s, e).replace(/\s+/g, ' ').trim();
+            return snippet || '(空白位置)';
+        }
+
+        function updateBookmarkCountUI() {
+            const list = Array.isArray(State.history.bookmarks) ? State.history.bookmarks : [];
+            $('#bmListBtn').textContent = `书签 (${list.length})`;
+            $('#bmPopTitle').textContent = `书签 (${list.length})`;
+            $('#clearBmBtn').style.display = list.length > 0 ? '' : 'none';
+        }
+
+        function renderBookmarkList() {
+            updateBookmarkCountUI();
+            const container = $('#bmList');
+            container.textContent = '';
+            const list = Array.isArray(State.history.bookmarks) ? State.history.bookmarks : [];
+            if (list.length === 0) {
+                const empty = document.createElement('div');
+                empty.className = 'pop-empty';
+                empty.textContent = '暂无书签，点「+ 书签」或按 B 记录当前位置';
+                container.appendChild(empty);
+                return;
+            }
+            const frag = document.createDocumentFragment();
+            list.forEach((bm) => {
+                const row = document.createElement('div');
+                row.className = 'bm-item';
+                row.dataset.bmId = bm.id;
+
+                const main = document.createElement('div');
+                main.className = 'bm-main';
+
+                const top = document.createElement('div');
+                top.className = 'bm-top';
+                const chSpan = document.createElement('span');
+                chSpan.className = 'bm-ch';
+                chSpan.textContent = bm.chapter || '正文';
+                chSpan.title = bm.chapter || '';
+                const pctSpan = document.createElement('span');
+                pctSpan.className = 'bm-pct';
+                pctSpan.textContent = bm.percent || '';
+                top.append(chSpan, pctSpan);
+
+                const ex = document.createElement('div');
+                ex.className = 'bm-excerpt';
+                ex.textContent = bm.excerpt || '';
+                ex.title = bm.excerpt || '';
+
+                const tm = document.createElement('div');
+                tm.className = 'bm-time';
+                tm.textContent = bm.createdAt ? formatBmTime(bm.createdAt) : '';
+
+                main.append(top, ex, tm);
+
+                const del = document.createElement('button');
+                del.type = 'button';
+                del.className = 'bm-del';
+                del.textContent = '×';
+                del.title = '删除书签';
+                del.onclick = (e) => {
+                    e.stopPropagation();
+                    State.history.bookmarks = (State.history.bookmarks || []).filter(x => x.id !== bm.id);
+                    saveBookHistoryNow();
+                    renderBookmarkList();
                 };
 
-                const shieldEvents = ['mousedown', 'mouseup', 'click', 'touchstart', 'touchend', 'pointerdown', 'pointerup'];
-                
-                shieldEvents.forEach(evt => {
-                    window.addEventListener(evt, (e) => {
-                        if (e.target && e.target.closest && e.target.closest('#excerpt-pop-btn')) {
-                            
-                            e.stopPropagation();
-                            e.stopImmediatePropagation(); 
+                row.onclick = () => {
+                    scrollToCharOffset(bm.charOffset || 0, { smooth: true, align: 'left' });
+                    closeTopBarAndPopovers();
+                };
 
-                            if (evt === 'mousedown') {
-                                e.preventDefault();
-                            }
-                            
-                            if (evt === 'click') {
-                                doExcerpt();
-                            }
-                        }
-                    }, true);
-                });
+                row.append(main, del);
+                frag.appendChild(row);
+            });
+            container.appendChild(frag);
+        }
 
-                let lastProcessedText = "";
+        function addCurrentBookmark() {
+            if (!State.rawText) return;
+            const charOffset = captureCurrentCharOffset();
+            const ch = getChapterAtOffset(charOffset);
+            const totalLen = Math.max(1, State.rawText.length);
+            const percent = ((charOffset / totalLen) * 100).toFixed(1) + '%';
+            const excerpt = extractExcerptAt(charOffset);
+            const list = Array.isArray(State.history.bookmarks) ? State.history.bookmarks.slice() : [];
 
-                document.addEventListener('mousedown', (e) => {
-                    if (e.target && e.target.closest && e.target.closest('#excerpt-pop-btn')) return;
-                    btn.style.display = 'none';
-                });
+            const nearbyIdx = list.findIndex(b => Math.abs((b.charOffset || 0) - charOffset) < 80);
+            const entry = {
+                id: 'bm_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 6),
+                charOffset,
+                chapter: ch ? ch.title : '正文',
+                excerpt,
+                percent,
+                createdAt: Date.now()
+            };
+            if (nearbyIdx !== -1) list.splice(nearbyIdx, 1);
+            list.unshift(entry);
+            if (list.length > 200) list.length = 200;
 
-                document.addEventListener('mouseup', (e) => {
-                    if (e.target && e.target.closest && e.target.closest('#excerpt-pop-btn')) return;
-                    
-                    setTimeout(() => {
-                        const text = window.getSelection().toString().trim();
-                        
-                        if (text.length > 1) {
-                            if (text !== lastProcessedText) {
-                                btn.style.left = Math.min(e.clientX + 5, window.innerWidth - 80) + 'px';
-                                btn.style.top = Math.min(e.clientY + 15, window.innerHeight - 40) + 'px';
-                                btn.style.display = 'block';
-                                lastProcessedText = text;
-                            }
-                        } else {
-                            btn.style.display = 'none';
-                            lastProcessedText = "";
-                        }
-                    }, 10);
+            State.history.bookmarks = list;
+            saveBookHistoryNow();
+            renderBookmarkList();
+
+            const btn = $('#addBmBtn');
+            const orig = '+ 书签';
+            btn.textContent = nearbyIdx !== -1 ? '✓ 已更新' : '✓ 已加';
+            setTimeout(() => { btn.textContent = orig; }, 1100);
+        }
+
+        // =====================================================================
+        // 9. 排版样式、顶部横条、目录与搜索作用域切换
+        // =====================================================================
+        function hexLuminance(hex) {
+            const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex || '');
+            if (!m) return 200;
+            return 0.299 * parseInt(m[1], 16) + 0.587 * parseInt(m[2], 16) + 0.114 * parseInt(m[3], 16);
+        }
+
+        function syncScopeButtonUI(scope) {
+            State.searchScope = scope === 'global' ? 'global' : 'txt';
+            const isGlobal = State.searchScope === 'global';
+            scopeToggleBtn.textContent = isGlobal ? '搜全站' : '搜本书';
+            scopeToggleBtn.classList.toggle('active', isGlobal);
+            scopeToggleBtn.title = isGlobal
+                ? '当前为全站搜索，点击切回搜本书'
+                : '当前为搜本书，点击切换为搜全站';
+        }
+
+        function applyPrefs({ reanchor = false } = {}) {
+            const anchorOff = reanchor ? captureCurrentCharOffset() : null;
+            const p = State.prefs;
+            const rootEl = document.documentElement;
+            const rootStyle = rootEl.style;
+            rootStyle.setProperty('--font-size', p.fontSize + 'px');
+            rootStyle.setProperty('--line-height', String(p.lineHeight));
+            rootStyle.setProperty('--col-width', p.columnWidth + 'px');
+            rootStyle.setProperty('--reader-fg', p.color);
+            rootStyle.setProperty('--reader-bg', p.backgroundColor);
+
+            const isDark = hexLuminance(p.backgroundColor) < 120;
+            rootEl.dataset.ui = isDark ? 'dark' : 'light';
+            rootStyle.setProperty('--col-rule', isDark ? 'rgba(255,255,255,0.08)' : 'rgba(44,42,39,0.1)');
+
+            $('#fontSizeSlider').value = String(p.fontSize);
+            $('#fzVal').textContent = p.fontSize + 'px';
+            $('#lineHeightSlider').value = String(p.lineHeight);
+            $('#lhVal').textContent = Number(p.lineHeight).toFixed(2);
+            $('#colWidthSlider').value = String(p.columnWidth);
+            $('#cwVal').textContent = String(p.columnWidth);
+            $('#fgColor').value = p.color;
+            $('#bgColor').value = p.backgroundColor;
+
+            topBar.querySelectorAll('.preset-btn').forEach(btn => {
+                btn.classList.toggle('active', btn.dataset.theme === p.theme);
+            });
+
+            if (reanchor && anchorOff !== null && State.chunks.length > 0) {
+                requestAnimationFrame(() => {
+                    scrollToCharOffset(anchorOff, { smooth: false, align: 'left' });
+                    updateProgressHud();
                 });
             }
         }
 
-        function bootstrapper() {
-            Search.init();
-            PinyinPlugin.init();
-            FullscreenControl.init();
+        const savePrefsDebounced = debounce(() => writeJSON(PREFS_KEY, State.prefs), 250);
 
-            initExcerptTrigger();
+        function renderTocList(filter = '') {
+            const list = $('#tocList');
+            list.textContent = '';
+            const kw = filter.trim().toLowerCase();
+            const frag = document.createDocumentFragment();
+            let count = 0;
+            for (const ch of State.chapters) {
+                if (kw && !ch.title.toLowerCase().includes(kw)) continue;
+                count++;
+                const row = document.createElement('div');
+                row.className = 'toc-item' + (ch.index === lastActiveChapterIdx ? ' active' : '');
+                row.dataset.chapterIdx = String(ch.index);
+                const t = document.createElement('span');
+                t.className = 'toc-item-title';
+                t.textContent = ch.title;
+                t.title = ch.title;
+                const pct = document.createElement('span');
+                pct.className = 'toc-item-pct';
+                pct.textContent = ch.percent;
+                row.append(t, pct);
+                frag.appendChild(row);
+            }
+            if (count === 0) {
+                const empty = document.createElement('div');
+                empty.className = 'pop-empty';
+                empty.textContent = '无匹配章节';
+                list.appendChild(empty);
+                return;
+            }
+            list.appendChild(frag);
+        }
+
+        function highlightActiveTocItem(chapterIdx) {
+            $('#tocList').querySelectorAll('.toc-item').forEach(el => {
+                el.classList.toggle('active', Number(el.dataset.chapterIdx) === chapterIdx);
+            });
+        }
+
+        function closePopovers() {
+            tocPopover.hidden = true;
+            bmPopover.hidden = true;
+            $('#tocBtn').classList.remove('active');
+            $('#bmListBtn').classList.remove('active');
+        }
+
+        function setTopBarOpen(open) {
+            topBar.classList.toggle('open', open);
+            barTrigger.style.display = open ? 'none' : 'flex';
+            if (!open) closePopovers();
+        }
+
+        function closeTopBarAndPopovers() {
+            closePopovers();
+            setTopBarOpen(false);
+        }
+
+        function positionPopoverUnder(pop, anchorBtn) {
+            const barRect = topBar.getBoundingClientRect();
+            const btnRect = anchorBtn.getBoundingClientRect();
+            const popW = Math.min(340, window.innerWidth - 24);
+            const left = Math.max(12, Math.min(window.innerWidth - popW - 12, btnRect.left));
+            pop.style.top = (Math.max(36, Math.round(barRect.bottom)) + 6) + 'px';
+            pop.style.left = Math.round(left) + 'px';
+        }
+
+        function initTopBarEvents() {
+            barTrigger.onclick = () => setTopBarOpen(true);
+            $('#closeBarBtn').onclick = () => closeTopBarAndPopovers();
+
+            document.addEventListener('mousedown', (e) => {
+                if (!topBar.classList.contains('open')) return;
+                if (e.target && e.target.closest && e.target.closest('#topBar, #barTrigger, .tb-popover')) return;
+                closeTopBarAndPopovers();
+            });
+
+            $('#tocBtn').onclick = () => {
+                const wantOpen = tocPopover.hidden;
+                closePopovers();
+                if (wantOpen) {
+                    positionPopoverUnder(tocPopover, $('#tocBtn'));
+                    tocPopover.hidden = false;
+                    $('#tocBtn').classList.add('active');
+                    const active = $('#tocList .toc-item.active');
+                    if (active) active.scrollIntoView({ block: 'center' });
+                }
+            };
+
+            $('#addBmBtn').onclick = () => addCurrentBookmark();
+
+            $('#bmListBtn').onclick = () => {
+                const wantOpen = bmPopover.hidden;
+                closePopovers();
+                if (wantOpen) {
+                    renderBookmarkList();
+                    positionPopoverUnder(bmPopover, $('#bmListBtn'));
+                    bmPopover.hidden = false;
+                    $('#bmListBtn').classList.add('active');
+                }
+            };
+
+            $('#clearBmBtn').onclick = () => {
+                if (!confirm('确定清空本书的全部书签吗？')) return;
+                State.history.bookmarks = [];
+                saveBookHistoryNow();
+                renderBookmarkList();
+            };
+
+            $('#fontSizeSlider').oninput = (e) => {
+                State.prefs.fontSize = Number(e.target.value);
+                applyPrefs({ reanchor: true });
+                savePrefsDebounced();
+            };
+            $('#lineHeightSlider').oninput = (e) => {
+                State.prefs.lineHeight = Number(e.target.value);
+                applyPrefs({ reanchor: true });
+                savePrefsDebounced();
+            };
+            $('#colWidthSlider').oninput = (e) => {
+                State.prefs.columnWidth = Number(e.target.value);
+                applyPrefs({ reanchor: true });
+                savePrefsDebounced();
+            };
+
+            topBar.querySelectorAll('.preset-btn').forEach(btn => {
+                btn.onclick = () => {
+                    const th = THEMES[btn.dataset.theme];
+                    if (!th) return;
+                    State.prefs.theme = btn.dataset.theme;
+                    State.prefs.color = th.fg;
+                    State.prefs.backgroundColor = th.bg;
+                    applyPrefs({ reanchor: false });
+                    savePrefsDebounced();
+                };
+            });
+            $('#fgColor').oninput = (e) => {
+                State.prefs.color = e.target.value;
+                State.prefs.theme = 'custom';
+                applyPrefs({ reanchor: false });
+                savePrefsDebounced();
+            };
+            $('#bgColor').oninput = (e) => {
+                State.prefs.backgroundColor = e.target.value;
+                State.prefs.theme = 'custom';
+                applyPrefs({ reanchor: false });
+                savePrefsDebounced();
+            };
+
+            $('#encodingSelect').onchange = (e) => {
+                const enc = e.target.value;
+                State.history.encoding = enc;
+                saveBookHistoryNow();
+                if (State.rawBytes) applyDecodedDocument(enc, { keepOffset: true });
+            };
+
+            scopeToggleBtn.onclick = () => {
+                const bridge = window.top && window.top.__TXT_SEARCH_BRIDGE__;
+                const next = State.searchScope === 'txt' ? 'global' : 'txt';
+                syncScopeButtonUI(next);
+                if (bridge && typeof bridge.setScope === 'function') {
+                    bridge.setScope(next, { rerun: true });
+                }
+            };
+
+            $('#resetBtn').onclick = () => {
+                State.prefs = { ...DEFAULT_PREFS };
+                applyPrefs({ reanchor: true });
+                writeJSON(PREFS_KEY, State.prefs);
+            };
+
+            $('#tocSearch').oninput = (e) => renderTocList(e.target.value);
+            $('#tocList').onclick = (e) => {
+                const row = e.target.closest && e.target.closest('.toc-item');
+                if (!row) return;
+                const ch = State.chapters[Number(row.dataset.chapterIdx)];
+                if (ch) {
+                    scrollToCharOffset(ch.startOffset, { smooth: true, align: 'left' });
+                    closeTopBarAndPopovers();
+                }
+            };
+
+            let resizeAnchor = null;
+            const onResizeEnd = debounce(() => {
+                if (resizeAnchor !== null) {
+                    scrollToCharOffset(resizeAnchor, { smooth: false, align: 'left' });
+                    resizeAnchor = null;
+                }
+                if (!tocPopover.hidden) positionPopoverUnder(tocPopover, $('#tocBtn'));
+                if (!bmPopover.hidden) positionPopoverUnder(bmPopover, $('#bmListBtn'));
+                updateProgressHud();
+            }, 80);
+            window.addEventListener('resize', () => {
+                if (resizeAnchor === null && State.chunks.length > 0) resizeAnchor = captureCurrentCharOffset();
+                onResizeEnd();
+            });
+        }
+
+        // =====================================================================
+        // 10. 拼音、摘抄与中击全屏
+        // =====================================================================
+        function initSelectionTools() {
+            let lastSelected = '';
+
+            const hidePopups = () => {
+                pinyinTooltip.style.display = 'none';
+                excerptBtn.style.display = 'none';
+            };
+
+            const doExcerpt = () => {
+                const sel = window.getSelection();
+                const text = sel ? sel.toString().trim() : '';
+                if (text.length < 2) return;
+                emitEvent('SAVE_EXCERPT', text, 'index');
+                excerptBtn.textContent = '✓ 已摘抄';
+                setTimeout(() => {
+                    excerptBtn.style.display = 'none';
+                    excerptBtn.textContent = '✏️ 摘抄';
+                    try { sel.removeAllRanges(); } catch (_) { }
+                    lastSelected = '';
+                }, 750);
+            };
+
+            excerptBtn.addEventListener('mousedown', (e) => { e.preventDefault(); e.stopPropagation(); });
+            excerptBtn.addEventListener('click', (e) => { e.stopPropagation(); doExcerpt(); });
+
+            document.addEventListener('mousedown', (e) => {
+                if (e.target && e.target.closest && e.target.closest('#excerptBtn')) return;
+                hidePopups();
+            });
+
+            document.addEventListener('mouseup', (e) => {
+                if (e.target && e.target.closest && e.target.closest('#topBar, .tb-popover, #excerptBtn')) return;
+                setTimeout(() => {
+                    const sel = window.getSelection();
+                    const text = sel ? sel.toString().trim() : '';
+                    if (!text || !sel.rangeCount) {
+                        hidePopups();
+                        lastSelected = '';
+                        return;
+                    }
+                    const rect = sel.getRangeAt(0).getBoundingClientRect();
+                    if (!rect || (rect.width === 0 && rect.height === 0)) return;
+
+                    const chars = Array.from(text);
+                    if (chars.length === 1) {
+                        const dict = window.top && window.top.pinyinData;
+                        const py = dict && dict[chars[0]];
+                        if (py) {
+                            pinyinTooltip.textContent = py;
+                            pinyinTooltip.style.display = 'block';
+                            const tw = pinyinTooltip.offsetWidth || 60;
+                            const left = Math.max(8, Math.min(window.innerWidth - tw - 8, rect.left + rect.width / 2 - tw / 2));
+                            const top = Math.max(8, rect.top - 34);
+                            pinyinTooltip.style.left = left + 'px';
+                            pinyinTooltip.style.top = top + 'px';
+                        } else {
+                            pinyinTooltip.style.display = 'none';
+                        }
+                        excerptBtn.style.display = 'none';
+                        lastSelected = text;
+                        return;
+                    }
+
+                    pinyinTooltip.style.display = 'none';
+                    if (text !== lastSelected) {
+                        excerptBtn.style.display = 'block';
+                        const bw = excerptBtn.offsetWidth || 72;
+                        const left = Math.max(8, Math.min(window.innerWidth - bw - 8, rect.right - bw / 2));
+                        const top = Math.min(window.innerHeight - 36, rect.bottom + 8);
+                        excerptBtn.style.left = left + 'px';
+                        excerptBtn.style.top = top + 'px';
+                        lastSelected = text;
+                    }
+                }, 10);
+            });
+        }
+
+        function initFullscreenControl() {
+            document.body.addEventListener('mousedown', (e) => {
+                if (e.button !== 1) return;
+                if (e.target && e.target.closest && e.target.closest('#topBar, .tb-popover')) return;
+                e.preventDefault();
+                try {
+                    const pDoc = window.parent.document;
+                    if (!pDoc.fullscreenElement) {
+                        pDoc.documentElement.requestFullscreen().catch(() => { });
+                        emitEvent('lightbox', { status: '1' }, 'index');
+                    } else {
+                        if (pDoc.exitFullscreen) pDoc.exitFullscreen();
+                        emitEvent('lightbox', { status: '0' }, 'index');
+                    }
+                } catch (_) { }
+            });
+        }
+
+        // =====================================================================
+        // 11. 书内 Wasm 检索引擎 + CSS Custom Highlight + 章节聚合 + 预览 + 锚记跳转
+        // =====================================================================
+        let activeHitHL = null;
+
+        function ensureActiveHitHighlightStyle() {
+            if (!searchHighlightSupported()) return false;
+            if (!document.getElementById('txt-active-hl-style')) {
+                const st = document.createElement('style');
+                st.id = 'txt-active-hl-style';
+                st.textContent = '::highlight(txt-active-hit) { background-color: rgba(217, 119, 6, 0.82); color: #fff; }';
+                document.head.appendChild(st);
+            }
+            if (!activeHitHL) {
+                activeHitHL = new Highlight();
+                activeHitHL.priority = 200;
+            }
+            return true;
+        }
+
+        function clearAllSearchHighlights() {
+            resetSearchHighlights();
+            publishSearchHighlights();
+            if (activeHitHL) {
+                activeHitHL.clear();
+                if (window.CSS && CSS.highlights) CSS.highlights.delete('txt-active-hit');
+            }
+        }
+
+        async function waitForSharedWasm(timeoutMs = 5000) {
+            const start = Date.now();
+            while (Date.now() - start < timeoutMs) {
+                const sw = window.top && window.top.sharedWasm;
+                if (sw && sw.ready && typeof sw.find_content_matches_multi === 'function') return sw;
+                if (sw && sw.failed) return null;
+                await new Promise(r => setTimeout(r, 40));
+            }
+            return null;
+        }
+
+        function adaptKeywordsForWasm(specs, weighted) {
+            if (!Array.isArray(specs)) return [];
+            if (weighted) return specs;
+            return specs.map(s => (typeof s === 'string' ? s : s.text)).filter(Boolean);
+        }
+
+        function u16ToCodePointIdx(str, u16Idx) {
+            const clamped = Math.max(0, Math.min(str.length, u16Idx));
+            let cp = 0;
+            for (let i = 0; i < clamped; i++) {
+                const c = str.charCodeAt(i);
+                if (c >= 0xD800 && c <= 0xDBFF && i + 1 < clamped) {
+                    const n = str.charCodeAt(i + 1);
+                    if (n >= 0xDC00 && n <= 0xDFFF) i++;
+                }
+                cp++;
+            }
+            return cp;
+        }
+
+        function buildCompactAnchorPreview(chunkText, localStart, localEnd, noise) {
+            const BEFORE = 10, AFTER = 18;
+            let s = Math.max(0, localStart - BEFORE);
+            let e = Math.min(chunkText.length, localEnd + AFTER);
+            const prevNl = chunkText.lastIndexOf('\n', localStart - 1);
+            if (prevNl >= s) s = prevNl + 1;
+            const nextNl = chunkText.indexOf('\n', localEnd);
+            if (nextNl !== -1 && nextNl < e) e = nextNl;
+
+            const prefixEllipsis = s > 0 && chunkText[s - 1] !== '\n' ? '…' : '';
+            const suffixEllipsis = e < chunkText.length && chunkText[e] !== '\n' ? '…' : '';
+            const cleanSlice = chunkText.slice(s, e).replace(/[\t\r\n]/g, ' ');
+            const preview = prefixEllipsis + cleanSlice + suffixEllipsis;
+            const pShift = prefixEllipsis.length;
+            const hs = u16ToCodePointIdx(preview, pShift + (localStart - s));
+            const he = u16ToCodePointIdx(preview, pShift + (localEnd - s));
+            return { preview, highlights: [[hs, he, noise]] };
+        }
+
+        function buildSnippetItem(hit, radius = 64, extraHits = null) {
+            const chunk = State.chunks[hit.chunkIdx];
+            if (!chunk) return null;
+            const text = chunk.text;
+            let s = Math.max(0, hit.localStart - radius);
+            let e = Math.min(text.length, hit.localEnd + radius);
+            if (s > 0) {
+                const nl = text.lastIndexOf('\n', hit.localStart - 1);
+                if (nl !== -1 && hit.localStart - nl <= radius) s = nl + 1;
+            }
+            if (e < text.length) {
+                const nl = text.indexOf('\n', hit.localEnd);
+                if (nl !== -1 && nl - hit.localEnd <= radius) e = nl;
+            }
+            const pre = s > 0 && text[s - 1] !== '\n' ? '…' : '';
+            const suf = e < text.length && text[e] !== '\n' ? '…' : '';
+            const body = text.slice(s, e).replace(/[\t\r]/g, ' ');
+            const t = pre + body + suf;
+            const shift = pre.length;
+
+            const h = [];
+            const candidates = extraHits || [hit];
+            for (const item of candidates) {
+                if (item.chunkIdx !== hit.chunkIdx) continue;
+                if (item.localEnd <= s || item.localStart >= e) continue;
+                const rs = Math.max(s, item.localStart) - s + shift;
+                const re = Math.min(e, item.localEnd) - s + shift;
+                if (re > rs) h.push([rs, re, item.noise]);
+            }
+            return { t, h };
+        }
+
+        async function runBookSearch({ keyword, specs, noise, token }) {
+            State.activeSearchToken = token;
+            clearAllSearchHighlights();
+            if (!keyword || !Array.isArray(specs) || specs.length === 0 || State.chunks.length === 0) {
+                State.lastSearch = null;
+                return { totalHits: 0, shownHits: 0, truncated: false, groups: [] };
+            }
+
+            const sw = await waitForSharedWasm();
+            if (token !== State.activeSearchToken) return null;
+            if (!sw) throw new Error('Wasm 搜索引擎未就绪');
+
+            const wasmKeywords = adaptKeywordsForWasm(specs, !!sw.weightedKeywords);
+            const useHL = searchHighlightSupported();
+            const MAX_RECORDED_HITS = 1500;
+            const MAX_HL_RANGES = 2000;
+            const totalLen = Math.max(1, State.rawText.length);
+
+            const hits = [];
+            const groupMap = new Map();
+            let totalHits = 0;
+            let hlCount = 0;
+
+            let sliceStart = performance.now();
+            for (let ci = 0; ci < State.chunks.length; ci++) {
+                if (token !== State.activeSearchToken) return null;
+                const chunk = State.chunks[ci];
+                const res = sw.find_content_matches_multi(chunk.text, wasmKeywords, noise);
+                const arr = res && res.matches;
+                const cnt = arr ? Math.floor(arr.length / 3) : 0;
+
+                if (cnt > 0) {
+                    const ch = State.chapters[chunk.chapterIdx];
+                    for (let i = 0; i < arr.length; i += 3) {
+                        const localStart = arr[i];
+                        const localEnd = arr[i + 1];
+                        const packedNoise = arr[i + 2];
+                        totalHits++;
+
+                        if (useHL && hlCount < MAX_HL_RANGES && localEnd > localStart && localEnd <= chunk.text.length) {
+                            try {
+                                const r = new Range();
+                                r.setStart(chunk.textNode, localStart);
+                                r.setEnd(chunk.textNode, localEnd);
+                                getSearchHighlight(packedNoise).add(r);
+                                hlCount++;
+                            } catch (_) { }
+                        }
+
+                        if (hits.length < MAX_RECORDED_HITS) {
+                            const charStart = chunk.startOffset + localStart;
+                            const charEnd = chunk.startOffset + localEnd;
+                            const pct = ((charStart / totalLen) * 100).toFixed(1) + '%';
+                            const compact = buildCompactAnchorPreview(chunk.text, localStart, localEnd, packedNoise);
+                            const hitObj = {
+                                hitIndex: hits.length,
+                                chunkIdx: ci,
+                                chapterIdx: chunk.chapterIdx,
+                                localStart,
+                                localEnd,
+                                charStart,
+                                charEnd,
+                                noise: packedNoise,
+                                percent: pct,
+                                preview: compact.preview,
+                                highlights: compact.highlights
+                            };
+                            hits.push(hitObj);
+
+                            let g = groupMap.get(chunk.chapterIdx);
+                            if (!g) {
+                                g = {
+                                    type: 'txt-group',
+                                    path: `txt-group:${chunk.chapterIdx}`,
+                                    groupIndex: chunk.chapterIdx,
+                                    title: ch ? ch.title : `第 ${chunk.chapterIdx + 1} 节`,
+                                    percent: ch ? ch.percent : pct,
+                                    count: 0,
+                                    hits: []
+                                };
+                                groupMap.set(chunk.chapterIdx, g);
+                            }
+                            g.count++;
+                            g.hits.push(hitObj);
+                        }
+                    }
+                }
+
+                if (performance.now() - sliceStart >= 10) {
+                    await new Promise(r => setTimeout(r, 0));
+                    sliceStart = performance.now();
+                }
+            }
+
+            if (token !== State.activeSearchToken) return null;
+            if (useHL) publishSearchHighlights();
+
+            const groups = Array.from(groupMap.values()).sort((a, b) => a.groupIndex - b.groupIndex);
+            State.lastSearch = { keyword, hits, groups, groupMap };
+            return {
+                keyword,
+                totalHits,
+                shownHits: hits.length,
+                truncated: totalHits > hits.length,
+                groups
+            };
+        }
+
+        function getTxtSnippets(path) {
+            const last = State.lastSearch;
+            if (!last || typeof path !== 'string') return null;
+
+            if (path.startsWith('txt-group:')) {
+                const gIdx = Number(path.slice('txt-group:'.length));
+                const g = last.groupMap.get(gIdx);
+                if (!g) return null;
+                const MAX_ITEMS = 40;
+                const items = [];
+                const slice = g.hits.slice(0, MAX_ITEMS);
+                for (const h of slice) {
+                    const it = buildSnippetItem(h, 58, g.hits);
+                    if (it) items.push(it);
+                }
+                return {
+                    body: { hits: g.count, more: Math.max(0, g.hits.length - MAX_ITEMS), items },
+                    comments: { hits: 0, docs: 0, more: 0, items: [] }
+                };
+            }
+
+            if (path.startsWith('txt-hit:')) {
+                const hIdx = Number(path.slice('txt-hit:'.length));
+                const h = last.hits[hIdx];
+                if (!h) return null;
+                const g = last.groupMap.get(h.chapterIdx);
+                const it = buildSnippetItem(h, 150, g ? g.hits : [h]);
+                return {
+                    body: { hits: 1, more: 0, items: it ? [it] : [] },
+                    comments: { hits: 0, docs: 0, more: 0, items: [] }
+                };
+            }
+            return null;
+        }
+
+        function flashPulseAtRange(range) {
+            try {
+                const rect = range.getBoundingClientRect();
+                if (!rect || (rect.width === 0 && rect.height === 0)) return;
+                const el = document.createElement('div');
+                el.className = 'txt-hit-pulse';
+                el.style.left = (rect.left - 4) + 'px';
+                el.style.top = (rect.top - 3) + 'px';
+                el.style.width = Math.max(18, rect.width + 8) + 'px';
+                el.style.height = Math.max(20, rect.height + 6) + 'px';
+                document.body.appendChild(el);
+                setTimeout(() => el.remove(), 1100);
+            } catch (_) { }
+        }
+
+        function jumpToHitAnchor(hitIndex) {
+            const last = State.lastSearch;
+            if (!last) return;
+            const hit = last.hits[hitIndex];
+            if (!hit) return;
+            const chunk = State.chunks[hit.chunkIdx];
+            if (!chunk || !chunk.textNode) return;
+
+            try {
+                const range = document.createRange();
+                range.setStart(chunk.textNode, hit.localStart);
+                range.setEnd(chunk.textNode, Math.min(chunk.text.length, hit.localEnd));
+
+                if (ensureActiveHitHighlightStyle()) {
+                    activeHitHL.clear();
+                    activeHitHL.add(range);
+                    CSS.highlights.set('txt-active-hit', activeHitHL);
+                }
+
+                const rect = range.getBoundingClientRect();
+                const sr = stage.getBoundingClientRect();
+                const target = stage.scrollLeft + (rect.left - sr.left) - (sr.width - rect.width) / 2;
+                const maxScroll = Math.max(0, stage.scrollWidth - stage.clientWidth);
+                const clamped = Math.max(0, Math.min(maxScroll, target));
+                cancelSmoothScroll();
+                stage.scrollLeft = clamped;
+                updateProgressHud();
+                saveBookHistoryDebounced();
+                requestAnimationFrame(() => flashPulseAtRange(range));
+            } catch (err) {
+                console.warn('[TXT] 锚记跳转异常:', err);
+            }
+        }
+
+        function registerWithMainSearch() {
+            const bridge = window.top && window.top.__TXT_SEARCH_BRIDGE__;
+            if (!bridge) return;
+            State.provider = {
+                title: State.title,
+                path: State.fileUrl,
+                runSearch: runBookSearch,
+                getSnippets: getTxtSnippets,
+                jumpTo: jumpToHitAnchor,
+                clearHighlights: clearAllSearchHighlights,
+                onScopeChange: syncScopeButtonUI
+            };
+            bridge.register(State.provider);
+        }
+
+        // =====================================================================
+        // 12. 文档装载与生命周期
+        // =====================================================================
+        function applyDecodedDocument(forcedEncoding, { keepOffset = false } = {}) {
+            const prevOffset = keepOffset ? captureCurrentCharOffset() : (State.history.charOffset || 0);
+            const { encoding, text } = decodeChineseBuffer(State.rawBytes, forcedEncoding);
+            State.detectedEncoding = encoding;
+            State.rawText = text;
+            State.lastSearch = null;
+            clearAllSearchHighlights();
+
+            const sizeKB = (State.rawBytes.byteLength / 1024).toFixed(0);
+            $('#fileMetaSub').textContent = `${sizeKB}KB · ${encoding.toUpperCase()}`;
+            $('#encodingSelect').value = forcedEncoding || 'auto';
+
+            parseChaptersAndBuildChunks(text);
+            applyPrefs({ reanchor: false });
+            updateBookmarkCountUI();
+
+            requestAnimationFrame(() => {
+                if (prevOffset > 0) {
+                    scrollToCharOffset(prevOffset, { smooth: false, align: 'left' });
+                } else if (State.history.scrollLeft > 0 && !keepOffset) {
+                    stage.scrollLeft = State.history.scrollLeft;
+                } else {
+                    stage.scrollLeft = 0;
+                }
+                updateProgressHud();
+            });
+        }
+
+        window.addEventListener('pagehide', (e) => {
+            saveBookHistoryNow();
+            if (!e.persisted) {
+                try {
+                    const bridge = window.top && window.top.__TXT_SEARCH_BRIDGE__;
+                    if (bridge && State.provider) bridge.unregister(State.provider);
+                } catch (_) { }
+                if (window.__LITE_BUS__) {
+                    window.__LITE_BUS__.close();
+                    window.__LITE_BUS__ = null;
+                }
+            }
+        });
+
+        async function bootstrap() {
+            const savedPrefs = readJSON(PREFS_KEY);
+            if (savedPrefs && typeof savedPrefs === 'object') {
+                State.prefs = { ...DEFAULT_PREFS, ...savedPrefs };
+                // 迁移旧预设名到 light / dark
+                if (State.prefs.theme === 'parchment' || State.prefs.theme === 'paper' || State.prefs.theme === 'forest') {
+                    State.prefs.theme = 'light';
+                }
+            }
+            applyPrefs({ reanchor: false });
+            initTopBarEvents();
+            initSelectionTools();
+            initFullscreenControl();
 
             const params = new URLSearchParams(window.location.search);
             const fileUrl = params.get('file');
-            if (!fileUrl) return;
+            if (!fileUrl) {
+                stage.innerHTML = '<div class="txt-loading">未指定 TXT 文件路径。</div>';
+                return;
+            }
+            State.fileUrl = fileUrl;
+            State.title = decodeURIComponent(fileUrl.split('/').pop() || 'Untitled.txt');
+            State.historyKey = 'txt.history_' + State.title;
+            document.title = State.title;
+            $('#fileTitle').textContent = State.title;
+            $('#fileTitle').title = State.title;
 
-            fetch(fileUrl)
-                .then(response => response.arrayBuffer())
-                .then(arrayBuffer => {
-                    let text = "";
-                    try {
-                        text = new TextDecoder("utf-8", { fatal: true }).decode(arrayBuffer);
-                    } catch (err) {
-                        text = new TextDecoder("gbk").decode(arrayBuffer);
-                    }
+            const savedHist = readJSON(State.historyKey);
+            if (savedHist && typeof savedHist === 'object') {
+                State.history = {
+                    ...State.history,
+                    ...savedHist,
+                    bookmarks: Array.isArray(savedHist.bookmarks) ? savedHist.bookmarks : []
+                };
+                if (!savedPrefs) {
+                    if (savedHist.fontSize) State.prefs.fontSize = Math.round(Number(savedHist.fontSize) * 16) || DEFAULT_PREFS.fontSize;
+                    if (savedHist.lineHeight) State.prefs.lineHeight = Number(savedHist.lineHeight) || DEFAULT_PREFS.lineHeight;
+                    if (savedHist.color) State.prefs.color = savedHist.color;
+                    if (savedHist.backgroundColor) State.prefs.backgroundColor = savedHist.backgroundColor;
+                    applyPrefs({ reanchor: false });
+                }
+            }
+            updateBookmarkCountUI();
 
-                    const title = decodeURIComponent(fileUrl.split("/").pop());
-                    const sizeKB = (arrayBuffer.byteLength / 1024).toFixed(2);
-                    
-                    Viewer.init(title, text, sizeKB);
-                })
-                .catch(err => {
-                    UI.content.textContent = `无法加载文件: ${err.message}`;
-                });
+            try {
+                const res = await fetch(fileUrl);
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                State.rawBytes = await res.arrayBuffer();
+                applyDecodedDocument(State.history.encoding || 'auto', { keepOffset: false });
+                registerWithMainSearch();
+            } catch (err) {
+                stage.innerHTML = `<div class="txt-loading">无法加载文件：${err.message}</div>`;
+            }
         }
 
-        window.addEventListener('load', bootstrapper);
+        window.addEventListener('DOMContentLoaded', bootstrap);
     </script>
 </body>
-
 </html>

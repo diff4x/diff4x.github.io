@@ -163,7 +163,6 @@ code+code {
    精确的右对齐由 content.js 的 initCodeTools 按代码框实际右边缘计算 margin-left，这里的 auto 只是兜底 */
 .code-tools {
     position: relative;
-    z-index: 2;
     display: flex;
     width: fit-content;
     margin: 0.5rem 0 -1px auto;

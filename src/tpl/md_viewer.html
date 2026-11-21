@@ -1,0 +1,993 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Markdown Preview</title>
+<link rel="stylesheet" href="../css/font.css">
+<style>
+:root{--bg:#fff;--fg:#1f2328;--muted:#59636e;--border:#d1d9e0;--code-bg:#f6f8fa;--code-inline:rgba(129,139,152,.12);--link:#0969da;--bar:#333;--toc-bg:#fbfcfd;--toc-active-bg:rgba(9,105,218,.1);--sep:#d1d9e0;
+/* 编辑器：Monaco vs（亮） */
+--ed-bg:#fffffe;--ed-fg:#000;--ed-ln:#237893;--ed-ln-on:#0b216f;--ed-line:#eee;--ed-cursor:#000;--ed-sel:#e5ebf1;--ed-sel-on:#add6ff;--ed-hl:rgba(173,214,255,.3);--ed-bracket:#b9b9b9;
+--ed-kw:#00f;--ed-var:#018;--ed-str:#a31515;--ed-num:#098658;--ed-cmt:#008000;
+
+--h1:#cf222e;--h2:#0a3069;--h3:#0550ae;--h4:#8250df;--h5:#953800;
+--mono:Consolas,Monaco,"Andale Mono","Ubuntu Mono",ui-monospace,SFMono-Regular,Menlo,"Liberation Mono",monospace;
+--sans:'Noto Serif SC',Georgia,"Songti SC","SimSun",serif;
+box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+:root[data-theme="dark"]{--bg:#222830;--fg:#d2d7e1;--muted:#9198a1;--border:#3e444e;--code-bg:#272c37;--code-inline:rgba(101,108,118,.2);--link:#4493f8;--bar:#333;--toc-bg:#1d2229;--toc-active-bg:rgba(68,147,248,.16);--sep:#31363d;
+/* 编辑器：Monaco vs-dark */
+--ed-bg:#1e1e1e;--ed-fg:#d4d4d4;--ed-ln:#858585;--ed-ln-on:#c6c6c6;--ed-line:#282828;--ed-cursor:#aeafad;--ed-sel:#3a3d41;--ed-sel-on:#264f78;--ed-hl:rgba(173,214,255,.15);--ed-bracket:#888;
+--ed-kw:#569cd6;--ed-var:#74b0df;--ed-str:#ce9178;--ed-num:#b5cea8;--ed-cmt:#608b4e;
+--h1:#ff7b72;--h2:#a5d6ff;--h3:#79c0ff;--h4:#d2a8ff;--h5:#ffa657}
+html{scroll-padding-top:env(safe-area-inset-top,0px);height:100%;background:var(--bg);font-family:var(--sans)}
+body{margin:0;height:100%;display:flex;flex-direction:column;background:var(--bg);color:var(--fg);font-family:var(--sans);overflow:hidden}
+:focus-visible{outline:2px solid #4493f8;outline-offset:2px}
+.bar{flex:none;display:flex;align-items:center;flex-wrap:wrap;gap:4px 10px;padding:7px 14px;background:var(--bar);color:#fff;user-select:none}
+.bar h1{margin:0 8px 0 0;font-size:14px;font-weight:600}
+.bar button{font:inherit;font-size:13px;color:#fff;background:none;border:0;padding:5px 10px;border-radius:4px;cursor:pointer}
+.bar button:hover{background:rgba(255,255,255,.14)}
+.bar button.active{background:rgba(255,255,255,.22)}
+.bar button:disabled{opacity:.5;cursor:not-allowed}
+.bar button.primary{background:#238636}
+.bar button.primary:hover{background:#2ea043}
+.status{font-size:12px;color:#8b949e}
+.opts{margin-left:auto;display:flex;align-items:center;gap:14px}
+.opts label{display:flex;align-items:center;gap:5px;font-size:13px;cursor:pointer}
+body.readonly .edit-only,body.readonly .ed,body.readonly #sep{display:none!important}
+body.readonly #panes{flex-direction:row!important}
+body.readonly .pv-wrap{flex:1 1 100%!important}
+#panes{flex:1;min-height:0;display:flex;flex-direction:row}
+.ed{flex:1 1 0;min-width:0;min-height:0;position:relative;background:var(--ed-bg)}
+.pv-wrap{flex:1 1 226px;min-width:0;min-height:0;position:relative;display:flex;flex-direction:row}
+.pv{flex:1 1 0;min-width:0;min-height:0;overflow:auto}
+#ed{width:100%;height:100%;box-sizing:border-box;border:0;resize:none;padding:12px 14px;background:var(--ed-bg);color:var(--ed-fg);font:14px/1.65 var(--mono);outline:none}
+.CodeMirror{position:absolute;inset:0;overflow:hidden;direction:ltr;background:var(--ed-bg);color:var(--ed-fg);font:14px/1.65 var(--mono)}
+.CodeMirror-scroll{overflow:scroll!important;margin-bottom:-50px;margin-right:-50px;padding-bottom:50px;height:100%;outline:0;position:relative;z-index:0}
+.CodeMirror-sizer{position:relative;border-right:50px solid transparent}
+.CodeMirror-vscrollbar,.CodeMirror-hscrollbar,.CodeMirror-scrollbar-filler,.CodeMirror-gutter-filler{position:absolute;z-index:6;display:none;outline:0}
+.CodeMirror-vscrollbar{right:0;top:0;overflow:hidden scroll}
+.CodeMirror-hscrollbar{bottom:0;left:0;overflow:scroll hidden}
+.CodeMirror-scrollbar-filler{right:0;bottom:0}
+.CodeMirror-gutter-filler{left:0;bottom:0}
+.CodeMirror-gutters{position:absolute;left:0;top:0;min-height:100%;z-index:3;background:var(--ed-bg);white-space:nowrap}
+.CodeMirror-gutter{white-space:normal;height:100%;display:inline-block;vertical-align:top;margin-bottom:-50px}
+.CodeMirror-gutter-wrapper{position:absolute;z-index:4;background:none!important;border:0!important}
+.CodeMirror-gutter-background{position:absolute;top:0;bottom:0;z-index:4}
+.CodeMirror-gutter-elt{position:absolute;cursor:default;z-index:4}
+.CodeMirror-linenumber{padding:0 3px 0 5px;min-width:20px;text-align:right;color:var(--ed-ln);white-space:nowrap}
+.CodeMirror-lines{padding:4px 0;cursor:text;min-height:1px}
+.CodeMirror pre.CodeMirror-line,.CodeMirror pre.CodeMirror-line-like{padding:0 4px;border:0;background:transparent;font:inherit;margin:0;white-space:pre;word-wrap:normal;line-height:inherit;color:inherit;z-index:2;position:relative;overflow:visible}
+.CodeMirror-wrap pre.CodeMirror-line,.CodeMirror-wrap pre.CodeMirror-line-like{word-wrap:break-word;white-space:pre-wrap;word-break:normal}
+.CodeMirror-linebackground{position:absolute;inset:0;z-index:0}
+.CodeMirror-measure{position:absolute;width:100%;height:0;overflow:hidden;visibility:hidden}
+.CodeMirror-measure pre{position:static}
+.CodeMirror-cursor{position:absolute;pointer-events:none;width:0;border-left:2px solid var(--ed-cursor)}
+div.CodeMirror-cursors{visibility:hidden;position:relative;z-index:3}
+.CodeMirror-focused div.CodeMirror-cursors{visibility:visible}
+.CodeMirror-selected{background:var(--ed-sel)}
+.CodeMirror-focused .CodeMirror-selected{background:var(--ed-sel-on)}
+/* Monaco 当前行：仅 1px 描边，无填充 */
+.CodeMirror-activeline-background{background:transparent;box-shadow:inset 0 1px 0 var(--ed-line),inset 0 -1px 0 var(--ed-line),inset -1px 0 0 var(--ed-line)}
+.CodeMirror-gutter-background.CodeMirror-activeline-gutter{box-shadow:inset 0 1px 0 var(--ed-line),inset 0 -1px 0 var(--ed-line)}
+.CodeMirror-activeline-gutter .CodeMirror-linenumber{color:var(--ed-ln-on)}
+.CodeMirror-matchingbracket{background:rgba(0,100,0,.1);outline:1px solid var(--ed-bracket)}
+.CodeMirror-scroll,.CodeMirror-sizer,.CodeMirror-gutter,.CodeMirror-gutters,.CodeMirror-linenumber{box-sizing:content-box}
+/* 标题 / 列表符 / --- / 表格线 = keyword；行内代码 = variable；链接与字符串 = string */
+.cm-header,.cm-formatting-header,.cm-hr,.cm-formatting-list,.cm-keyword,.cm-tag,.cm-atom{color:var(--ed-kw)}
+.cm-header{font-weight:400}
+.cm-strong{font-weight:700}.cm-em{font-style:italic}.cm-strikethrough{text-decoration:line-through}
+.cm-comment{color:var(--ed-var)}
+.cm-link,.cm-url,.cm-string,.cm-string-2{color:var(--ed-str)}
+.cm-number{color:var(--ed-num)}
+.cm-formatting-quote{color:var(--ed-cmt)}
+.cm-tbl{color:var(--ed-kw)}
+.cm-matchhighlight{background:var(--ed-hl)}
+#ctx{position:fixed;z-index:20;min-width:220px;padding:4px;background:var(--ed-bg);color:var(--ed-fg);border:1px solid var(--border);border-radius:6px;box-shadow:0 4px 16px rgba(0,0,0,.25);font-size:13px}
+#ctx button{display:flex;justify-content:space-between;gap:24px;width:100%;padding:6px 10px;font:inherit;color:inherit;background:none;border:0;border-radius:4px;cursor:pointer;text-align:left}
+#ctx button:hover{background:var(--code-bg)}
+#ctx kbd{font:inherit;color:var(--muted)}
+#ctx hr{margin:4px 0;border:0;border-top:1px solid var(--border)}
+.sep{flex:none;width:6px;background:var(--sep);cursor:col-resize;touch-action:none}
+.sep:hover,.sep.on{background:var(--link)}
+#toc{flex:0 0 220px;min-width:110px;display:flex;flex-direction:column;background:var(--toc-bg);font-size:13px;font-family:var(--sans);z-index:10}
+body.readonly #toc{flex:0 0 240px}
+.toc-hd{flex:none;display:flex;align-items:center;justify-content:space-between;padding:8px 12px;border-bottom:1px solid var(--border);font-size:12px;font-weight:600;color:var(--muted);user-select:none}
+#toc-list{flex:1;overflow-y:auto;padding:6px 8px 16px}
+#toc-list a{display:block;padding:4px 8px;border-radius:4px;color:var(--fg);text-decoration:none;line-height:1.45;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;border-left:2px solid transparent}
+#toc-list a:hover{background:var(--code-bg);color:var(--link)}
+#toc-list a.active{background:var(--toc-active-bg);color:var(--link);border-left-color:var(--link);font-weight:600}
+#toc-list .toc-no{color:var(--muted);font-size:11.5px;margin-right:4px}
+#toc-list .toc-empty{padding:12px 8px;color:var(--muted);font-size:12px}
+.md{max-width:860px;margin:0 auto;padding:24px 32px 64px;font-size:16px;line-height:1.65;word-wrap:break-word;font-family:var(--sans)}
+.md>:first-child{margin-top:0}
+.md h1,.md h2,.md h3,.md h4,.md h5,.md h6{margin:1.5em 0 .6em;font-weight:600;line-height:1.25}
+.md h1,.md h2{padding-bottom:.3em;border-bottom:1px solid var(--border)}
+.md h1{font-size:2em}.md h2{font-size:1.5em}.md h3{font-size:1.25em}.md h4{font-size:1em}.md h5{font-size:.875em}.md h6{font-size:.85em;color:var(--muted)}
+.md p,.md ul,.md ol,.md blockquote,.md pre,.md table{margin:0 0 1em}
+.md ul,.md ol{padding-left:2em}
+.md li+li{margin-top:.25em}
+.md li>input{margin:0 .4em .2em -1.4em;vertical-align:middle}
+.md a{color:var(--link);text-decoration:none}.md a:hover{text-decoration:underline}
+.md blockquote{padding:0 1em;color:var(--muted);border-left:.25em solid var(--border)}
+.md code{font-family:var(--mono);font-size:88%;padding:.2em .4em;background:var(--code-inline);border-radius:6px}
+.md pre{padding:16px;overflow:auto;background:var(--code-bg);border-radius:6px;line-height:1.45}
+.md pre code{padding:0;background:none;font-family:var(--mono)}
+.md table{border-collapse:collapse;display:block;overflow:auto;width:max-content;max-width:100%}
+.md th,.md td{padding:6px 13px;border:1px solid var(--border)}
+.md th{font-weight:600}
+.md tr:nth-child(2n){background:var(--code-bg)}
+.md hr{height:.25em;margin:1.5em 0;background:var(--border);border:0}
+.md img{max-width:100%}
+.math{font-family:"Cambria Math","STIX Two Math","Latin Modern Math","Times New Roman",var(--sans);font-size:1.04em}
+.math i{font-style:italic}
+.math .tx{font-style:normal;white-space:pre-wrap}
+.math .rm{font-style:normal}
+.math .mr{margin:0 .3em}.math .mb{margin:0 .2em}.math .mp{margin-right:.2em}
+.math sup,.math sub{font-size:.72em;line-height:0}
+.math .ss{display:inline-flex;flex-direction:column;vertical-align:middle;line-height:1.1}
+.math .ss sup,.math .ss sub{position:static;vertical-align:baseline;line-height:1.1}
+.math .frac{display:inline-flex;flex-direction:column;vertical-align:middle;text-align:center;margin:0 .15em;line-height:1.3}
+.math .frac>span{padding:0 .25em}
+.math .frac>span:first-child{border-bottom:1px solid currentColor}
+.math .sqrt>span{border-top:1px solid currentColor;padding:0 .15em}
+.math .ol{border-top:1px solid currentColor}
+.math-display{display:block;margin:.8em 0;text-align:center;overflow-x:auto;font-size:1.12em}
+.math-src{color:var(--muted)}
+.hljs-keyword,.hljs-doctag,.hljs-selector-tag{color:var(--h1)}
+.hljs-string,.hljs-regexp{color:var(--h2)}
+.hljs-number,.hljs-literal,.hljs-attr,.hljs-attribute,.hljs-variable,.hljs-selector-class,.hljs-selector-id{color:var(--h3)}
+.hljs-comment,.hljs-quote{color:var(--muted)}
+.hljs-title,.hljs-section{color:var(--h4)}
+.hljs-built_in,.hljs-type,.hljs-name,.hljs-symbol{color:var(--h5)}
+@media (max-width:900px){
+body:not(.readonly) #panes{flex-direction:column-reverse}
+body:not(.readonly) .ed,body:not(.readonly) .pv-wrap{flex:1 1 0}
+body:not(.readonly) #sep{width:auto;height:6px;cursor:row-resize}
+#toc{flex:0 0 180px}
+.md{padding:16px 18px 48px}
+}
+@media print{
+:root{padding:0}.bar,.ed,#sep,#toc-sep,#ctx,#toc{display:none!important}
+html,body{height:auto;overflow:visible}#panes,.pv-wrap{display:block}.pv{overflow:visible}
+}
+</style>
+</head>
+<body>
+<header class="bar">
+  <h1 id="title">README.md</h1>
+  <button id="save" class="primary edit-only" title="一键固化覆盖原文件 (Ctrl+S)">Save</button>
+  <button id="reload" class="edit-only" title="重新从原文件加载">Reload</button>
+  <button id="copy">Copy</button>
+  <button id="pdf">Export PDF</button>
+  <span id="status" class="status"></span>
+  <div class="opts">
+    <label class="edit-only"><input type="checkbox" id="sync" checked> Sync scroll</label>
+    <label><input type="checkbox" id="dark"> Dark mode</label>
+  </div>
+</header>
+<main id="panes">
+  <section class="ed"><textarea id="ed" spellcheck="false" aria-label="Markdown editor"></textarea></section>
+  <div id="sep" class="sep" role="separator" aria-orientation="vertical" aria-label="Resize editor and preview" title="拖拽调整尺寸，双击恢复默认比例"></div>
+  <div class="pv-wrap" id="pv-wrap">
+    <section class="pv" id="pv"><article class="md" id="out"></article></section>
+    <div id="toc-sep" class="sep" role="separator" aria-orientation="vertical" aria-label="Resize preview and TOC" title="拖拽调整目录宽度，双击恢复默认宽度"></div>
+    <aside id="toc" aria-label="目录大纲">
+      <div class="toc-hd"><span>目录</span></div>
+      <nav id="toc-list"></nav>
+    </aside>
+  </div>
+</main>
+<div id="ctx" role="menu" hidden></div>
+
+<script src="../third/markdown/marked.min.js"></script>
+<script src="../third/markdown/purify.min.js"></script>
+<script src="../third/markdown/highlight.min.js"></script>
+<script>
+(() => {
+  if (window.top && window.top.VirtualCursor) {
+    try { window.top.VirtualCursor.attach(window); } catch (_) { }
+  }
+
+  const $ = s => document.querySelector(s), root = document.documentElement;
+  const out = $('#out'), pv = $('#pv'), pvWrap = $('#pv-wrap'), ed = $('#ed');
+  const sync = $('#sync'), dark = $('#dark'), panes = $('#panes'), sep = $('#sep');
+  const statusEl = $('#status'), saveBtn = $('#save');
+  const tocEl = $('#toc'), tocList = $('#toc-list'), tocSep = $('#toc-sep'), edPane = $('.ed');
+
+  const readStore = k => {
+    try { const v = localStorage.getItem(k); return v === null ? undefined : JSON.parse(v); }
+    catch { return localStorage.getItem(k); }
+  };
+
+  const isLocalHost = (location.hostname === 'localhost' || location.hostname === '127.0.0.1' || location.protocol === 'file:') && location.port !== '9000';
+  const isEditable = readStore('online_flag') !== undefined ? (readStore('online_flag') === '0') : isLocalHost;
+  if (!isEditable) document.body.classList.add('readonly');
+
+  const params = new URLSearchParams(location.search);
+  const rawMdPath = params.get('file') || (window.top && window.top.readme_md) || readStore('readme_md') || '/README.md';
+  const mdPath = rawMdPath.startsWith('/') ? rawMdPath : '/' + rawMdPath;
+  const relPath = mdPath.replace(/^\/+/, '');
+  const initHash = params.get('hash') || '';
+  $('#title').textContent = relPath;
+
+  // 默认 light 模式（仅用户显式切换后持久化为 dark）
+  const setTheme = d => { root.dataset.theme = d ? 'dark' : 'light'; dark.checked = d; };
+  setTheme(localStorage.getItem('mlp-dark') === '1');
+  dark.onchange = () => {
+    setTheme(dark.checked);
+    try { localStorage.setItem('mlp-dark', dark.checked ? '1' : '0'); } catch (_) { }
+  };
+
+  // 自动对齐主站正文与 code 标签字体（基于 font.css + content.css）
+  (async function syncMainSiteFonts() {
+    try {
+      const topFont = window.top && window.top.getComputedStyle
+        ? window.top.getComputedStyle(window.top.document.body).fontFamily : '';
+      if (topFont) root.style.setProperty('--sans', topFont);
+    } catch (_) { }
+    try {
+      const res = await fetch('../css/content.css');
+      if (!res.ok) return;
+      const css = await res.text();
+      let bodyFont = '', codeFont = '';
+      try {
+        const sheet = new CSSStyleSheet();
+        sheet.replaceSync(css);
+        for (const rule of sheet.cssRules) {
+          if (rule.type !== CSSRule.STYLE_RULE || !rule.style.fontFamily) continue;
+          const sels = rule.selectorText.split(',').map(s => s.trim().toLowerCase());
+          if (sels.some(s => s === 'body' || s === 'html')) bodyFont = rule.style.fontFamily;
+          if (sels.some(s => s === 'code' || s === 'pre code' || s.endsWith(' code') || s.startsWith('code['))) codeFont = rule.style.fontFamily;
+        }
+      } catch (_) {
+        const mBody = /(?:^|[}\s])(?:html|body)\s*\{[^}]*font-family\s*:\s*([^;}]+)/i.exec(css);
+        const mCode = /(?:^|[}\s,])code\s*\{[^}]*font-family\s*:\s*([^;}]+)/i.exec(css);
+        if (mBody) bodyFont = mBody[1].trim();
+        if (mCode) codeFont = mCode[1].trim();
+      }
+      if (bodyFont) root.style.setProperty('--sans', bodyFont);
+      if (codeFont) root.style.setProperty('--mono', codeFont);
+    } catch (_) { }
+  })();
+
+  // Markdown renderer (local same-origin marked + DOMPurify + highlight.js)
+  const ok = !!(window.marked && window.DOMPurify);
+  if (ok) {
+    marked.setOptions({ gfm: true });
+    DOMPurify.addHook('afterSanitizeAttributes', n => {
+      if (n.tagName === 'A' && n.hasAttribute('href') && /^https?:\/\//i.test(n.getAttribute('href'))) {
+        n.setAttribute('target', '_blank'); n.setAttribute('rel', 'noopener noreferrer');
+      }
+    });
+  }
+
+  let cm = null, rawText = '', diskText = '', raf = 0, saving = false;
+  let tocSig = '', tocHeadings = [], tocLinks = [], spyRaf = 0;
+
+  const normLF = s => String(s ?? '').replace(/\r\n?/g, '\n');
+  const getVal = () => cm ? cm.getValue() : (isEditable ? ed.value : rawText);
+  const setVal = v => {
+    rawText = v;
+    if (cm) { cm.setValue(v); cm.scrollTo(0, 0); } else { ed.value = v; ed.scrollTop = 0; }
+    if (raf) { cancelAnimationFrame(raf); raf = 0; }
+    render();
+  };
+
+  // ═══ MD-PIPELINE BEGIN ═══════════════════════════════════════════
+  // Markdown 渲染管线（不依赖 marked 的具体版本）：
+  //   protectMath → marked.parse → restoreMath → DOMPurify → fixBold → highlightCode
+  const escHtml = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const PH_OPEN = '\uE000', PH_CLOSE = '\uE001';   // 公式占位符：私有区字符，Markdown 规则不会处理它们
+
+  // 1) 渲染前把 $…$ / $$…$$ 换成占位符。否则 marked 会破坏 TeX 源码：
+  //    吃掉 \_ \% 的反斜杠、把 x*y*z 变斜体、把表格单元格里的 | 当作列分隔符等。
+  //    围栏代码块、行内代码、\$ 转义内的 $ 不处理；$5 与 $10 这类金额不会被误判为公式。
+  function protectMath(src) {
+    const store = [];
+    const hold = (raw, tex, display) => PH_OPEN + (store.push({ raw, tex, display }) - 1) + PH_CLOSE;
+
+    const scan = s => {
+      let out = '', i = 0;
+      while (i < s.length) {
+        const c = s[i];
+        if (c === '\\') { out += s.substr(i, 2); i += 2; continue; }
+        if (c === '`') {                                     // 行内代码：原样跳过
+          let j = i; while (s[j] === '`') j++;
+          const len = j - i; let k = j, end = -1;
+          while (k < s.length) {
+            if (s[k] !== '`') { k++; continue; }
+            let m = k; while (s[m] === '`') m++;
+            if (m - k === len) { end = m; break; }
+            k = m;
+          }
+          if (end < 0) end = j;
+          out += s.slice(i, end); i = end; continue;
+        }
+        if (c === '$') {
+          if (s[i + 1] === '$') {                            // $$ 展示公式
+            const e = s.indexOf('$$', i + 2);
+            if (e > i + 2 && s.slice(i + 2, e).trim()) { out += hold(s.slice(i, e + 2), s.slice(i + 2, e), true); i = e + 2; }
+            else { out += '$$'; i += 2; }
+            continue;
+          }
+          if (i + 1 < s.length && !/\s/.test(s[i + 1])) {    // $ 行内公式：开头 $ 后不能是空白
+            let j = i + 1;
+            while (j < s.length && s[j] !== '$') j += s[j] === '\\' ? 2 : 1;
+            if (j < s.length && !/\s/.test(s[j - 1]) && !/\d/.test(s[j + 1] || '')) {   // 结尾 $ 前不能是空白、后不能是数字
+              out += hold(s.slice(i, j + 1), s.slice(i + 1, j), false); i = j + 1; continue;
+            }
+          }
+        }
+        out += c; i++;
+      }
+      return out;
+    };
+
+    const lines = src.split('\n'), out = [];
+    let fence = '';
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const fm = /^\s*(`{3,}|~{3,})/.exec(line);
+      if (fence) {
+        out.push(line);
+        if (fm && fm[1][0] === fence[0] && fm[1].length >= fence.length && /^\s*[`~]+\s*$/.test(line)) fence = '';
+        continue;
+      }
+      if (fm) { fence = fm[1]; out.push(line); continue; }
+
+      const t = line.trim();
+      if (t.startsWith('$$') && t.indexOf('$$', 2) < 0) {    // 跨行 $$ … $$（不跨空行，最多 30 行）
+        const body = [t.slice(2)], raw = [line];
+        let j = i + 1, tail = null;
+        for (; j < lines.length && j - i <= 30 && lines[j].trim() !== ''; j++) {
+          raw.push(lines[j]);
+          const e = lines[j].indexOf('$$');
+          if (e >= 0) { body.push(lines[j].slice(0, e)); tail = lines[j].slice(e + 2); break; }
+          body.push(lines[j]);
+        }
+        if (tail !== null && body.join('').trim()) {
+          out.push(line.match(/^\s*/)[0] + hold(raw.join('\n'), body.join('\n'), true) + scan(tail));
+          i = j; continue;
+        }
+      }
+      out.push(scan(line));
+    }
+    return { text: out.join('\n'), store };
+  }
+
+  // 2) 占位符 → 公式 HTML。代码块与标签属性内出现的占位符还原为原文。
+  function restoreMath(html, store) {
+    if (!store.length) return html;
+    const PH = new RegExp(PH_OPEN + '(\\d+)' + PH_CLOSE, 'g');
+    const asRaw = (_, i) => escHtml(store[i].raw);
+    const asMath = (_, i) => renderMath(store[i]);
+    return html.split(/(<pre[\s\S]*?<\/pre>|<code[\s\S]*?<\/code>)/i).map((seg, k) =>
+      k % 2 ? seg.replace(PH, asRaw)
+        : seg.split(/(<[^>]*>)/).map((p, n) => n % 2 ? p.replace(PH, asRaw) : p.replace(PH, asMath)).join('')
+    ).join('');
+  }
+
+  function renderMath({ raw, tex, display }) {
+    try { return `<span class="math${display ? ' math-display' : ''}">${texToHtml(tex)}</span>`; }
+    catch (_) { return `<code class="math-src">${escHtml(raw)}</code>`; }   // 不支持的写法：显示 TeX 源码
+  }
+
+  // 轻量 TeX → HTML：覆盖 README 类文档常见的子集（上下标、分式、根号、\text、希腊字母、常用符号）。
+  // 遇到不支持的命令（如 \begin{cases}）会抛错，由 renderMath 退回显示源码。
+  const TEX_SYM = {
+    sim: '∼', approx: '≈', le: '≤', leq: '≤', ge: '≥', geq: '≥', ne: '≠', neq: '≠', equiv: '≡', ll: '≪', gg: '≫',
+    in: '∈', notin: '∉', subset: '⊂', subseteq: '⊆', supset: '⊃', cup: '∪', cap: '∩', emptyset: '∅', forall: '∀', exists: '∃',
+    to: '→', rightarrow: '→', leftarrow: '←', leftrightarrow: '↔', longrightarrow: '⟶', longleftarrow: '⟵',
+    Rightarrow: '⇒', Leftarrow: '⇐', Leftrightarrow: '⇔', mapsto: '↦',
+    times: '×', div: '÷', cdot: '·', pm: '±', mp: '∓', infty: '∞', partial: '∂', nabla: '∇', sum: '∑', prod: '∏', int: '∫',
+    lfloor: '⌊', rfloor: '⌋', lceil: '⌈', rceil: '⌉', langle: '⟨', rangle: '⟩', vert: '|', mid: '∣', Vert: '‖',
+    ldots: '…', dots: '…', cdots: '⋯', land: '∧', lor: '∨', neg: '¬', oplus: '⊕', otimes: '⊗',
+    quad: '\u2003', qquad: '\u2003\u2003', ',': '\u2009', ';': '\u2005', ':': '\u2005', '!': '', ' ': '\u00a0',
+    '%': '%', '_': '_', '{': '{', '}': '}', '&': '&', '#': '#', '$': '$', '|': '‖',
+    alpha: 'α', beta: 'β', gamma: 'γ', delta: 'δ', epsilon: 'ε', theta: 'θ', lambda: 'λ', mu: 'μ', pi: 'π', rho: 'ρ', sigma: 'σ', tau: 'τ', phi: 'φ', omega: 'ω',
+    Gamma: 'Γ', Delta: 'Δ', Theta: 'Θ', Lambda: 'Λ', Pi: 'Π', Sigma: 'Σ', Phi: 'Φ', Omega: 'Ω'
+  };
+  const TEX_FUNC = new Set(['min', 'max', 'log', 'ln', 'lg', 'exp', 'sin', 'cos', 'tan', 'lim', 'sup', 'inf', 'arg', 'det', 'gcd', 'mod', 'Pr']);
+  const TEX_REL = '=<>≤≥≠≈∼≡≪≫∈∉⊂⊆⊃→←↔⟶⟵⇒⇐⇔↦∣', TEX_BIN = '+−×÷·±∓∪∩∧∨⊕⊗';
+
+  function texToHtml(tex) {
+    let i = 0;
+    const skipWs = () => { while (i < tex.length && /\s/.test(tex[i])) i++; };
+    const unesc = s => s.replace(/\\([_%&#${}\\ ])/g, '$1');
+    const sym = ch => {
+      const e = escHtml(ch);
+      return !ch ? '' : TEX_REL.includes(ch) ? `<span class="mr">${e}</span>` : TEX_BIN.includes(ch) ? `<span class="mb">${e}</span>` : e;
+    };
+    const readRaw = () => {                                  // 读取 {…} 内的原文（\text 等使用）
+      skipWs();
+      if (tex[i] !== '{') return tex[i++] || '';
+      let d = 0, s = '';
+      for (i++; i < tex.length; i++) {
+        const c = tex[i];
+        if (c === '\\') { s += c + (tex[i + 1] || ''); i++; continue; }
+        if (c === '{') d++;
+        else if (c === '}') { if (d === 0) { i++; return s; } d--; }
+        s += c;
+      }
+      throw new Error('unclosed group');
+    };
+    const seq = stop => { let h = ''; while (i < tex.length && tex[i] !== stop) h += atom(true); return h; };
+    const group = () => {                                    // 参数：{…} 或单个记号
+      skipWs();
+      if (tex[i] !== '{') return atom(false);
+      i++; const h = seq('}');
+      if (tex[i] !== '}') throw new Error('unclosed group');
+      i++; return h;
+    };
+    function atom(scripts) {
+      skipWs();
+      const base = (tex[i] === '^' || tex[i] === '_') ? '' : baseAtom();
+      let sup = '', sub = '';
+      if (scripts) for (; ;) {
+        skipWs();
+        if (tex[i] === '^' && !sup) { i++; sup = group(); }
+        else if (tex[i] === '_' && !sub) { i++; sub = group(); }
+        else break;
+      }
+      if (sup && sub) return `${base}<span class="ss"><sup>${sup}</sup><sub>${sub}</sub></span>`;
+      return sup ? `${base}<sup>${sup}</sup>` : sub ? `${base}<sub>${sub}</sub>` : base;
+    }
+    function baseAtom() {
+      if (i >= tex.length) return '';
+      const c = tex[i];
+      if (c === '\\') return command();
+      i++;
+      if (c === '{') {
+        const h = seq('}');
+        if (tex[i] !== '}') throw new Error('unclosed group');
+        i++; return h;
+      }
+      if (/[A-Za-z]/.test(c)) return `<i>${c}</i>`;
+      if (c === '~') return '\u00a0';
+      if (c === '-') return sym('\u2212');
+      if (c === '*') return '\u2217';
+      if (c === "'") return '\u2032';
+      if (c === ',') return '<span class="mp">,</span>';
+      return sym(c);
+    }
+    function command() {
+      i++;                                                   // 跳过 \
+      const m = /^[A-Za-z]+/.exec(tex.slice(i));
+      const name = m ? m[0] : (tex[i] || '');
+      i += name.length || 1;
+      switch (name) {
+        case 'text': case 'mbox': case 'textrm': return `<span class="tx">${escHtml(unesc(readRaw()))}</span>`;
+        case 'mathrm': case 'operatorname': return `<span class="rm">${escHtml(unesc(readRaw()))}</span>`;
+        case 'textbf': case 'mathbf': case 'boldsymbol': return `<b>${escHtml(unesc(readRaw()))}</b>`;
+        case 'frac': case 'dfrac': case 'tfrac': { const a = group(), b = group(); return `<span class="frac"><span>${a}</span><span>${b}</span></span>`; }
+        case 'sqrt': return `<span class="sqrt">\u221a<span>${group()}</span></span>`;
+        case 'overline': return `<span class="ol">${group()}</span>`;
+        case 'left': case 'right': case 'big': case 'Big': case 'bigl': case 'bigr': case 'Bigl': case 'Bigr': case 'biggl': case 'biggr':
+          skipWs();
+          if (tex[i] === '.') { i++; return ''; }
+          return baseAtom();
+        case '\\': return '<br>';
+      }
+      if (Object.prototype.hasOwnProperty.call(TEX_SYM, name)) return sym(TEX_SYM[name]);
+      if (TEX_FUNC.has(name)) return `<span class="rm">${name}</span>`;
+      throw new Error('unsupported \\' + name);
+    }
+    const html = seq(null);
+    return html;
+  }
+
+  // 3) 兜底：修复仍以字面量残留的 **加粗**。
+  //    marked ≤ v4 判定强调边界时只认 ASCII 标点，遇到「…)**：」「…]**：」「…`code`**：」这类
+  //    收尾 ** 前是标点、后是全角标点/汉字的写法就不会闭合。这里在同一父节点内把成对的 ** 补成 <strong>。
+  //    只处理恰好两个星号的标记；开头 ** 后、结尾 ** 前不能是空白；不跨越块级元素；代码内不处理。
+  function fixBold(root) {
+    const BLOCK = 'ul,ol,pre,table,blockquote,p,div,h1,h2,h3,h4,h5,h6,hr';
+    const groups = new Map();
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    for (let n; (n = walker.nextNode());) {
+      if (!n.nodeValue.includes('**')) continue;
+      const p = n.parentNode;
+      if (p.closest && p.closest('pre,code')) continue;
+      if (!groups.has(p)) groups.set(p, []);
+      groups.get(p).push(n);
+    }
+    for (const nodes of groups.values()) {
+      const marks = [];
+      for (const node of nodes) {
+        const re = /\*+/g; let m;
+        while ((m = re.exec(node.nodeValue))) if (m[0].length === 2) marks.push({ node, idx: m.index });
+      }
+      const pairs = []; let open = null;
+      for (const mk of marks) {
+        const v = mk.node.nodeValue, before = v[mk.idx - 1], after = v[mk.idx + 2];
+        const canClose = before === undefined || !/\s/.test(before);     // 节点边界外是行内元素（如 <code>），视为非空白
+        const canOpen = after === undefined || !/\s/.test(after);
+        if (open && canClose) { pairs.push([open, mk]); open = null; }
+        else if (!open && canOpen) open = mk;
+      }
+      for (const [o, c] of pairs.reverse()) {                            // 从后往前处理，前面的偏移不受影响
+        const probe = document.createRange();
+        probe.setStart(o.node, o.idx + 2); probe.setEnd(c.node, c.idx);
+        if (probe.collapsed || probe.cloneContents().querySelector(BLOCK)) continue;
+        const same = o.node === c.node;
+        c.node.nodeValue = c.node.nodeValue.slice(0, c.idx) + c.node.nodeValue.slice(c.idx + 2);
+        o.node.nodeValue = o.node.nodeValue.slice(0, o.idx) + o.node.nodeValue.slice(o.idx + 2);
+        const r = document.createRange();
+        r.setStart(o.node, o.idx); r.setEnd(c.node, same ? c.idx - 2 : c.idx);
+        const strong = document.createElement('strong');
+        strong.appendChild(r.extractContents());
+        r.insertNode(strong);
+      }
+    }
+  }
+
+  // 4) 代码高亮：marked v8 起移除了 highlight 选项，改为渲染后统一处理（对所有版本一致）。
+  //    只高亮显式标注且 highlight.js 认识的语言；text / 无标注的代码块（如 ASCII 架构图）保持原样。
+  function highlightCode(root) {
+    if (!window.hljs) return;
+    root.querySelectorAll('pre > code').forEach(el => {
+      const m = /(?:^|\s)language-([\w+#-]+)/.exec(el.className);
+      const lang = m && m[1].toLowerCase();
+      if (!lang || lang === 'text' || lang === 'plaintext' || lang === 'txt' || !hljs.getLanguage(lang)) return;
+      try { el.innerHTML = hljs.highlight(el.textContent, { language: lang }).value; } catch (_) { }
+    });
+  }
+  // ═══ MD-PIPELINE END ═════════════════════════════════════════════
+
+  // 标题锚点规则与 GitHub 一致：小写 → 去掉标点（保留字母/数字/下划线/连字符/空格）→ 每个空格换成 "-"。
+  // 注意不能合并连续空格：「附录 A — 标题」应得到 附录-a--标题，README 目录里的锚点正是这种写法。
+  function slugify(text) {
+    return String(text || '').trim().toLowerCase()
+      .replace(/[^\p{L}\p{M}\p{N}_\s-]/gu, '')
+      .replace(/\s/g, '-') || 'section';
+  }
+
+
+
+  function buildToc() {
+    const hs = Array.from(out.querySelectorAll('h1,h2,h3,h4,h5,h6'));
+    const usedIds = new Set();
+    hs.forEach(h => {
+      const base = slugify(h.textContent);
+      let id = base, n = 1;
+      while (usedIds.has(id)) id = `${base}-${n++}`;
+      usedIds.add(id);
+      h.id = id;
+    });
+    tocHeadings = hs;
+
+    const sig = hs.map(h => `${h.tagName}|${h.id}|${h.textContent.trim()}`).join('\n');
+    if (sig === tocSig) {
+      updateActiveToc();
+      return;
+    }
+    tocSig = sig;
+    tocList.textContent = '';
+    tocLinks = [];
+
+    if (hs.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'toc-empty';
+      empty.textContent = '暂无标题';
+      tocList.appendChild(empty);
+      return;
+    }
+
+    const minLv = Math.min(...hs.map(h => Number(h.tagName[1])));
+    const counters = [0, 0, 0, 0, 0, 0];
+    const frag = document.createDocumentFragment();
+
+    hs.forEach(h => {
+      const rawLv = Number(h.tagName[1]);
+      const depth = Math.max(0, rawLv - minLv);
+      for (let i = depth + 1; i < counters.length; i++) counters[i] = 0;
+      counters[depth]++;
+      const numStr = counters.slice(0, depth + 1).filter(n => n > 0).join('.');
+
+      const a = document.createElement('a');
+      a.href = '#' + h.id;
+      a.dataset.targetId = h.id;
+      a.style.paddingLeft = (8 + depth * 12) + 'px';
+      const titleText = h.textContent.trim();
+      a.title = `${numStr} ${titleText}`;
+
+      const noSpan = document.createElement('span');
+      noSpan.className = 'toc-no';
+      noSpan.textContent = numStr;
+      a.append(noSpan, document.createTextNode(titleText));
+      frag.appendChild(a);
+      tocLinks.push(a);
+    });
+    tocList.appendChild(frag);
+
+    updateActiveToc();
+  }
+
+  function updateActiveToc() {
+    spyRaf = 0;
+    if (tocHeadings.length === 0 || tocLinks.length === 0) return;
+    const pvRect = pv.getBoundingClientRect();
+    let activeIdx = 0;
+    for (let i = 0; i < tocHeadings.length; i++) {
+      const top = tocHeadings[i].getBoundingClientRect().top - pvRect.top;
+      if (top <= 48) activeIdx = i;
+      else break;
+    }
+    tocLinks.forEach((a, i) => {
+      const on = i === activeIdx;
+      a.classList.toggle('active', on);
+      if (on) {
+        const r = a.getBoundingClientRect();
+        const lr = tocList.getBoundingClientRect();
+        if (r.top < lr.top || r.bottom > lr.bottom) a.scrollIntoView({ block: 'nearest' });
+      }
+    });
+  }
+
+  pv.addEventListener('scroll', () => {
+    if (!spyRaf) spyRaf = requestAnimationFrame(updateActiveToc);
+  });
+
+  tocList.addEventListener('click', e => {
+    const a = e.target.closest && e.target.closest('a[data-target-id]');
+    if (!a) return;
+    e.preventDefault();
+    const target = document.getElementById(a.dataset.targetId);
+    if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
+
+  function render() {
+    raf = 0;
+    const text = normLF(getVal()).replace(/^\uFEFF/, '');
+    if (ok) {
+      const { text: src, store } = protectMath(text);
+      out.innerHTML = DOMPurify.sanitize(restoreMath(marked.parse(src), store));
+      fixBold(out);
+      highlightCode(out);
+    } else out.textContent = text;
+    buildToc();
+  }
+  function onEdit() {
+    rawText = getVal();
+    if (!raf) raf = requestAnimationFrame(render);
+    const dirty = normLF(rawText) !== normLF(diskText);
+    window._mdDirty = dirty;
+    statusEl.textContent = dirty ? '● 未固化' : '';
+  }
+
+  function scrollToHash(hash) {
+    if (!hash) return;
+    let t = hash.replace(/^#/, '');
+    try { t = decodeURIComponent(t); } catch (_) { }
+    const norm = t.trim().toLowerCase();
+    if (!norm) return;
+    const hs = Array.from(out.querySelectorAll('h1,h2,h3,h4,h5,h6'));
+    const slug = slugify(t);
+    const hit = hs.find(h => (h.id || '').toLowerCase() === norm)
+      || hs.find(h => h.id === slug)
+      || hs.find(h => h.textContent.trim().toLowerCase() === norm)
+      || hs.find(h => h.textContent.trim().toLowerCase().includes(norm));
+    if (hit) hit.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+  out.addEventListener('click', e => {
+    const a = e.target.closest && e.target.closest('a[href^="#"]');
+    if (a) { e.preventDefault(); scrollToHash(a.getAttribute('href')); }
+  });
+
+  async function fetchMd() {
+    const url = mdPath + (isEditable ? '?_t=' + Date.now() : '');
+    const res = await fetch(url, { cache: isEditable ? 'no-store' : 'default' });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    return await res.text();
+  }
+
+  async function loadDoc(hash = '') {
+    statusEl.textContent = '加载中...';
+    try {
+      const text = await fetchMd();
+      diskText = text;
+      setVal(text);
+      window._mdDirty = false;
+      statusEl.textContent = '';
+      if (hash) requestAnimationFrame(() => scrollToHash(hash));
+      else pv.scrollTop = 0;
+    } catch (e) {
+      setVal(`# 加载失败\n\n无法读取 \`${mdPath}\`：${e.message}`);
+      statusEl.textContent = '加载失败';
+    }
+  }
+
+  async function copyText(text) {
+    const ta = document.createElement('textarea');
+    ta.value = text; ta.readOnly = true;
+    ta.style.cssText = 'position:fixed;top:-9999px;left:-9999px;opacity:0;';
+    document.body.appendChild(ta); ta.focus(); ta.select();
+    let copied = false;
+    try { copied = document.execCommand('copy'); } catch (_) { }
+    document.body.removeChild(ta);
+    if (copied) return true;
+    try { await navigator.clipboard.writeText(text); return true; } catch (_) { return false; }
+  }
+
+  async function saveDoc() {
+    if (!isEditable || saving) return;
+    const text = getVal();
+    if (!text) return alert('内容为空，已中止固化');
+    const proto = readStore('protocol_name');
+    if (!proto) return alert('未配置 protocol_name');
+
+    saving = true; saveBtn.disabled = true; statusEl.textContent = '固化中...';
+    try {
+      if (!(await copyText(text))) {
+        alert('写入剪贴板失败，已中止固化');
+        statusEl.textContent = '固化失败';
+        return;
+      }
+      const expected = normLF(text);
+      location.href = proto + '://9{' + encodeURIComponent(relPath);
+
+      let done = false;
+      for (let i = 0; i < 30; i++) {
+        await new Promise(r => setTimeout(r, 400));
+        try {
+          const latest = await fetchMd();
+          if (normLF(latest) === expected) { diskText = latest; done = true; break; }
+        } catch (_) { }
+      }
+      window._mdDirty = !done;
+      statusEl.textContent = done ? '✓ 已固化' : '已触发固化（未检测到变更）';
+      if (done) setTimeout(() => { if (!window._mdDirty) statusEl.textContent = ''; }, 1800);
+    } finally {
+      saving = false; saveBtn.disabled = false;
+    }
+  }
+
+  // Toolbar
+  const flash = (b, t) => { const o = b.textContent; b.textContent = t; setTimeout(() => { b.textContent = o; }, 1200); };
+  saveBtn.onclick = saveDoc;
+  $('#reload').onclick = () => {
+    if (window._mdDirty && !confirm('放弃未固化的修改并重新加载原文件？')) return;
+    loadDoc();
+  };
+  $('#copy').onclick = async e => { flash(e.currentTarget, (await copyText(getVal())) ? 'Copied' : 'Failed'); };
+  $('#pdf').onclick = () => { try { window.print(); } catch (_) { } };
+
+  window.addEventListener('keydown', e => {
+    if (isEditable && (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') { e.preventDefault(); saveDoc(); }
+  });
+  window.addEventListener('message', e => {
+    if (e.origin === location.origin && e.data?.type === 'SCROLL_HASH') scrollToHash(e.data.hash);
+  });
+
+  // Sync scroll & divider (默认严格 50/50 平分，双击分隔条恢复平分)
+  let lock = '', tm = 0;
+  const bindSync = sc => {
+    const link = (a, b, id) => a.addEventListener('scroll', () => {
+      if (!isEditable || !sync.checked || (lock && lock !== id)) return;
+      lock = id; clearTimeout(tm); tm = setTimeout(() => { lock = ''; }, 100);
+      b.scrollTop = (a.scrollTop / Math.max(1, a.scrollHeight - a.clientHeight)) * (b.scrollHeight - b.clientHeight);
+    });
+    link(sc, pv, 'e'); link(pv, sc, 'p');
+  };
+  ed.addEventListener('input', onEdit);
+  bindSync(ed);
+
+  const isStacked = () => isEditable && getComputedStyle(panes).flexDirection.startsWith('column');
+  let lastStacked = isStacked();
+
+  function clampPaneSizes() {
+    const stacked = isStacked();
+    sep.setAttribute('aria-orientation', stacked ? 'horizontal' : 'vertical');
+
+    if (stacked !== lastStacked) {
+      lastStacked = stacked;
+      edPane.style.flex = '';
+      pvWrap.style.flex = '';
+    }
+
+    const pr = panes.getBoundingClientRect();
+    if (isEditable && edPane.style.flex) {
+      if (stacked) {
+        const curH = edPane.getBoundingClientRect().height;
+        const maxH = Math.max(120, pr.height - 6 - 120);
+        const clampedH = Math.min(maxH, Math.max(120, curH));
+        edPane.style.flex = '0 0 ' + Math.round(clampedH) + 'px';
+      } else {
+        const tocW = tocEl.getBoundingClientRect().width || 220;
+        const curW = edPane.getBoundingClientRect().width;
+        const maxW = Math.max(160, pr.width - 6 - tocW - 6 - 160);
+        const clampedW = Math.min(maxW, Math.max(160, curW));
+        edPane.style.flex = '0 0 ' + Math.round(clampedW) + 'px';
+      }
+    }
+
+    if (tocEl.style.flex) {
+      const pwr = pvWrap.getBoundingClientRect();
+      if (pwr.width > 0) {
+        const curToc = tocEl.getBoundingClientRect().width;
+        const maxToc = Math.max(110, pwr.width - 6 - 160);
+        const clampedToc = Math.min(maxToc, Math.max(110, curToc));
+        tocEl.style.flex = '0 0 ' + Math.round(clampedToc) + 'px';
+      }
+    }
+  }
+
+  // 分隔条 1：宽窗调节「左编辑 | 中预览」，窄窗调节「上预览+目录 | 下编辑」
+  sep.addEventListener('pointerdown', e => {
+    if (!isEditable) return;
+    sep.setPointerCapture(e.pointerId);
+    sep.classList.add('on');
+    const stacked = isStacked();
+    sep.onpointermove = ev => {
+      const r = panes.getBoundingClientRect();
+      if (stacked) {
+        // column-reverse：.ed 在下方，高度 = r.bottom - clientY
+        const rawH = r.bottom - ev.clientY - 3;
+        const minH = Math.min(120, r.height * 0.2);
+        const maxH = Math.max(minH, r.height - 6 - Math.min(120, r.height * 0.2));
+        edPane.style.flex = '0 0 ' + Math.round(Math.min(maxH, Math.max(minH, rawH))) + 'px';
+        pvWrap.style.flex = '1 1 0';
+      } else {
+        const tocW = tocEl.getBoundingClientRect().width || 220;
+        const rawW = ev.clientX - r.left - 3;
+        const minW = 160;
+        const maxW = Math.max(minW, r.width - 6 - tocW - 6 - 160);
+        edPane.style.flex = '0 0 ' + Math.round(Math.min(maxW, Math.max(minW, rawW))) + 'px';
+        pvWrap.style.flex = '1 1 0';
+      }
+      if (cm) cm.refresh();
+    };
+    const endDrag = () => { sep.onpointermove = null; sep.onpointerup = null; sep.onpointercancel = null; sep.classList.remove('on'); };
+    sep.onpointerup = endDrag;
+    sep.onpointercancel = endDrag;
+  });
+  sep.addEventListener('dblclick', () => {
+    edPane.style.flex = '';
+    pvWrap.style.flex = '';
+    if (cm) cm.refresh();
+  });
+
+  // 分隔条 2：调节「预览 | 目录」两列宽度（线上两列、线下宽/窄窗均可用）
+  tocSep.addEventListener('pointerdown', e => {
+    tocSep.setPointerCapture(e.pointerId);
+    tocSep.classList.add('on');
+    tocSep.onpointermove = ev => {
+      const r = pvWrap.getBoundingClientRect();
+      const rawW = r.right - ev.clientX - 3;
+      const minW = 110;
+      const maxW = Math.max(minW, r.width - 6 - 160);
+      tocEl.style.flex = '0 0 ' + Math.round(Math.min(maxW, Math.max(minW, rawW))) + 'px';
+      if (cm) cm.refresh();
+    };
+    const endDrag = () => { tocSep.onpointermove = null; tocSep.onpointerup = null; tocSep.onpointercancel = null; tocSep.classList.remove('on'); };
+    tocSep.onpointerup = endDrag;
+    tocSep.onpointercancel = endDrag;
+  });
+  tocSep.addEventListener('dblclick', () => {
+    tocEl.style.flex = '';
+    if (cm) cm.refresh();
+  });
+
+  if (typeof ResizeObserver === 'function') {
+    new ResizeObserver(() => {
+      clampPaneSizes();
+      if (cm) cm.refresh();
+    }).observe(panes);
+  }
+
+  // 线下模式：按需加载同源 CodeMirror 5（线上不加载，不入 coreFiles）
+  async function initLocalCodeMirror() {
+    const base = '../third/markdown/codemirror/';
+    const files = [
+      'codemirror.min.js',
+      'mode/xml.min.js', 'mode/meta.min.js', 'mode/markdown.min.js',
+      'mode/javascript.min.js', 'mode/css.min.js', 'mode/htmlmixed.min.js',
+      'mode/python.min.js', 'mode/shell.min.js',
+      'addon/closebrackets.min.js', 'addon/matchbrackets.min.js',
+      'addon/active-line.min.js', 'addon/match-highlighter.min.js'
+    ];
+    for (const f of files) {
+      await new Promise((res, rej) => {
+        const s = document.createElement('script');
+        s.src = base + f; s.async = false; s.onload = res; s.onerror = rej;
+        document.head.appendChild(s);
+      });
+    }
+    if (typeof window.CodeMirror !== 'function') return;
+
+    function nextOcc(c) {
+      const sels = c.listSelections(), main = sels[sels.length - 1];
+      if (main.empty()) { c.setSelections(sels.map(s => { const w = c.findWordAt(s.head); return { anchor: w.anchor, head: w.head }; })); return; }
+      const t = c.getRange(main.from(), main.to()), doc = c.getValue(), have = new Set(sels.map(s => c.indexFromPos(s.from())));
+      const occ = []; let i = -1; while ((i = doc.indexOf(t, i + 1)) >= 0) occ.push(i);
+      const end = c.indexFromPos(main.to());
+      const p = occ.find(x => x >= end && !have.has(x)) ?? occ.find(x => !have.has(x));
+      if (p == null) return;
+      c.setSelections(sels.concat({ anchor: c.posFromIndex(p), head: c.posFromIndex(p + t.length) }), sels.length);
+      c.scrollIntoView(c.getCursor('head'));
+    }
+    function allOcc(c) {
+      const esc = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      let t = c.getSelection(), re;
+      if (t) re = new RegExp(esc(t), 'gu');
+      else {
+        const w = c.findWordAt(c.getCursor()); t = c.getRange(w.anchor, w.head);
+        if (!/[\p{L}\p{N}]/u.test(t)) return;
+        re = new RegExp('(?<![\\p{L}\\p{N}_])' + esc(t) + '(?![\\p{L}\\p{N}_])', 'gu');
+      }
+      const doc = c.getValue(), r = []; let m;
+      while ((m = re.exec(doc))) r.push({ anchor: c.posFromIndex(m.index), head: c.posFromIndex(m.index + t.length) });
+      if (r.length) c.setSelections(r);
+    }
+    const addCur = d => c => {
+      const h = c.getCursor('head'), n = h.line + d;
+      if (n >= 0 && n < c.lineCount()) c.addSelection({ line: n, ch: Math.min(h.ch, c.getLine(n).length) });
+    };
+
+    cm = CodeMirror.fromTextArea(ed, {
+      mode: { name: 'markdown', highlightFormatting: true, fencedCodeBlockHighlighting: true },
+      lineNumbers: true, lineWrapping: true, tabSize: 2, indentUnit: 2, styleActiveLine: true, matchBrackets: true, autoCloseBrackets: true,
+      highlightSelectionMatches: { minChars: 2, showToken: /[\p{L}\p{N}_$]/u, delay: 60 },
+      configureMouse: (c, r, ev) => ({ addNew: ev.altKey || ev.ctrlKey || ev.metaKey }),
+      extraKeys: {
+        'Ctrl-S': saveDoc, 'Cmd-S': saveDoc, 'Ctrl-D': nextOcc, 'Cmd-D': nextOcc,
+        'Ctrl-F2': allOcc, 'Cmd-F2': allOcc, 'Ctrl-Alt-Up': addCur(-1), 'Ctrl-Alt-Down': addCur(1),
+        Tab: c => c.execCommand(c.somethingSelected() ? 'indentMore' : 'insertSoftTab'), 'Shift-Tab': 'indentLess'
+      }
+    });
+    cm.on('change', onEdit);
+    // 表格着色：表头行/分隔行整行、数据行仅 | 管道符（对齐 Monaco 的 keyword 配色）
+    try {
+      const sepRe = /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)*\|?\s*$/;
+      cm.addOverlay({
+        token(stream) {
+          const s = stream.string;
+          if (!/^\s*\|/.test(s)) { stream.skipToEnd(); return null; }
+          if (sepRe.test(s)) { stream.skipToEnd(); return 'tbl'; }
+          const nx = typeof stream.lookAhead === 'function' ? stream.lookAhead(1) : null;
+          if (nx != null && sepRe.test(nx)) { stream.skipToEnd(); return 'tbl'; }
+          if (stream.peek() === '|') { stream.next(); return 'tbl'; }
+          stream.eatWhile(c => c !== '|');
+          return null;
+        }
+      });
+    } catch (_) { }
+    bindSync(cm.getScrollerElement());
+
+    const ctx = $('#ctx'), hide = () => { ctx.hidden = true; };
+    const clip = async cut => { const t = cm.getSelection(); if (t && await copyText(t) && cut) cm.replaceSelection(''); };
+    const paste = () => navigator.clipboard.readText().then(t => cm.replaceSelection(t)).catch(() => { });
+    const items = [
+      ['Save', 'Ctrl+S', saveDoc], ['Change All Occurrences', 'Ctrl+F2', () => allOcc(cm)], null,
+      ['Undo', 'Ctrl+Z', () => cm.undo()], ['Redo', 'Ctrl+Y', () => cm.redo()], null,
+      ['Cut', 'Ctrl+X', () => clip(true)], ['Copy', 'Ctrl+C', () => clip(false)], ['Paste', 'Ctrl+V', paste],
+      ['Select All', 'Ctrl+A', () => cm.execCommand('selectAll')]
+    ];
+    cm.getWrapperElement().addEventListener('contextmenu', e => {
+      e.preventDefault(); e.stopPropagation();
+      if (!cm.somethingSelected()) cm.setCursor(cm.coordsChar({ left: e.clientX, top: e.clientY }));
+      ctx.replaceChildren(...items.map(it => {
+        if (!it) return document.createElement('hr');
+        const b = document.createElement('button'), s = document.createElement('span'), k = document.createElement('kbd');
+        b.type = 'button'; b.setAttribute('role', 'menuitem'); s.textContent = it[0]; k.textContent = it[1]; b.append(s, k);
+        b.onclick = () => { hide(); cm.focus(); it[2](); };
+        return b;
+      }));
+      ctx.hidden = false;
+      ctx.style.left = Math.max(4, Math.min(e.clientX, innerWidth - ctx.offsetWidth - 4)) + 'px';
+      ctx.style.top = Math.max(4, Math.min(e.clientY, innerHeight - ctx.offsetHeight - 4)) + 'px';
+    }, true);
+    addEventListener('pointerdown', e => { if (!ctx.contains(e.target)) hide(); }, true);
+    addEventListener('keydown', e => { if (e.key === 'Escape') hide(); });
+    addEventListener('blur', hide);
+  }
+
+  (async () => {
+    if (isEditable) { try { await initLocalCodeMirror(); } catch (_) { } }
+    await loadDoc(initHash);
+  })();
+})();
+</script>
+</body>
+</html>

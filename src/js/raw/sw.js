@@ -1,6 +1,6 @@
-importScripts('/src/js/core-list.js?v=1795130135361');
+importScripts('/src/js/core-list.js?v=1795248052332');
 
-self.SW_VERSION = '1795130135361';
+self.SW_VERSION = '1795248052332';
 self.EMERGENCY = 'repair_command_id=2';
 
 const CACHE_NAME_CORE = 'core-cache-' + BUILD_VERSION;
@@ -125,10 +125,18 @@ self.addEventListener('install', event => {
             '/',
             '/index.html',
             '/src/js/index.js',
+            '/src/js/shared-utils.js',
+            '/src/js/search-engine.js',
+            '/src/js/search-preview.js',
+            '/src/js/search-ui.js',
+            '/src/js/snapshot.js',
+            '/src/js/snapshot.js',
             '/src/js/side.js',
             '/src/js/content.js',
             '/src/js/data/lite_data.js',
-            '/src/js/worker.js'
+            '/src/js/worker.js',
+            '/src/wasm/compute_intensive_task_processor.min.js',
+            '/src/wasm/compute_intensive_task_processor_bg.wasm'
         ]);
         const cachedUrls = new Set();
         const fallbackUrls = new Set();
@@ -336,6 +344,7 @@ self.addEventListener('install', event => {
                         else if (url.endsWith('.css')) contentType = 'text/css; charset=utf-8';
                         else if (url.endsWith('.json')) contentType = 'application/json; charset=utf-8';
                         else if (url.endsWith('.js')) contentType = 'application/javascript; charset=utf-8';
+                        else if (url.endsWith('.md')) contentType = 'text/markdown; charset=utf-8';
 
                         const fakeRes = new Response(bundleData[url], {
                             headers: { 'Content-Type': contentType }

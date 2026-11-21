@@ -38,5 +38,1098 @@
 
 		<div id="bibi-book-data" data-bibi-book-mimetype="application/epub+zip" hidden="hidden">
 		</div>
+		<style id="epub-search-ui-style">
+			#epubSearchScope {
+				height: 26px;
+				margin: 7px 6px 0 4px;
+				padding: 0 9px;
+				border-radius: 4px;
+				border: 1px solid rgba(0, 0, 0, 0.22);
+				background: rgba(255, 255, 255, 0.9);
+				color: #1f2937;
+				font-size: 12px;
+				font-family: system-ui, -apple-system, "Microsoft YaHei", sans-serif;
+				line-height: 24px;
+				cursor: pointer;
+				white-space: nowrap;
+				vertical-align: top;
+				box-sizing: border-box;
+				transition: background-color 0.15s ease, color 0.15s ease;
+			}
+			#epubSearchScope:hover {
+				background: #eef2f7;
+			}
+			#epubSearchScope.is-global {
+				background: #2563eb;
+				border-color: #1d4ed8;
+				color: #fff;
+			}
+			.epub-hit-pulse {
+				position: fixed;
+				pointer-events: none;
+				border: 2px solid #ea580c;
+				background: rgba(249, 115, 22, 0.22);
+				border-radius: 3px;
+				z-index: 999999;
+				animation: epubHitPulse 1.05s ease-out forwards;
+			}
+			@keyframes epubHitPulse {
+				0% { transform: scale(1.16); opacity: 1; }
+				100% { transform: scale(1); opacity: 0; }
+			}
+		</style>
+
+		<script type="module">
+			import {
+				SEARCH_HL_STYLE,
+				SEARCH_SYN_HL_STYLE,
+				SEARCH_SYN2_HL_STYLE,
+				searchHlTier,
+				searchHlBucket
+			} from '../js/shared-utils.js';
+
+			const TIER_SIZE = SEARCH_HL_STYLE.length;
+			const SKIP_TAGS = new Set([
+				'SCRIPT', 'STYLE', 'NOSCRIPT', 'SVG', 'TEMPLATE',
+				'RT', 'RP', 'IFRAME', 'OBJECT', 'AUDIO', 'VIDEO'
+			]);
+			const BLOCK_TAGS = new Set([
+				'ADDRESS', 'ARTICLE', 'ASIDE', 'BLOCKQUOTE', 'DD', 'DETAILS', 'DIALOG',
+				'DIV', 'DL', 'DT', 'FIELDSET', 'FIGCAPTION', 'FIGURE', 'FOOTER', 'FORM',
+				'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'HEADER', 'HGROUP', 'HR', 'LI',
+				'MAIN', 'NAV', 'OL', 'P', 'PRE', 'SECTION', 'TABLE', 'TBODY', 'TD',
+				'TFOOT', 'TH', 'THEAD', 'TR', 'UL'
+			]);
+
+			const ITEM_HL_CSS = [
+				...SEARCH_HL_STYLE.map(([a, c], b) => `::highlight(epub-hl-${b}) { background-color: rgba(255, 235, 0, ${a}); color: ${c}; }`),
+				...SEARCH_SYN_HL_STYLE.map(([a, c], b) => `::highlight(epub-syn-${b}) { background-color: rgba(56, 189, 248, ${a}); color: ${c}; }`),
+				...SEARCH_SYN2_HL_STYLE.map(([a, c], b) => `::highlight(epub-syn2-${b}) { background-color: rgba(56, 189, 248, ${a}); color: ${c}; }`),
+				'::highlight(epub-active-hit) { background-color: rgba(249, 115, 22, 0.85); color: #fff; }'
+			].join('\n');
+
+			function hlSlot(noise) {
+				return searchHlTier(noise) * TIER_SIZE + searchHlBucket(noise);
+			}
+
+			function hlNameBySlot(slot) {
+				if (slot < TIER_SIZE) return `epub-hl-${slot}`;
+				if (slot < TIER_SIZE * 2) return `epub-syn-${slot - TIER_SIZE}`;
+				return `epub-syn2-${slot - TIER_SIZE * 2}`;
+			}
+
+			const State = {
+				opened: false,
+				title: '',
+				// items[itemIndex] = { itemIndex, item, text, nodes: [{node, start, end}], anchorOffsets: Map, globalStart, globalEnd }
+				items: [],
+				totalChars: 0,
+				// sections: [{ index, title, startGlobal, endGlobal, percent }]
+				sections: [],
+				groupUnit: '节',
+				activeSearchToken: 0,
+				lastSearch: null, // { keyword, wasmKeywords, noise, hits, groups, groupMap, itemHitsMap }
+				activeHit: null,
+				searchScope: 'txt',
+				scopeBtn: null,
+				provider: null,
+				boundItems: new WeakSet(),
+				highlightedItemIndices: new Set()
+			};
+
+			// =========================================================================
+			// 1. BUS 通信与快捷键接管
+			// =========================================================================
+			function getTabId() {
+				try { return (window.top && window.top.__TAB_ID__) || ''; } catch (_) { return ''; }
+			}
+
+			let bus = null;
+			try {
+				bus = new BroadcastChannel('bus');
+				bus.addEventListener('message', (e) => {
+					const { type, target, tabId } = e.data || {};
+					const myTab = getTabId();
+					if (tabId && myTab && tabId !== myTab) return;
+					if (target !== '*' && target !== 'content') return;
+					if (type === 'DESTROY_HIGHLIGHT') clearAllHighlights();
+				});
+			} catch (_) { }
+
+			function emitToIndex(type, payload) {
+				if (!bus) return;
+				try {
+					bus.postMessage({ type, payload, from: 'content', target: 'index', tabId: getTabId() });
+				} catch (_) { }
+			}
+
+			function getSearchBridge() {
+				try {
+					return window.top && (window.top.__DOC_SEARCH_BRIDGE__ || window.top.__TXT_SEARCH_BRIDGE__);
+				} catch (_) {
+					return null;
+				}
+			}
+
+			function syncScopeUI(scope) {
+				State.searchScope = scope === 'global' ? 'global' : 'txt';
+				const btn = State.scopeBtn;
+				if (!btn) return;
+				const isGlobal = State.searchScope === 'global';
+				btn.textContent = isGlobal ? '搜全站' : '搜本书';
+				btn.classList.toggle('is-global', isGlobal);
+				btn.title = isGlobal
+					? '当前为全站搜索，点击切回搜本书'
+					: '当前为搜本书，点击切换为搜全站';
+			}
+
+			function openMainBookSearch({ forceBook = false } = {}) {
+				const bridge = getSearchBridge();
+				if (forceBook && bridge && typeof bridge.setScope === 'function' && State.searchScope !== 'txt') {
+					bridge.setScope('txt', { rerun: false });
+				}
+				emitToIndex('quick_search', '');
+			}
+
+			function bindSearchHotkeysOnWindow(win) {
+				if (!win) return;
+				try {
+					win.addEventListener('keydown', (e) => {
+						const cmd = (e.ctrlKey || e.metaKey) && !e.altKey;
+						if (cmd && (e.key === 'f' || e.key === 'F' || e.keyCode === 70)) {
+							e.preventDefault();
+							e.stopImmediatePropagation();
+							openMainBookSearch({ forceBook: true });
+							return;
+						}
+						if (e.key === '\\' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+							const active = win.document && win.document.activeElement;
+							const tag = (active && active.tagName || '').toUpperCase();
+							if (tag !== 'INPUT' && tag !== 'TEXTAREA' && tag !== 'SELECT' && !(active && active.isContentEditable)) {
+								e.preventDefault();
+								e.stopImmediatePropagation();
+								openMainBookSearch({ forceBook: false });
+							}
+						}
+					}, true);
+				} catch (_) { }
+			}
+
+			bindSearchHotkeysOnWindow(window);
+
+			function mountMenuScopeButton() {
+				if (State.scopeBtn && document.body.contains(State.scopeBtn)) return;
+				const menuR = document.getElementById('bibi-menu-r');
+				if (!menuR) return;
+
+				const btn = document.createElement('button');
+				btn.id = 'epubSearchScope';
+				btn.type = 'button';
+				btn.textContent = '搜本书';
+				btn.title = '当前为搜本书，点击切换为搜全站';
+
+				['pointerdown', 'pointerup', 'mousedown', 'mouseup', 'touchstart', 'touchend'].forEach((evt) => {
+					btn.addEventListener(evt, (e) => { e.stopPropagation(); });
+				});
+				btn.addEventListener('click', (e) => {
+					e.preventDefault();
+					e.stopPropagation();
+					const bridge = getSearchBridge();
+					const next = State.searchScope === 'txt' ? 'global' : 'txt';
+					syncScopeUI(next);
+					if (bridge && typeof bridge.setScope === 'function') {
+						bridge.setScope(next, { rerun: true });
+					}
+				});
+
+				menuR.insertBefore(btn, menuR.firstChild);
+				State.scopeBtn = btn;
+				syncScopeUI(State.searchScope);
+			}
+
+			// =========================================================================
+			// 2. 章节 DOM 文本提取（跳过 <rt>/<rp> 注音，保留段界 \n 与精确偏移表）
+			// =========================================================================
+			function ensureItemHighlightStyle(doc) {
+				if (!doc || !doc.head) return;
+				if (doc.getElementById('epub-search-hl-style')) return;
+				const st = doc.createElement('style');
+				st.id = 'epub-search-hl-style';
+				st.textContent = ITEM_HL_CSS;
+				doc.head.appendChild(st);
+			}
+
+			function extractItemText(item) {
+				const doc = item && item.contentDocument;
+				const body = doc && doc.body;
+				if (!body) {
+					return { text: '', nodes: [], anchorOffsets: new Map() };
+				}
+
+				const parts = [];
+				const nodes = [];
+				const anchorOffsets = new Map();
+				let offset = 0;
+
+				const pushBreak = () => {
+					if (offset > 0 && parts.length > 0 && !parts[parts.length - 1].endsWith('\n')) {
+						parts.push('\n');
+						offset += 1;
+					}
+				};
+
+				const walk = (node, inPre) => {
+					const nt = node.nodeType;
+					if (nt === Node.TEXT_NODE) {
+						const raw = node.nodeValue;
+						if (!raw || raw.length === 0) return;
+						// 非 <pre> 内的源码换行折为单空格（保持 1:1 UTF-16 长度），避免把同段内词句误截断
+						const str = inPre ? raw : raw.replace(/[\r\n]/g, ' ');
+						const start = offset;
+						parts.push(str);
+						offset += str.length;
+						nodes.push({ node, start, end: offset });
+						return;
+					}
+					if (nt !== Node.ELEMENT_NODE) return;
+
+					const tag = node.tagName ? node.tagName.toUpperCase() : '';
+					if (SKIP_TAGS.has(tag)) return;
+					if (node.id === 'excerpt-pop-btn') return;
+					if (node.classList && node.classList.contains('pinyin-tooltip')) return;
+
+					if (tag === 'BR') {
+						pushBreak();
+						return;
+					}
+
+					const isBlock = BLOCK_TAGS.has(tag);
+					if (isBlock) pushBreak();
+
+					if (node.id && !anchorOffsets.has(node.id)) {
+						anchorOffsets.set(node.id, offset);
+					}
+					if (tag === 'A') {
+						const nm = node.getAttribute('name');
+						if (nm && !anchorOffsets.has(nm)) anchorOffsets.set(nm, offset);
+					}
+					const nextPre = inPre || tag === 'PRE';
+					for (let child = node.firstChild; child; child = child.nextSibling) {
+						walk(child, nextPre);
+					}
+					if (isBlock) pushBreak();
+				};
+
+				walk(body, false);
+				return { text: parts.join(''), nodes, anchorOffsets };
+			}
+
+			function prepareItemForSearch(item) {
+				if (!item || item.IsPlaceholder || !item.contentDocument || !item.contentWindow) return;
+				ensureItemHighlightStyle(item.contentDocument);
+				if (!State.boundItems.has(item)) {
+					State.boundItems.add(item);
+					bindSearchHotkeysOnWindow(item.contentWindow);
+				}
+			}
+
+			// =========================================================================
+			// 3. 构建全文索引与 TOC 最细叶子节点分段
+			// =========================================================================
+			function resolveAnchorOffset(itemData, rawSelector) {
+				if (!itemData || !rawSelector || typeof rawSelector !== 'string') return 0;
+				let id = rawSelector.replace(/^#/, '');
+				if (!id) return 0;
+				if (itemData.anchorOffsets.has(id)) return itemData.anchorOffsets.get(id);
+				try {
+					const dec = decodeURIComponent(id);
+					if (itemData.anchorOffsets.has(dec)) return itemData.anchorOffsets.get(dec);
+					id = dec;
+				} catch (_) { }
+
+				// 兜底：通过 DOM 顺序找该元素后的首个 Text 节点偏移
+				const doc = itemData.item && itemData.item.contentDocument;
+				const el = doc && doc.getElementById(id);
+				if (el && itemData.nodes.length > 0) {
+					for (const n of itemData.nodes) {
+						const rel = el.compareDocumentPosition(n.node);
+						if (rel & (Node.DOCUMENT_POSITION_CONTAINED_BY | Node.DOCUMENT_POSITION_FOLLOWING)) {
+							return n.start;
+						}
+					}
+				}
+				return 0;
+			}
+
+			function buildLeafTocSections() {
+				const totalLen = Math.max(1, State.totalChars);
+				const navWrap = window.I && window.I.Panel && window.I.Panel.BookInfo && window.I.Panel.BookInfo.Navigation;
+				const tocNav = navWrap && (navWrap.querySelector('nav.bibi-nav-toc') || navWrap.querySelector('nav'));
+				const rawEntries = [];
+
+				if (tocNav) {
+					let order = 0;
+					const walkList = (container, depth) => {
+						const lis = container.querySelectorAll(':scope > ol > li, :scope > ul > li');
+						for (const li of lis) {
+							const ownLink = Array.from(li.children).find(el => el.tagName === 'A') || null;
+							const childLists = Array.from(li.children).filter(el => el.tagName === 'OL' || el.tagName === 'UL');
+							const childLinksCount = childLists.reduce((sum, ul) => sum + ul.querySelectorAll('a').length, 0);
+							const isLeaf = childLinksCount === 0;
+
+							if (ownLink && ownLink.Destination && typeof ownLink.Destination.ItemIndex === 'number') {
+								const itemIdx = ownLink.Destination.ItemIndex;
+								const itemData = State.items[itemIdx];
+								const title = (ownLink.textContent || '').replace(/\s+/g, ' ').trim();
+								if (itemData && title) {
+									const localOffset = ownLink.Destination.ElementSelector
+										? resolveAnchorOffset(itemData, ownLink.Destination.ElementSelector)
+										: 0;
+									const globalPos = itemData.globalStart + localOffset;
+									rawEntries.push({
+										title,
+										itemIndex: itemIdx,
+										localOffset,
+										globalPos,
+										isLeaf,
+										depth,
+										order: order++
+									});
+								}
+							}
+
+							for (const childList of childLists) {
+								walkList(li, depth + 1);
+								break;
+							}
+						}
+					};
+					walkList(tocNav, 0);
+
+					// 若导航结构不是标准的 nav > ol/ul > li，兜底扫所有 a
+					if (rawEntries.length === 0) {
+						const allLinks = tocNav.querySelectorAll('a');
+						allLinks.forEach((a, idx) => {
+							if (!a.Destination || typeof a.Destination.ItemIndex !== 'number') return;
+							const itemIdx = a.Destination.ItemIndex;
+							const itemData = State.items[itemIdx];
+							const title = (a.textContent || '').replace(/\s+/g, ' ').trim();
+							if (!itemData || !title) return;
+							const localOffset = a.Destination.ElementSelector
+								? resolveAnchorOffset(itemData, a.Destination.ElementSelector)
+								: 0;
+							const li = a.closest('li');
+							const isLeaf = !li || li.querySelectorAll('li a').length === 0;
+							rawEntries.push({
+								title,
+								itemIndex: itemIdx,
+								localOffset,
+								globalPos: itemData.globalStart + localOffset,
+								isLeaf,
+								depth: 0,
+								order: idx
+							});
+						});
+					}
+				}
+
+				if (rawEntries.length > 0) {
+					// 同一起点时，最深 / 叶子节点覆盖父节点
+					rawEntries.sort((a, b) =>
+						(a.globalPos - b.globalPos)
+						|| (Number(a.isLeaf) - Number(b.isLeaf))
+						|| (a.depth - b.depth)
+						|| (a.order - b.order)
+					);
+					const dedup = [];
+					for (const ent of rawEntries) {
+						if (dedup.length > 0 && Math.abs(ent.globalPos - dedup[dedup.length - 1].globalPos) <= 2) {
+							dedup[dedup.length - 1] = ent;
+						} else {
+							dedup.push(ent);
+						}
+					}
+
+					const sections = [];
+					if (dedup[0].globalPos > 60) {
+						sections.push({
+							index: 0,
+							title: '封面 / 开头',
+							startGlobal: 0,
+							endGlobal: dedup[0].globalPos,
+							percent: '0.0%'
+						});
+					}
+					for (let i = 0; i < dedup.length; i++) {
+						const startGlobal = dedup[i].globalPos;
+						const endGlobal = i + 1 < dedup.length ? dedup[i + 1].globalPos : State.totalChars;
+						sections.push({
+							index: sections.length,
+							title: dedup[i].title,
+							startGlobal,
+							endGlobal,
+							percent: ((startGlobal / totalLen) * 100).toFixed(1) + '%'
+						});
+					}
+					State.sections = sections;
+					State.groupUnit = '节';
+					return;
+				}
+
+				// 无目录大纲兜底：按章节 item 或超长单章切段
+				const sections = [];
+				const nonEmptyItems = State.items.filter(it => it && it.text.trim().length > 0);
+				if (nonEmptyItems.length <= 2 && State.totalChars > 36000) {
+					const SEG_SIZE = 18000;
+					let segNo = 1;
+					for (const it of nonEmptyItems) {
+						let pos = 0;
+						while (pos < it.text.length) {
+							let next = Math.min(it.text.length, pos + SEG_SIZE);
+							if (next < it.text.length) {
+								const nl = it.text.indexOf('\n', next);
+								if (nl !== -1 && nl - next < 2000) next = nl + 1;
+							}
+							const startGlobal = it.globalStart + pos;
+							const pct = ((startGlobal / totalLen) * 100).toFixed(1) + '%';
+							sections.push({
+								index: sections.length,
+								title: `第 ${segNo} 段`,
+								startGlobal,
+								endGlobal: it.globalStart + next,
+								percent: pct
+							});
+							pos = next;
+							segNo++;
+						}
+					}
+					State.sections = sections;
+					State.groupUnit = '段';
+					return;
+				}
+
+				for (const it of State.items) {
+					if (!it) continue;
+					let title = '';
+					const doc = it.item && it.item.contentDocument;
+					if (doc && doc.body) {
+						const h = doc.body.querySelector('h1, h2, h3, h4');
+						if (h) title = (h.textContent || '').replace(/\s+/g, ' ').trim();
+					}
+					if (!title) title = `第 ${it.itemIndex + 1} 节`;
+					if (title.length > 44) title = title.slice(0, 44) + '…';
+					sections.push({
+						index: sections.length,
+						title,
+						startGlobal: it.globalStart,
+						endGlobal: it.globalEnd,
+						percent: ((it.globalStart / totalLen) * 100).toFixed(1) + '%'
+					});
+				}
+				State.sections = sections;
+				State.groupUnit = '节';
+			}
+
+			function getSectionAtGlobalOffset(globalOffset) {
+				const secs = State.sections;
+				if (!secs || secs.length === 0) {
+					return { index: 0, title: '正文', startGlobal: 0, endGlobal: State.totalChars, percent: '0.0%' };
+				}
+				let lo = 0, hi = secs.length - 1, ans = secs[0];
+				while (lo <= hi) {
+					const mid = (lo + hi) >> 1;
+					if (secs[mid].startGlobal <= globalOffset) { ans = secs[mid]; lo = mid + 1; }
+					else hi = mid - 1;
+				}
+				return ans;
+			}
+
+			function buildBookIndex() {
+				const rawItems = (window.R && Array.isArray(window.R.Items)) ? window.R.Items : [];
+				State.items = new Array(rawItems.length);
+				let cursor = 0;
+
+				for (let i = 0; i < rawItems.length; i++) {
+					const item = rawItems[i];
+					prepareItemForSearch(item);
+					const extracted = (!item || item.IsPlaceholder || !item.contentDocument)
+						? { text: '', nodes: [], anchorOffsets: new Map() }
+						: extractItemText(item);
+					const start = cursor;
+					cursor += extracted.text.length;
+					State.items[i] = {
+						itemIndex: i,
+						item,
+						text: extracted.text,
+						nodes: extracted.nodes,
+						anchorOffsets: extracted.anchorOffsets,
+						globalStart: start,
+						globalEnd: cursor
+					};
+				}
+				State.totalChars = cursor;
+				buildLeafTocSections();
+			}
+
+			// =========================================================================
+			// 4. 章节 iframe 内 CSS Custom Highlight 绘制与清理
+			// =========================================================================
+			function clearItemHighlights(itemIndex) {
+				const itemData = State.items[itemIndex];
+				const win = itemData && itemData.item && itemData.item.contentWindow;
+				if (!win || !win.CSS || !win.CSS.highlights) return;
+				for (let slot = 0; slot < TIER_SIZE * 3; slot++) {
+					win.CSS.highlights.delete(hlNameBySlot(slot));
+				}
+				win.CSS.highlights.delete('epub-active-hit');
+			}
+
+			function clearAllHighlights() {
+				for (const idx of State.highlightedItemIndices) {
+					clearItemHighlights(idx);
+				}
+				State.highlightedItemIndices.clear();
+				if (State.activeHit) {
+					clearItemHighlights(State.activeHit.itemIndex);
+					State.activeHit = null;
+				}
+			}
+
+			function mapSpanToItemRanges(itemData, matchStart, matchEnd) {
+				const ranges = [];
+				const nodes = itemData && itemData.nodes;
+				const doc = itemData && itemData.item && itemData.item.contentDocument;
+				if (!doc || !Array.isArray(nodes) || nodes.length === 0) return ranges;
+
+				let lo = 0, hi = nodes.length - 1, idx = nodes.length;
+				while (lo <= hi) {
+					const mid = (lo + hi) >> 1;
+					if (nodes[mid].end > matchStart) { idx = mid; hi = mid - 1; }
+					else lo = mid + 1;
+				}
+
+				for (let i = idx; i < nodes.length; i++) {
+					const entry = nodes[i];
+					if (entry.start >= matchEnd) break;
+					const node = entry.node;
+					if (!node || !node.isConnected) continue;
+					const from = Math.max(0, matchStart - entry.start);
+					const to = Math.min(node.length, matchEnd - entry.start);
+					if (to > from) {
+						try {
+							const r = doc.createRange();
+							r.setStart(node, from);
+							r.setEnd(node, to);
+							ranges.push(r);
+						} catch (_) { }
+					}
+				}
+				return ranges;
+			}
+
+			function paintItemHighlights(itemIndex) {
+				const last = State.lastSearch;
+				if (!last) return;
+				const itemData = State.items[itemIndex];
+				const item = itemData && itemData.item;
+				const win = item && item.contentWindow;
+				const doc = item && item.contentDocument;
+				if (!win || !doc || !win.CSS || !win.CSS.highlights || typeof win.Highlight === 'undefined') return;
+
+				ensureItemHighlightStyle(doc);
+				clearItemHighlights(itemIndex);
+
+				const itemHits = last.itemHitsMap.get(itemIndex);
+				if (!itemHits || itemHits.length === 0) return;
+
+				const pools = new Array(TIER_SIZE * 3).fill(null);
+				const MAX_RANGES_PER_ITEM = 1000;
+				let count = 0;
+
+				for (const hit of itemHits) {
+					if (count >= MAX_RANGES_PER_ITEM) break;
+					const slot = hlSlot(hit.noise);
+					if (!pools[slot]) {
+						const h = new win.Highlight();
+						const tier = Math.floor(slot / TIER_SIZE);
+						const bucket = slot % TIER_SIZE;
+						h.priority = tier === 0 ? (100 - bucket * 10) : (tier === 1 ? (40 - bucket * 5) : (20 - bucket * 3));
+						pools[slot] = h;
+					}
+					const ranges = mapSpanToItemRanges(itemData, hit.localStart, hit.localEnd);
+					for (const r of ranges) {
+						pools[slot].add(r);
+						count++;
+					}
+				}
+
+				for (let slot = 0; slot < pools.length; slot++) {
+					if (pools[slot] && pools[slot].size > 0) {
+						win.CSS.highlights.set(hlNameBySlot(slot), pools[slot]);
+					}
+				}
+
+				if (State.activeHit && State.activeHit.itemIndex === itemIndex) {
+					const activeRanges = mapSpanToItemRanges(itemData, State.activeHit.localStart, State.activeHit.localEnd);
+					if (activeRanges.length > 0) {
+						const ah = new win.Highlight();
+						ah.priority = 200;
+						for (const r of activeRanges) ah.add(r);
+						win.CSS.highlights.set('epub-active-hit', ah);
+					}
+				}
+				State.highlightedItemIndices.add(itemIndex);
+			}
+
+			// =========================================================================
+			// 5. Wasm 宽容 + 近义搜索与预览片段生成
+			// =========================================================================
+			async function waitForSharedWasm(timeoutMs = 5000) {
+				const start = Date.now();
+				while (Date.now() - start < timeoutMs) {
+					const sw = window.top && window.top.sharedWasm;
+					if (sw && sw.ready && typeof sw.find_content_matches_multi === 'function') return sw;
+					if (sw && sw.failed) return null;
+					await new Promise(r => setTimeout(r, 40));
+				}
+				return null;
+			}
+
+			function adaptKeywordsForWasm(specs, weighted) {
+				if (!Array.isArray(specs)) return [];
+				if (weighted) return specs;
+				return specs.map(s => (typeof s === 'string' ? s : s.text)).filter(Boolean);
+			}
+
+			function u16ToCodePointIdx(str, u16Idx) {
+				const clamped = Math.max(0, Math.min(str.length, u16Idx));
+				let cp = 0;
+				for (let i = 0; i < clamped; i++) {
+					const c = str.charCodeAt(i);
+					if (c >= 0xD800 && c <= 0xDBFF && i + 1 < clamped) {
+						const n = str.charCodeAt(i + 1);
+						if (n >= 0xDC00 && n <= 0xDFFF) i++;
+					}
+					cp++;
+				}
+				return cp;
+			}
+
+			function buildCompactPreview(itemText, localStart, localEnd, noise) {
+				const BEFORE = 10, AFTER = 18;
+				let s = Math.max(0, localStart - BEFORE);
+				let e = Math.min(itemText.length, localEnd + AFTER);
+				const prevNl = itemText.lastIndexOf('\n', localStart - 1);
+				if (prevNl >= s) s = prevNl + 1;
+				const nextNl = itemText.indexOf('\n', localEnd);
+				if (nextNl !== -1 && nextNl < e) e = nextNl;
+
+				const pre = s > 0 && itemText[s - 1] !== '\n' ? '…' : '';
+				const suf = e < itemText.length && itemText[e] !== '\n' ? '…' : '';
+				const cleanSlice = itemText.slice(s, e).replace(/[\t\r\n]/g, ' ');
+				const preview = pre + cleanSlice + suf;
+				const shift = pre.length;
+				const hs = u16ToCodePointIdx(preview, shift + (localStart - s));
+				const he = u16ToCodePointIdx(preview, shift + (localEnd - s));
+				return { preview, highlights: [[hs, he, noise]] };
+			}
+
+			function buildSnippetItem(hit, radius = 64, extraHits = null) {
+				const itemData = State.items[hit.itemIndex];
+				if (!itemData || !itemData.text) return null;
+				const text = itemData.text;
+				let s = Math.max(0, hit.localStart - radius);
+				let e = Math.min(text.length, hit.localEnd + radius);
+				if (s > 0) {
+					const nl = text.lastIndexOf('\n', hit.localStart - 1);
+					if (nl !== -1 && hit.localStart - nl <= radius) s = nl + 1;
+				}
+				if (e < text.length) {
+					const nl = text.indexOf('\n', hit.localEnd);
+					if (nl !== -1 && nl - hit.localEnd <= radius) e = nl;
+				}
+				const pre = s > 0 && text[s - 1] !== '\n' ? '…' : '';
+				const suf = e < text.length && text[e] !== '\n' ? '…' : '';
+				const body = text.slice(s, e).replace(/[\t\r]/g, ' ');
+				const t = pre + body + suf;
+				const shift = pre.length;
+
+				const h = [];
+				const candidates = extraHits || [hit];
+				for (const item of candidates) {
+					if (item.itemIndex !== hit.itemIndex) continue;
+					if (item.localEnd <= s || item.localStart >= e) continue;
+					const rs = Math.max(s, item.localStart) - s + shift;
+					const re = Math.min(e, item.localEnd) - s + shift;
+					if (re > rs) h.push([rs, re, item.noise]);
+				}
+				return { t, h };
+			}
+
+			async function runEpubSearch({ keyword, specs, noise, token, reportStatus }) {
+				State.activeSearchToken = token;
+				clearAllHighlights();
+
+				if (!keyword || !Array.isArray(specs) || specs.length === 0) {
+					State.lastSearch = null;
+					return { totalHits: 0, shownHits: 0, truncated: false, groups: [], groupUnit: State.groupUnit };
+				}
+
+				if (State.totalChars === 0) {
+					State.lastSearch = null;
+					return {
+						keyword,
+						totalHits: 0,
+						shownHits: 0,
+						truncated: false,
+						groups: [],
+						groupUnit: State.groupUnit,
+						statusMsg: '该 EPUB 无可检索文本（可能为纯图版）'
+					};
+				}
+
+				const sw = await waitForSharedWasm();
+				if (token !== State.activeSearchToken) return null;
+				if (!sw) throw new Error('Wasm 搜索引擎未就绪');
+
+				if (typeof reportStatus === 'function') reportStatus('搜索中...');
+				const wasmKeywords = adaptKeywordsForWasm(specs, !!sw.weightedKeywords);
+				const MAX_RECORDED_HITS = 1500;
+				const totalLen = Math.max(1, State.totalChars);
+
+				const hits = [];
+				const groupMap = new Map();
+				const itemHitsMap = new Map();
+				let totalHits = 0;
+
+				let sliceStart = performance.now();
+				for (let i = 0; i < State.items.length; i++) {
+					if (token !== State.activeSearchToken) return null;
+					const itemData = State.items[i];
+					if (!itemData || !itemData.text) continue;
+
+					const res = sw.find_content_matches_multi(itemData.text, wasmKeywords, noise);
+					const arr = res && res.matches;
+					const cnt = arr ? Math.floor(arr.length / 3) : 0;
+
+					if (cnt > 0) {
+						const iHits = [];
+						for (let k = 0; k < arr.length; k += 3) {
+							const localStart = arr[k];
+							const localEnd = arr[k + 1];
+							const packedNoise = arr[k + 2];
+							totalHits++;
+
+							iHits.push({ localStart, localEnd, noise: packedNoise });
+
+							if (hits.length < MAX_RECORDED_HITS) {
+								const globalStart = itemData.globalStart + localStart;
+								const sec = getSectionAtGlobalOffset(globalStart);
+								const pct = ((globalStart / totalLen) * 100).toFixed(1) + '%';
+								const compact = buildCompactPreview(itemData.text, localStart, localEnd, packedNoise);
+								const hitObj = {
+									hitIndex: hits.length,
+									itemIndex: i,
+									sectionIdx: sec.index,
+									localStart,
+									localEnd,
+									globalStart,
+									noise: packedNoise,
+									percent: pct,
+									preview: compact.preview,
+									highlights: compact.highlights
+								};
+								hits.push(hitObj);
+
+								let g = groupMap.get(sec.index);
+								if (!g) {
+									g = {
+										type: 'txt-group',
+										path: `txt-group:${sec.index}`,
+										groupIndex: sec.index,
+										title: sec.title,
+										percent: sec.percent,
+										count: 0,
+										hits: []
+									};
+									groupMap.set(sec.index, g);
+								}
+								g.count++;
+								g.hits.push(hitObj);
+							}
+						}
+						itemHitsMap.set(i, iHits);
+					}
+
+					if (performance.now() - sliceStart >= 10) {
+						await new Promise(r => setTimeout(r, 0));
+						sliceStart = performance.now();
+					}
+				}
+
+				if (token !== State.activeSearchToken) return null;
+
+				const groups = Array.from(groupMap.values()).sort((a, b) => a.groupIndex - b.groupIndex);
+				State.lastSearch = { keyword, wasmKeywords, noise, hits, groups, groupMap, itemHitsMap };
+
+				for (const itemIdx of itemHitsMap.keys()) {
+					paintItemHighlights(itemIdx);
+				}
+
+				return {
+					keyword,
+					totalHits,
+					shownHits: hits.length,
+					truncated: totalHits > hits.length,
+					groups,
+					groupUnit: State.groupUnit
+				};
+			}
+
+			function getEpubSnippets(path) {
+				const last = State.lastSearch;
+				if (!last || typeof path !== 'string') return null;
+
+				if (path.startsWith('txt-group:')) {
+					const gIdx = Number(path.slice('txt-group:'.length));
+					const g = last.groupMap.get(gIdx);
+					if (!g) return null;
+					const MAX_ITEMS = 40;
+					const items = [];
+					for (const h of g.hits.slice(0, MAX_ITEMS)) {
+						const it = buildSnippetItem(h, 58, g.hits);
+						if (it) items.push(it);
+					}
+					return {
+						body: { hits: g.count, more: Math.max(0, g.hits.length - MAX_ITEMS), items },
+						comments: { hits: 0, docs: 0, more: 0, items: [] }
+					};
+				}
+
+				if (path.startsWith('txt-hit:')) {
+					const hIdx = Number(path.slice('txt-hit:'.length));
+					const h = last.hits[hIdx];
+					if (!h) return null;
+					const g = last.groupMap.get(h.sectionIdx);
+					const it = buildSnippetItem(h, 150, g ? g.hits : [h]);
+					return {
+						body: { hits: 1, more: 0, items: it ? [it] : [] },
+						comments: { hits: 0, docs: 0, more: 0, items: [] }
+					};
+				}
+				return null;
+			}
+
+			// =========================================================================
+			// 6. 跨视图 / 跨书写方向精确瞬时切页与脉冲反馈
+			// =========================================================================
+			function toOuterViewportRect(item, localRect) {
+				const ir = item.getBoundingClientRect();
+				const cs = getComputedStyle(item);
+				const padL = parseFloat(cs.paddingLeft) || 0;
+				const padT = parseFloat(cs.paddingTop) || 0;
+				const bdL = parseFloat(cs.borderLeftWidth) || 0;
+				const bdT = parseFloat(cs.borderTopWidth) || 0;
+				const scaleX = ir.width / (item.offsetWidth || ir.width) || 1;
+				const scaleY = ir.height / (item.offsetHeight || ir.height) || 1;
+				const left = ir.left + (bdL + padL + localRect.left) * scaleX;
+				const top = ir.top + (bdT + padT + localRect.top) * scaleY;
+				const width = localRect.width * scaleX;
+				const height = localRect.height * scaleY;
+				return { left, top, width, height, right: left + width, bottom: top + height };
+			}
+
+			function findNearestPageForOuterRect(item, outerRect) {
+				const pages = item && item.Pages;
+				if (!Array.isArray(pages) || pages.length === 0) return null;
+				if (pages.length === 1) return pages[0];
+
+				const cx = outerRect.left + outerRect.width / 2;
+				const cy = outerRect.top + outerRect.height / 2;
+				let bestPage = pages[0];
+				let bestDist = Infinity;
+
+				for (const page of pages) {
+					const pr = page.getBoundingClientRect();
+					if (cx >= pr.left && cx <= pr.right && cy >= pr.top && cy <= pr.bottom) {
+						return page;
+					}
+					const dx = cx < pr.left ? (pr.left - cx) : (cx > pr.right ? cx - pr.right : 0);
+					const dy = cy < pr.top ? (pr.top - cy) : (cy > pr.bottom ? cy - pr.bottom : 0);
+					const d2 = dx * dx + dy * dy;
+					if (d2 < bestDist) {
+						bestDist = d2;
+						bestPage = page;
+					}
+				}
+				return bestPage;
+			}
+
+			function flashPulseAtOuterRect(rect) {
+				if (!rect || (rect.width === 0 && rect.height === 0)) return;
+				const el = document.createElement('div');
+				el.className = 'epub-hit-pulse';
+				el.style.left = (rect.left - 4) + 'px';
+				el.style.top = (rect.top - 3) + 'px';
+				el.style.width = Math.max(18, rect.width + 8) + 'px';
+				el.style.height = Math.max(18, rect.height + 6) + 'px';
+				document.body.appendChild(el);
+				setTimeout(() => el.remove(), 1100);
+			}
+
+			async function jumpToEpubHit(hitIndex) {
+				const last = State.lastSearch;
+				if (!last) return;
+				const hit = last.hits[hitIndex];
+				if (!hit) return;
+
+				const prevHit = State.activeHit;
+				State.activeHit = hit;
+
+				const itemData = State.items[hit.itemIndex];
+				const item = itemData && itemData.item;
+				if (!item) return;
+
+				if (prevHit && prevHit.itemIndex !== hit.itemIndex) {
+					paintItemHighlights(prevHit.itemIndex);
+				}
+
+				// 若为 pre-paginated 占位章节，先拉起加载
+				if (item.IsPlaceholder && window.I && window.I.PageObserver) {
+					try { await window.I.PageObserver.turnItem(item, { Up: true }); } catch (_) { }
+					prepareItemForSearch(item);
+				}
+
+				const ranges = mapSpanToItemRanges(itemData, hit.localStart, hit.localEnd);
+				paintItemHighlights(hit.itemIndex);
+
+				// 中断正在进行的滚动动画，保证瞬时切页不被 R.Moving 拦截
+				try {
+					if (window.I && window.I.ScrollObserver) window.I.ScrollObserver.forceStopScrolling();
+					if (window.R) window.R.Moving = false;
+				} catch (_) { }
+
+				const primaryRange = ranges[0] || null;
+				const localRect = primaryRange ? primaryRange.getBoundingClientRect() : null;
+				let targetPage = (item.Pages && item.Pages[0]) || null;
+
+				if (localRect && (localRect.width > 0 || localRect.height > 0)) {
+					const outerBefore = toOuterViewportRect(item, localRect);
+					const matched = findNearestPageForOuterRect(item, outerBefore);
+					if (matched) targetPage = matched;
+				}
+
+				const rvm = window.S && window.S.RVM;
+				if (window.R && targetPage) {
+					try {
+						await window.R.focusOn({ Destination: { Page: targetPage }, Duration: 0 });
+						if (window.I && window.I.History) {
+							window.I.History.add({ UI: window.Bibi, SumUp: false, Destination: { Page: targetPage } });
+						}
+					} catch (_) { }
+				}
+
+				// 连续滚动模式（horizontal / vertical）下把命中微调居中到 R.Main
+				if (rvm !== 'paged' && primaryRange && window.R && window.R.Main) {
+					const afterLocal = primaryRange.getBoundingClientRect();
+					if (afterLocal && (afterLocal.width > 0 || afterLocal.height > 0)) {
+						const outerNow = toOuterViewportRect(item, afterLocal);
+						const main = window.R.Main;
+						const mr = main.getBoundingClientRect();
+						if (rvm === 'horizontal') {
+							const targetX = main.scrollLeft + (outerNow.left - mr.left) - (mr.width - outerNow.width) / 2;
+							main.scrollLeft = Math.max(0, targetX);
+						} else if (rvm === 'vertical') {
+							const targetY = main.scrollTop + (outerNow.top - mr.top) - (mr.height - outerNow.height) / 2;
+							main.scrollTop = Math.max(0, targetY);
+						}
+					}
+				}
+
+				if (primaryRange) {
+					requestAnimationFrame(() => {
+						const rNow = primaryRange.getBoundingClientRect();
+						if (rNow && (rNow.width > 0 || rNow.height > 0)) {
+							flashPulseAtOuterRect(toOuterViewportRect(item, rNow));
+						}
+					});
+				}
+			}
+
+			// =========================================================================
+			// 7. 绑定 Bibi 生命周期与主站桥接
+			// =========================================================================
+			function onBookOpened() {
+				if (State.opened) return;
+				State.opened = true;
+				mountMenuScopeButton();
+				buildBookIndex();
+
+				State.title = (window.B && window.B.Title) || document.title || 'EPUB';
+
+				const bridge = getSearchBridge();
+				if (bridge) {
+					if (!State.provider) {
+						State.provider = {
+							kind: 'epub',
+							title: State.title,
+							runSearch: runEpubSearch,
+							getSnippets: getEpubSnippets,
+							jumpTo: jumpToEpubHit,
+							clearHighlights: clearAllHighlights,
+							onScopeChange: syncScopeUI
+						};
+						bridge.register(State.provider);
+					} else {
+						State.provider.title = State.title;
+					}
+				}
+			}
+
+			function cleanupOnUnload() {
+				clearAllHighlights();
+				const bridge = getSearchBridge();
+				if (bridge && State.provider) bridge.unregister(State.provider);
+				try {
+					if (window.top) window.top.__bibi_lightbox_on = false;
+				} catch (_) { }
+				if (bus) {
+					try { bus.close(); } catch (_) { }
+					bus = null;
+				}
+			}
+
+			window.addEventListener('pagehide', (e) => {
+				if (!e.persisted) cleanupOnUnload();
+			});
+
+			function initEpubSearchBridge() {
+				// 直接监听 document 上的原生 CustomEvent，避免抢跑于 Bibi 的 E.initialize() 之前
+				document.addEventListener('bibi:created-menu', mountMenuScopeButton);
+				document.addEventListener('bibi:postprocessed-item', (ev) => {
+					prepareItemForSearch(ev && ev.detail);
+				});
+				document.addEventListener('bibi:loaded-item', (ev) => {
+					const item = ev && ev.detail;
+					prepareItemForSearch(item);
+					if (State.opened && item && typeof item.Index === 'number' && State.items[item.Index]) {
+						const prev = State.items[item.Index];
+						if (!prev.text && !item.IsPlaceholder) {
+							const extracted = extractItemText(item);
+							prev.text = extracted.text;
+							prev.nodes = extracted.nodes;
+							prev.anchorOffsets = extracted.anchorOffsets;
+						}
+						if (State.lastSearch) paintItemHighlights(item.Index);
+					}
+				});
+				document.addEventListener('bibi:opened', onBookOpened);
+
+				if (document.getElementById('bibi-menu-r')) mountMenuScopeButton();
+				if (window.L && window.L.Opened) onBookOpened();
+			}
+
+			initEpubSearchBridge();
+		</script>
 	</body>
 </html>

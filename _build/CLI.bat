@@ -108,6 +108,7 @@ if not "!input_arg:://=!"=="!input_arg!" (
     if "!action!"=="6" goto run_gen
     if "!action!"=="7" goto case_jump_txn_file_line
     if "!action!"=="8" goto case_go
+    if "!action!"=="9" goto case_overwrite_md
     goto end
 )
 
@@ -230,6 +231,25 @@ set "target_file=%B%html\!title!.html"
 powershell -NoProfile -nologo -command "Add-Type -AssemblyName System.Windows.Forms; $txt = [System.Windows.Forms.Clipboard]::GetText(); if($txt.Length -gt 0) { [IO.File]::WriteAllText('!target_file!', $txt, [Text.Encoding]::UTF8); [System.Windows.Forms.Clipboard]::Clear(); }" >nul 2>&1
 
 goto run_gen
+
+
+:: =====================================================
+:: [9] URL动作：Clipboard Overwrite MD（剪贴板覆写指定 Markdown 文件）
+:: =====================================================
+:case_overwrite_md
+set "md_rel=!params!"
+if "!md_rel:~0,1!"=="/" set "md_rel=!md_rel:~1!"
+if "!md_rel:~-1!"=="/" set "md_rel=!md_rel:~0,-1!"
+if not defined md_rel goto end
+if /i not "!md_rel:~-3!"==".md" goto end
+if not "!md_rel:..=!"=="!md_rel!" goto end
+if not "!md_rel::=!"=="!md_rel!" goto end
+set "md_rel=!md_rel:/=\!"
+set "target_md=%B%!md_rel!"
+
+powershell -NoProfile -nologo -command "Add-Type -AssemblyName System.Windows.Forms; $txt = [System.Windows.Forms.Clipboard]::GetText(); if($txt.Length -gt 0) { $enc = New-Object System.Text.UTF8Encoding($false); $tmp = '!target_md!.tmp'; [IO.File]::WriteAllText($tmp, $txt, $enc); Move-Item -LiteralPath $tmp -Destination '!target_md!' -Force; [System.Windows.Forms.Clipboard]::Clear(); }" >nul 2>&1
+
+goto end
 
 
 :: =====================================================

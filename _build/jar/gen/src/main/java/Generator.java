@@ -82,7 +82,8 @@ public class Generator {
                 "  const data_repo_id = \"" + Config.props.getProperty("data-repo-id") + "\";\n" +
                 "  const data_category_id = \"" + Config.props.getProperty("data-category-id") + "\";\n" +
                 "  const update_interval = " + Config.props.getProperty("update_interval") + ";\n" +
-                "  const update_interval_local = " + Config.props.getProperty("update_interval_local") + ";\n</script>";
+                "  const update_interval_local = " + Config.props.getProperty("update_interval_local") + ";\n" +
+                "  const readme_md = \"" + normalizeWebPath(Config.props.getProperty("readme_md", "/README.md")) + "\";\n</script>";
 
         String html = new String(Files.readAllBytes(Config.indexHtml), StandardCharsets.UTF_8);
         String beginTag = "<" + "!-- PARAM-BEGIN --" + ">";
@@ -435,12 +436,26 @@ public class Generator {
                     if (webPath.isEmpty()) continue;
                     Path physicalFile = findPhysicalFile(projectRoot, webPath);
                     String hash = calculateFingerprint(physicalFile);
-                    if (webPath.equals("/") || webPath.endsWith(".html") || webPath.endsWith(".css") || webPath.endsWith(".json")) {
+                    if (webPath.equals("/") || webPath.endsWith(".html") || webPath.endsWith(".css") || webPath.endsWith(".json") || webPath.endsWith(".md")) {
                         try {
                             coreBundle.put(webPath, new String(Files.readAllBytes(physicalFile), StandardCharsets.UTF_8));
                             swManifest.put(webPath, new FileMeta(hash, Config.FILE_CORE_BUNDLE));
                         } catch (IOException e) { swManifest.put(webPath, new FileMeta(hash, "standalone")); }
                     } else swManifest.put(webPath, new FileMeta(hash, "standalone"));
+                }
+            }
+
+            String readmeMdPath = normalizeWebPath(Config.props.getProperty("readme_md", ""));
+            if (!readmeMdPath.isEmpty() && !swManifest.containsKey(readmeMdPath)) {
+                Path mdFile = findPhysicalFile(projectRoot, readmeMdPath);
+                if (Files.exists(mdFile)) {
+                    String hash = calculateFingerprint(mdFile);
+                    try {
+                        coreBundle.put(readmeMdPath, new String(Files.readAllBytes(mdFile), StandardCharsets.UTF_8));
+                        swManifest.put(readmeMdPath, new FileMeta(hash, Config.FILE_CORE_BUNDLE));
+                    } catch (IOException e) {
+                        swManifest.put(readmeMdPath, new FileMeta(hash, "standalone"));
+                    }
                 }
             }
 
@@ -506,6 +521,13 @@ public class Generator {
             return buildVersion;
 
         } catch (IOException e) { logger.error("生成清单失败", e); return null; }
+    }
+
+    private static String normalizeWebPath(String p) {
+        if (p == null) return "";
+        String s = p.trim().replace("\\", "/");
+        if (s.isEmpty()) return "";
+        return s.startsWith("/") ? s : "/" + s;
     }
 
     private static Path projectRootPath() { return Paths.get("..").toAbsolutePath().normalize(); }

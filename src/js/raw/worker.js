@@ -93,18 +93,19 @@ function compareCommentHits(a, b) {
         || (a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
 }
 
-function expandTermSpecs(rawText, useSyn) {
+function expandTermSpecs(rawText, useSyn, opts = {}) {
     const str = toHalfwidth(String(rawText || ""));
     const clean = str.replace(/\s+/g, "");
     if (!clean) return [];
     const specs = [{ text: clean, weight: 100, tier: 0 }];
     if (useSyn && synReady && synMod && typeof synMod.expandQuery === 'function') {
-        const existsInCorpus = (dataReady && typeof bloom_might_match === 'function')
+        const skipBloom = !!(opts && opts.skipCorpusFilter);
+        const existsInCorpus = (!skipBloom && dataReady && typeof bloom_might_match === 'function')
             ? (w) => !!bloom_might_match(w)
             : null;
         const res = synMod.expandQuery(str, {
             existsInCorpus,
-            cacheTag: (dataReady ? dataGen : 0) + ':' + commentGen
+            cacheTag: skipBloom ? 'raw' : ((dataReady ? dataGen : 0) + ':' + commentGen)
         });
         if (Array.isArray(res.items) && res.items.length > 0) {
             for (let i = 0; i < res.items.length; i++) specs.push(res.items[i]);
@@ -308,10 +309,9 @@ function fingerprintFlat(raw, isOffline) {
     return (h1 >>> 0).toString(16) + (h2 >>> 0).toString(16) + '.' + raw.length;
 }
 
-async function scanAll(token, prepare, scan, getGen) {
-    const readGen = typeof getGen === 'function' ? getGen : () => dataGen;
+async function scanAll(token, prepare, scan) {
     for (; ;) {
-        const gen = readGen();
+        const gen = dataGen;
         if (token !== latestToken) return null;
         if (typeof prepare === 'function' && !prepare()) {
             return [];
@@ -322,7 +322,7 @@ async function scanAll(token, prepare, scan, getGen) {
 
         for (let from = 0; from < total;) {
             if (token !== latestToken) return null;
-            if (gen !== readGen()) {
+            if (gen !== dataGen) {
                 restart = true;
                 break;
             }
@@ -339,7 +339,7 @@ async function scanAll(token, prepare, scan, getGen) {
 
             if (from < total) await yieldToQueue();
         }
-        if (restart || gen !== readGen()) continue;
+        if (restart || gen !== dataGen) continue;
         if (token !== latestToken) return null;
 
         results.sort(compareResults);
@@ -468,8 +468,7 @@ async function runAdsSearch(payload) {
         usePrepared ? () => !!prepare_ads_search(wasmPlan) : null,
         usePrepared
             ? (from, to) => scan_prepared_ads_range(from, to)
-            : (from, to) => search_ads_range(wasmPlan, from, to),
-        () => dataGen + ':' + commentGen
+            : (from, to) => search_ads_range(wasmPlan, from, to)
     );
     if (results === null) return;
 
@@ -648,7 +647,8 @@ function processMessage(data) {
             const results = items.map(it => ({
                 text: it && typeof it.text === 'string' ? it.text : '',
                 like: !!(it && it.like),
-                specs: expandTermSpecs(it && it.text, !!(it && it.like))
+                skipCorpusFilter: !!(it && it.skipCorpusFilter),
+                specs: expandTermSpecs(it && it.text, !!(it && it.like), { skipCorpusFilter: !!(it && it.skipCorpusFilter) })
             }));
             self.postMessage({
                 type: 'EXPAND_RESULT',

@@ -449,3 +449,85 @@ export const videoLogic = function () {
         }
     };
 };
+
+
+export function generateDoc(type, payload) {
+    const commonStyles = `@charset "UTF-8";@import url("../src/css/font.css");html,body,pre,textarea{font-family:'Noto Serif SC'}html{background-color:#000;touch-action:none;}body{margin:0;display:flex;justify-content:center;align-items:center;height:100vh;position:relative;overflow:hidden;touch-action:none;}.span-container{position:absolute;bottom:10px;right:10px;background:plum;z-index:999}.span-container span{margin-bottom:5px;padding:0 10px;cursor:pointer}.hide{opacity:.2!important}#f{display:none}`;
+
+    const baseTag = `<base href="${window.location.href}">`;
+    const viewportMeta = `<meta name="viewport" content="width=1024, viewport-fit=cover" />`;
+    let htmlStr = '';
+
+    if (type === 'image') {
+        const { imageUrl } = payload;
+        const jsUrl = JSON.stringify(imageUrl);
+
+        htmlStr = `<!DOCTYPE html><html><head><meta charset="utf-8"/>${baseTag}${viewportMeta}<style>${commonStyles} img{z-index:1;max-height:100vh;max-width:100vw;visibility:hidden}#loader{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:9999}.bar-spinner{width:40px;height:40px;position:relative;animation:spin 1s linear infinite}.bar{width:4px;height:20px;background:pink;border-radius:2px;position:absolute;top:10px;left:18px;transform-origin:center bottom}@keyframes spin{0%{transform:rotate(0deg)}100%{transform:rotate(360deg)}}</style></head><body>
+        <div id="loader"><div class="bar-spinner"><div class="bar"></div></div></div>
+        <img id="img">
+        <div class="span-container"><span id="addbg">As Wallpaper</span><span id="fs" title="全屏(或按鼠标中键)">[F]</span><span id="c"></span><span id="p">prev</span><span id="i"></span><span id="n">next</span><span id="f"></span></div>
+        <script>
+            (function() {
+                var _img = document.getElementById('img');
+                var _loader = document.getElementById('loader');
+                if (_img) {
+                    _img.onload = function() {
+                        if(_loader) _loader.style.display = 'none';
+                        _img.style.visibility = 'visible';
+                    };
+                    _img.onerror = function() {
+                        if(_loader) _loader.style.display = 'none';
+                    };
+                }
+                setTimeout(function() {
+                    if (_img) _img.src = ${jsUrl};
+                }, 40);
+                try {
+                    (${iframeCommonLogic.toString()})();
+                    (${imageLogic.toString()})();
+                } catch(e) {
+                    console.warn(e);
+                }
+            })();
+        </script></body></html>`;
+    }
+    if (type === 'video') {
+        const { videoUrl } = payload;
+        const isMkv = videoUrl.toLowerCase().endsWith('.mkv');
+        const filename = videoUrl.split('/').pop();
+        const basename = filename.includes('.') ? filename.substring(0, filename.lastIndexOf('.')) : filename;
+        const vttUrl = isMkv ? `video/vtt/${basename}.vtt` : '';
+
+        const jsVideoUrl = JSON.stringify(videoUrl);
+        const jsVttUrl = JSON.stringify(vttUrl);
+        const jsIsMkv = JSON.stringify(isMkv);
+
+        const trackHtml = isMkv ? `<track id="main-track" label="中文" kind="subtitles" srclang="zh" default>` : '';
+        const delayUiHtml = isMkv ? `<span id="delay-info" title="按 [ 提前0.5s，按 ] 延后0.5s" style="color:#ffeb3b;margin-right:10px;">偏移: 0.0s</span>` : '';
+
+        htmlStr = `<!DOCTYPE html><html><head><meta charset="utf-8"/>${baseTag}${viewportMeta}<style>${commonStyles} video{max-width:100%;max-height:100%}video::cue{font-size:26px;color:#fff;background:rgba(0,0,0,0.9);text-shadow:2px 2px 4px rgba(0,0,0,0.8);font-family:'Noto Serif SC'}</style></head><body>
+        <video id="video" controls loop playsinline>${trackHtml}</video>
+        <div class="span-container">${delayUiHtml}<span id="fs" title="全屏(或按鼠标中键)">[F]</span><span id="c"></span><span id="p">prev</span><span id="i"></span><span id="n">next</span><span id="f"></span></div>
+        <script>
+            (function() {
+                var _video = document.getElementById('video');
+                var _track = document.getElementById('main-track');
+                setTimeout(function() {
+                    if (_video) {
+                        _video.src = ${jsVideoUrl};
+                        if (${jsIsMkv} && _track) {
+                            _track.src = ${jsVttUrl};
+                        }
+                    }
+                }, 60);
+                try {
+                    (${iframeCommonLogic.toString()})();
+                    (${videoLogic.toString()})();
+                } catch(e) {
+                    console.warn('Video iframe logic init error:', e);
+                }
+            })();
+        </script></body></html>`;
+    }
+    return htmlStr.replace(/>\s+</g, '><').replace(/\n/g, '').trim();
+}

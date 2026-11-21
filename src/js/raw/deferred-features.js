@@ -1,124 +1,24 @@
+/**
+ * deferred-features.js —— 懒加载外围功能集合：
+ * What's new 更新日志、庆祝彩纸、@bomb/@rebirth 数据管理、7 天备份提醒、
+ * 侧栏全局书签菜单、本地到期任务提醒，以及闲时工具（拼音词库、容量监测、夜间标题闪烁）。
+ */
 import { ExcerptsSys } from './excerpts.js';
+import {
+    $,
+    createLocalStoreProxy,
+    escapeHtml,
+    makeDraggable
+} from './shared-utils.js';
+import {
+    stopPreviewMedia,
+    showStandaloneImagePreview,
+    toggleStandaloneMediaPreview
+} from './search-preview.js';
 
-const $ = (selector) => document.querySelector(selector);
-const store = new Proxy({}, {
-    get(_, key) {
-        const raw = localStorage.getItem(key);
-        if (raw === null) return undefined;
-        try { return JSON.parse(raw); } catch { return raw; }
-    },
-    set(_, key, value) {
-        localStorage.setItem(key, JSON.stringify(value));
-        return true;
-    },
-    deleteProperty(_, key) {
-        localStorage.removeItem(key);
-        return true;
-    }
-});
-
-const MEDIA_POS_KEY = 'media_positions';
-const MEDIA_POS_MAX = 500;
-const MEDIA_POS_MIN = 1;
-const MEDIA_POS_END_GAP = 2;
-
-function mediaPosKey(src) {
-    let s = String(src || '').split('#')[0].split('?')[0];
-    try { s = decodeURIComponent(s); } catch (e) { }
-    const m = s.match(/(?:^|\/)((?:video|audio)\/.+)$/);
-    return m ? m[1] : s.replace(/^(?:\.{1,2}\/|\/)+/, '');
-}
-
-function readMediaPositions() {
-    try {
-        const obj = JSON.parse(localStorage.getItem(MEDIA_POS_KEY));
-        return (obj && typeof obj === 'object' && !Array.isArray(obj)) ? obj : {};
-    } catch (e) { return {}; }
-}
-
-function getMediaPosition(src) {
-    const t = readMediaPositions()[mediaPosKey(src)];
-    return (typeof t === 'number' && Number.isFinite(t) && t > 0) ? t : 0;
-}
-
-function saveMediaPosition(el) {
-    try {
-        if (!el) return;
-        const dur = el.duration;
-        if (!Number.isFinite(dur) || dur <= 0) return;
-        const key = mediaPosKey((el.dataset && el.dataset.path) || el.getAttribute('src'));
-        if (!key) return;
-        const t = el.currentTime;
-        const map = readMediaPositions();
-        delete map[key];
-        if (Number.isFinite(t) && t >= MEDIA_POS_MIN && dur - t > MEDIA_POS_END_GAP) {
-            map[key] = Math.round(t * 10) / 10;
-        }
-        const keys = Object.keys(map);
-        if (keys.length > MEDIA_POS_MAX) keys.slice(0, keys.length - MEDIA_POS_MAX).forEach(k => delete map[k]);
-        localStorage.setItem(MEDIA_POS_KEY, JSON.stringify(map));
-    } catch (e) { }
-}
-
-function saveMediaPositionsIn(root) {
-    if (root) root.querySelectorAll('video, audio').forEach(el => saveMediaPosition(el));
-}
-
-function resumeMediaPosition(el, src) {
-    const saved = getMediaPosition(src);
-    if (!saved) return;
-    try { el.currentTime = saved; } catch (e) { }
-    el.addEventListener('loadedmetadata', () => {
-        if (Number.isFinite(el.duration) && saved > el.duration - MEDIA_POS_END_GAP) el.currentTime = 0;
-    }, { once: true });
-}
-
-function makeDraggable(popupSelector, headerSelector) {
-    const popup = $(popupSelector);
-    const header = $(headerSelector);
-    if (!popup || !header) return;
-
-    let isDragging = false;
-    let startX = 0, startY = 0, initialLeft = 0, initialTop = 0;
-
-    header.addEventListener('mousedown', (e) => {
-        if (e.button !== 0) return;
-        isDragging = true;
-        startX = e.clientX;
-        startY = e.clientY;
-        initialLeft = popup.offsetLeft;
-        initialTop = popup.offsetTop;
-        popup.style.position = 'absolute';
-        popup.style.margin = '0';
-        popup.style.transform = 'translateX(0)';
-        header.style.cursor = 'moving';
-        e.preventDefault();
-    });
-
-    document.addEventListener('mousemove', (e) => {
-        if (!isDragging) return;
-        const scale = window._tpZoom || 1;
-        const left = initialLeft + (e.clientX - startX) / scale;
-        const top = initialTop + (e.clientY - startY) / scale;
-        popup.style.left = left + 'px';
-        popup.style.top = top + 'px';
-    });
-
-    document.addEventListener('mouseup', () => {
-        if (isDragging) {
-            isDragging = false;
-            header.style.cursor = 'move';
-        }
-    });
-}
+const store = createLocalStoreProxy();
 
 let _clRenderSeq = 0;
-
-function escapeHtml(str) {
-    return String(str ?? '').replace(/[&<>"']/g, ch => (
-        { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]
-    ));
-}
 
 function formatLogTime(ts) {
     const d = new Date(ts);
@@ -141,56 +41,8 @@ function collectPrivatePaths() {
 
 const CL_MEDIA_KIND_BY_BUCKET = { gallery: 'image', video: 'video', audio: 'audio' };
 
-const CL_WAVE_STYLE = `<style>
-  .wave-bars { display: flex; align-items: flex-end; gap: 4px; height: 40px; justify-content: center; }
-  .wave-bar { width: 5px; background: #61afef; border-radius: 2px; animation: waveAnim 0.8s ease-in-out infinite alternate; }
-  .wave-bar.paused { animation-play-state: paused !important; }
-  @keyframes waveAnim { 0% { height: 10px; } 100% { height: 100%; } }
-  .wb-1 { animation-delay: 0s; } .wb-2 { animation-delay: 0.2s; } .wb-3 { animation-delay: 0.4s; } .wb-4 { animation-delay: 0.6s; } .wb-5 { animation-delay: 0.8s; }
-</style>`;
-
 let _clPreviewPath = null;
 let _clOwnsPreview = false;
-
-function getClPreviewParts() {
-    let box = document.getElementById('center-snippet-preview');
-    if (!box) {
-        box = document.createElement('div');
-        box.id = 'center-snippet-preview';
-
-        const header = document.createElement('div');
-        header.id = 'preview-header';
-        const wrapper = document.createElement('div');
-        wrapper.id = 'preview-scroll-wrapper';
-        const content = document.createElement('div');
-        content.id = 'preview-scroll-content';
-
-        wrapper.appendChild(content);
-        box.append(header, wrapper);
-        (document.getElementById('stage') || document.body).appendChild(box);
-    }
-    return { box, content: box.querySelector('#preview-scroll-content') };
-}
-
-function clStopMedia(content) {
-    content.querySelectorAll('video, audio').forEach(m => {
-        saveMediaPosition(m);
-        try {
-            m.pause();
-            m.removeAttribute('src');
-            m.load();
-        } catch (e) { }
-    });
-}
-
-function clSafePlay(mediaEl) {
-    const p = mediaEl.play();
-    if (p !== undefined) {
-        p.catch(err => {
-            if (err.name !== 'AbortError') console.warn('Auto-play prevented', err);
-        });
-    }
-}
 
 function hideChangelogPreview() {
     _clPreviewPath = null;
@@ -201,83 +53,11 @@ function hideChangelogPreview() {
     if (!box) return;
     const content = box.querySelector('#preview-scroll-content');
     if (content) {
-        clStopMedia(content);
+        stopPreviewMedia(content);
         content.innerHTML = '';
     }
+    box.removeAttribute('data-active');
     box.style.display = 'none';
-}
-
-function showChangelogImagePreview(path) {
-    const { box, content } = getClPreviewParts();
-    clStopMedia(content);
-    _clOwnsPreview = true;
-
-    box.classList.add('image-preview-mode');
-    box.style.borderColor = '#61afef';
-    content.style.transform = '';
-
-    const img = document.createElement('img');
-    img.alt = 'Preview';
-    img.style.cssText = 'max-width: 450px; max-height: 350px; object-fit: contain;';
-    img.onerror = () => {
-        if (_clPreviewPath === path) {
-            content.innerHTML = '';
-            box.style.display = 'none';
-        }
-    };
-    img.src = path;
-    content.replaceChildren(img);
-    box.style.display = 'flex';
-}
-
-function toggleChangelogMedia(path, kind) {
-    const { box, content } = getClPreviewParts();
-    let mediaEl = content.querySelector('video, audio');
-
-    if (_clOwnsPreview && mediaEl && mediaEl.dataset.path === path) {
-        if (mediaEl.paused) clSafePlay(mediaEl);
-        else mediaEl.pause();
-        return;
-    }
-
-    clStopMedia(content);
-    _clOwnsPreview = true;
-
-    box.classList.add('image-preview-mode');
-    box.style.borderColor = '#61afef';
-    content.style.transform = '';
-
-    if (kind === 'video') {
-        mediaEl = document.createElement('video');
-        mediaEl.style.cssText = 'max-width: 450px; max-height: 350px; width: 100%; outline: none; object-fit: contain;';
-        content.replaceChildren(mediaEl);
-    } else {
-        const filename = path.split('/').pop();
-        content.innerHTML = `${CL_WAVE_STYLE}
-            <div style="display:flex; flex-direction:column; align-items:center; justify-content:center; height:100%; width:100%;">
-               <div style="margin-bottom:20px; color:#abb2bf; font-size:14px; text-align:center; word-break:break-all; padding: 0 15px;">${escapeHtml(filename)}</div>
-               <div class="wave-bars">
-                  <div class="wave-bar wb-1"></div><div class="wave-bar wb-2"></div><div class="wave-bar wb-3"></div><div class="wave-bar wb-4"></div><div class="wave-bar wb-5"></div>
-               </div>
-            </div>`;
-        mediaEl = document.createElement('audio');
-        mediaEl.style.display = 'none';
-        content.appendChild(mediaEl);
-
-        const bars = content.querySelectorAll('.wave-bar');
-        const syncBars = () => bars.forEach(b => b.classList.toggle('paused', mediaEl.paused));
-        mediaEl.addEventListener('play', syncBars);
-        mediaEl.addEventListener('pause', syncBars);
-        syncBars();
-    }
-
-    mediaEl.dataset.path = path;
-    mediaEl.loop = true;
-    mediaEl.volume = 0.1;
-    mediaEl.src = path;
-    resumeMediaPosition(mediaEl, path);
-    box.style.display = 'flex';
-    clSafePlay(mediaEl);
 }
 
 function bindChangelogMediaPreview(content) {
@@ -301,7 +81,10 @@ function bindChangelogMediaPreview(content) {
 
         hideChangelogPreview();
         _clPreviewPath = path;
-        if (kind === 'image') showChangelogImagePreview(path);
+        if (kind === 'image') {
+            _clOwnsPreview = true;
+            showStandaloneImagePreview(path, () => _clPreviewPath === path);
+        }
     });
 
     content.addEventListener('contextmenu', (e) => {
@@ -310,7 +93,10 @@ function bindChangelogMediaPreview(content) {
         const kind = previewKindOf(link);
         if (kind !== 'video' && kind !== 'audio') return;
         e.preventDefault();
-        toggleChangelogMedia(link.dataset.path, kind);
+        toggleStandaloneMediaPreview(link.dataset.path, kind, {
+            isOwner: () => _clOwnsPreview,
+            onClaim: () => { _clOwnsPreview = true; }
+        });
     });
 
     content.addEventListener('mouseleave', hideChangelogPreview);
@@ -814,7 +600,7 @@ export function bomb(ctx) {
                 const takeSnapFn = (ctx && typeof ctx.takeSnapshot === 'function') ? ctx.takeSnapshot : window.takeSnapshot;
                 let savedSnapStr = null;
                 if (selections.includes('last_li_a') && typeof takeSnapFn === 'function') {
-                    takeSnapFn(false);
+                    await takeSnapFn(false);
                     savedSnapStr = sessionStorage.getItem('ss_restore_strict');
                 }
                 const backupData = await getSelectedData(selections);
@@ -906,7 +692,7 @@ export function rebirth(ctx) {
                 if (typeof $ !== 'undefined' && $("#clear")) $("#clear").click();
                 await restoreData(loadedData, selections);
                 const takeSnapFn = (ctx && typeof ctx.takeSnapshot === 'function') ? ctx.takeSnapshot : window.takeSnapshot;
-                if (typeof takeSnapFn === 'function') takeSnapFn(true); else window.location.reload();
+                if (typeof takeSnapFn === 'function') await takeSnapFn(true); else window.location.reload();
             };
         }
     });
@@ -1037,6 +823,16 @@ export function showGlobalBookmarkMenu(x, y, source) {
             `;
             a.onmouseenter = () => a.style.background = '#555';
             a.onmouseleave = () => a.style.background = 'transparent';
+            if (/\bREADME\b/i.test(item.text || '')) {
+                a.addEventListener('click', (ev) => {
+                    if (ev.button !== 0 || ev.ctrlKey || ev.metaKey || ev.shiftKey || ev.altKey) return;
+                    ev.preventDefault();
+                    if (window._closeGlobalMenu) window._closeGlobalMenu();
+                    let hash = '';
+                    try { const u = new URL(item.href, location.href); hash = decodeURIComponent((u.hash || '').slice(1)); } catch (_) { }
+                    openMdViewer({ hash });
+                });
+            }
             menu.appendChild(a);
         });
     }
@@ -1228,4 +1024,312 @@ export function initDueTasksPingPong(ctx = {}) {
     const scheduleFn = typeof ctx.safeInterval === 'function' ? ctx.safeInterval : setInterval;
     scheduleFn(checkTasks, CHECK_INTERVAL);
     checkTasks();
+}
+
+
+// =========================================================================
+// 闲时外围工具：拼音词库加载、localStorage 告警、夜间催睡标题/图标闪烁
+// =========================================================================
+export function initIdleUtilities(ctx = {}) {
+    const { safeInterval, idleRun, docTitle } = ctx;
+    const runIdle = typeof idleRun === 'function'
+        ? idleRun
+        : (fn => (window.requestIdleCallback ? requestIdleCallback(fn) : setTimeout(fn, 50)));
+    const schedule = typeof safeInterval === 'function' ? safeInterval : setInterval;
+    const baseTitle = docTitle || document.title;
+
+    // 1. 闲时加载拼音词库
+    (function loadPinyinData(maxRetries = 30) {
+        let attempts = 0;
+        const targetUrl = new URL('/src/js/pinyinData.js', window.location.origin).href;
+        const checkAndLoad = async () => {
+            try {
+                let res = (store.online_flag !== "0" && 'caches' in window)
+                    ? await caches.match(targetUrl, { ignoreSearch: true })
+                    : null;
+                if (!res || !res.ok) {
+                    if (store.online_flag === "0" || !navigator.serviceWorker || !navigator.serviceWorker.controller || attempts >= 2) {
+                        res = await fetch(targetUrl, { cache: store.online_flag === "0" ? 'no-store' : 'no-cache' });
+                    }
+                }
+                if (res && res.ok) {
+                    const scriptText = await res.text();
+                    const pinyinScript = document.createElement("script");
+                    pinyinScript.type = "text/javascript";
+                    pinyinScript.charset = "UTF-8";
+                    pinyinScript.textContent = scriptText;
+                    document.body.appendChild(pinyinScript);
+                    pinyinScript.remove();
+                    return;
+                }
+                throw new Error("Cache Miss");
+            } catch (e) {
+                attempts++;
+                if (attempts < maxRetries) setTimeout(checkAndLoad, 2000);
+                else console.error("❌ pinyinData.js 加载超时");
+            }
+        };
+        runIdle(checkAndLoad);
+    })();
+
+    // 2. 夜间催睡标题与 Favicon 闪烁
+    function startFaviconBlink() {
+        if (window.faviconBlinkTimer) return;
+        const faviconLink = document.getElementById('favicon');
+        if (!faviconLink) return;
+        const originalSrc = faviconLink.getAttribute('href');
+
+        const toggleOpacityAndApply = (img, opacity) => {
+            const canvas = document.createElement('canvas');
+            canvas.width = 16;
+            canvas.height = 16;
+            const c = canvas.getContext('2d');
+            if (!c) return;
+            c.clearRect(0, 0, 16, 16);
+            c.globalAlpha = opacity;
+            c.drawImage(img, 0, 0, 16, 16);
+            faviconLink.href = canvas.toDataURL('image/x-icon');
+        };
+
+        const initBlink = (img) => {
+            let isVisible = true;
+            window.faviconBlinkTimer = setInterval(() => {
+                isVisible = !isVisible;
+                toggleOpacityAndApply(img, isVisible ? 1 : 0);
+            }, 500);
+        };
+
+        if (window.cachedFaviconImg) {
+            initBlink(window.cachedFaviconImg);
+        } else {
+            const img = new Image();
+            img.onload = function () {
+                window.cachedFaviconImg = img;
+                initBlink(img);
+            };
+            img.src = originalSrc;
+        }
+    }
+
+    function stopFaviconBlink() {
+        if (window.faviconBlinkTimer) {
+            clearInterval(window.faviconBlinkTimer);
+            window.faviconBlinkTimer = null;
+        }
+        const faviconLink = document.getElementById('favicon');
+        if (faviconLink && window.cachedFaviconImg) {
+            faviconLink.href = window.cachedFaviconImg.src;
+        }
+    }
+
+    function updateTitle() {
+        const now = new Date();
+        const h = now.getHours();
+        const mm = String(now.getMinutes()).padStart(2, "0");
+        const hh = String(h).padStart(2, "0");
+        const time = `${hh}:${mm}`;
+        const isRestTime = (h >= 23 || h < 6);
+        document.title = isRestTime ? `${time} - 该睡觉了` : `${time} - ${baseTitle}`;
+        if (isRestTime) startFaviconBlink();
+        else stopFaviconBlink();
+    }
+
+    updateTitle();
+    setTimeout(() => {
+        updateTitle();
+        window.updateTitleTimer = schedule(updateTitle, 60 * 1000);
+    }, (60 - new Date().getSeconds()) * 1000 - new Date().getMilliseconds());
+
+    // 3. localStorage 容量告警
+    function lsAlert() {
+        runIdle(() => {
+            const alertSizeB = 1024 * 1024 * 4;
+            let totalBytes = 0;
+            for (const key in localStorage) {
+                if (Object.prototype.hasOwnProperty.call(localStorage, key)) {
+                    totalBytes += localStorage.getItem(key).length * 2;
+                }
+            }
+            if (totalBytes > alertSizeB) {
+                alert("localStorage > " + (totalBytes / (1024 * 1024)).toFixed(2) + " MB !");
+            }
+        });
+    }
+    window.alertTimer = schedule(lsAlert, 60000);
+}
+
+
+export function openMdViewer(opts = {}) {
+    const file = (opts && opts.file) || window.readme_md || store.readme_md || '/README.md';
+    const hash = (opts && opts.hash) || '';
+    const stage = document.getElementById('stage') || document.body;
+    let popup = document.getElementById('md-viewer-popup');
+
+    const stageW = () => stage.clientWidth || window.innerWidth;
+    const stageH = () => stage.clientHeight || window.innerHeight;
+
+    if (!popup) {
+        if (!document.getElementById('md-viewer-resize-style')) {
+            const st = document.createElement('style');
+            st.id = 'md-viewer-resize-style';
+            st.textContent = `
+#md-viewer-popup{position:absolute;background:#fff;border:1px solid #333;box-shadow:0 6px 24px rgba(0,0,0,.35);z-index:10002;flex-direction:column;border-radius:4px;overflow:hidden;box-sizing:border-box}
+#md-viewer-popup .md-rz{position:absolute;z-index:12;touch-action:none}
+#md-viewer-popup .md-rz-n{top:0;left:8px;right:8px;height:6px;cursor:ns-resize}
+#md-viewer-popup .md-rz-s{bottom:0;left:8px;right:8px;height:6px;cursor:ns-resize}
+#md-viewer-popup .md-rz-e{top:8px;right:0;bottom:8px;width:6px;cursor:ew-resize}
+#md-viewer-popup .md-rz-w{top:8px;left:0;bottom:8px;width:6px;cursor:ew-resize}
+#md-viewer-popup .md-rz-nw{top:0;left:0;width:10px;height:10px;cursor:nwse-resize}
+#md-viewer-popup .md-rz-ne{top:0;right:0;width:10px;height:10px;cursor:nesw-resize}
+#md-viewer-popup .md-rz-sw{bottom:0;left:0;width:10px;height:10px;cursor:nesw-resize}
+#md-viewer-popup .md-rz-se{bottom:0;right:0;width:14px;height:14px;cursor:nwse-resize;background:linear-gradient(135deg,transparent 50%,rgba(120,120,120,.55) 50%,rgba(120,120,120,.55) 62%,transparent 62%,transparent 75%,rgba(120,120,120,.55) 75%)}
+`;
+            document.head.appendChild(st);
+        }
+
+        const initW = Math.min(1180, Math.round(stageW() * 0.92));
+        const initH = Math.round(stageH() * 0.88);
+        const initL = Math.max(0, Math.round((stageW() - initW) / 2));
+        const initT = Math.max(8, Math.round((stageH() - initH) / 2));
+
+        popup = document.createElement('div');
+        popup.id = 'md-viewer-popup';
+        popup.classList.add('elastic-anim');
+        popup.style.cssText = 'display:none;left:0px;top:0px;width:100%;height:100%;border-radius:0;';
+
+        const header = document.createElement('div');
+        header.id = 'md-viewer-header';
+        header.style.cssText = 'height:34px;background:#eee;cursor:default;display:flex;justify-content:space-between;align-items:center;padding:0 12px;flex-shrink:0;border-bottom:1px solid #ccc;user-select:none;font-size:13.5px;color:#222;';
+        header.innerHTML = `<span class="cl-title">${store.online_flag === '0' ? 'Markdown Editor' : 'README'}</span><div style="display:flex;align-items:center;gap:6px;"><button id="md-viewer-max" class="cl-btn" title="最大化 / 还原" style="cursor:pointer;padding:1px 8px;">❐</button><button id="md-viewer-close" class="cl-btn" style="cursor:pointer;padding:1px 8px;">Close</button></div>`;
+
+        const iframe = document.createElement('iframe');
+        iframe.id = 'md-viewer-frame';
+        iframe.allow = 'clipboard-read; clipboard-write';
+        iframe.style.cssText = 'flex:1;width:100%;height:100%;border:none;background:#fff;';
+        const qs = new URLSearchParams({ file });
+        if (hash) qs.set('hash', hash);
+        iframe.src = `src/tpl/md_viewer.html?${qs.toString()}`;
+
+        popup.append(header, iframe);
+        stage.appendChild(popup);
+
+        // 八方向宽高 resize（支持触控板缩放倍率 window._tpZoom），默认最大化启动
+        const MIN_W = 420, MIN_H = 260;
+        let maximized = true;
+        let savedBox = { left: initL, top: initT, width: initW, height: initH };
+        const maxBtn = header.querySelector('#md-viewer-max');
+
+        // 最大化状态下禁止拖动标题栏错位，非最大化时正常拖拽并屏蔽 iframe 捕获鼠标
+        header.querySelectorAll('button').forEach(btn => {
+            btn.addEventListener('mousedown', (e) => e.stopPropagation());
+        });
+        header.addEventListener('mousedown', (e) => {
+            if (e.button !== 0 || e.target.closest('button')) return;
+            if (maximized) {
+                e.stopImmediatePropagation();
+                return;
+            }
+            iframe.style.pointerEvents = 'none';
+            const restore = () => { iframe.style.pointerEvents = ''; };
+            document.addEventListener('mouseup', restore, { once: true });
+        });
+        makeDraggable('#md-viewer-popup', '#md-viewer-header');
+
+        const toggleMaximize = () => {
+            if (!maximized) {
+                savedBox = { left: popup.offsetLeft, top: popup.offsetTop, width: popup.offsetWidth, height: popup.offsetHeight };
+                popup.style.left = '0px';
+                popup.style.top = '0px';
+                popup.style.width = '100%';
+                popup.style.height = '100%';
+                popup.style.borderRadius = '0';
+                header.style.cursor = 'default';
+                maxBtn.textContent = '❐';
+                maximized = true;
+            } else {
+                const b = savedBox || { left: initL, top: initT, width: initW, height: initH };
+                popup.style.left = b.left + 'px';
+                popup.style.top = b.top + 'px';
+                popup.style.width = b.width + 'px';
+                popup.style.height = b.height + 'px';
+                popup.style.borderRadius = '4px';
+                header.style.cursor = 'move';
+                maxBtn.textContent = '⛶';
+                maximized = false;
+            }
+        };
+        maxBtn.onclick = toggleMaximize;
+        header.addEventListener('dblclick', (e) => { if (!e.target.closest('button')) toggleMaximize(); });
+
+        ['n', 's', 'e', 'w', 'nw', 'ne', 'sw', 'se'].forEach(dir => {
+            const h = document.createElement('div');
+            h.className = `md-rz md-rz-${dir}`;
+            h.addEventListener('pointerdown', (e) => {
+                if (e.button !== 0) return;
+                e.preventDefault();
+                e.stopPropagation();
+                if (maximized) {
+                    maximized = false;
+                    maxBtn.textContent = '⛶';
+                    popup.style.borderRadius = '4px';
+                    header.style.cursor = 'move';
+                    popup.style.width = popup.offsetWidth + 'px';
+                    popup.style.height = popup.offsetHeight + 'px';
+                }
+                h.setPointerCapture(e.pointerId);
+                iframe.style.pointerEvents = 'none';
+
+                const startX = e.clientX, startY = e.clientY;
+                const sL = popup.offsetLeft, sT = popup.offsetTop;
+                const sW = popup.offsetWidth, sH = popup.offsetHeight;
+                const maxW = stageW(), maxH = stageH();
+
+                const onMove = (ev) => {
+                    const scale = window._tpZoom || 1;
+                    const dx = (ev.clientX - startX) / scale;
+                    const dy = (ev.clientY - startY) / scale;
+                    let nL = sL, nT = sT, nW = sW, nH = sH;
+
+                    if (dir.includes('e')) nW = Math.max(MIN_W, Math.min(maxW - sL, sW + dx));
+                    if (dir.includes('s')) nH = Math.max(MIN_H, Math.min(maxH - sT, sH + dy));
+                    if (dir.includes('w')) {
+                        const right = sL + sW;
+                        nW = Math.max(MIN_W, Math.min(right, sW - dx));
+                        nL = right - nW;
+                    }
+                    if (dir.includes('n')) {
+                        const bottom = sT + sH;
+                        nH = Math.max(MIN_H, Math.min(bottom, sH - dy));
+                        nT = bottom - nH;
+                    }
+                    popup.style.left = Math.round(nL) + 'px';
+                    popup.style.top = Math.round(nT) + 'px';
+                    popup.style.width = Math.round(nW) + 'px';
+                    popup.style.height = Math.round(nH) + 'px';
+                };
+                const onUp = () => {
+                    h.onpointermove = null;
+                    h.onpointerup = null;
+                    h.onpointercancel = null;
+                    iframe.style.pointerEvents = '';
+                };
+                h.onpointermove = onMove;
+                h.onpointerup = onUp;
+                h.onpointercancel = onUp;
+            });
+            popup.appendChild(h);
+        });
+
+        header.querySelector('#md-viewer-close').onclick = () => {
+            try {
+                if (iframe.contentWindow && iframe.contentWindow._mdDirty && !confirm('有未固化的修改，确定关闭？')) return;
+            } catch (_) { }
+            popup.style.display = 'none';
+        };
+    } else if (hash) {
+        const iframe = document.getElementById('md-viewer-frame');
+        try { iframe?.contentWindow?.postMessage({ type: 'SCROLL_HASH', hash }, location.origin); } catch (_) { }
+    }
+
+    popup.style.display = 'flex';
 }
