@@ -115,15 +115,77 @@ function initExcerptTrigger() {
         btn = document.createElement('div');
         btn.id = 'excerpt-pop-btn';
         btn.textContent = '✏️';
-        btn.style.cssText = 'position: fixed; background: #516194; color: rgb(255, 255, 255); padding: 0 5px; border-radius: 6px; cursor: pointer; z-index: 2147483647; box-shadow: rgba(0, 0, 0, 0.4) 0px 4px 12px; display: none; user-select: none; left: 938px; top: 240px;';
+        btn.style.cssText = 'position: fixed; background: #516194; color: rgb(255, 255, 255); padding: 0 5px; border-radius: 6px; cursor: pointer; z-index: 2147483647; box-shadow: rgba(0, 0, 0, 0.4) 0px 4px 12px; display: none; user-select: none;';
         document.body.appendChild(btn);
+
+        const getSelectionEndRect = (sel, fallbackEvent) => {
+            if (sel && sel.rangeCount > 0) {
+                try {
+                    if (sel.focusNode) {
+                        const caret = document.createRange();
+                        caret.setStart(sel.focusNode, sel.focusOffset);
+                        caret.collapse(true);
+                        const rect = caret.getBoundingClientRect();
+                        if (rect && rect.height > 0) return rect;
+
+                        if (sel.focusNode.nodeType === Node.TEXT_NODE && sel.focusNode.length > 0) {
+                            const r2 = document.createRange();
+                            if (sel.focusOffset > 0) {
+                                r2.setStart(sel.focusNode, sel.focusOffset - 1);
+                                r2.setEnd(sel.focusNode, sel.focusOffset);
+                                const rr = r2.getBoundingClientRect();
+                                if (rr && rr.height > 0) {
+                                    return { left: rr.right, right: rr.right, top: rr.top, bottom: rr.bottom, width: 0, height: rr.height };
+                                }
+                            } else {
+                                r2.setStart(sel.focusNode, 0);
+                                r2.setEnd(sel.focusNode, 1);
+                                const rr = r2.getBoundingClientRect();
+                                if (rr && rr.height > 0) {
+                                    return { left: rr.left, right: rr.left, top: rr.top, bottom: rr.bottom, width: 0, height: rr.height };
+                                }
+                            }
+                        }
+                    }
+                } catch (_) { }
+
+                try {
+                    const range = sel.getRangeAt(0);
+                    const rects = Array.from(range.getClientRects()).filter(r => r.width > 0 || r.height > 0);
+                    if (rects.length > 0) {
+                        let isBackward = false;
+                        if (sel.anchorNode && sel.focusNode) {
+                            if (sel.anchorNode === sel.focusNode) {
+                                isBackward = sel.focusOffset < sel.anchorOffset;
+                            } else {
+                                isBackward = !!(sel.anchorNode.compareDocumentPosition(sel.focusNode) & Node.DOCUMENT_POSITION_PRECEDING);
+                            }
+                        }
+                        const r = isBackward ? rects[0] : rects[rects.length - 1];
+                        const x = isBackward ? r.left : r.right;
+                        return { left: x, right: x, top: r.top, bottom: r.bottom, width: 0, height: r.height };
+                    }
+                } catch (_) { }
+            }
+            if (fallbackEvent && typeof fallbackEvent.clientX === 'number') {
+                return {
+                    left: fallbackEvent.clientX,
+                    right: fallbackEvent.clientX,
+                    top: fallbackEvent.clientY - 12,
+                    bottom: fallbackEvent.clientY + 6,
+                    width: 0,
+                    height: 18
+                };
+            }
+            return null;
+        };
 
         const doExcerpt = () => {
             const sel = window.getSelection();
-            const text = sel.toString().trim();
-            if (text.length > 1) {
+            const text = sel ? sel.toString().trim() : '';
+            if (Array.from(text).length > 1) {
                 emitEvent('SAVE_EXCERPT', text, 'index');
-                
+
                 const oldText = btn.textContent;
                 btn.textContent = '✅ 已摘抄';
                 btn.style.background = '#10b981';
@@ -131,25 +193,24 @@ function initExcerptTrigger() {
                     btn.style.display = 'none';
                     btn.textContent = oldText;
                     btn.style.background = '#516194';
-                    sel.removeAllRanges(); 
+                    if (sel) sel.removeAllRanges();
                     lastProcessedText = "";
                 }, 800);
             }
         };
 
         const shieldEvents = ['mousedown', 'mouseup', 'click', 'touchstart', 'touchend', 'pointerdown', 'pointerup'];
-        
+
         shieldEvents.forEach(evt => {
             window.addEventListener(evt, (e) => {
                 if (e.target && e.target.closest && e.target.closest('#excerpt-pop-btn')) {
-                    
                     e.stopPropagation();
-                    e.stopImmediatePropagation(); 
+                    e.stopImmediatePropagation();
 
                     if (evt === 'mousedown') {
                         e.preventDefault();
                     }
-                    
+
                     if (evt === 'click') {
                         doExcerpt();
                     }
@@ -162,20 +223,37 @@ function initExcerptTrigger() {
         document.addEventListener('mousedown', (e) => {
             if (e.target && e.target.closest && e.target.closest('#excerpt-pop-btn')) return;
             btn.style.display = 'none';
+            lastProcessedText = "";
         });
 
         document.addEventListener('mouseup', (e) => {
             if (e.target && e.target.closest && e.target.closest('#excerpt-pop-btn')) return;
-            
+
             setTimeout(() => {
-                const text = window.getSelection().toString().trim();
-                
-                if (text.length > 1) {
+                const sel = window.getSelection();
+                const text = sel ? sel.toString().trim() : '';
+
+                if (Array.from(text).length > 1) {
                     if (text !== lastProcessedText) {
-                        btn.style.left = Math.min(e.clientX + 5, window.innerWidth - 80) + 'px';
-                        btn.style.top = Math.min(e.clientY + 15, window.innerHeight - 40) + 'px';
-                        btn.style.display = 'block';
-                        lastProcessedText = text;
+                        const endRect = getSelectionEndRect(sel, e);
+                        if (endRect) {
+                            btn.style.visibility = 'hidden';
+                            btn.style.display = 'block';
+                            const bw = btn.offsetWidth || 32;
+                            const bh = btn.offsetHeight || 24;
+                            const endX = (endRect.left + endRect.right) / 2;
+                            const left = Math.max(8, Math.min(window.innerWidth - bw - 8, endX - bw / 2));
+                            let top = endRect.bottom + 6;
+                            if (top + bh > window.innerHeight - 8 && endRect.top - bh - 6 >= 8) {
+                                top = endRect.top - bh - 6;
+                            } else {
+                                top = Math.max(8, Math.min(window.innerHeight - bh - 8, top));
+                            }
+                            btn.style.left = Math.round(left) + 'px';
+                            btn.style.top = Math.round(top) + 'px';
+                            btn.style.visibility = 'visible';
+                            lastProcessedText = text;
+                        }
                     }
                 } else {
                     btn.style.display = 'none';
@@ -185,6 +263,7 @@ function initExcerptTrigger() {
         });
     }
 }
+
 initExcerptTrigger();
 if (window.top && window.top.VirtualCursor) {
     window.top.VirtualCursor.attach(window);

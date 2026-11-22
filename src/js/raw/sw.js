@@ -1,6 +1,6 @@
-importScripts('/src/js/core-list.js?v=1795248052332');
+importScripts('/src/js/core-list.js?v=1795340414859');
 
-self.SW_VERSION = '1795248052332';
+self.SW_VERSION = '1795340414859';
 self.EMERGENCY = 'repair_command_id=2';
 
 const CACHE_NAME_CORE = 'core-cache-' + BUILD_VERSION;
@@ -126,10 +126,10 @@ self.addEventListener('install', event => {
             '/index.html',
             '/src/js/index.js',
             '/src/js/shared-utils.js',
+            '/src/js/book-db.js',
             '/src/js/search-engine.js',
             '/src/js/search-preview.js',
             '/src/js/search-ui.js',
-            '/src/js/snapshot.js',
             '/src/js/snapshot.js',
             '/src/js/side.js',
             '/src/js/content.js',
@@ -382,6 +382,17 @@ self.addEventListener('install', event => {
             const deletedFiles = Object.keys(oldManifest).filter(url => !newManifestKeys.includes(url));
             for (const url of deletedFiles) {
                 if (url !== '/') await writeLog(`⛔ [SW] 删除文件: ${url}`);
+                if (url.startsWith('/ebook/')) {
+                    deferredJobs.push(async () => {
+                        try {
+                            const mediaCache = await caches.open(CACHE_NAME_MEDIA);
+                            await mediaCache.delete(url, { ignoreSearch: true });
+                            const enc = encodeURI(url);
+                            if (enc !== url) await mediaCache.delete(enc, { ignoreSearch: true });
+                        } catch (_) { }
+                        await deleteBookFromBookDB(url);
+                    });
+                }
             }
         }
 
@@ -602,4 +613,54 @@ async function fetchWithLock(request, options = {}) {
 async function compressText(text) {
     const stream = new Blob([text]).stream().pipeThrough(new CompressionStream('deflate-raw'));
     return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+
+async function deleteBookFromBookDB(rawUrl) {
+    try {
+        if (typeof indexedDB === 'undefined') return;
+        let key = String(rawUrl || '').split('#')[0].split('?')[0];
+        if (/%[0-9A-Fa-f]{2}/.test(key)) {
+            try { key = decodeURIComponent(key); } catch (_) {
+                try { key = decodeURI(key); } catch (__) { }
+            }
+        }
+        key = key.replace(/^\/+/, '');
+        if (!key) return;
+
+        if (typeof indexedDB.databases === 'function') {
+            const dbs = await indexedDB.databases();
+            if (!dbs.some(d => d && d.name === 'BookDB')) return;
+        }
+
+        const db = await new Promise((resolve) => {
+            const req = indexedDB.open('BookDB');
+            req.onsuccess = () => resolve(req.result);
+            req.onerror = () => resolve(null);
+        });
+        if (!db) return;
+        try {
+            const names = [];
+            if (db.objectStoreNames.contains('book_extracts')) names.push('book_extracts');
+            if (db.objectStoreNames.contains('search_cache')) names.push('search_cache');
+            if (names.length > 0) {
+                await new Promise((resolve) => {
+                    const tx = db.transaction(names, 'readwrite');
+                    if (names.includes('book_extracts')) tx.objectStore('book_extracts').delete(key);
+                    if (names.includes('search_cache')) {
+                        const os = tx.objectStore('search_cache');
+                        if (os.indexNames.contains('by_book')) {
+                            const curReq = os.index('by_book').openKeyCursor(IDBKeyRange.only(key));
+                            curReq.onsuccess = () => {
+                                const cur = curReq.result;
+                                if (cur) { os.delete(cur.primaryKey); cur.continue(); }
+                            };
+                        }
+                    }
+                    tx.oncomplete = tx.onerror = tx.onabort = () => resolve();
+                });
+            }
+        } finally {
+            db.close();
+        }
+    } catch (_) { }
 }

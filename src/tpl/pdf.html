@@ -729,16 +729,77 @@ function initExcerptTrigger() {
         btn = document.createElement('div');
         btn.id = 'excerpt-pop-btn';
         btn.textContent = '✏️';
-        btn.style.cssText = 'position: fixed; background: #516194; color: rgb(255, 255, 255); padding: 0 5px; border-radius: 6px; cursor: pointer; z-index: 2147483647; box-shadow: rgba(0, 0, 0, 0.4) 0px 4px 12px; display: none; user-select: none; left: 938px; top: 240px;';
+        btn.style.cssText = 'position: fixed; background: #516194; color: rgb(255, 255, 255); padding: 0 5px; border-radius: 6px; cursor: pointer; z-index: 2147483647; box-shadow: rgba(0, 0, 0, 0.4) 0px 4px 12px; display: none; user-select: none;';
         document.body.appendChild(btn);
+
+        const getSelectionEndRect = (sel, fallbackEvent) => {
+            if (sel && sel.rangeCount > 0) {
+                try {
+                    if (sel.focusNode) {
+                        const caret = document.createRange();
+                        caret.setStart(sel.focusNode, sel.focusOffset);
+                        caret.collapse(true);
+                        const rect = caret.getBoundingClientRect();
+                        if (rect && rect.height > 0) return rect;
+
+                        if (sel.focusNode.nodeType === Node.TEXT_NODE && sel.focusNode.length > 0) {
+                            const r2 = document.createRange();
+                            if (sel.focusOffset > 0) {
+                                r2.setStart(sel.focusNode, sel.focusOffset - 1);
+                                r2.setEnd(sel.focusNode, sel.focusOffset);
+                                const rr = r2.getBoundingClientRect();
+                                if (rr && rr.height > 0) {
+                                    return { left: rr.right, right: rr.right, top: rr.top, bottom: rr.bottom, width: 0, height: rr.height };
+                                }
+                            } else {
+                                r2.setStart(sel.focusNode, 0);
+                                r2.setEnd(sel.focusNode, 1);
+                                const rr = r2.getBoundingClientRect();
+                                if (rr && rr.height > 0) {
+                                    return { left: rr.left, right: rr.left, top: rr.top, bottom: rr.bottom, width: 0, height: rr.height };
+                                }
+                            }
+                        }
+                    }
+                } catch (_) { }
+
+                try {
+                    const range = sel.getRangeAt(0);
+                    const rects = Array.from(range.getClientRects()).filter(r => r.width > 0 || r.height > 0);
+                    if (rects.length > 0) {
+                        let isBackward = false;
+                        if (sel.anchorNode && sel.focusNode) {
+                            if (sel.anchorNode === sel.focusNode) {
+                                isBackward = sel.focusOffset < sel.anchorOffset;
+                            } else {
+                                isBackward = !!(sel.anchorNode.compareDocumentPosition(sel.focusNode) & Node.DOCUMENT_POSITION_PRECEDING);
+                            }
+                        }
+                        const r = isBackward ? rects[0] : rects[rects.length - 1];
+                        const x = isBackward ? r.left : r.right;
+                        return { left: x, right: x, top: r.top, bottom: r.bottom, width: 0, height: r.height };
+                    }
+                } catch (_) { }
+            }
+            if (fallbackEvent && typeof fallbackEvent.clientX === 'number') {
+                return {
+                    left: fallbackEvent.clientX,
+                    right: fallbackEvent.clientX,
+                    top: fallbackEvent.clientY - 12,
+                    bottom: fallbackEvent.clientY + 6,
+                    width: 0,
+                    height: 18
+                };
+            }
+            return null;
+        };
 
         const doExcerpt = () => {
             const sel = window.getSelection();
-            const text = sel.toString().trim();
-            if (text.length > 1) {
-
+            const text = sel ? sel.toString().trim() : '';
+            if (Array.from(text).length > 1) {
                 emitEvent('SAVE_EXCERPT', text, 'index');
-                
+
                 const oldText = btn.textContent;
                 btn.textContent = '✅ 已摘抄';
                 btn.style.background = '#10b981';
@@ -746,25 +807,24 @@ function initExcerptTrigger() {
                     btn.style.display = 'none';
                     btn.textContent = oldText;
                     btn.style.background = '#516194';
-                    sel.removeAllRanges(); 
+                    if (sel) sel.removeAllRanges();
                     lastProcessedText = "";
                 }, 800);
             }
         };
 
         const shieldEvents = ['mousedown', 'mouseup', 'click', 'touchstart', 'touchend', 'pointerdown', 'pointerup'];
-        
+
         shieldEvents.forEach(evt => {
             window.addEventListener(evt, (e) => {
                 if (e.target && e.target.closest && e.target.closest('#excerpt-pop-btn')) {
-                    
                     e.stopPropagation();
-                    e.stopImmediatePropagation(); 
+                    e.stopImmediatePropagation();
 
                     if (evt === 'mousedown') {
                         e.preventDefault();
                     }
-                    
+
                     if (evt === 'click') {
                         doExcerpt();
                     }
@@ -777,20 +837,37 @@ function initExcerptTrigger() {
         document.addEventListener('mousedown', (e) => {
             if (e.target && e.target.closest && e.target.closest('#excerpt-pop-btn')) return;
             btn.style.display = 'none';
+            lastProcessedText = "";
         });
 
         document.addEventListener('mouseup', (e) => {
             if (e.target && e.target.closest && e.target.closest('#excerpt-pop-btn')) return;
-            
+
             setTimeout(() => {
-                const text = window.getSelection().toString().trim();
-                
-                if (text.length > 1) {
+                const sel = window.getSelection();
+                const text = sel ? sel.toString().trim() : '';
+
+                if (Array.from(text).length > 1) {
                     if (text !== lastProcessedText) {
-                        btn.style.left = Math.min(e.clientX + 5, window.innerWidth - 80) + 'px';
-                        btn.style.top = Math.min(e.clientY + 15, window.innerHeight - 40) + 'px';
-                        btn.style.display = 'block';
-                        lastProcessedText = text;
+                        const endRect = getSelectionEndRect(sel, e);
+                        if (endRect) {
+                            btn.style.visibility = 'hidden';
+                            btn.style.display = 'block';
+                            const bw = btn.offsetWidth || 32;
+                            const bh = btn.offsetHeight || 24;
+                            const endX = (endRect.left + endRect.right) / 2;
+                            const left = Math.max(8, Math.min(window.innerWidth - bw - 8, endX - bw / 2));
+                            let top = endRect.bottom + 6;
+                            if (top + bh > window.innerHeight - 8 && endRect.top - bh - 6 >= 8) {
+                                top = endRect.top - bh - 6;
+                            } else {
+                                top = Math.max(8, Math.min(window.innerHeight - bh - 8, top));
+                            }
+                            btn.style.left = Math.round(left) + 'px';
+                            btn.style.top = Math.round(top) + 'px';
+                            btn.style.visibility = 'visible';
+                            lastProcessedText = text;
+                        }
                     }
                 } else {
                     btn.style.display = 'none';
@@ -803,7 +880,17 @@ function initExcerptTrigger() {
 initExcerptTrigger();
   </script>
   <script type="module">
-    import { searchHlTier, searchHlBucket } from '../js/shared-utils.js';
+    import {
+      searchHlTier,
+      searchHlBucket,
+      adaptKeywordsForWasm,
+      collectAdsPositiveIndices,
+      evalAdsExpr,
+      mergeWasmMatchSpans,
+      collectWasmMatches,
+      buildMergedGroupSnippets
+    } from '../js/shared-utils.js';
+    import { BookDB, normalizeBookKey, buildBookSearchCacheKey } from '../js/book-db.js';
 
     const HL_SUPPORTED = !!(window.CSS && CSS.highlights && typeof Highlight !== 'undefined');
     const TIER_SIZE = 6;
@@ -848,6 +935,7 @@ initExcerptTrigger();
       pdfDoc: null,
       numPages: 0,
       title: '',
+      bookKey: '',
       // pages[pageIndex] = { pageNumber, text, items: [{ start, end }] }
       pages: [],
       extractedCount: 0,
@@ -1126,15 +1214,40 @@ initExcerptTrigger();
 
     function startBackgroundPreExtraction(pdfDoc, docGen) {
       const numPages = pdfDoc.numPages || 0;
+      const bookKey = State.bookKey;
       State.pages = new Array(numPages);
       State.extractedCount = 0;
       State.extractDone = false;
       State.extractBoosted = false;
 
-      State.outlinePromise = parseOutlineSections(pdfDoc, docGen);
+      let outlineRestored = false;
+      State.outlinePromise = null;
 
       State.extractPromise = (async () => {
-        // 先让首屏页面渲染完成（最多等 350ms）
+        // 1. 优先命中 BookDB 提取缓存（只读 PDF 免逐页解析）
+        if (bookKey) {
+          const cached = await BookDB.getExtract(bookKey);
+          if (docGen !== State.docGen) return;
+          if (cached && cached.kind === 'pdf' && cached.numPages === numPages && Array.isArray(cached.pages) && cached.pages.length === numPages) {
+            State.pages = cached.pages;
+            State.extractedCount = numPages;
+            State.extractDone = true;
+            if (Array.isArray(cached.sections) && cached.sections.length > 0) {
+              State.sections = cached.sections;
+              State.groupUnit = cached.groupUnit || State.groupUnit;
+              outlineRestored = true;
+            }
+            if (!outlineRestored) {
+              State.outlinePromise = parseOutlineSections(pdfDoc, docGen);
+            }
+            notifyExtractProgress();
+            return;
+          }
+        }
+
+        State.outlinePromise = parseOutlineSections(pdfDoc, docGen);
+
+        // 2. 未命中缓存：先让首屏页面渲染完成（最多等 350ms），再后台静默提取
         try {
           const oneRendered = window.PDFViewerApplication && window.PDFViewerApplication.pdfViewer && window.PDFViewerApplication.pdfViewer.onePageRendered;
           if (oneRendered) {
@@ -1184,6 +1297,21 @@ initExcerptTrigger();
         if (docGen === State.docGen) {
           State.extractDone = true;
           notifyExtractProgress();
+
+          // 3. 后台提取与大纲解析全部完成后持久化至 BookDB
+          if (bookKey) {
+            const pOutline = State.outlinePromise;
+            Promise.resolve(pOutline).then(() => {
+              if (docGen !== State.docGen) return;
+              BookDB.putExtract(bookKey, 'pdf', {
+                kind: 'pdf',
+                numPages,
+                pages: State.pages,
+                sections: State.sections,
+                groupUnit: State.groupUnit
+              }, { numPages, groupUnit: State.groupUnit });
+            }).catch(() => { });
+          }
         }
       })();
     }
@@ -1285,15 +1413,16 @@ initExcerptTrigger();
         if (sw && sw.ready && typeof sw.find_content_matches_multi === 'function') {
           const live = buildPageTextFromStrings(strList);
           itemsMeta = live.items;
-          const res = sw.find_content_matches_multi(live.text, last.wasmKeywords, last.noise);
-          const arr = res && res.matches;
-          const recalc = [];
-          if (arr) {
-            for (let i = 0; i < arr.length; i += 3) {
-              recalc.push({ localStart: arr[i], localEnd: arr[i + 1], noise: arr[i + 2] });
+          if (last.isAds && Array.isArray(last.adsPositiveTerms)) {
+            const raw = [];
+            for (const pt of last.adsPositiveTerms) {
+              raw.push(...collectWasmMatches(sw, live.text, pt.wasmKeywords, pt.noise, pt.termIdx));
             }
+            hitsToPaint = mergeWasmMatchSpans(raw).map(m => ({ localStart: m.start, localEnd: m.end, noise: m.noise }));
+          } else {
+            const matches = collectWasmMatches(sw, live.text, last.wasmKeywords, last.noise, 0);
+            hitsToPaint = matches.map(m => ({ localStart: m.start, localEnd: m.end, noise: m.noise }));
           }
-          hitsToPaint = recalc;
         }
       }
       if (!itemsMeta) return;
@@ -1346,12 +1475,6 @@ initExcerptTrigger();
       return null;
     }
 
-    function adaptKeywordsForWasm(specs, weighted) {
-      if (!Array.isArray(specs)) return [];
-      if (weighted) return specs;
-      return specs.map(s => (typeof s === 'string' ? s : s.text)).filter(Boolean);
-    }
-
     function u16ToCodePointIdx(str, u16Idx) {
       const clamped = Math.max(0, Math.min(str.length, u16Idx));
       let cp = 0;
@@ -1366,7 +1489,7 @@ initExcerptTrigger();
       return cp;
     }
 
-    function buildCompactPreview(pageText, localStart, localEnd, noise) {
+    function buildCompactPreview(pageText, localStart, localEnd, noise, allPageHits = null) {
       const BEFORE = 10, AFTER = 18;
       const s = Math.max(0, localStart - BEFORE);
       const e = Math.min(pageText.length, localEnd + AFTER);
@@ -1375,6 +1498,20 @@ initExcerptTrigger();
       const cleanSlice = pageText.slice(s, e).replace(/[\t\r\n]/g, ' ');
       const preview = pre + cleanSlice + suf;
       const shift = pre.length;
+
+      if (Array.isArray(allPageHits) && allPageHits.length > 0) {
+        const highlights = [];
+        for (const m of allPageHits) {
+          if (m.end <= s) continue;
+          if (m.start >= e) break;
+          const rs = shift + (Math.max(s, m.start) - s);
+          const re = shift + (Math.min(e, m.end) - s);
+          if (re > rs) {
+            highlights.push([u16ToCodePointIdx(preview, rs), u16ToCodePointIdx(preview, re), m.noise]);
+          }
+        }
+        if (highlights.length > 0) return { preview, highlights };
+      }
       const hs = u16ToCodePointIdx(preview, shift + (localStart - s));
       const he = u16ToCodePointIdx(preview, shift + (localEnd - s));
       return { preview, highlights: [[hs, he, noise]] };
@@ -1404,11 +1541,12 @@ initExcerptTrigger();
       return { t, h };
     }
 
-    async function runPdfSearch({ keyword, specs, noise, token, reportStatus }) {
+    async function runPdfSearch({ keyword, specs, noise, synonymsEnabled, adsPlan, token, reportStatus, cacheMeta }) {
       State.activeSearchToken = token;
       clearAllHighlights();
 
-      if (!keyword || !Array.isArray(specs) || specs.length === 0 || !State.pdfDoc) {
+      const isAds = !!(adsPlan && Array.isArray(adsPlan.terms) && adsPlan.terms.length > 0 && adsPlan.expr);
+      if (!keyword || !State.pdfDoc || (!isAds && (!Array.isArray(specs) || specs.length === 0))) {
         State.lastSearch = null;
         return { totalHits: 0, shownHits: 0, truncated: false, groups: [], groupUnit: State.groupUnit };
       }
@@ -1450,12 +1588,91 @@ initExcerptTrigger();
         };
       }
 
+      const canCache = !!(State.bookKey && (!cacheMeta || cacheMeta.canCache !== false));
+      const queryKey = canCache ? buildBookSearchCacheKey({
+        bookSig: `pdf:${State.numPages}:${State.sections.length}`,
+        algoVer: (cacheMeta && cacheMeta.algoVer) || 11,
+        synVer: (cacheMeta && cacheMeta.synVer) || '',
+        keyword,
+        noise,
+        useSyn: !!synonymsEnabled,
+        adsPlan: isAds ? adsPlan : null
+      }) : '';
+
+      if (canCache && queryKey) {
+        const cached = await BookDB.getSearch(State.bookKey, queryKey);
+        if (token !== State.activeSearchToken) return null;
+        if (cached && Array.isArray(cached.hits) && Array.isArray(cached.groupMeta)) {
+          const swLive = window.top && window.top.sharedWasm;
+          const weighted = !!(swLive && swLive.weightedKeywords);
+          let cachedWasmKws = [];
+          let cachedAdsPos = null;
+          if (isAds) {
+            const terms = adsPlan.terms.map((t, idx) => ({
+              termIdx: idx,
+              noise: t.noise,
+              wasmKeywords: adaptKeywordsForWasm(t.specs, weighted)
+            }));
+            cachedAdsPos = collectAdsPositiveIndices(adsPlan.expr).map(idx => terms[idx]).filter(Boolean);
+          } else {
+            cachedWasmKws = adaptKeywordsForWasm(specs, weighted);
+          }
+
+          const groupMap = new Map();
+          for (const gm of cached.groupMeta) {
+            groupMap.set(gm.groupIndex, {
+              type: 'txt-group',
+              path: `txt-group:${gm.groupIndex}`,
+              groupIndex: gm.groupIndex,
+              title: gm.title,
+              percent: gm.percent,
+              count: gm.count,
+              hits: []
+            });
+          }
+          const pageHitsMap = new Map();
+          const hasExplicitPageHits = Array.isArray(cached.pageHitsEntries);
+          if (hasExplicitPageHits) {
+            for (const [pi, arr] of cached.pageHitsEntries) pageHitsMap.set(pi, arr);
+          }
+          for (const h of cached.hits) {
+            const g = groupMap.get(h.sectionIdx);
+            if (g) g.hits.push(h);
+            if (!hasExplicitPageHits) {
+              let pArr = pageHitsMap.get(h.pageIndex);
+              if (!pArr) { pArr = []; pageHitsMap.set(h.pageIndex, pArr); }
+              pArr.push({ localStart: h.localStart, localEnd: h.localEnd, noise: h.noise });
+            }
+          }
+          const groups = Array.from(groupMap.values()).sort((a, b) => a.groupIndex - b.groupIndex);
+          State.lastSearch = {
+            keyword,
+            isAds,
+            adsPositiveTerms: cachedAdsPos,
+            wasmKeywords: cachedWasmKws,
+            noise,
+            hits: cached.hits,
+            groups,
+            groupMap,
+            pageHitsMap
+          };
+          paintAllRenderedPages();
+          return {
+            keyword,
+            totalHits: cached.totalHits,
+            shownHits: cached.hits.length,
+            truncated: !!cached.truncated,
+            groups,
+            groupUnit: cached.groupUnit || State.groupUnit
+          };
+        }
+      }
+
       const sw = await waitForSharedWasm();
       if (token !== State.activeSearchToken) return null;
       if (!sw) throw new Error('Wasm 搜索引擎未就绪');
 
       if (typeof reportStatus === 'function') reportStatus('搜索中...');
-      const wasmKeywords = adaptKeywordsForWasm(specs, !!sw.weightedKeywords);
       const MAX_RECORDED_HITS = 1500;
 
       const hits = [];
@@ -1463,74 +1680,169 @@ initExcerptTrigger();
       const pageHitsMap = new Map();
       let totalHits = 0;
 
+      const recordPageMatches = (pi, pageData, sec, matchList) => {
+        const pHits = pageHitsMap.get(pi) || [];
+        for (const m of matchList) {
+          const localStart = m.start;
+          const localEnd = m.end;
+          const packedNoise = m.noise;
+          totalHits++;
+          pHits.push({ localStart, localEnd, noise: packedNoise });
+
+          let g = groupMap.get(sec.index);
+          if (!g) {
+            g = {
+              type: 'txt-group',
+              path: `txt-group:${sec.index}`,
+              groupIndex: sec.index,
+              title: sec.title,
+              percent: sec.label,
+              count: 0,
+              hits: []
+            };
+            groupMap.set(sec.index, g);
+          }
+          g.count++;
+
+          if (hits.length < MAX_RECORDED_HITS) {
+            const compact = buildCompactPreview(pageData.text, localStart, localEnd, packedNoise, matchList);
+            const hitObj = {
+              hitIndex: hits.length,
+              pageIndex: pi,
+              pageNumber: pageData.pageNumber,
+              sectionIdx: sec.index,
+              localStart,
+              localEnd,
+              noise: packedNoise,
+              termIdx: typeof m.termIdx === 'number' ? m.termIdx : 0,
+              percent: `p.${pageData.pageNumber}`,
+              preview: compact.preview,
+              highlights: compact.highlights
+            };
+            hits.push(hitObj);
+            g.hits.push(hitObj);
+          }
+        }
+        if (pHits.length > 0) pageHitsMap.set(pi, pHits);
+      };
+
       let sliceStart = performance.now();
-      for (let pi = 0; pi < State.pages.length; pi++) {
-        if (token !== State.activeSearchToken) return null;
-        const pageData = State.pages[pi];
-        if (!pageData || !pageData.text) continue;
+      let wasmKeywords = [];
+      let adsPositiveTerms = null;
 
-        const res = sw.find_content_matches_multi(pageData.text, wasmKeywords, noise);
-        const arr = res && res.matches;
-        const cnt = arr ? Math.floor(arr.length / 3) : 0;
+      if (isAds) {
+        const terms = adsPlan.terms.map((t, idx) => ({
+          termIdx: idx,
+          noise: t.noise,
+          wasmKeywords: adaptKeywordsForWasm(t.specs, !!sw.weightedKeywords)
+        }));
+        const posIndices = collectAdsPositiveIndices(adsPlan.expr);
+        const posSet = new Set(posIndices);
+        adsPositiveTerms = posIndices.map(idx => terms[idx]).filter(Boolean);
 
-        if (cnt > 0) {
-          const sec = getSectionForPage(pageData.pageNumber);
-          const pHits = [];
-          for (let i = 0; i < arr.length; i += 3) {
-            const localStart = arr[i];
-            const localEnd = arr[i + 1];
-            const packedNoise = arr[i + 2];
-            totalHits++;
+        const secs = (State.sections && State.sections.length > 0)
+          ? State.sections
+          : buildFixedPageSections(State.numPages).sections;
 
-            const baseHit = { localStart, localEnd, noise: packedNoise };
-            pHits.push(baseHit);
+        for (const sec of secs) {
+          if (token !== State.activeSearchToken) return null;
+          const startPi = Math.max(0, sec.startPage - 1);
+          const endPi = Math.min(State.pages.length - 1, sec.endPage - 1);
+          if (endPi < startPi) continue;
 
-            if (hits.length < MAX_RECORDED_HITS) {
-              const compact = buildCompactPreview(pageData.text, localStart, localEnd, packedNoise);
-              const hitObj = {
-                hitIndex: hits.length,
-                pageIndex: pi,
-                pageNumber: pageData.pageNumber,
-                sectionIdx: sec.index,
-                localStart,
-                localEnd,
-                noise: packedNoise,
-                percent: `p.${pageData.pageNumber}`,
-                preview: compact.preview,
-                highlights: compact.highlights
-              };
-              hits.push(hitObj);
+          const termHitCache = new Map();
+          const termMatchesByPage = new Map();
 
-              let g = groupMap.get(sec.index);
-              if (!g) {
-                g = {
-                  type: 'txt-group',
-                  path: `txt-group:${sec.index}`,
-                  groupIndex: sec.index,
-                  title: sec.title,
-                  percent: sec.label,
-                  count: 0,
-                  hits: []
-                };
-                groupMap.set(sec.index, g);
+          const hasTermInSection = (tIdx) => {
+            if (termHitCache.has(tIdx)) return termHitCache.get(tIdx);
+            const term = terms[tIdx];
+            if (!term || term.wasmKeywords.length === 0) {
+              termHitCache.set(tIdx, false);
+              return false;
+            }
+            const keepAll = posSet.has(tIdx);
+            let found = false;
+            let byPage = null;
+            for (let pi = startPi; pi <= endPi; pi++) {
+              const pageData = State.pages[pi];
+              if (!pageData || !pageData.text) continue;
+              const matches = collectWasmMatches(sw, pageData.text, term.wasmKeywords, term.noise, tIdx);
+              if (matches.length > 0) {
+                found = true;
+                if (!keepAll) break;
+                if (!byPage) { byPage = new Map(); termMatchesByPage.set(tIdx, byPage); }
+                byPage.set(pi, matches);
               }
-              g.count++;
-              g.hits.push(hitObj);
+            }
+            termHitCache.set(tIdx, found);
+            return found;
+          };
+
+          if (evalAdsExpr(adsPlan.expr, hasTermInSection)) {
+            for (const pIdx of posIndices) hasTermInSection(pIdx);
+            for (let pi = startPi; pi <= endPi; pi++) {
+              const pageData = State.pages[pi];
+              if (!pageData || !pageData.text) continue;
+              const raw = [];
+              for (const pIdx of posIndices) {
+                const byPage = termMatchesByPage.get(pIdx);
+                const m = byPage && byPage.get(pi);
+                if (m && m.length > 0) raw.push(...m);
+              }
+              if (raw.length > 0) {
+                recordPageMatches(pi, pageData, sec, mergeWasmMatchSpans(raw));
+              }
             }
           }
-          pageHitsMap.set(pi, pHits);
-        }
 
-        if (performance.now() - sliceStart >= 10) {
-          await new Promise(r => setTimeout(r, 0));
-          sliceStart = performance.now();
+          if (performance.now() - sliceStart >= 10) {
+            await new Promise(r => setTimeout(r, 0));
+            sliceStart = performance.now();
+          }
+        }
+      } else {
+        wasmKeywords = adaptKeywordsForWasm(specs, !!sw.weightedKeywords);
+        for (let pi = 0; pi < State.pages.length; pi++) {
+          if (token !== State.activeSearchToken) return null;
+          const pageData = State.pages[pi];
+          if (!pageData || !pageData.text) continue;
+
+          const matches = collectWasmMatches(sw, pageData.text, wasmKeywords, noise, 0);
+          if (matches.length > 0) {
+            recordPageMatches(pi, pageData, getSectionForPage(pageData.pageNumber), matches);
+          }
+
+          if (performance.now() - sliceStart >= 10) {
+            await new Promise(r => setTimeout(r, 0));
+            sliceStart = performance.now();
+          }
         }
       }
 
       if (token !== State.activeSearchToken) return null;
 
       const groups = Array.from(groupMap.values()).sort((a, b) => a.groupIndex - b.groupIndex);
-      State.lastSearch = { keyword, wasmKeywords, noise, hits, groups, groupMap, pageHitsMap };
+      const truncated = totalHits > hits.length;
+      State.lastSearch = { keyword, isAds, adsPositiveTerms, wasmKeywords, noise, hits, groups, groupMap, pageHitsMap };
+
+      if (canCache && queryKey) {
+        const groupMeta = groups.map(g => ({
+          groupIndex: g.groupIndex,
+          title: g.title,
+          percent: g.percent,
+          count: g.count
+        }));
+        BookDB.putSearch(State.bookKey, queryKey, 'pdf', {
+          keyword,
+          isAds,
+          totalHits,
+          truncated,
+          groupUnit: State.groupUnit,
+          hits,
+          groupMeta,
+          pageHitsEntries: truncated ? Array.from(pageHitsMap.entries()) : null
+        });
+      }
 
       paintAllRenderedPages();
 
@@ -1538,7 +1850,7 @@ initExcerptTrigger();
         keyword,
         totalHits,
         shownHits: hits.length,
-        truncated: totalHits > hits.length,
+        truncated,
         groups,
         groupUnit: State.groupUnit
       };
@@ -1552,14 +1864,17 @@ initExcerptTrigger();
         const gIdx = Number(path.slice('txt-group:'.length));
         const g = last.groupMap.get(gIdx);
         if (!g) return null;
-        const MAX_ITEMS = 40;
-        const items = [];
-        for (const h of g.hits.slice(0, MAX_ITEMS)) {
-          const it = buildSnippetItem(h, 54, g.hits);
-          if (it) items.push(it);
-        }
+        const { items, more } = buildMergedGroupSnippets(g.hits, {
+          maxItems: 40,
+          radius: 54,
+          maxWindowChars: 170,
+          snapToNewline: false,
+          getUnitKey: (h) => h.pageIndex,
+          getUnitText: (h) => (State.pages[h.pageIndex] && State.pages[h.pageIndex].text) || '',
+          getPrefix: (h, s) => (s > 0 ? '…' : '') + `[p.${h.pageNumber}] `
+        });
         return {
-          body: { hits: g.count, more: Math.max(0, g.hits.length - MAX_ITEMS), items },
+          body: { hits: g.count, more: more + Math.max(0, g.count - g.hits.length), items },
           comments: { hits: 0, docs: 0, more: 0, items: [] }
         };
       }
@@ -1671,6 +1986,7 @@ initExcerptTrigger();
       const params = new URLSearchParams(window.location.search);
       const fileUrl = params.get('file') || '';
       State.title = decodeURIComponent((fileUrl.split('/').pop() || document.title || 'PDF').split('#')[0]);
+      State.bookKey = (docGen === 1 && fileUrl) ? normalizeBookKey(fileUrl) : '';
 
       const initSections = buildFixedPageSections(State.numPages);
       State.sections = initSections.sections;

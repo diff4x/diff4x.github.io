@@ -34,6 +34,15 @@ export function pageOverlayKey(kw) {
     return isAdsQuery(kw) ? String(kw).trim() : normalizeKeyword(kw);
 }
 
+export function normalizeDocPath(p) {
+    if (!p || typeof p !== 'string') return '';
+    let s = p.replace(/^(?:\.\.\/|\/)+/, '');
+    if (/%[0-9A-Fa-f]{2}/.test(s)) {
+        try { s = decodeURI(s); } catch (_) { }
+    }
+    return s;
+}
+
 function adsHoldsOnEmpty(n) {
     if (n.op === 'term') return n.neg;
     return n.op === 'and' ? n.args.every(adsHoldsOnEmpty) : n.args.some(adsHoldsOnEmpty);
@@ -373,15 +382,18 @@ function createSearchResultCache(db, lru, store, emitEvent, { memMax = 48, flush
 }
 
 export function createSearchEngine(ctx) {
-    const { store, dbProxy, emitEvent, getWorker, getActiveWorker, getCommentModel } = ctx;
+    const { store, dbProxy, iframes, emitEvent, getWorker, getActiveWorker, getCommentModel } = ctx;
 
     const commentHitCache = new Map();
     const pageHitCache = new Map();
     const snippetCache = new Map();
+    const fetchedBilingualCache = new Map();
     const pendingSnippets = new Map();
+    const pendingLocalSnippets = new Map();
     const pendingExpands = new Map();
     const termSpecsCache = new Map();
     let _snipReqId = 0;
+    let _localSnipReqId = 0;
     let _expandReqId = 0;
 
     let _privateSrc = null;
@@ -511,15 +523,26 @@ export function createSearchEngine(ctx) {
         } catch (e) { return false; }
     }
 
+    let _synFpCache = '';
+    let _synFpSrc = null;
+
+    function getSynonymsFingerprint() {
+        if (!window._synonymsReady || !window.synonymIndex) return '';
+        const idx = window.synonymIndex;
+        if (_synFpSrc === idx && _synFpCache) return _synFpCache;
+        const sigPart = idx.sig
+            ? String(idx.sig)
+            : (Array.isArray(idx.groups) && idx.groups.length > 0 ? JSON.stringify(idx.groups) : String(idx.version || '0'));
+        _synFpCache = hashText(String(idx.version || '') + '|' + sigPart);
+        _synFpSrc = idx;
+        return _synFpCache;
+    }
+
     async function bindSynonymsNamespace() {
-        if (!window._synonymsReady || !window.synonymIndex) return false;
+        const synFp = getSynonymsFingerprint();
+        if (!synFp) return false;
         try {
-            const idx = window.synonymIndex;
-            const sigPart = idx.sig
-                ? String(idx.sig)
-                : (Array.isArray(idx.groups) && idx.groups.length > 0 ? JSON.stringify(idx.groups) : String(idx.version || '0'));
-            const fp = 'syn:' + hashText(String(idx.version || '') + '|' + sigPart);
-            return await searchResultCache.bindNamespace('syn', fp);
+            return await searchResultCache.bindNamespace('syn', 'syn:' + synFp);
         } catch (e) { return false; }
     }
 
@@ -736,7 +759,7 @@ export function createSearchEngine(ctx) {
         return { ok: true, terms, expr, summary: show(tree, null) };
     }
 
-    function buildAdsPositiveTerms(kw) {
+    function buildAdsPositiveTerms(kw, raw = false) {
         const plan = parseAdsQuery(kw);
         if (!plan.ok) return null;
         const posIdx = new Set();
@@ -750,7 +773,7 @@ export function createSearchEngine(ctx) {
         for (const idx of [...posIdx].sort((a, b) => a - b)) {
             const t = plan.terms[idx];
             if (!t) continue;
-            const keywords = buildTermSpecs(t.text, !!t.like);
+            const keywords = buildTermSpecs(t.text, !!t.like, raw);
             if (keywords.length > 0) {
                 terms.push({ text: t.text, like: !!t.like, noise: t.noise, keywords });
             }
@@ -826,9 +849,8 @@ export function createSearchEngine(ctx) {
         const entries = pageHitCache.get(pageOverlayKey(keyword));
         if (!entries || entries.size === 0) return results;
 
-        const strip = (p) => (p.startsWith('../') ? p.substring(3) : p);
         const indexByPath = new Map();
-        results.forEach((r, i) => indexByPath.set(strip(r.path), i));
+        results.forEach((r, i) => indexByPath.set(normalizeDocPath(r.path), i));
 
         const adsMode = isAdsQuery(keyword);
         const out = results.slice();
@@ -958,7 +980,7 @@ export function createSearchEngine(ctx) {
         if (store.resource_type !== "html" || hist.length === 0) return;
 
         const currentPath = hist[0];
-        const path = currentPath.startsWith('../') ? currentPath.substring(3) : currentPath;
+        const path = normalizeDocPath(currentPath);
         const title = payload.title || path.split('/').pop().replace('.html', '');
         const count = typeof payload.count === 'number' ? payload.count : 0;
 
@@ -979,55 +1001,325 @@ export function createSearchEngine(ctx) {
         if (changed) uiHandlers.rerenderOverlay();
     }
 
-    function requestSnippets(path, keyword) {
-        if (isTxtScope() && txtProvider && typeof txtProvider.getSnippets === 'function') {
-            return Promise.resolve(txtProvider.getSnippets(path, keyword));
+    function getContentIframe() {
+        return (iframes && iframes.content) || document.getElementById('content');
+    }
+
+    function isOpenPageBilingual() {
+        try {
+            const ifr = getContentIframe();
+            const doc = ifr && ifr.contentDocument;
+            return !!(doc && (doc.getElementById('zhText') || doc.getElementById('engText')));
+        } catch (_) {
+            return false;
         }
+    }
+
+    function isCurrentOpenHtml(normPath) {
+        if (!normPath || store.resource_type !== 'html') return false;
+        let hist = store.last_li_a;
+        if (!Array.isArray(hist)) hist = hist ? [hist] : [];
+        if (hist.length > 0 && normalizeDocPath(hist[0]) === normPath) return true;
+        try {
+            const ifr = getContentIframe();
+            const locPath = ifr && ifr.contentWindow && ifr.contentWindow.location && ifr.contentWindow.location.pathname;
+            if (locPath && normalizeDocPath(locPath) === normPath) return true;
+        } catch (_) { }
+        return false;
+    }
+
+    function hasLivePageOverlay(keyword, normPath) {
+        const entries = pageHitCache.get(pageOverlayKey(keyword));
+        if (!entries) return false;
+        const e = entries.get(normPath);
+        return !!(e && (e.count > 0 || e.matched));
+    }
+
+    function handleLocalSearchSnippets(payload) {
+        const reqId = payload && payload.reqId;
+        const cb = pendingLocalSnippets.get(reqId);
+        if (cb) {
+            pendingLocalSnippets.delete(reqId);
+            cb(payload.body || null);
+        }
+    }
+
+    function requestLocalPageSnippets(keyword, maxBody = 40) {
+        return new Promise((resolve) => {
+            const reqId = ++_localSnipReqId;
+            const timer = setTimeout(() => {
+                pendingLocalSnippets.delete(reqId);
+                resolve(null);
+            }, 1200);
+            pendingLocalSnippets.set(reqId, (body) => {
+                clearTimeout(timer);
+                resolve(body);
+            });
+            emitEvent('LOCAL_SEARCH_SNIPPETS', { reqId, keyword, maxBody }, 'content');
+        });
+    }
+
+    function buildSnippetsFromWasmMatches(text, rawMatches, maxBody = 40) {
+        if (!text || !Array.isArray(rawMatches) || rawMatches.length === 0) {
+            return { hits: 0, docs: 0, more: 0, items: [] };
+        }
+        rawMatches.sort((a, b) => a.start - b.start || b.end - a.end);
+        const merged = [];
+        for (const m of rawMatches) {
+            const last = merged[merged.length - 1];
+            if (last && m.start < last.end) {
+                const lastTier = Math.min(((last.noise | 0) >> 8) & 3, 2);
+                const curTier = Math.min(((m.noise | 0) >> 8) & 3, 2);
+                const lastNoise = last.noise & 255;
+                const curNoise = m.noise & 255;
+                const lastWeight = (last.noise >>> 16) & 255;
+                const curWeight = (m.noise >>> 16) & 255;
+                const lastLen = last.end - last.start;
+                const curLen = m.end - m.start;
+                if (
+                    curTier < lastTier ||
+                    (curTier === lastTier && curNoise < lastNoise) ||
+                    (curTier === lastTier && curNoise === lastNoise && curWeight > lastWeight) ||
+                    (curTier === lastTier && curNoise === lastNoise && curWeight === lastWeight && curLen > lastLen)
+                ) {
+                    merged[merged.length - 1] = m;
+                }
+                continue;
+            }
+            merged.push(m);
+        }
+
+        const stepBack = (str, u16Idx, count) => {
+            let i = Math.max(0, Math.min(str.length, u16Idx));
+            let n = 0;
+            while (i > 0 && n < count) {
+                i--;
+                const c = str.charCodeAt(i);
+                if (c >= 0xDC00 && c <= 0xDFFF && i > 0) {
+                    const p = str.charCodeAt(i - 1);
+                    if (p >= 0xD800 && p <= 0xDBFF) i--;
+                }
+                n++;
+            }
+            return i;
+        };
+        const stepFwd = (str, u16Idx, count) => {
+            let i = Math.max(0, Math.min(str.length, u16Idx));
+            let n = 0;
+            while (i < str.length && n < count) {
+                const c = str.charCodeAt(i);
+                if (c >= 0xD800 && c <= 0xDBFF && i + 1 < str.length) {
+                    const nx = str.charCodeAt(i + 1);
+                    if (nx >= 0xDC00 && nx <= 0xDFFF) i++;
+                }
+                i++;
+                n++;
+            }
+            return i;
+        };
+        const cpLen = (str, from, to) => {
+            let n = 0;
+            for (let i = from; i < to; i++) {
+                const c = str.charCodeAt(i);
+                if (c >= 0xD800 && c <= 0xDBFF && i + 1 < to) {
+                    const nx = str.charCodeAt(i + 1);
+                    if (nx >= 0xDC00 && nx <= 0xDFFF) i++;
+                }
+                n++;
+            }
+            return n;
+        };
+
+        const groups = [];
+        for (const m of merged) {
+            const hlNoise = (m.noise || 0) & 0x3ff;
+            const ws = stepBack(text, m.start, 20);
+            const we = stepFwd(text, m.end, 40);
+            const last = groups[groups.length - 1];
+            if (last && ws <= last.we && cpLen(text, last.ws, Math.max(last.we, we)) <= 140) {
+                if (we > last.we) last.we = we;
+                last.hits.push({ start: m.start, end: m.end, noise: hlNoise });
+            } else {
+                groups.push({ ws, we, hits: [{ start: m.start, end: m.end, noise: hlNoise }] });
+            }
+        }
+
+        const items = groups.map(g => {
+            const prefix = g.ws > 0;
+            const suffix = g.we < text.length;
+            const t = (prefix ? '...' : '') + text.slice(g.ws, g.we) + (suffix ? '...' : '');
+            const base = prefix ? 3 : 0;
+            const h = [];
+            let minNoise = 0xFFFFFFFF;
+            for (const hit of g.hits) {
+                h.push([base + (hit.start - g.ws), base + (hit.end - g.ws), hit.noise]);
+                if (hit.noise < minNoise) minNoise = hit.noise;
+            }
+            return { t, h, n: minNoise };
+        });
+
+        items.sort((a, b) => a.n - b.n);
+        const more = items.length > maxBody ? items.length - maxBody : 0;
+        if (more > 0) items.length = maxBody;
+        return { hits: merged.length, docs: 0, more, items };
+    }
+
+    async function requestFetchedBilingualSnippets(normPath, keyword, maxBody = 40) {
+        const sw = window.sharedWasm;
+        if (!sw || !sw.ready || typeof sw.find_content_matches_multi !== 'function') return null;
+
+        let cached = fetchedBilingualCache.get(normPath);
+        if (cached === undefined) {
+            try {
+                const res = await fetch(encodeURI(normPath));
+                if (!res.ok) return null;
+                const html = await res.text();
+                const doc = new DOMParser().parseFromString(html, 'text/html');
+                const eng = doc.getElementById('engText');
+                const zh = doc.getElementById('zhText');
+                if (!eng && !zh) {
+                    cached = { isBilingual: false, text: '' };
+                } else {
+                    const parts = [];
+                    if (eng && eng.textContent) parts.push(eng.textContent);
+                    if (zh && zh.textContent) parts.push(zh.textContent);
+                    cached = { isBilingual: true, text: parts.join('\n') };
+                }
+                fetchedBilingualCache.delete(normPath);
+                fetchedBilingualCache.set(normPath, cached);
+                if (fetchedBilingualCache.size > 20) {
+                    fetchedBilingualCache.delete(fetchedBilingualCache.keys().next().value);
+                }
+            } catch (_) {
+                return null;
+            }
+        }
+        if (!cached || !cached.isBilingual || !cached.text) return null;
+
+        const adaptKws = (kws) => sw.weightedKeywords
+            ? kws
+            : kws.map(k => (typeof k === 'string' ? k : (k && k.text) || '')).filter(Boolean);
+
+        const rawMatches = [];
+        if (isAdsQuery(keyword)) {
+            const plan = parseAdsQuery(keyword);
+            if (plan && plan.ok && Array.isArray(plan.terms)) {
+                await ensureTermSpecs(plan.terms.filter(t => t && t.like).map(t => ({ text: t.text, like: true })));
+            }
+            const posTerms = buildAdsPositiveTerms(keyword) || [];
+            for (const t of posTerms) {
+                const r = sw.find_content_matches_multi(cached.text, adaptKws(t.keywords), t.noise);
+                const buf = r && r.matches;
+                const cnt = (r && r.count) || 0;
+                for (let i = 0; i < cnt; i++) {
+                    rawMatches.push({ start: buf[i * 3], end: buf[i * 3 + 1], noise: buf[i * 3 + 2] });
+                }
+            }
+        } else {
+            const useSyn = (store.synonyms_enabled ?? 1) === 1;
+            const noise = Number(store.noise_level ?? 5);
+            if (useSyn) await ensureTermSpecs([{ text: keyword, like: true }]);
+            const kws = adaptKws(buildTermSpecs(keyword, useSyn));
+            const r = sw.find_content_matches_multi(cached.text, kws, noise);
+            const buf = r && r.matches;
+            const cnt = (r && r.count) || 0;
+            for (let i = 0; i < cnt; i++) {
+                rawMatches.push({ start: buf[i * 3], end: buf[i * 3 + 1], noise: buf[i * 3 + 2] });
+            }
+        }
+
+        const body = buildSnippetsFromWasmMatches(cached.text, rawMatches, maxBody);
+        return body.items.length > 0 ? body : null;
+    }
+
+    function requestWorkerSnippets(workerPath, keyword, ads, adsTerms, noise, useSyn) {
         const worker = getActiveWorker();
         if (!worker) return Promise.resolve(null);
-        const commentModel = getCommentModel();
-        const noise = Number(store.noise_level ?? 5);
-        const useSyn = (store.synonyms_enabled ?? 1) === 1;
-        const ads = isAdsQuery(keyword);
-        const key = [ads ? keyword.trim() : normalizeKeyword(keyword), noise, useSyn ? 1 : 0, commentModel ? commentModel.ver : 0, path].join('|');
-
-        const hit = snippetCache.get(key);
-        if (hit) {
-            snippetCache.delete(key);
-            snippetCache.set(key, hit);
-            return Promise.resolve(hit);
-        }
-
-        let adsTerms = null;
-        if (ads) {
-            adsTerms = buildAdsPositiveTerms(keyword);
-            if (!adsTerms || adsTerms.length === 0) return Promise.resolve(null);
-        }
-
         return new Promise((resolve) => {
             const reqId = ++_snipReqId;
-            pendingSnippets.set(reqId, (data) => {
-                if (data) {
-                    snippetCache.set(key, data);
-                    if (snippetCache.size > 40) snippetCache.delete(snippetCache.keys().next().value);
-                }
-                resolve(data);
-            });
+            pendingSnippets.set(reqId, (data) => resolve(data));
             worker.postMessage({
                 type: 'SNIPPETS',
                 payload: ads
                     ? {
-                        reqId, path, keyword,
+                        reqId, path: workerPath, keyword,
                         adsTerms: adsTerms.map(x => ({ text: x.text, like: !!x.like, noise: x.noise })),
                         maxBody: 40, maxComments: 30
                     }
                     : {
-                        reqId, path, keyword, noise,
+                        reqId, path: workerPath, keyword, noise,
                         synonymsEnabled: useSyn,
                         maxBody: 40, maxComments: 30
                     }
             });
         });
+    }
+
+    async function requestSnippets(path, keyword) {
+        if (isTxtScope() && txtProvider && typeof txtProvider.getSnippets === 'function') {
+            return txtProvider.getSnippets(path, keyword);
+        }
+        const normPath = normalizeDocPath(path);
+        const commentModel = getCommentModel();
+        const noise = Number(store.noise_level ?? 5);
+        const useSyn = (store.synonyms_enabled ?? 1) === 1;
+        const ads = isAdsQuery(keyword);
+
+        let adsTerms = null;
+        if (ads) {
+            adsTerms = buildAdsPositiveTerms(keyword);
+            if (!adsTerms || adsTerms.length === 0) return null;
+        }
+
+        const isCurrentOpen = isCurrentOpenHtml(normPath);
+        const liveBilingual = isCurrentOpen && isOpenPageBilingual();
+        const hasLiveOverlay = isCurrentOpen && hasLivePageOverlay(keyword, normPath);
+        const preferLive = liveBilingual || hasLiveOverlay;
+        const key = [ads ? keyword.trim() : normalizeKeyword(keyword), noise, useSyn ? 1 : 0, commentModel ? commentModel.ver : 0, normPath].join('|');
+
+        if (!preferLive) {
+            const hit = snippetCache.get(key);
+            if (hit) {
+                snippetCache.delete(key);
+                snippetCache.set(key, hit);
+                return hit;
+            }
+        }
+
+        const workerPromise = requestWorkerSnippets(normPath, keyword, ads, adsTerms, noise, useSyn);
+        const livePromise = preferLive ? requestLocalPageSnippets(keyword, 40) : null;
+
+        let data = await workerPromise;
+        const emptyComments = { hits: 0, docs: 0, more: 0, items: [] };
+        const commentsSection = (data && data.comments) || emptyComments;
+
+        if (livePromise) {
+            const liveBody = await livePromise;
+            if (liveBody && liveBody.items && liveBody.items.length > 0) {
+                return { body: liveBody, comments: commentsSection };
+            }
+        }
+
+        const hasWorkerBody = !!(data && data.body && Array.isArray(data.body.items) && data.body.items.length > 0);
+        if (!hasWorkerBody) {
+            if (isCurrentOpen && !livePromise) {
+                const liveBody = await requestLocalPageSnippets(keyword, 40);
+                if (liveBody && liveBody.items && liveBody.items.length > 0) {
+                    return { body: liveBody, comments: commentsSection };
+                }
+            } else if (!isCurrentOpen && normPath.endsWith('.html') && !(isPrivatePath(normPath) && store.online_flag === '1')) {
+                const fetchedBody = await requestFetchedBilingualSnippets(normPath, keyword, 40);
+                if (fetchedBody && fetchedBody.items && fetchedBody.items.length > 0) {
+                    data = { body: fetchedBody, comments: commentsSection };
+                }
+            }
+        }
+
+        if (data && !preferLive && !(isCurrentOpen && (!data.body || data.body.items.length === 0))) {
+            snippetCache.set(key, data);
+            if (snippetCache.size > 40) snippetCache.delete(snippetCache.keys().next().value);
+        }
+        return data;
     }
 
     function computeTitleMatchRanges(title, keyword) {
@@ -1040,7 +1332,7 @@ export function createSearchEngine(ctx) {
 
         const allHits = [];
         if (isAdsQuery(kw)) {
-            const posTerms = buildAdsPositiveTerms(kw);
+            const posTerms = buildAdsPositiveTerms(kw, isTxtScope());
             if (!posTerms || posTerms.length === 0) return [];
             for (const t of posTerms) srCollectMatches(chars, t.keywords, t.noise, allHits);
         } else {
@@ -1105,16 +1397,75 @@ export function createSearchEngine(ctx) {
     async function searchTxtBook(kw) {
         const provider = txtProvider;
         if (!provider) return;
-        if (isAdsQuery(kw)) {
-            invalidateSearch();
-            if (typeof provider.clearHighlights === 'function') provider.clearHighlights();
-            window._txtStatus = '⚠️ 文内搜索不支持组合语法 @[...]';
-            uiHandlers.showTxtResults({ totalHits: 0, groups: [], keyword: kw }, kw);
-            return;
-        }
 
         const currentToken = ++window._searchToken;
         cancelWorkerSearch(currentToken);
+
+        if (isAdsQuery(kw)) {
+            const plan = parseAdsQuery(kw);
+            if (!plan.ok) {
+                if (typeof provider.clearHighlights === 'function') provider.clearHighlights();
+                window._adsStatus = { error: plan.error };
+                window._txtStatus = plan.error;
+                uiHandlers.showTxtResults({ totalHits: 0, groups: [], keyword: kw, error: plan.error }, kw);
+                return;
+            }
+
+            window._adsStatus = { summary: plan.summary };
+            window._txtStatus = `${plan.summary} · 搜索中...`;
+            uiHandlers.paintStatus(kw);
+
+            const likeTerms = plan.terms.filter(t => t && t.like);
+            if (likeTerms.length > 0) {
+                if (!window._synonymsReady) window._searchSentWithoutSyn = true;
+                await ensureTermSpecs(likeTerms.map(t => ({ text: t.text, like: true, skipCorpusFilter: true })));
+                if (currentToken !== window._searchToken || !isTxtScope() || txtProvider !== provider) return;
+            }
+
+            const adsPlan = {
+                terms: plan.terms.map(t => ({
+                    text: t.text,
+                    noise: t.noise,
+                    like: !!t.like,
+                    specs: buildTermSpecs(t.text, !!t.like, true)
+                })),
+                expr: plan.expr,
+                summary: plan.summary
+            };
+
+            const reportStatus = (msg) => {
+                if (currentToken !== window._searchToken || !isTxtScope() || txtProvider !== provider) return;
+                window._txtStatus = msg ? `${plan.summary} · ${msg}` : plan.summary;
+                uiHandlers.paintStatus(kw);
+            };
+            const canCache = likeTerms.length === 0 || !!window._synonymsReady;
+            const cacheMeta = {
+                algoVer: SEARCH_ALGO_VER,
+                synVer: getSynonymsFingerprint(),
+                canCache
+            };
+            try {
+                const res = await provider.runSearch({
+                    keyword: kw,
+                    adsPlan,
+                    token: currentToken,
+                    reportStatus,
+                    cacheMeta
+                });
+                if (!res || currentToken !== window._searchToken || !isTxtScope() || txtProvider !== provider) return;
+                const extra = res.statusMsg
+                    || (res.truncated ? `命中较多，已展示前 ${res.shownHits}/${res.totalHits} 处` : '');
+                window._txtStatus = extra ? `${plan.summary} · ${extra}` : plan.summary;
+                uiHandlers.showTxtResults(res, kw);
+            } catch (err) {
+                if (currentToken !== window._searchToken) return;
+                console.error('[Doc Search] 组合搜索失败:', err);
+                window._txtStatus = '⚠️ 文内组合检索异常';
+                uiHandlers.paintStatus(kw);
+            }
+            return;
+        }
+
         const useSyn = (store.synonyms_enabled ?? 1) === 1;
         const noise = Number(store.noise_level ?? 5);
 
@@ -1133,6 +1484,11 @@ export function createSearchEngine(ctx) {
             window._txtStatus = msg || '';
             uiHandlers.paintStatus(kw);
         };
+        const cacheMeta = {
+            algoVer: SEARCH_ALGO_VER,
+            synVer: getSynonymsFingerprint(),
+            canCache: !useSyn || !!window._synonymsReady
+        };
         try {
             const res = await provider.runSearch({
                 keyword: kw,
@@ -1140,7 +1496,8 @@ export function createSearchEngine(ctx) {
                 noise,
                 synonymsEnabled: useSyn,
                 token: currentToken,
-                reportStatus
+                reportStatus,
+                cacheMeta
             });
             if (!res || currentToken !== window._searchToken || !isTxtScope() || txtProvider !== provider) return;
             window._txtStatus = res.statusMsg
@@ -1345,6 +1702,7 @@ export function createSearchEngine(ctx) {
         applyPageOverlay,
         applyCommentOverlay,
         handleLocalSearchResult,
+        handleLocalSearchSnippets,
         refreshCommentOverlayForCurrentKeyword,
         requestSnippets,
         computeTitleMatchRanges,

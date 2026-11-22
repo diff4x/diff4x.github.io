@@ -309,10 +309,14 @@ export function createSearchPreviewController(ctx) {
                     block.appendChild(row);
 
                     if (!useHL) return;
+                    const maxLen = text.length;
                     for (const [s, e, n] of item.h) {
+                        const rs = Math.max(0, Math.min(maxLen, s + 1));
+                        const re = Math.max(rs, Math.min(maxLen, e + 1));
+                        if (re <= rs) continue;
                         const r = new Range();
-                        r.setStart(text, s + 1);
-                        r.setEnd(text, e + 1);
+                        r.setStart(text, rs);
+                        r.setEnd(text, re);
                         getSearchHighlight(n).add(r);
                     }
                 });

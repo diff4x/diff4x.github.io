@@ -14,6 +14,7 @@ import {
     isActionCommand,
     isAdsQuery,
     isReservedSearchCommand,
+    normalizeDocPath,
     pageOverlayKey
 } from './search-engine.js';
 import { createSearchPreviewController } from './search-preview.js';
@@ -212,6 +213,7 @@ export function createSearchUI(ctx) {
         shownHits: 0,
         groupUnit: '节',
         groups: [],
+        error: '',
         expanded: new Set(),
         activeHitIndex: -1
     };
@@ -650,10 +652,11 @@ export function createSearchUI(ctx) {
             const totalHits = sf && typeof sf.txtHits === 'number' ? sf.txtHits : 0;
             const totalGroups = sf && typeof sf.txtGroups === 'number' ? sf.txtGroups : 0;
             const unit = (sf && sf.groupUnit) || _txtState.groupUnit || '节';
-            countEl.textContent = (isAdsQuery(kw) || (sf && sf.pending))
+            const hasErr = !!(sf && sf.error);
+            countEl.textContent = (hasErr || (sf && sf.pending))
                 ? ''
                 : (totalHits === 0 ? '0 处' : `${totalHits} 处 / ${totalGroups} ${unit}`);
-            countEl.classList.toggle('sf-hot', totalHits > 0);
+            countEl.classList.toggle('sf-hot', !hasErr && totalHits > 0);
             const statusEl = bar.querySelector('#sf-status');
             if (statusEl) statusEl.textContent = window._txtStatus || '';
             sfLayout();
@@ -795,7 +798,12 @@ export function createSearchUI(ctx) {
         }
 
         window._currentResultMap = resultMap;
-        sfRefreshBar(kw, { txtHits: _txtState.totalHits, txtGroups: groups.length, groupUnit: _txtState.groupUnit });
+        sfRefreshBar(kw, {
+            txtHits: _txtState.totalHits,
+            txtGroups: groups.length,
+            groupUnit: _txtState.groupUnit,
+            error: _txtState.error
+        });
     }
 
     function showTxtResults(res, keyword) {
@@ -805,6 +813,7 @@ export function createSearchUI(ctx) {
             shownHits: (res && res.shownHits) || 0,
             groupUnit: (res && res.groupUnit) || '节',
             groups: (res && Array.isArray(res.groups)) ? res.groups : [],
+            error: (res && res.error) || '',
             expanded: new Set(),
             activeHitIndex: -1
         };
@@ -818,7 +827,7 @@ export function createSearchUI(ctx) {
                 ? `搜本书..`
                 : 'search..';
         }
-        _txtState = { keyword: '', totalHits: 0, shownHits: 0, groups: [], expanded: new Set(), activeHitIndex: -1 };
+        _txtState = { keyword: '', totalHits: 0, shownHits: 0, groupUnit: '节', groups: [], error: '', expanded: new Set(), activeHitIndex: -1 };
         const bar = document.getElementById('sf-bar');
         if (bar) {
             const scopeBtn = bar.querySelector('#sf-scope');
@@ -955,17 +964,22 @@ export function createSearchUI(ctx) {
         if (!Array.isArray(history)) history = history ? [history] : [];
 
         let currentIndex = -1;
+        let isBilingualOpen = false;
         if (store.resource_type === "html" && history.length > 0) {
             const currentPath = history[0];
-            const strippedPath = currentPath.startsWith('../') ? currentPath.substring(3) : currentPath;
-            currentIndex = finalResults.findIndex(r => r.path === currentPath || r.path === strippedPath);
+            const strippedPath = normalizeDocPath(currentPath);
+            currentIndex = finalResults.findIndex(r => r.path === currentPath || normalizeDocPath(r.path) === strippedPath);
+            try {
+                const cdoc = iframes && iframes.content && iframes.content.contentDocument;
+                isBilingualOpen = !!(cdoc && (cdoc.getElementById('zhText') || cdoc.getElementById('engText')));
+            } catch (_) { }
         }
 
         if (activeKw !== "" && !isActionCommand(activeKw)) {
             if (!isAdsQuery(activeKw) && !provisional && !fromCache && !options.noCache) {
                 engine.searchResultCache.set(activeKw, base, options.termSpecs || null);
             }
-            if (currentIndex === -1) emitEvent('LOCAL_SEARCH_COUNT', activeKw, 'content');
+            if (currentIndex === -1 || isBilingualOpen) emitEvent('LOCAL_SEARCH_COUNT', activeKw, 'content');
         }
 
         if (currentIndex !== -1) {
@@ -1356,7 +1370,7 @@ export function createSearchUI(ctx) {
             elSearchInput.value = "";
             engine.invalidateSearch();
             window._txtStatus = '';
-            _txtState = { keyword: '', totalHits: 0, shownHits: 0, groups: [], expanded: new Set(), activeHitIndex: -1 };
+            _txtState = { keyword: '', totalHits: 0, shownHits: 0, groupUnit: '节', groups: [], error: '', expanded: new Set(), activeHitIndex: -1 };
             const provider = engine.getTxtProvider();
             if (provider && typeof provider.clearHighlights === 'function') provider.clearHighlights();
             updateSearchResults([]);

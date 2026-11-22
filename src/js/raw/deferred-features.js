@@ -527,6 +527,7 @@ export function bomb(ctx) {
                 try {
                     if (ctx?.dbProxy && typeof ctx.dbProxy.close === 'function') ctx.dbProxy.close();
                     if (typeof ExcerptsSys !== 'undefined' && typeof ExcerptsSys.close === 'function') ExcerptsSys.close();
+                    try { const m = await import('./book-db.js'); if (m && m.BookDB) m.BookDB.close(); } catch (_) { }
                     if (ctx?.iframes?.side?.contentWindow?.MarkSystem && typeof ctx.iframes.side.contentWindow.MarkSystem.close === 'function') {
                         ctx.iframes.side.contentWindow.MarkSystem.close();
                     }
@@ -548,12 +549,12 @@ export function bomb(ctx) {
                 if (window.indexedDB) {
                     if (typeof indexedDB.databases === 'function') {
                         clearTasks.push(indexedDB.databases().then(dbs => {
-                            const names = new Set(['MainDB', 'ExcerptsDB', 'SideDB', 'AlignDrafts']);
+                            const names = new Set(['MainDB', 'ExcerptsDB', 'SideDB', 'AlignDrafts', 'BookDB']);
                             dbs.forEach(d => { if (d && d.name) names.add(d.name); });
                             return Promise.all([...names].map(deleteIdb));
-                        }).catch(() => Promise.all(['MainDB', 'ExcerptsDB', 'SideDB', 'AlignDrafts'].map(deleteIdb))));
+                        }).catch(() => Promise.all(['MainDB', 'ExcerptsDB', 'SideDB', 'AlignDrafts', 'BookDB'].map(deleteIdb))));
                     } else {
-                        clearTasks.push(Promise.all(['MainDB', 'ExcerptsDB', 'SideDB', 'AlignDrafts'].map(deleteIdb)));
+                        clearTasks.push(Promise.all(['MainDB', 'ExcerptsDB', 'SideDB', 'AlignDrafts', 'BookDB'].map(deleteIdb)));
                     }
                 }
                 if ('caches' in window) clearTasks.push(caches.keys().then(ks => Promise.all(ks.map(k => caches.delete(k)))));

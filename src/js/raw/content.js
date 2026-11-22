@@ -248,6 +248,17 @@ BUS.addEventListener('message', (e) => {
             })();
             break;
 
+        case "LOCAL_SEARCH_SNIPPETS":
+            (async () => {
+                if (!wasmEngineReady) await wasmInitPromise;
+                const reqId = payload && payload.reqId;
+                const kw = payload && payload.keyword;
+                const maxBody = (payload && typeof payload.maxBody === 'number') ? payload.maxBody : 40;
+                const body = await buildLocalSnippets(kw, maxBody);
+                emitEvent("LOCAL_SEARCH_SNIPPETS_RESULT", { reqId, body }, "index");
+            })();
+            break;
+
         case "DESTROY_HIGHLIGHT":
             _searchSeq++;
             if (CSS.highlights) {
@@ -344,7 +355,7 @@ async function format() {
         try {
             const preTag = document.querySelector('pre');
             if (!preTag) {
-                postProcess();
+                postProcess(anchorNode);
                 resolve();
                 return;
             }
@@ -630,54 +641,7 @@ async function search(preserveScroll = false) {
     await ensureContentTermSpecs(rawKeyword);
     if (mySeq !== _searchSeq) return;
 
-    const contentRoot =
-        document.querySelector('pre:not(#diff-pre)') ||
-        document.querySelector('article') ||
-        document.querySelector('main') ||
-        document.body;
-
-    const walker = document.createTreeWalker(contentRoot, NodeFilter.SHOW_TEXT, {
-        acceptNode(node) {
-            let el = node.parentElement;
-            while (el && el !== contentRoot) {
-                const id = el.id || '';
-                const cls = el.className || '';
-                if (
-                    id === 'bar' || id === 'toc' || id === 'toc-list' || id === 's_nav' ||
-                    id === 'gotop' || id === 'diff-minimap' || id === 'search-minimap' || id === 'diff-controls-wrapper' ||
-                    id === 'excerpt-pop-btn' ||
-                    (typeof cls === 'string' && (
-                        cls.includes('active-search-border') ||
-                        cls.includes('toc-toggle')
-                    ))
-                ) {
-                    return NodeFilter.FILTER_REJECT;
-                }
-                el = el.parentElement;
-            }
-            return NodeFilter.FILTER_ACCEPT;
-        }
-    }, false);
-
-    const textNodes = [];
-    let globalText = "";
-    const nodeMap = [];
-    let currentPos = 0;
-    const isBlockBreak = makeBlockBreakDetector();
-
-    while (walker.nextNode()) {
-        const node = walker.currentNode;
-        const val = node.nodeValue;
-        if (!val) continue;
-        if (isBlockBreak(node)) {
-            globalText += "\n";
-            currentPos += 1;
-        }
-        textNodes.push(node);
-        globalText += val;
-        nodeMap.push({ node, start: currentPos, end: currentPos + val.length });
-        currentPos += val.length;
-    }
+    const { globalText, nodeMap } = collectPageSearchText(true);
 
     const { matches, titleHits, adsBodyHits } = analyzePageMatches(globalText, rawKeyword);
     const totalMatches = matches.length;
@@ -860,10 +824,7 @@ async function search(preserveScroll = false) {
     }
 }
 
-async function countMatchesEnhanced(kw) {
-    if (!kw || kw.trim() === "" || !wasmEngineReady) return { count: 0, adsBodyHits: null };
-    await ensureContentTermSpecs(kw.trim());
-
+function collectPageSearchText(withNodeMap = false) {
     const contentRoot =
         document.querySelector('pre:not(#diff-pre)') ||
         document.querySelector('article') ||
@@ -874,12 +835,17 @@ async function countMatchesEnhanced(kw) {
         acceptNode(node) {
             let el = node.parentElement;
             while (el && el !== contentRoot) {
+                const tag = el.tagName ? el.tagName.toUpperCase() : '';
+                if (tag === 'SCRIPT' || tag === 'STYLE' || tag === 'NOSCRIPT' || tag === 'TEMPLATE') {
+                    return NodeFilter.FILTER_REJECT;
+                }
                 const id = el.id || '';
                 const cls = el.className || '';
                 if (
                     id === 'bar' || id === 'toc' || id === 'toc-list' || id === 's_nav' ||
                     id === 'gotop' || id === 'diff-minimap' || id === 'search-minimap' || id === 'diff-controls-wrapper' ||
-                    id === 'excerpt-pop-btn' ||
+                    id === 'excerpt-pop-btn' || id === 'pinyin-tooltip' ||
+                    id === 'anchor' || id === 'lock-screen' || id === 'control-panel' ||
                     (typeof cls === 'string' && (
                         cls.includes('active-search-border') ||
                         cls.includes('toc-toggle')
@@ -894,14 +860,140 @@ async function countMatchesEnhanced(kw) {
     }, false);
 
     let globalText = "";
+    const nodeMap = withNodeMap ? [] : null;
+    let currentPos = 0;
     const isBlockBreak = makeBlockBreakDetector();
+
     while (walker.nextNode()) {
         const node = walker.currentNode;
         const val = node.nodeValue;
         if (!val) continue;
-        if (isBlockBreak(node)) globalText += "\n";
+        if (isBlockBreak(node)) {
+            globalText += "\n";
+            currentPos += 1;
+        }
         globalText += val;
+        if (withNodeMap) {
+            nodeMap.push({ node, start: currentPos, end: currentPos + val.length });
+        }
+        currentPos += val.length;
     }
+
+    return { globalText, nodeMap };
+}
+
+function stepBackCodePoints(str, u16Idx, count) {
+    let i = Math.max(0, Math.min(str.length, u16Idx));
+    let n = 0;
+    while (i > 0 && n < count) {
+        i--;
+        const c = str.charCodeAt(i);
+        if (c >= 0xDC00 && c <= 0xDFFF && i > 0) {
+            const p = str.charCodeAt(i - 1);
+            if (p >= 0xD800 && p <= 0xDBFF) i--;
+        }
+        n++;
+    }
+    return i;
+}
+
+function stepForwardCodePoints(str, u16Idx, count) {
+    let i = Math.max(0, Math.min(str.length, u16Idx));
+    let n = 0;
+    while (i < str.length && n < count) {
+        const c = str.charCodeAt(i);
+        if (c >= 0xD800 && c <= 0xDBFF && i + 1 < str.length) {
+            const nx = str.charCodeAt(i + 1);
+            if (nx >= 0xDC00 && nx <= 0xDFFF) i++;
+        }
+        i++;
+        n++;
+    }
+    return i;
+}
+
+function countCodePoints(str, from, to) {
+    let n = 0;
+    for (let i = from; i < to; i++) {
+        const c = str.charCodeAt(i);
+        if (c >= 0xD800 && c <= 0xDBFF && i + 1 < to) {
+            const nx = str.charCodeAt(i + 1);
+            if (nx >= 0xDC00 && nx <= 0xDFFF) i++;
+        }
+        n++;
+    }
+    return n;
+}
+
+function buildSnippetsFromMatches(text, matches, maxBody = 40) {
+    if (!text || !Array.isArray(matches) || matches.length === 0) {
+        return { hits: 0, docs: 0, more: 0, items: [] };
+    }
+    const SNIP_BEFORE = 20;
+    const SNIP_AFTER = 40;
+    const SNIP_MAX_CHARS = 140;
+    const groups = [];
+
+    for (const m of matches) {
+        const start = m.start;
+        const end = m.end;
+        const hlNoise = (m.noise || 0) & 0x3ff;
+        const ws = stepBackCodePoints(text, start, SNIP_BEFORE);
+        const we = stepForwardCodePoints(text, end, SNIP_AFTER);
+        const last = groups[groups.length - 1];
+        let merge = false;
+        if (last && ws <= last.we) {
+            const newWe = Math.max(last.we, we);
+            if (countCodePoints(text, last.ws, newWe) <= SNIP_MAX_CHARS) {
+                merge = true;
+            }
+        }
+        if (merge) {
+            if (we > last.we) last.we = we;
+            last.hits.push({ start, end, noise: hlNoise });
+        } else {
+            groups.push({ ws, we, hits: [{ start, end, noise: hlNoise }] });
+        }
+    }
+
+    const items = groups.map(g => {
+        const prefix = g.ws > 0;
+        const suffix = g.we < text.length;
+        const t = (prefix ? '...' : '') + text.slice(g.ws, g.we) + (suffix ? '...' : '');
+        const base = prefix ? 3 : 0;
+        const h = [];
+        let minNoise = 0xFFFFFFFF;
+        for (const hit of g.hits) {
+            const s16 = base + (hit.start - g.ws);
+            const e16 = base + (hit.end - g.ws);
+            h.push([s16, e16, hit.noise]);
+            if (hit.noise < minNoise) minNoise = hit.noise;
+        }
+        return { t, h, n: minNoise };
+    });
+
+    items.sort((a, b) => a.n - b.n);
+    const more = items.length > maxBody ? items.length - maxBody : 0;
+    if (more > 0) items.length = maxBody;
+    return { hits: matches.length, docs: 0, more, items };
+}
+
+async function buildLocalSnippets(kw, maxBody = 40) {
+    if (!kw || kw.trim() === "" || !wasmEngineReady) {
+        return { hits: 0, docs: 0, more: 0, items: [] };
+    }
+    const trimmed = kw.trim();
+    await ensureContentTermSpecs(trimmed);
+    const { globalText } = collectPageSearchText(false);
+    const res = analyzePageMatches(globalText, trimmed);
+    return buildSnippetsFromMatches(globalText, res.matches, maxBody);
+}
+
+async function countMatchesEnhanced(kw) {
+    if (!kw || kw.trim() === "" || !wasmEngineReady) return { count: 0, adsBodyHits: null };
+    await ensureContentTermSpecs(kw.trim());
+
+    const { globalText } = collectPageSearchText(false);
 
     const res = analyzePageMatches(globalText, kw.trim());
     return {
@@ -1554,28 +1646,152 @@ function go_top() {
     });
 }
 
-function pinyin_func() {
-    const dict = window.top.pinyinData;
-    if (!dict || Object.keys(dict).length === 0) {
-        setTimeout(pinyin_func, 500);
-        return;
+function getSelectedTextCompat() {
+    const active = document.activeElement;
+    if (active && (active.tagName === 'TEXTAREA' || (active.tagName === 'INPUT' && /^(text|search|url|tel|password)$/i.test(active.type)))) {
+        const start = active.selectionStart;
+        const end = active.selectionEnd;
+        if (typeof start === 'number' && typeof end === 'number' && end > start) {
+            return active.value.slice(start, end).trim();
+        }
+    }
+    const sel = window.getSelection();
+    return sel ? sel.toString().trim() : '';
+}
+
+function getSelectionEndRect(sel, fallbackEvent) {
+    if (sel && sel.rangeCount > 0) {
+        try {
+            if (sel.focusNode) {
+                const caret = document.createRange();
+                caret.setStart(sel.focusNode, sel.focusOffset);
+                caret.collapse(true);
+                const rect = caret.getBoundingClientRect();
+                if (rect && rect.height > 0) return rect;
+
+                if (sel.focusNode.nodeType === Node.TEXT_NODE && sel.focusNode.length > 0) {
+                    const r2 = document.createRange();
+                    if (sel.focusOffset > 0) {
+                        r2.setStart(sel.focusNode, sel.focusOffset - 1);
+                        r2.setEnd(sel.focusNode, sel.focusOffset);
+                        const rr = r2.getBoundingClientRect();
+                        if (rr && rr.height > 0) {
+                            return { left: rr.right, right: rr.right, top: rr.top, bottom: rr.bottom, width: 0, height: rr.height };
+                        }
+                    } else {
+                        r2.setStart(sel.focusNode, 0);
+                        r2.setEnd(sel.focusNode, 1);
+                        const rr = r2.getBoundingClientRect();
+                        if (rr && rr.height > 0) {
+                            return { left: rr.left, right: rr.left, top: rr.top, bottom: rr.bottom, width: 0, height: rr.height };
+                        }
+                    }
+                }
+            }
+        } catch (_) { }
+
+        try {
+            const range = sel.getRangeAt(0);
+            const rects = Array.from(range.getClientRects()).filter(r => r.width > 0 || r.height > 0);
+            if (rects.length > 0) {
+                let isBackward = false;
+                if (sel.anchorNode && sel.focusNode) {
+                    if (sel.anchorNode === sel.focusNode) {
+                        isBackward = sel.focusOffset < sel.anchorOffset;
+                    } else {
+                        isBackward = !!(sel.anchorNode.compareDocumentPosition(sel.focusNode) & Node.DOCUMENT_POSITION_PRECEDING);
+                    }
+                }
+                const r = isBackward ? rects[0] : rects[rects.length - 1];
+                const x = isBackward ? r.left : r.right;
+                return { left: x, right: x, top: r.top, bottom: r.bottom, width: 0, height: r.height };
+            }
+        } catch (_) { }
     }
 
-    let tooltip = document.createElement("div");
+    if (fallbackEvent && typeof fallbackEvent.clientX === 'number') {
+        return {
+            left: fallbackEvent.clientX,
+            right: fallbackEvent.clientX,
+            top: fallbackEvent.clientY - 12,
+            bottom: fallbackEvent.clientY + 6,
+            width: 0,
+            height: 18
+        };
+    }
+    return null;
+}
+
+function positionExcerptBelowCaret(btn, sel, fallbackEvent) {
+    const endRect = getSelectionEndRect(sel, fallbackEvent);
+    if (!endRect) return false;
+    btn.style.visibility = 'hidden';
+    btn.style.display = 'block';
+    const bw = btn.offsetWidth || 32;
+    const bh = btn.offsetHeight || 24;
+    const endX = (endRect.left + endRect.right) / 2;
+    const left = Math.max(8, Math.min(window.innerWidth - bw - 8, endX - bw / 2));
+    let top = endRect.bottom + 6;
+    if (top + bh > window.innerHeight - 8 && endRect.top - bh - 6 >= 8) {
+        top = endRect.top - bh - 6;
+    } else {
+        top = Math.max(8, Math.min(window.innerHeight - bh - 8, top));
+    }
+    btn.style.left = Math.round(left) + 'px';
+    btn.style.top = Math.round(top) + 'px';
+    btn.style.visibility = 'visible';
+    return true;
+}
+
+function pinyin_func() {
+    if (window.__PINYIN_INIT__) return;
+    window.__PINYIN_INIT__ = true;
+
+    document.querySelectorAll('#pinyin-tooltip, .pinyin-tooltip').forEach(el => el.remove());
+
+    const tooltip = document.createElement("div");
+    tooltip.id = "pinyin-tooltip";
     tooltip.className = "pinyin-tooltip";
+    tooltip.style.cssText = 'position: fixed; z-index: 2147483647; display: none; pointer-events: none; background: #222; color: #fff; padding: 3px 8px; border-radius: 4px; font-size: 13px; line-height: 1.4; white-space: nowrap; box-shadow: 0 3px 10px rgba(0,0,0,0.3);';
     document.body.appendChild(tooltip);
 
-    document.addEventListener("mouseup", function (event) {
-        const selection = window.getSelection().toString().trim();
-        if (selection.length === 1 && dict[selection]) {
-            tooltip.innerText = dict[selection];
-            tooltip.style.left = event.pageX + "px";
-            tooltip.style.top = event.pageY + "px";
-            tooltip.style.display = "block";
-        } else {
-            tooltip.style.display = "none";
-        }
-    });
+    let shownAt = 0;
+    const hide = () => { tooltip.style.display = "none"; };
+
+    window.addEventListener("mousedown", hide, true);
+    document.addEventListener("scroll", () => {
+        if (performance.now() - shownAt > 150) hide();
+    }, true);
+
+    window.addEventListener("mouseup", function (event) {
+        if (event.target && event.target.closest && event.target.closest('#excerpt-pop-btn')) return;
+        setTimeout(() => {
+            const dict = window.top && window.top.pinyinData;
+            if (!dict) { hide(); return; }
+            const text = getSelectedTextCompat();
+            const chars = Array.from(text);
+            if (chars.length === 1 && dict[chars[0]]) {
+                tooltip.innerText = dict[chars[0]];
+                tooltip.style.visibility = 'hidden';
+                tooltip.style.display = 'block';
+                const tw = tooltip.offsetWidth || 48;
+                const th = tooltip.offsetHeight || 24;
+                const sel = window.getSelection();
+                const rect = (sel && sel.rangeCount > 0) ? sel.getRangeAt(0).getBoundingClientRect() : null;
+                const anchorX = (rect && (rect.width > 0 || rect.height > 0)) ? (rect.left + rect.width / 2) : event.clientX;
+                const anchorTop = (rect && rect.height > 0) ? rect.top : event.clientY;
+                const anchorBottom = (rect && rect.height > 0) ? rect.bottom : event.clientY;
+                const left = Math.max(8, Math.min(window.innerWidth - tw - 8, anchorX - tw / 2));
+                const top = anchorTop - th - 6 >= 8 ? (anchorTop - th - 6) : Math.min(window.innerHeight - th - 8, anchorBottom + 6);
+                tooltip.style.left = Math.round(left) + "px";
+                tooltip.style.top = Math.round(top) + "px";
+                tooltip.style.visibility = 'visible';
+                shownAt = performance.now();
+            } else {
+                hide();
+            }
+        }, 10);
+    }, true);
 }
 
 function comments() {
@@ -1589,90 +1805,109 @@ function comments() {
 }
 
 function initExcerptTrigger() {
-    let btn = document.getElementById('excerpt-pop-btn');
-    if (!btn) {
-        btn = document.createElement('div');
-        btn.id = 'excerpt-pop-btn';
-        btn.textContent = '✏️';
-        btn.style.cssText = 'position: fixed; background: #516194; color: rgb(255, 255, 255); padding: 0 5px; border-radius: 6px; cursor: pointer; z-index: 2147483647; box-shadow: rgba(0, 0, 0, 0.4) 0px 4px 12px; display: none; user-select: none; left: 938px; top: 240px;';
-        document.body.appendChild(btn);
+    if (window.__EXCERPT_INIT__) return;
+    window.__EXCERPT_INIT__ = true;
 
-        const doExcerpt = () => {
-            const sel = window.getSelection();
-            const text = sel.toString().trim();
-            if (text.length > 1) {
-                emitEvent('SAVE_EXCERPT', text, 'index');
+    document.querySelectorAll('#excerpt-pop-btn').forEach(el => el.remove());
 
-                const oldText = btn.textContent;
-                btn.textContent = '✅ 已摘抄';
-                btn.style.background = '#10b981';
-                setTimeout(() => {
-                    btn.style.display = 'none';
-                    btn.textContent = oldText;
-                    btn.style.background = '#516194';
-                    sel.removeAllRanges();
-                    lastProcessedText = "";
-                }, 800);
-            }
-        };
+    const btn = document.createElement('div');
+    btn.id = 'excerpt-pop-btn';
+    btn.textContent = '✏️';
+    btn.style.cssText = 'position: fixed; background: #516194; color: rgb(255, 255, 255); padding: 0 5px; border-radius: 6px; cursor: pointer; z-index: 2147483647; box-shadow: rgba(0, 0, 0, 0.4) 0px 4px 12px; display: none; user-select: none;';
+    document.body.appendChild(btn);
 
-        const shieldEvents = ['mousedown', 'mouseup', 'click', 'touchstart', 'touchend', 'pointerdown', 'pointerup'];
+    let lastProcessedText = "";
+    let shownAt = 0;
 
-        shieldEvents.forEach(evt => {
-            window.addEventListener(evt, (e) => {
-                if (e.target && e.target.closest && e.target.closest('#excerpt-pop-btn')) {
+    const doExcerpt = () => {
+        const text = getSelectedTextCompat();
+        if (Array.from(text).length > 1) {
+            emitEvent('SAVE_EXCERPT', text, 'index');
 
-                    e.stopPropagation();
-                    e.stopImmediatePropagation();
+            const oldText = btn.textContent;
+            btn.textContent = '✅ 已摘抄';
+            btn.style.background = '#10b981';
+            setTimeout(() => {
+                btn.style.display = 'none';
+                btn.textContent = oldText;
+                btn.style.background = '#516194';
+                const sel = window.getSelection();
+                if (sel) sel.removeAllRanges();
+                lastProcessedText = "";
+            }, 800);
+        }
+    };
 
-                    if (evt === 'mousedown') {
-                        e.preventDefault();
-                    }
+    const shieldEvents = ['mousedown', 'mouseup', 'click', 'touchstart', 'touchend', 'pointerdown', 'pointerup'];
 
-                    if (evt === 'click') {
-                        doExcerpt();
-                    }
+    shieldEvents.forEach(evt => {
+        window.addEventListener(evt, (e) => {
+            if (e.target && e.target.closest && e.target.closest('#excerpt-pop-btn')) {
+                e.stopPropagation();
+                e.stopImmediatePropagation();
+
+                if (evt === 'mousedown') {
+                    e.preventDefault();
                 }
-            }, true);
-        });
 
-        let lastProcessedText = "";
+                if (evt === 'click') {
+                    doExcerpt();
+                }
+            }
+        }, true);
+    });
 
-        const isMac = /Mac|iPhone|iPad/.test(navigator.platform);
-        document.addEventListener('mousedown', (e) => {
-            if (e.target && e.target.closest && e.target.closest('#excerpt-pop-btn')) return;
-            if (e.button !== 0 || (isMac && e.ctrlKey)) return;
-            btn.style.display = 'none';
+    const isMac = /Mac|iPhone|iPad/.test(navigator.platform);
+    window.addEventListener('mousedown', (e) => {
+        if (e.target && e.target.closest && e.target.closest('#excerpt-pop-btn')) return;
+        if (e.button !== 0 || (isMac && e.ctrlKey)) return;
+        btn.style.display = 'none';
+        const isEditableTarget = e.target && (
+            e.target.isContentEditable ||
+            e.target.tagName === 'TEXTAREA' ||
+            e.target.tagName === 'INPUT' ||
+            (e.target.closest && e.target.closest('[contenteditable]'))
+        );
+        if (!isEditableTarget) {
             const sel = window.getSelection();
             if (sel && !sel.isCollapsed) {
                 sel.removeAllRanges();
             }
-            lastProcessedText = "";
-        });
+        }
+        lastProcessedText = "";
+    }, true);
 
-        document.addEventListener('mouseup', (e) => {
-            if (e.target && e.target.closest && e.target.closest('#excerpt-pop-btn')) return;
+    document.addEventListener('scroll', () => {
+        if (performance.now() - shownAt > 150) {
+            btn.style.display = 'none';
+        }
+    }, true);
 
-            setTimeout(() => {
-                const text = window.getSelection().toString().trim();
+    window.addEventListener('mouseup', (e) => {
+        if (e.target && e.target.closest && e.target.closest('#excerpt-pop-btn')) return;
 
-                if (text.length > 1) {
-                    if (text !== lastProcessedText) {
-                        btn.style.left = Math.min(e.clientX + 5, window.innerWidth - 80) + 'px';
-                        btn.style.top = Math.min(e.clientY + 15, window.innerHeight - 40) + 'px';
-                        btn.style.display = 'block';
+        setTimeout(() => {
+            const text = getSelectedTextCompat();
+
+            if (Array.from(text).length > 1) {
+                if (text !== lastProcessedText) {
+                    if (positionExcerptBelowCaret(btn, window.getSelection(), e)) {
                         lastProcessedText = text;
+                        shownAt = performance.now();
                     }
-                } else {
-                    btn.style.display = 'none';
-                    lastProcessedText = "";
                 }
-            }, 10);
-        });
-    }
+            } else {
+                btn.style.display = 'none';
+                lastProcessedText = "";
+            }
+        }, 10);
+    }, true);
 }
 
 async function start() {
+    pinyin_func();
+    initExcerptTrigger();
+
     if (wasmInitPromise) {
         await wasmInitPromise;
     }
@@ -1691,9 +1926,6 @@ async function start() {
     go_top();
     setTimeout(toc, 500);
     setTimeout(lightbox, 500);
-    pinyin_func();
-
-    initExcerptTrigger();
 
     requestAnimationFrame(() => {
         document.body.style.opacity = 1;

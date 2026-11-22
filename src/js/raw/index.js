@@ -96,6 +96,7 @@ const searchStackReady = Promise.all([
     searchEngine = engineMod.createSearchEngine({
         store,
         dbProxy,
+        iframes,
         emitEvent,
         getWorker: () => searchWorker || _pendingWorker,
         getActiveWorker: () => searchWorker,
@@ -163,6 +164,7 @@ const executeSelfHealing = async (reason, commandId = null) => {
         if (window.indexedDB) {
             dbProxy.close();
             indexedDB.deleteDatabase('MainDB');
+            indexedDB.deleteDatabase('BookDB');
         }
         sessionStorage.removeItem("sw_reload_guard");
         sessionStorage.removeItem("ss_restore_strict");
@@ -284,6 +286,11 @@ BUS.addEventListener('message', async (e) => {
         case "LOCAL_SEARCH_RESULT":
             await searchStackReady;
             if (searchEngine) searchEngine.handleLocalSearchResult(payload);
+            break;
+
+        case "LOCAL_SEARCH_SNIPPETS_RESULT":
+            await searchStackReady;
+            if (searchEngine) searchEngine.handleLocalSearchSnippets(payload);
             break;
 
         case "SEARCH_CACHE_CLEARED":
@@ -454,13 +461,18 @@ BUS.addEventListener('message', async (e) => {
             break;
 
         case "SAVE_EXCERPT": {
-            let bookName = "html";
-            if (store.resource_type === 'txt' && store.txt_path) bookName = store.txt_path.split('/').pop();
-            else if (store.resource_type === 'pdf' && store.pdf_path) bookName = store.pdf_path.split('/').pop();
-            else if (store.resource_type === 'epub' && store.epub_path) bookName = store.epub_path.split('/').pop();
+            const excerptText = typeof payload === 'string' ? payload : (payload && payload.text);
+            if (!excerptText) break;
+            let bookName = (payload && typeof payload === 'object' && payload.bookName) || "";
+            if (!bookName) {
+                bookName = "html";
+                if (store.resource_type === 'txt' && store.txt_path) bookName = store.txt_path.split('/').pop();
+                else if (store.resource_type === 'pdf' && store.pdf_path) bookName = store.pdf_path.split('/').pop();
+                else if (store.resource_type === 'epub' && store.epub_path) bookName = store.epub_path.split('/').pop();
+            }
 
             import('./excerpts.js').then(({ ExcerptsSys, ExcerptsUIManager }) => {
-                ExcerptsSys.save(bookName, payload).then(() => {
+                ExcerptsSys.save(bookName, excerptText).then(() => {
                     if (document.getElementById('excerpts-popup') && document.getElementById('excerpts-popup').style.display !== 'none') {
                         ExcerptsUIManager.openAndRefresh();
                     }
@@ -1036,13 +1048,21 @@ async function finalizeDataLoad() {
     try {
         if (!window._isOfflineDataFallback && Array.isArray(window.data) && window.data.length > 0) {
             const currentMediaPaths = new Set();
+            const currentEbookPaths = new Set();
             for (let i = 0; i < window.data.length; i += 4) {
+                const p = window.data[i + 2];
                 const type = window.data[i + 3];
-                if (['image', 'video', 'audio', 'ebook'].includes(type)) {
-                    currentMediaPaths.add(window.data[i + 2]);
+                const isBook = type === 'ebook' || type === 'pdf' || type === 'epub' || type === 'txt'
+                    || (typeof p === 'string' && p.startsWith('ebook/'));
+                if (isBook || type === 'image' || type === 'video' || type === 'audio') {
+                    currentMediaPaths.add(p);
+                }
+                if (isBook && typeof p === 'string') {
+                    currentEbookPaths.add(p);
                 }
             }
 
+            const deletedBookPaths = [];
             const oldMediaListRaw = await dbProxy.get('sys_state', 'media_paths_snapshot');
             if (!oldMediaListRaw) {
                 await dbProxy.put('sys_state', 'media_paths_snapshot', Array.from(currentMediaPaths));
@@ -1061,18 +1081,53 @@ async function finalizeDataLoad() {
                     if (!currentMediaPaths.has(path)) {
                         await dbProxy.addLog(`⛔ 删除媒体: /${path}`);
                         deletedPaths.push(path);
+                        if (typeof path === 'string' && (path.startsWith('ebook/') || /\.(?:pdf|epub|txt)$/i.test(path))) {
+                            deletedBookPaths.push(path);
+                        }
                         hasMediaUpdates = true;
                     }
                 }
                 if (deletedPaths.length > 0 && 'caches' in window) {
                     try {
                         const mediaCache = await caches.open('media-cache');
-                        await Promise.all(deletedPaths.map(p => mediaCache.delete('/' + p, { ignoreSearch: true })));
+                        await Promise.all(deletedPaths.map(async (p) => {
+                            await mediaCache.delete('/' + p, { ignoreSearch: true });
+                            const enc = encodeURI('/' + p);
+                            if (enc !== '/' + p) await mediaCache.delete(enc, { ignoreSearch: true });
+                        }));
                     } catch (e) { }
                 }
                 if (hasMediaUpdates) {
                     await dbProxy.put('sys_state', 'media_paths_snapshot', Array.from(currentMediaPaths));
                 }
+            }
+
+            // 仅当发现书籍被删除时彻底清理 BookDB 对应条目（对账 + 明确删除列表双重兜底）
+            try {
+                const { BookDB, normalizeBookKey } = await import('./book-db.js');
+                const validKeys = new Set();
+                for (const p of currentEbookPaths) {
+                    const k = normalizeBookKey(p);
+                    if (k) validKeys.add(k);
+                }
+                const cleaned = new Set();
+                for (const dp of deletedBookPaths) {
+                    const k = normalizeBookKey(dp);
+                    if (!k || cleaned.has(k)) continue;
+                    const res = await BookDB.deleteBook(k);
+                    if (res.deletedExtract || res.deletedSearches > 0) {
+                        cleaned.add(k);
+                        await dbProxy.addLog(`🧹 [BookDB] 清理已删除书籍缓存: /${k}`);
+                    }
+                }
+                const pruned = await BookDB.pruneDeletedBooks(validKeys);
+                for (const item of pruned) {
+                    if (!cleaned.has(item.bookKey)) {
+                        await dbProxy.addLog(`🧹 [BookDB] 清理已删除书籍缓存: /${item.bookKey}`);
+                    }
+                }
+            } catch (bookErr) {
+                console.warn("[BookDB] 已删除书籍清理检查失败:", bookErr);
             }
         }
     } catch (err) {

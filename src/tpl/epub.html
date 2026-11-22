@@ -85,8 +85,15 @@
 				SEARCH_SYN_HL_STYLE,
 				SEARCH_SYN2_HL_STYLE,
 				searchHlTier,
-				searchHlBucket
+				searchHlBucket,
+				adaptKeywordsForWasm,
+				collectAdsPositiveIndices,
+				evalAdsExpr,
+				mergeWasmMatchSpans,
+				collectWasmMatches,
+				buildMergedGroupSnippets
 			} from '../js/shared-utils.js';
+			import { BookDB, normalizeBookKey, buildBookSearchCacheKey } from '../js/book-db.js';
 
 			const TIER_SIZE = SEARCH_HL_STYLE.length;
 			const SKIP_TAGS = new Set([
@@ -121,6 +128,7 @@
 			const State = {
 				opened: false,
 				title: '',
+				bookKey: '',
 				// items[itemIndex] = { itemIndex, item, text, nodes: [{node, start, end}], anchorOffsets: Map, globalStart, globalEnd }
 				items: [],
 				totalChars: 0,
@@ -695,12 +703,6 @@
 				return null;
 			}
 
-			function adaptKeywordsForWasm(specs, weighted) {
-				if (!Array.isArray(specs)) return [];
-				if (weighted) return specs;
-				return specs.map(s => (typeof s === 'string' ? s : s.text)).filter(Boolean);
-			}
-
 			function u16ToCodePointIdx(str, u16Idx) {
 				const clamped = Math.max(0, Math.min(str.length, u16Idx));
 				let cp = 0;
@@ -715,7 +717,7 @@
 				return cp;
 			}
 
-			function buildCompactPreview(itemText, localStart, localEnd, noise) {
+			function buildCompactPreview(itemText, localStart, localEnd, noise, allSliceHits = null) {
 				const BEFORE = 10, AFTER = 18;
 				let s = Math.max(0, localStart - BEFORE);
 				let e = Math.min(itemText.length, localEnd + AFTER);
@@ -729,6 +731,20 @@
 				const cleanSlice = itemText.slice(s, e).replace(/[\t\r\n]/g, ' ');
 				const preview = pre + cleanSlice + suf;
 				const shift = pre.length;
+
+				if (Array.isArray(allSliceHits) && allSliceHits.length > 0) {
+					const highlights = [];
+					for (const m of allSliceHits) {
+						if (m.end <= s) continue;
+						if (m.start >= e) break;
+						const rs = shift + (Math.max(s, m.start) - s);
+						const re = shift + (Math.min(e, m.end) - s);
+						if (re > rs) {
+							highlights.push([u16ToCodePointIdx(preview, rs), u16ToCodePointIdx(preview, re), m.noise]);
+						}
+					}
+					if (highlights.length > 0) return { preview, highlights };
+				}
 				const hs = u16ToCodePointIdx(preview, shift + (localStart - s));
 				const he = u16ToCodePointIdx(preview, shift + (localEnd - s));
 				return { preview, highlights: [[hs, he, noise]] };
@@ -766,11 +782,12 @@
 				return { t, h };
 			}
 
-			async function runEpubSearch({ keyword, specs, noise, token, reportStatus }) {
+			async function runEpubSearch({ keyword, specs, noise, synonymsEnabled, adsPlan, token, reportStatus, cacheMeta }) {
 				State.activeSearchToken = token;
 				clearAllHighlights();
 
-				if (!keyword || !Array.isArray(specs) || specs.length === 0) {
+				const isAds = !!(adsPlan && Array.isArray(adsPlan.terms) && adsPlan.terms.length > 0 && adsPlan.expr);
+				if (!keyword || (!isAds && (!Array.isArray(specs) || specs.length === 0))) {
 					State.lastSearch = null;
 					return { totalHits: 0, shownHits: 0, truncated: false, groups: [], groupUnit: State.groupUnit };
 				}
@@ -788,12 +805,66 @@
 					};
 				}
 
+				const canCache = !!(State.bookKey && (!cacheMeta || cacheMeta.canCache !== false));
+				const queryKey = canCache ? buildBookSearchCacheKey({
+					bookSig: `epub:${State.items.length}:${State.totalChars}:${State.sections.length}`,
+					algoVer: (cacheMeta && cacheMeta.algoVer) || 11,
+					synVer: (cacheMeta && cacheMeta.synVer) || '',
+					keyword,
+					noise,
+					useSyn: !!synonymsEnabled,
+					adsPlan: isAds ? adsPlan : null
+				}) : '';
+
+				if (canCache && queryKey) {
+					const cached = await BookDB.getSearch(State.bookKey, queryKey);
+					if (token !== State.activeSearchToken) return null;
+					if (cached && Array.isArray(cached.hits) && Array.isArray(cached.groupMeta)) {
+						const groupMap = new Map();
+						for (const gm of cached.groupMeta) {
+							groupMap.set(gm.groupIndex, {
+								type: 'txt-group',
+								path: `txt-group:${gm.groupIndex}`,
+								groupIndex: gm.groupIndex,
+								title: gm.title,
+								percent: gm.percent,
+								count: gm.count,
+								hits: []
+							});
+						}
+						const itemHitsMap = new Map();
+						const hasExplicitItemHits = Array.isArray(cached.itemHitsEntries);
+						if (hasExplicitItemHits) {
+							for (const [idx, arr] of cached.itemHitsEntries) itemHitsMap.set(idx, arr);
+						}
+						for (const h of cached.hits) {
+							const g = groupMap.get(h.sectionIdx);
+							if (g) g.hits.push(h);
+							if (!hasExplicitItemHits) {
+								let iArr = itemHitsMap.get(h.itemIndex);
+								if (!iArr) { iArr = []; itemHitsMap.set(h.itemIndex, iArr); }
+								iArr.push({ localStart: h.localStart, localEnd: h.localEnd, noise: h.noise });
+							}
+						}
+						const groups = Array.from(groupMap.values()).sort((a, b) => a.groupIndex - b.groupIndex);
+						State.lastSearch = { keyword, isAds, wasmKeywords: [], noise, hits: cached.hits, groups, groupMap, itemHitsMap };
+						for (const itemIdx of itemHitsMap.keys()) paintItemHighlights(itemIdx);
+						return {
+							keyword,
+							totalHits: cached.totalHits,
+							shownHits: cached.hits.length,
+							truncated: !!cached.truncated,
+							groups,
+							groupUnit: cached.groupUnit || State.groupUnit
+						};
+					}
+				}
+
 				const sw = await waitForSharedWasm();
 				if (token !== State.activeSearchToken) return null;
 				if (!sw) throw new Error('Wasm 搜索引擎未就绪');
 
 				if (typeof reportStatus === 'function') reportStatus('搜索中...');
-				const wasmKeywords = adaptKeywordsForWasm(specs, !!sw.weightedKeywords);
 				const MAX_RECORDED_HITS = 1500;
 				const totalLen = Math.max(1, State.totalChars);
 
@@ -802,75 +873,188 @@
 				const itemHitsMap = new Map();
 				let totalHits = 0;
 
+				const recordItemMatches = (itemData, matchList, fixedSec = null) => {
+					let iHits = itemHitsMap.get(itemData.itemIndex);
+					if (!iHits) { iHits = []; itemHitsMap.set(itemData.itemIndex, iHits); }
+
+					for (const m of matchList) {
+						const localStart = m.start;
+						const localEnd = m.end;
+						const packedNoise = m.noise;
+						totalHits++;
+
+						iHits.push({ localStart, localEnd, noise: packedNoise });
+
+						const globalStart = itemData.globalStart + localStart;
+						const sec = fixedSec || getSectionAtGlobalOffset(globalStart);
+						const pct = ((globalStart / totalLen) * 100).toFixed(1) + '%';
+
+						let g = groupMap.get(sec.index);
+						if (!g) {
+							g = {
+								type: 'txt-group',
+								path: `txt-group:${sec.index}`,
+								groupIndex: sec.index,
+								title: sec.title,
+								percent: sec.percent,
+								count: 0,
+								hits: []
+							};
+							groupMap.set(sec.index, g);
+						}
+						g.count++;
+
+						if (hits.length < MAX_RECORDED_HITS) {
+							const compact = buildCompactPreview(itemData.text, localStart, localEnd, packedNoise, matchList);
+							const hitObj = {
+								hitIndex: hits.length,
+								itemIndex: itemData.itemIndex,
+								sectionIdx: sec.index,
+								localStart,
+								localEnd,
+								globalStart,
+								noise: packedNoise,
+								termIdx: typeof m.termIdx === 'number' ? m.termIdx : 0,
+								percent: pct,
+								preview: compact.preview,
+								highlights: compact.highlights
+							};
+							hits.push(hitObj);
+							g.hits.push(hitObj);
+						}
+					}
+				};
+
 				let sliceStart = performance.now();
-				for (let i = 0; i < State.items.length; i++) {
-					if (token !== State.activeSearchToken) return null;
-					const itemData = State.items[i];
-					if (!itemData || !itemData.text) continue;
+				let wasmKeywords = [];
 
-					const res = sw.find_content_matches_multi(itemData.text, wasmKeywords, noise);
-					const arr = res && res.matches;
-					const cnt = arr ? Math.floor(arr.length / 3) : 0;
+				if (isAds) {
+					const terms = adsPlan.terms.map(t => ({
+						noise: t.noise,
+						wasmKeywords: adaptKeywordsForWasm(t.specs, !!sw.weightedKeywords)
+					}));
+					const posIndices = collectAdsPositiveIndices(adsPlan.expr);
+					const posSet = new Set(posIndices);
+					const secs = (State.sections && State.sections.length > 0)
+						? State.sections
+						: [{ index: 0, title: '正文', startGlobal: 0, endGlobal: State.totalChars, percent: '0.0%' }];
 
-					if (cnt > 0) {
-						const iHits = [];
-						for (let k = 0; k < arr.length; k += 3) {
-							const localStart = arr[k];
-							const localEnd = arr[k + 1];
-							const packedNoise = arr[k + 2];
-							totalHits++;
+					// 预定位每个 section 覆盖的 spine item 切片（按 globalOffset 单调推进）
+					let itemCursor = 0;
+					for (const sec of secs) {
+						if (token !== State.activeSearchToken) return null;
+						if (sec.endGlobal <= sec.startGlobal) continue;
 
-							iHits.push({ localStart, localEnd, noise: packedNoise });
-
-							if (hits.length < MAX_RECORDED_HITS) {
-								const globalStart = itemData.globalStart + localStart;
-								const sec = getSectionAtGlobalOffset(globalStart);
-								const pct = ((globalStart / totalLen) * 100).toFixed(1) + '%';
-								const compact = buildCompactPreview(itemData.text, localStart, localEnd, packedNoise);
-								const hitObj = {
-									hitIndex: hits.length,
-									itemIndex: i,
-									sectionIdx: sec.index,
-									localStart,
-									localEnd,
-									globalStart,
-									noise: packedNoise,
-									percent: pct,
-									preview: compact.preview,
-									highlights: compact.highlights
-								};
-								hits.push(hitObj);
-
-								let g = groupMap.get(sec.index);
-								if (!g) {
-									g = {
-										type: 'txt-group',
-										path: `txt-group:${sec.index}`,
-										groupIndex: sec.index,
-										title: sec.title,
-										percent: sec.percent,
-										count: 0,
-										hits: []
-									};
-									groupMap.set(sec.index, g);
-								}
-								g.count++;
-								g.hits.push(hitObj);
+						while (itemCursor < State.items.length && (!State.items[itemCursor] || State.items[itemCursor].globalEnd <= sec.startGlobal)) {
+							itemCursor++;
+						}
+						const slices = [];
+						for (let idx = itemCursor; idx < State.items.length; idx++) {
+							const it = State.items[idx];
+							if (!it) continue;
+							if (it.globalStart >= sec.endGlobal) break;
+							if (!it.text || it.globalEnd <= sec.startGlobal) continue;
+							const sliceStartOff = Math.max(0, sec.startGlobal - it.globalStart);
+							const sliceEndOff = Math.min(it.text.length, sec.endGlobal - it.globalStart);
+							if (sliceEndOff > sliceStartOff) {
+								const sliceText = (sliceStartOff === 0 && sliceEndOff === it.text.length)
+									? it.text
+									: it.text.slice(sliceStartOff, sliceEndOff);
+								slices.push({ itemData: it, sliceStartOff, sliceText });
 							}
 						}
-						itemHitsMap.set(i, iHits);
-					}
+						if (slices.length === 0) continue;
 
-					if (performance.now() - sliceStart >= 10) {
-						await new Promise(r => setTimeout(r, 0));
-						sliceStart = performance.now();
+						const termHitCache = new Map();
+						const termMatchesBySlice = new Map();
+
+						const hasTermInSection = (tIdx) => {
+							if (termHitCache.has(tIdx)) return termHitCache.get(tIdx);
+							const term = terms[tIdx];
+							if (!term || term.wasmKeywords.length === 0) {
+								termHitCache.set(tIdx, false);
+								return false;
+							}
+							const keepAll = posSet.has(tIdx);
+							let found = false;
+							let bySlice = null;
+							for (let si = 0; si < slices.length; si++) {
+								const sl = slices[si];
+								const matches = collectWasmMatches(sw, sl.sliceText, term.wasmKeywords, term.noise, tIdx, sl.sliceStartOff);
+								if (matches.length > 0) {
+									found = true;
+									if (!keepAll) break;
+									if (!bySlice) { bySlice = new Map(); termMatchesBySlice.set(tIdx, bySlice); }
+									bySlice.set(si, matches);
+								}
+							}
+							termHitCache.set(tIdx, found);
+							return found;
+						};
+
+						if (evalAdsExpr(adsPlan.expr, hasTermInSection)) {
+							for (const pIdx of posIndices) hasTermInSection(pIdx);
+							for (let si = 0; si < slices.length; si++) {
+								const raw = [];
+								for (const pIdx of posIndices) {
+									const bySlice = termMatchesBySlice.get(pIdx);
+									const m = bySlice && bySlice.get(si);
+									if (m && m.length > 0) raw.push(...m);
+								}
+								if (raw.length > 0) {
+									recordItemMatches(slices[si].itemData, mergeWasmMatchSpans(raw), sec);
+								}
+							}
+						}
+
+						if (performance.now() - sliceStart >= 10) {
+							await new Promise(r => setTimeout(r, 0));
+							sliceStart = performance.now();
+						}
+					}
+				} else {
+					wasmKeywords = adaptKeywordsForWasm(specs, !!sw.weightedKeywords);
+					for (let i = 0; i < State.items.length; i++) {
+						if (token !== State.activeSearchToken) return null;
+						const itemData = State.items[i];
+						if (!itemData || !itemData.text) continue;
+
+						const matches = collectWasmMatches(sw, itemData.text, wasmKeywords, noise, 0);
+						if (matches.length > 0) {
+							recordItemMatches(itemData, matches);
+						}
+
+						if (performance.now() - sliceStart >= 10) {
+							await new Promise(r => setTimeout(r, 0));
+							sliceStart = performance.now();
+						}
 					}
 				}
 
 				if (token !== State.activeSearchToken) return null;
 
 				const groups = Array.from(groupMap.values()).sort((a, b) => a.groupIndex - b.groupIndex);
-				State.lastSearch = { keyword, wasmKeywords, noise, hits, groups, groupMap, itemHitsMap };
+				const truncated = totalHits > hits.length;
+				State.lastSearch = { keyword, isAds, wasmKeywords, noise, hits, groups, groupMap, itemHitsMap };
+
+				if (canCache && queryKey) {
+					const groupMeta = groups.map(g => ({
+						groupIndex: g.groupIndex,
+						title: g.title,
+						percent: g.percent,
+						count: g.count
+					}));
+					BookDB.putSearch(State.bookKey, queryKey, 'epub', {
+						keyword,
+						isAds,
+						totalHits,
+						truncated,
+						groupUnit: State.groupUnit,
+						hits,
+						groupMeta,
+						itemHitsEntries: truncated ? Array.from(itemHitsMap.entries()) : null
+					});
+				}
 
 				for (const itemIdx of itemHitsMap.keys()) {
 					paintItemHighlights(itemIdx);
@@ -880,7 +1064,7 @@
 					keyword,
 					totalHits,
 					shownHits: hits.length,
-					truncated: totalHits > hits.length,
+					truncated,
 					groups,
 					groupUnit: State.groupUnit
 				};
@@ -894,14 +1078,16 @@
 					const gIdx = Number(path.slice('txt-group:'.length));
 					const g = last.groupMap.get(gIdx);
 					if (!g) return null;
-					const MAX_ITEMS = 40;
-					const items = [];
-					for (const h of g.hits.slice(0, MAX_ITEMS)) {
-						const it = buildSnippetItem(h, 58, g.hits);
-						if (it) items.push(it);
-					}
+					const { items, more } = buildMergedGroupSnippets(g.hits, {
+						maxItems: 40,
+						radius: 58,
+						maxWindowChars: 180,
+						snapToNewline: true,
+						getUnitKey: (h) => h.itemIndex,
+						getUnitText: (h) => (State.items[h.itemIndex] && State.items[h.itemIndex].text) || ''
+					});
 					return {
-						body: { hits: g.count, more: Math.max(0, g.hits.length - MAX_ITEMS), items },
+						body: { hits: g.count, more: more + Math.max(0, g.count - g.hits.length), items },
 						comments: { hits: 0, docs: 0, more: 0, items: [] }
 					};
 				}
@@ -1065,6 +1251,9 @@
 				mountMenuScopeButton();
 				buildBookIndex();
 
+				const params = new URLSearchParams(window.location.search);
+				const bookParam = params.get('book') || '';
+				State.bookKey = bookParam ? normalizeBookKey(bookParam) : '';
 				State.title = (window.B && window.B.Title) || document.title || 'EPUB';
 
 				const bridge = getSearchBridge();

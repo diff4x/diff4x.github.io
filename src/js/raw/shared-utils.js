@@ -239,3 +239,209 @@ export function publishSearchHighlights() {
         else CSS.highlights.delete(searchHlNameBySlot(slot));
     });
 }
+
+// =========================================================================
+// 文内搜索（TXT / PDF / EPUB）共享组合检索与摘要合并工具
+// =========================================================================
+export function adaptKeywordsForWasm(specs, weighted) {
+    if (!Array.isArray(specs)) return [];
+    if (weighted) return specs;
+    return specs
+        .map(s => (typeof s === 'string' ? s : (s && typeof s.text === 'string' ? s.text : '')))
+        .filter(Boolean);
+}
+
+export function collectAdsPositiveIndices(expr) {
+    const pos = new Set();
+    const walk = (n) => {
+        if (!n) return;
+        if (n.op === 'term') {
+            if (!n.neg) pos.add(n.term);
+        } else if (Array.isArray(n.args)) {
+            n.args.forEach(walk);
+        }
+    };
+    walk(expr);
+    return [...pos].sort((a, b) => a - b);
+}
+
+export function evalAdsExpr(node, hasTermFn) {
+    if (!node) return false;
+    if (node.op === 'term') {
+        const hit = !!hasTermFn(node.term);
+        return node.neg ? !hit : hit;
+    }
+    if (node.op === 'and') {
+        for (let i = 0; i < node.args.length; i++) {
+            if (!evalAdsExpr(node.args[i], hasTermFn)) return false;
+        }
+        return true;
+    }
+    if (node.op === 'or') {
+        for (let i = 0; i < node.args.length; i++) {
+            if (evalAdsExpr(node.args[i], hasTermFn)) return true;
+        }
+        return false;
+    }
+    return false;
+}
+
+export function mergeWasmMatchSpans(rawMatches) {
+    if (!Array.isArray(rawMatches) || rawMatches.length <= 1) {
+        return Array.isArray(rawMatches) ? rawMatches.slice() : [];
+    }
+    const sorted = rawMatches.slice().sort((a, b) => a.start - b.start || b.end - a.end);
+    const merged = [];
+    for (const m of sorted) {
+        const last = merged[merged.length - 1];
+        if (last && m.start < last.end) {
+            const lastTier = searchHlTier(last.noise);
+            const curTier = searchHlTier(m.noise);
+            const lastNoise = last.noise & 0xff;
+            const curNoise = m.noise & 0xff;
+            const lastWeight = (last.noise >>> 16) & 0xff;
+            const curWeight = (m.noise >>> 16) & 0xff;
+            const lastLen = last.end - last.start;
+            const curLen = m.end - m.start;
+            if (
+                curTier < lastTier ||
+                (curTier === lastTier && curNoise < lastNoise) ||
+                (curTier === lastTier && curNoise === lastNoise && curWeight > lastWeight) ||
+                (curTier === lastTier && curNoise === lastNoise && curWeight === lastWeight && curLen > lastLen)
+            ) {
+                merged[merged.length - 1] = m;
+            }
+            continue;
+        }
+        merged.push(m);
+    }
+    return merged;
+}
+
+export function collectWasmMatches(sw, text, wasmKeywords, noise, termIdx = 0, offsetShift = 0) {
+    if (!text || !Array.isArray(wasmKeywords) || wasmKeywords.length === 0) return [];
+    const res = sw.find_content_matches_multi(text, wasmKeywords, noise);
+    const arr = res && res.matches;
+    if (!arr || arr.length < 3) return [];
+    const out = [];
+    for (let i = 0; i < arr.length; i += 3) {
+        out.push({
+            start: arr[i] + offsetShift,
+            end: arr[i + 1] + offsetShift,
+            noise: arr[i + 2],
+            termIdx
+        });
+    }
+    return out;
+}
+
+export function buildMergedGroupSnippets(groupHits, opts) {
+    const {
+        maxItems = 40,
+        radius = 58,
+        maxWindowChars = 180,
+        snapToNewline = true,
+        getUnitKey,
+        getUnitText,
+        getPrefix
+    } = opts || {};
+
+    if (!Array.isArray(groupHits) || groupHits.length === 0) {
+        return { items: [], more: 0 };
+    }
+
+    const windows = [];
+    const byUnit = new Map();
+
+    for (const hit of groupHits) {
+        const unitKey = getUnitKey(hit);
+        const text = getUnitText(hit);
+        if (!text) continue;
+
+        let arr = byUnit.get(unitKey);
+        if (!arr) { arr = []; byUnit.set(unitKey, arr); }
+        arr.push(hit);
+
+        let s = Math.max(0, hit.localStart - radius);
+        let e = Math.min(text.length, hit.localEnd + radius);
+        if (snapToNewline) {
+            if (s > 0) {
+                const nl = text.lastIndexOf('\n', hit.localStart - 1);
+                if (nl !== -1 && hit.localStart - nl <= radius) s = nl + 1;
+            }
+            if (e < text.length) {
+                const nl = text.indexOf('\n', hit.localEnd);
+                if (nl !== -1 && nl - hit.localEnd <= radius) e = nl;
+            }
+        }
+
+        const prev = windows[windows.length - 1];
+        const tIdx = typeof hit.termIdx === 'number' ? hit.termIdx : 0;
+        if (prev && prev.unitKey === unitKey && s <= prev.e && (Math.max(prev.e, e) - prev.s) <= maxWindowChars) {
+            if (e > prev.e) prev.e = e;
+            prev.termSet.add(tIdx);
+        } else {
+            windows.push({
+                idx: windows.length,
+                unitKey,
+                hit,
+                text,
+                s,
+                e,
+                termSet: new Set([tIdx])
+            });
+        }
+    }
+
+    let selected = windows;
+    if (windows.length > maxItems) {
+        const allTerms = new Set();
+        for (const w of windows) w.termSet.forEach(t => allTerms.add(t));
+
+        selected = windows.slice(0, maxItems);
+        if (allTerms.size > 1) {
+            const covered = new Set();
+            for (const w of selected) w.termSet.forEach(t => covered.add(t));
+
+            const extras = [];
+            for (const t of allTerms) {
+                if (covered.has(t)) continue;
+                const firstWin = windows.find(w => w.termSet.has(t));
+                if (firstWin && !extras.includes(firstWin)) {
+                    extras.push(firstWin);
+                    firstWin.termSet.forEach(x => covered.add(x));
+                }
+            }
+            if (extras.length > 0) {
+                const keepCount = Math.max(0, maxItems - extras.length);
+                selected = selected.slice(0, keepCount).concat(extras);
+                selected.sort((a, b) => a.idx - b.idx);
+            }
+        }
+    }
+
+    const items = [];
+    for (const win of selected) {
+        const { text, s, e, unitKey, hit } = win;
+        const pre = typeof getPrefix === 'function'
+            ? getPrefix(hit, s, text)
+            : (s > 0 && (!snapToNewline || text[s - 1] !== '\n') ? '…' : '');
+        const suf = e < text.length && (!snapToNewline || text[e] !== '\n') ? '…' : '';
+        const body = text.slice(s, e).replace(snapToNewline ? /[\t\r]/g : /[\t\r\n]/g, ' ');
+        const t = pre + body + suf;
+        const shift = pre.length;
+
+        const h = [];
+        const unitHits = byUnit.get(unitKey) || [hit];
+        for (const item of unitHits) {
+            if (item.localEnd <= s) continue;
+            if (item.localStart >= e) break;
+            const rs = Math.max(s, item.localStart) - s + shift;
+            const re = Math.min(e, item.localEnd) - s + shift;
+            if (re > rs) h.push([rs, re, item.noise]);
+        }
+        items.push({ t, h });
+    }
+
+    return { items, more: Math.max(0, windows.length - items.length) };
+}

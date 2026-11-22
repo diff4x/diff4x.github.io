@@ -182,6 +182,7 @@ export function initTouchpad(ctx) {
 
     panel.innerHTML = `
     <div class="tp-col-scroll" style="width: 15%; min-width: 50px; display: flex; flex-direction: column;">
+        <div class="tp-btn" data-btn="scroll_lock_toggle" title="停止/恢复光标联动滚屏" style="flex:0 0 36px; border-bottom: 1px solid var(--tp-line); display:flex; align-items:center; justify-content:center; font-size:12px; color:#cfd3dc;">停滚</div>
         <div class="tp-btn tp-scroll-btn" data-scroll="-160" style="flex:1; border-bottom: 1px solid var(--tp-line); display:flex; align-items:center; justify-content:center; color:var(--tp-accent); font-weight:bold;">▲</div>
         <div class="tp-btn tp-scroll-btn" data-scroll="160" style="flex:1; display:flex; align-items:center; justify-content:center; color:var(--tp-accent); font-weight:bold;">▼</div>
     </div>
@@ -217,6 +218,7 @@ export function initTouchpad(ctx) {
     let zoom = 1, panX = 0, panY = 0;
     let currentTargetId = null;
     let isSelectMode = false;
+    let isScrollFollow = true;
     let cursorFeedbackTimer = null;
 
     function playCursorClickFeedback() {
@@ -575,6 +577,7 @@ export function initTouchpad(ctx) {
     }
 
     function sendOverflowWheel(overflowX, overflowY) {
+        if (!isScrollFollow) return;
         if (Math.abs(overflowX) <= 0.1 && Math.abs(overflowY) <= 0.1) return;
         const mult = Math.max(edgeAccelFactor(cursor.x, stage.clientWidth), edgeAccelFactor(cursor.y, stage.clientHeight));
         routeOp('wheel', {
@@ -590,7 +593,7 @@ export function initTouchpad(ctx) {
 
     function edgeHoldLoop() {
         edgeHoldRaf = null;
-        if (!moveState || !moveState.moved) return;
+        if (!moveState || !moveState.moved || !isScrollFollow) return;
 
         const nearLeft = cursor.x < stage.clientWidth * EDGE_ZONE;
         const nearRight = cursor.x > stage.clientWidth * (1 - EDGE_ZONE);
@@ -624,7 +627,7 @@ export function initTouchpad(ctx) {
             };
 
             if (isSelectMode) routeOp('select_start');
-            if (!edgeHoldRaf) edgeHoldRaf = requestAnimationFrame(edgeHoldLoop);
+            if (isScrollFollow && !edgeHoldRaf) edgeHoldRaf = requestAnimationFrame(edgeHoldLoop);
         }
     });
 
@@ -666,7 +669,7 @@ export function initTouchpad(ctx) {
                 let oldCursorX = cursor.x;
                 let oldCursorY = cursor.y;
 
-                if (Math.abs(logicalDx) >= 0.1) {
+                if (isScrollFollow && Math.abs(logicalDx) >= 0.1) {
                     let hit = resolveHit(cursor.x, cursor.y);
                     let target = null;
                     let win = window;
@@ -784,15 +787,26 @@ export function initTouchpad(ctx) {
 
     let isDragMode = false;
 
+    const isToggleBtn = (act) => act === 'drag_toggle' || act === 'select_toggle' || act === 'scroll_lock_toggle';
+
     btns.forEach((btn) => {
         btn.addEventListener('pointerdown', (e) => {
             e.preventDefault();
-            if (btn.dataset.btn !== 'drag_toggle') btn.classList.add('tp-active');
+            if (!isToggleBtn(btn.dataset.btn)) btn.classList.add('tp-active');
         });
 
         btn.addEventListener('pointerup', () => {
             const act = btn.dataset.btn;
 
+            if (act === 'scroll_lock_toggle') {
+                isScrollFollow = !isScrollFollow;
+                btn.classList.toggle('tp-active', !isScrollFollow);
+                if (!isScrollFollow && edgeHoldRaf) {
+                    cancelAnimationFrame(edgeHoldRaf);
+                    edgeHoldRaf = null;
+                }
+                return;
+            }
             if (act === 'drag_toggle') {
                 isDragMode = !isDragMode;
                 btn.classList.toggle('tp-active', isDragMode);
@@ -824,7 +838,7 @@ export function initTouchpad(ctx) {
         });
 
         const release = () => {
-            if (btn.dataset.btn !== 'drag_toggle') btn.classList.remove('tp-active');
+            if (!isToggleBtn(btn.dataset.btn)) btn.classList.remove('tp-active');
         };
         btn.addEventListener('pointercancel', release);
     });

@@ -147,8 +147,11 @@ body:not(.readonly) #sep{width:auto;height:6px;cursor:row-resize}
 #toc{flex:0 0 180px}
 .md{padding:16px 18px 48px}
 }
+#md-pinyin-tooltip{position:fixed;display:none;pointer-events:none;z-index:2147483647;background:var(--fg);color:var(--bg);padding:3px 9px;border-radius:4px;font:600 13px/1.4 system-ui,-apple-system,sans-serif;white-space:nowrap;box-shadow:0 4px 12px rgba(0,0,0,.28)}
+#md-excerpt-btn{position:fixed;display:none;z-index:2147483647;background:#516194;color:#fff;padding:2px 8px;border-radius:6px;font:12.5px/1.4 system-ui,-apple-system,"Microsoft YaHei",sans-serif;cursor:pointer;user-select:none;box-shadow:0 4px 12px rgba(0,0,0,.35)}
+#md-excerpt-btn:hover{filter:brightness(1.08)}
 @media print{
-:root{padding:0}.bar,.ed,#sep,#toc-sep,#ctx,#toc{display:none!important}
+:root{padding:0}.bar,.ed,#sep,#toc-sep,#ctx,#toc,#md-pinyin-tooltip,#md-excerpt-btn{display:none!important}
 html,body{height:auto;overflow:visible}#panes,.pv-wrap{display:block}.pv{overflow:visible}
 }
 </style>
@@ -982,6 +985,214 @@ html,body{height:auto;overflow:visible}#panes,.pv-wrap{display:block}.pv{overflo
     addEventListener('keydown', e => { if (e.key === 'Escape') hide(); });
     addEventListener('blur', hide);
   }
+
+  // ── BUS 通信（供摘抄写入主站） ──
+  let mdBus = null;
+  try { mdBus = new BroadcastChannel('bus'); } catch (_) { }
+  window.addEventListener('pagehide', (e) => {
+    if (!e.persisted && mdBus) {
+      try { mdBus.close(); } catch (_) { }
+      mdBus = null;
+    }
+  });
+  function emitToIndex(type, payload) {
+    if (!mdBus) return;
+    try {
+      const tabId = (window.top && window.top.__TAB_ID__) || '';
+      mdBus.postMessage({ type, payload, from: 'md_viewer', target: 'index', tabId });
+    } catch (_) { }
+  }
+
+  // ── 拼音与摘抄（预览区 + 编辑区均支持，摘抄按钮位于结束光标正下方） ──
+  function initMdPinyinAndExcerpt() {
+    const pyTip = document.createElement('div');
+    pyTip.id = 'md-pinyin-tooltip';
+    document.body.appendChild(pyTip);
+
+    const exBtn = document.createElement('div');
+    exBtn.id = 'md-excerpt-btn';
+    exBtn.textContent = '✏️';
+    document.body.appendChild(exBtn);
+
+    let lastExcerptText = '';
+    const bookName = relPath.split('/').pop() || 'README.md';
+
+    const hideAll = () => {
+      pyTip.style.display = 'none';
+      exBtn.style.display = 'none';
+    };
+
+    const getEditorSelection = (ev) => {
+      if (cm && cm.somethingSelected()) {
+        const text = cm.getSelection().trim();
+        if (text) {
+          const head = cm.cursorCoords('head', 'window');
+          return { text, endRect: head, isCM: true };
+        }
+      }
+      if (!cm && document.activeElement === ed) {
+        const s = ed.selectionStart, e = ed.selectionEnd;
+        if (typeof s === 'number' && typeof e === 'number' && e > s) {
+          const text = ed.value.slice(s, e).trim();
+          if (text) {
+            return {
+              text,
+              endRect: { left: ev.clientX, right: ev.clientX, top: ev.clientY - 12, bottom: ev.clientY + 6, width: 0, height: 18 },
+              isTextarea: true
+            };
+          }
+        }
+      }
+      return null;
+    };
+
+    const getDomEndRect = (sel, ev) => {
+      if (sel && sel.rangeCount > 0) {
+        try {
+          if (sel.focusNode) {
+            const caret = document.createRange();
+            caret.setStart(sel.focusNode, sel.focusOffset);
+            caret.collapse(true);
+            const r = caret.getBoundingClientRect();
+            if (r && r.height > 0) return r;
+            if (sel.focusNode.nodeType === Node.TEXT_NODE && sel.focusNode.length > 0) {
+              const r2 = document.createRange();
+              if (sel.focusOffset > 0) {
+                r2.setStart(sel.focusNode, sel.focusOffset - 1);
+                r2.setEnd(sel.focusNode, sel.focusOffset);
+                const rr = r2.getBoundingClientRect();
+                if (rr && rr.height > 0) return { left: rr.right, right: rr.right, top: rr.top, bottom: rr.bottom, width: 0, height: rr.height };
+              } else {
+                r2.setStart(sel.focusNode, 0);
+                r2.setEnd(sel.focusNode, 1);
+                const rr = r2.getBoundingClientRect();
+                if (rr && rr.height > 0) return { left: rr.left, right: rr.left, top: rr.top, bottom: rr.bottom, width: 0, height: rr.height };
+              }
+            }
+          }
+        } catch (_) { }
+        try {
+          const rects = Array.from(sel.getRangeAt(0).getClientRects()).filter(r => r.width > 0 || r.height > 0);
+          if (rects.length > 0) {
+            let isBackward = false;
+            if (sel.anchorNode && sel.focusNode) {
+              isBackward = sel.anchorNode === sel.focusNode
+                ? sel.focusOffset < sel.anchorOffset
+                : !!(sel.anchorNode.compareDocumentPosition(sel.focusNode) & Node.DOCUMENT_POSITION_PRECEDING);
+            }
+            const r = isBackward ? rects[0] : rects[rects.length - 1];
+            const x = isBackward ? r.left : r.right;
+            return { left: x, right: x, top: r.top, bottom: r.bottom, width: 0, height: r.height };
+          }
+        } catch (_) { }
+      }
+      return { left: ev.clientX, right: ev.clientX, top: ev.clientY - 12, bottom: ev.clientY + 6, width: 0, height: 18 };
+    };
+
+    const getSelectionInfo = (ev) => {
+      const edSel = getEditorSelection(ev);
+      if (edSel) return edSel;
+      const sel = window.getSelection();
+      const text = sel ? sel.toString().trim() : '';
+      if (!text) return null;
+      return { text, endRect: getDomEndRect(sel, ev), sel };
+    };
+
+    const doExcerpt = () => {
+      const info = getSelectionInfo({ clientX: 0, clientY: 0 });
+      if (!info || Array.from(info.text).length <= 1) return;
+      emitToIndex('SAVE_EXCERPT', { text: info.text, bookName });
+      const oldText = exBtn.textContent;
+      exBtn.textContent = '✅ 已摘抄';
+      exBtn.style.background = '#10b981';
+      setTimeout(() => {
+        exBtn.style.display = 'none';
+        exBtn.textContent = oldText;
+        exBtn.style.background = '#516194';
+        if (info.isCM && cm) cm.setCursor(cm.getCursor('head'));
+        else if (info.sel) info.sel.removeAllRanges();
+        lastExcerptText = '';
+      }, 800);
+    };
+
+    ['mousedown', 'mouseup', 'click', 'touchstart', 'touchend', 'pointerdown', 'pointerup'].forEach(evt => {
+      window.addEventListener(evt, (e) => {
+        if (e.target && e.target.closest && e.target.closest('#md-excerpt-btn')) {
+          e.stopPropagation();
+          e.stopImmediatePropagation();
+          if (evt === 'mousedown') e.preventDefault();
+          if (evt === 'click') doExcerpt();
+        }
+      }, true);
+    });
+
+    document.addEventListener('mousedown', (e) => {
+      if (e.target && e.target.closest && e.target.closest('#md-excerpt-btn')) return;
+      hideAll();
+      lastExcerptText = '';
+    }, true);
+
+    pv.addEventListener('scroll', hideAll, { passive: true });
+    document.addEventListener('scroll', hideAll, true);
+
+    document.addEventListener('mouseup', (e) => {
+      if (e.target && e.target.closest && e.target.closest('#md-excerpt-btn, .bar, #ctx')) return;
+      setTimeout(() => {
+        const info = getSelectionInfo(e);
+        if (!info) {
+          hideAll();
+          lastExcerptText = '';
+          return;
+        }
+        const chars = Array.from(info.text);
+        const endRect = info.endRect;
+
+        if (chars.length === 1) {
+          exBtn.style.display = 'none';
+          lastExcerptText = '';
+          const dict = window.top && window.top.pinyinData;
+          const py = dict && dict[chars[0]];
+          if (py) {
+            pyTip.textContent = py;
+            pyTip.style.visibility = 'hidden';
+            pyTip.style.display = 'block';
+            const tw = pyTip.offsetWidth || 48;
+            const th = pyTip.offsetHeight || 24;
+            const anchorX = (endRect.left + endRect.right) / 2;
+            const left = Math.max(8, Math.min(window.innerWidth - tw - 8, anchorX - tw / 2));
+            const top = endRect.top - th - 6 >= 8 ? (endRect.top - th - 6) : Math.min(window.innerHeight - th - 8, endRect.bottom + 6);
+            pyTip.style.left = Math.round(left) + 'px';
+            pyTip.style.top = Math.round(top) + 'px';
+            pyTip.style.visibility = 'visible';
+          } else {
+            pyTip.style.display = 'none';
+          }
+          return;
+        }
+
+        pyTip.style.display = 'none';
+        if (info.text !== lastExcerptText) {
+          exBtn.style.visibility = 'hidden';
+          exBtn.style.display = 'block';
+          const bw = exBtn.offsetWidth || 32;
+          const bh = exBtn.offsetHeight || 24;
+          const endX = (endRect.left + endRect.right) / 2;
+          const left = Math.max(8, Math.min(window.innerWidth - bw - 8, endX - bw / 2));
+          let top = endRect.bottom + 6;
+          if (top + bh > window.innerHeight - 8 && endRect.top - bh - 6 >= 8) {
+            top = endRect.top - bh - 6;
+          } else {
+            top = Math.max(8, Math.min(window.innerHeight - bh - 8, top));
+          }
+          exBtn.style.left = Math.round(left) + 'px';
+          exBtn.style.top = Math.round(top) + 'px';
+          exBtn.style.visibility = 'visible';
+          lastExcerptText = info.text;
+        }
+      }, 10);
+    }, true);
+  }
+  initMdPinyinAndExcerpt();
 
   (async () => {
     if (isEditable) { try { await initLocalCodeMirror(); } catch (_) { } }

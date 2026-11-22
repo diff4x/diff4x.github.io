@@ -333,6 +333,36 @@ html, body {
     color: var(--ui-fg);
     font-variant-numeric: tabular-nums;
 }
+.tb-num {
+    width: 44px;
+    padding: 1px 4px;
+    border: 1px solid var(--ui-border);
+    border-radius: 3px;
+    background: transparent;
+    color: var(--ui-fg);
+    font: inherit;
+    font-size: 11.5px;
+    font-variant-numeric: tabular-nums;
+    text-align: center;
+    outline: none;
+    box-sizing: border-box;
+    user-select: text;
+    -moz-appearance: textfield;
+}
+.tb-num:focus {
+    border-color: var(--ui-fg);
+    background: var(--ui-hover);
+}
+.tb-num::-webkit-inner-spin-button,
+.tb-num::-webkit-outer-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+}
+.tb-unit {
+    font-size: 11px;
+    color: var(--ui-muted);
+    margin-left: -2px;
+}
 
 .tb-color {
     display: inline-flex;
@@ -569,15 +599,15 @@ select.tb-select {
             <span class="tb-sep"></span>
 
             <div class="tb-group">
-                <label class="tb-slider-wrap" title="调整字号">
-                    字号<input type="range" id="fontSizeSlider" min="13" max="34" step="1" value="18"><span id="fzVal" class="tb-val">18px</span>
-                </label>
-                <label class="tb-slider-wrap" title="调整行高">
-                    行高<input type="range" id="lineHeightSlider" min="1.3" max="2.6" step="0.05" value="1.85"><span id="lhVal" class="tb-val">1.85</span>
-                </label>
-                <label class="tb-slider-wrap" title="调整参考栏宽 (自动 1/2/3 栏)">
-                    栏宽<input type="range" id="colWidthSlider" min="280" max="680" step="20" value="440"><span id="cwVal" class="tb-val">440</span>
-                </label>
+                <span class="tb-slider-wrap" title="调整字号">
+                    字号<input type="range" id="fontSizeSlider" min="13" max="34" step="1" value="18"><input type="number" id="fzInput" class="tb-num" min="10" max="60" step="1" value="18" aria-label="字号数值"><span class="tb-unit">px</span>
+                </span>
+                <span class="tb-slider-wrap" title="调整行高">
+                    行高<input type="range" id="lineHeightSlider" min="1.3" max="2.6" step="0.05" value="1.85"><input type="number" id="lhInput" class="tb-num" min="1.0" max="4.0" step="0.05" value="1.85" aria-label="行高数值">
+                </span>
+                <span class="tb-slider-wrap" title="调整参考栏宽 (自动 1/2/3 栏)">
+                    栏宽<input type="range" id="colWidthSlider" min="280" max="680" step="20" value="440"><input type="number" id="cwInput" class="tb-num" min="200" max="2000" step="10" value="440" aria-label="栏宽数值">
+                </span>
             </div>
 
             <span class="tb-sep"></span>
@@ -632,8 +662,15 @@ select.tb-select {
             searchHighlightSupported,
             getSearchHighlight,
             resetSearchHighlights,
-            publishSearchHighlights
+            publishSearchHighlights,
+            adaptKeywordsForWasm,
+            collectAdsPositiveIndices,
+            evalAdsExpr,
+            mergeWasmMatchSpans,
+            collectWasmMatches,
+            buildMergedGroupSnippets
         } from '../js/shared-utils.js';
+        import { BookDB, normalizeBookKey, buildBookSearchCacheKey } from '../js/book-db.js';
 
         if (window.top && window.top.VirtualCursor) {
             try { window.top.VirtualCursor.attach(window); } catch (_) { }
@@ -712,6 +749,7 @@ select.tb-select {
 
         const State = {
             fileUrl: '',
+            bookKey: '',
             title: '',
             historyKey: '',
             rawBytes: null,
@@ -1285,7 +1323,7 @@ select.tb-select {
                 : '当前为搜本书，点击切换为搜全站';
         }
 
-        function applyPrefs({ reanchor = false } = {}) {
+        function applyPrefs({ reanchor = false, skipInput = null } = {}) {
             const anchorOff = reanchor ? captureCurrentCharOffset() : null;
             const p = State.prefs;
             const rootEl = document.documentElement;
@@ -1300,12 +1338,21 @@ select.tb-select {
             rootEl.dataset.ui = isDark ? 'dark' : 'light';
             rootStyle.setProperty('--col-rule', isDark ? 'rgba(255,255,255,0.08)' : 'rgba(44,42,39,0.1)');
 
-            $('#fontSizeSlider').value = String(p.fontSize);
-            $('#fzVal').textContent = p.fontSize + 'px';
-            $('#lineHeightSlider').value = String(p.lineHeight);
-            $('#lhVal').textContent = Number(p.lineHeight).toFixed(2);
-            $('#colWidthSlider').value = String(p.columnWidth);
-            $('#cwVal').textContent = String(p.columnWidth);
+            const syncSlider = (sliderEl, val) => {
+                const min = Number(sliderEl.min), max = Number(sliderEl.max);
+                sliderEl.value = String(Math.max(min, Math.min(max, val)));
+            };
+            syncSlider($('#fontSizeSlider'), p.fontSize);
+            syncSlider($('#lineHeightSlider'), p.lineHeight);
+            syncSlider($('#colWidthSlider'), p.columnWidth);
+
+            const fzInput = $('#fzInput');
+            const lhInput = $('#lhInput');
+            const cwInput = $('#cwInput');
+            if (skipInput !== fzInput) fzInput.value = String(p.fontSize);
+            if (skipInput !== lhInput) lhInput.value = Number(p.lineHeight).toFixed(2);
+            if (skipInput !== cwInput) cwInput.value = String(p.columnWidth);
+
             $('#fgColor').value = p.color;
             $('#bgColor').value = p.backgroundColor;
 
@@ -1430,21 +1477,60 @@ select.tb-select {
                 renderBookmarkList();
             };
 
-            $('#fontSizeSlider').oninput = (e) => {
-                State.prefs.fontSize = Number(e.target.value);
-                applyPrefs({ reanchor: true });
-                savePrefsDebounced();
-            };
-            $('#lineHeightSlider').oninput = (e) => {
-                State.prefs.lineHeight = Number(e.target.value);
-                applyPrefs({ reanchor: true });
-                savePrefsDebounced();
-            };
-            $('#colWidthSlider').oninput = (e) => {
-                State.prefs.columnWidth = Number(e.target.value);
-                applyPrefs({ reanchor: true });
-                savePrefsDebounced();
-            };
+            function bindRangeAndNumber({ sliderId, inputId, prefKey, min, max, decimals = 0 }) {
+                const slider = $(sliderId);
+                const input = $(inputId);
+                const normalize = (v) => {
+                    const clamped = Math.max(min, Math.min(max, v));
+                    return decimals > 0 ? Number(clamped.toFixed(decimals)) : Math.round(clamped);
+                };
+
+                slider.oninput = (e) => {
+                    State.prefs[prefKey] = normalize(Number(e.target.value));
+                    applyPrefs({ reanchor: true });
+                    savePrefsDebounced();
+                };
+
+                input.onfocus = () => input.select();
+
+                input.oninput = () => {
+                    const raw = input.value.trim();
+                    if (raw === '') return;
+                    const num = Number(raw);
+                    if (!Number.isFinite(num) || num < min || num > max) return;
+                    State.prefs[prefKey] = normalize(num);
+                    applyPrefs({ reanchor: true, skipInput: input });
+                    savePrefsDebounced();
+                };
+
+                const commit = () => {
+                    const raw = input.value.trim();
+                    const num = Number(raw);
+                    if (raw !== '' && Number.isFinite(num)) {
+                        State.prefs[prefKey] = normalize(num);
+                        savePrefsDebounced();
+                    }
+                    applyPrefs({ reanchor: true });
+                };
+
+                input.onchange = commit;
+                input.onblur = commit;
+                input.onkeydown = (e) => {
+                    if (e.key === 'Enter') {
+                        e.preventDefault();
+                        commit();
+                        input.blur();
+                    } else if (e.key === 'Escape') {
+                        e.stopPropagation();
+                        applyPrefs({ reanchor: false });
+                        input.blur();
+                    }
+                };
+            }
+
+            bindRangeAndNumber({ sliderId: '#fontSizeSlider', inputId: '#fzInput', prefKey: 'fontSize', min: 10, max: 60, decimals: 0 });
+            bindRangeAndNumber({ sliderId: '#lineHeightSlider', inputId: '#lhInput', prefKey: 'lineHeight', min: 1.0, max: 4.0, decimals: 2 });
+            bindRangeAndNumber({ sliderId: '#colWidthSlider', inputId: '#cwInput', prefKey: 'columnWidth', min: 200, max: 2000, decimals: 0 });
 
             topBar.querySelectorAll('.preset-btn').forEach(btn => {
                 btn.onclick = () => {
@@ -1587,12 +1673,62 @@ select.tb-select {
 
                     pinyinTooltip.style.display = 'none';
                     if (text !== lastSelected) {
+                        const getEndRect = () => {
+                            try {
+                                if (sel.focusNode) {
+                                    const caret = document.createRange();
+                                    caret.setStart(sel.focusNode, sel.focusOffset);
+                                    caret.collapse(true);
+                                    const cr = caret.getBoundingClientRect();
+                                    if (cr && cr.height > 0) return cr;
+                                    if (sel.focusNode.nodeType === Node.TEXT_NODE && sel.focusNode.length > 0) {
+                                        const r2 = document.createRange();
+                                        if (sel.focusOffset > 0) {
+                                            r2.setStart(sel.focusNode, sel.focusOffset - 1);
+                                            r2.setEnd(sel.focusNode, sel.focusOffset);
+                                            const rr = r2.getBoundingClientRect();
+                                            if (rr && rr.height > 0) return { left: rr.right, right: rr.right, top: rr.top, bottom: rr.bottom, width: 0, height: rr.height };
+                                        } else {
+                                            r2.setStart(sel.focusNode, 0);
+                                            r2.setEnd(sel.focusNode, 1);
+                                            const rr = r2.getBoundingClientRect();
+                                            if (rr && rr.height > 0) return { left: rr.left, right: rr.left, top: rr.top, bottom: rr.bottom, width: 0, height: rr.height };
+                                        }
+                                    }
+                                }
+                            } catch (_) { }
+                            try {
+                                const rects = Array.from(sel.getRangeAt(0).getClientRects()).filter(r => r.width > 0 || r.height > 0);
+                                if (rects.length > 0) {
+                                    let isBackward = false;
+                                    if (sel.anchorNode && sel.focusNode) {
+                                        isBackward = sel.anchorNode === sel.focusNode
+                                            ? sel.focusOffset < sel.anchorOffset
+                                            : !!(sel.anchorNode.compareDocumentPosition(sel.focusNode) & Node.DOCUMENT_POSITION_PRECEDING);
+                                    }
+                                    const r = isBackward ? rects[0] : rects[rects.length - 1];
+                                    const x = isBackward ? r.left : r.right;
+                                    return { left: x, right: x, top: r.top, bottom: r.bottom, width: 0, height: r.height };
+                                }
+                            } catch (_) { }
+                            return { left: e.clientX, right: e.clientX, top: e.clientY - 12, bottom: e.clientY + 6, width: 0, height: 18 };
+                        };
+                        const endRect = getEndRect();
+                        excerptBtn.style.visibility = 'hidden';
                         excerptBtn.style.display = 'block';
                         const bw = excerptBtn.offsetWidth || 72;
-                        const left = Math.max(8, Math.min(window.innerWidth - bw - 8, rect.right - bw / 2));
-                        const top = Math.min(window.innerHeight - 36, rect.bottom + 8);
-                        excerptBtn.style.left = left + 'px';
-                        excerptBtn.style.top = top + 'px';
+                        const bh = excerptBtn.offsetHeight || 26;
+                        const endX = (endRect.left + endRect.right) / 2;
+                        const left = Math.max(8, Math.min(window.innerWidth - bw - 8, endX - bw / 2));
+                        let top = endRect.bottom + 6;
+                        if (top + bh > window.innerHeight - 8 && endRect.top - bh - 6 >= 8) {
+                            top = endRect.top - bh - 6;
+                        } else {
+                            top = Math.max(8, Math.min(window.innerHeight - bh - 8, top));
+                        }
+                        excerptBtn.style.left = Math.round(left) + 'px';
+                        excerptBtn.style.top = Math.round(top) + 'px';
+                        excerptBtn.style.visibility = 'visible';
                         lastSelected = text;
                     }
                 }, 10);
@@ -1657,12 +1793,6 @@ select.tb-select {
             return null;
         }
 
-        function adaptKeywordsForWasm(specs, weighted) {
-            if (!Array.isArray(specs)) return [];
-            if (weighted) return specs;
-            return specs.map(s => (typeof s === 'string' ? s : s.text)).filter(Boolean);
-        }
-
         function u16ToCodePointIdx(str, u16Idx) {
             const clamped = Math.max(0, Math.min(str.length, u16Idx));
             let cp = 0;
@@ -1677,7 +1807,7 @@ select.tb-select {
             return cp;
         }
 
-        function buildCompactAnchorPreview(chunkText, localStart, localEnd, noise) {
+        function buildCompactAnchorPreview(chunkText, localStart, localEnd, noise, allChunkHits = null) {
             const BEFORE = 10, AFTER = 18;
             let s = Math.max(0, localStart - BEFORE);
             let e = Math.min(chunkText.length, localEnd + AFTER);
@@ -1691,6 +1821,20 @@ select.tb-select {
             const cleanSlice = chunkText.slice(s, e).replace(/[\t\r\n]/g, ' ');
             const preview = prefixEllipsis + cleanSlice + suffixEllipsis;
             const pShift = prefixEllipsis.length;
+
+            if (Array.isArray(allChunkHits) && allChunkHits.length > 0) {
+                const highlights = [];
+                for (const m of allChunkHits) {
+                    if (m.end <= s) continue;
+                    if (m.start >= e) break;
+                    const rs = pShift + (Math.max(s, m.start) - s);
+                    const re = pShift + (Math.min(e, m.end) - s);
+                    if (re > rs) {
+                        highlights.push([u16ToCodePointIdx(preview, rs), u16ToCodePointIdx(preview, re), m.noise]);
+                    }
+                }
+                if (highlights.length > 0) return { preview, highlights };
+            }
             const hs = u16ToCodePointIdx(preview, pShift + (localStart - s));
             const he = u16ToCodePointIdx(preview, pShift + (localEnd - s));
             return { preview, highlights: [[hs, he, noise]] };
@@ -1728,22 +1872,79 @@ select.tb-select {
             return { t, h };
         }
 
-        async function runBookSearch({ keyword, specs, noise, token }) {
+        async function runBookSearch({ keyword, specs, noise, synonymsEnabled, adsPlan, token, cacheMeta }) {
             State.activeSearchToken = token;
             clearAllSearchHighlights();
-            if (!keyword || !Array.isArray(specs) || specs.length === 0 || State.chunks.length === 0) {
+            const isAds = !!(adsPlan && Array.isArray(adsPlan.terms) && adsPlan.terms.length > 0 && adsPlan.expr);
+            if (!keyword || State.chunks.length === 0 || (!isAds && (!Array.isArray(specs) || specs.length === 0))) {
                 State.lastSearch = null;
                 return { totalHits: 0, shownHits: 0, truncated: false, groups: [] };
+            }
+
+            const useHL = searchHighlightSupported();
+            const MAX_RECORDED_HITS = 1500;
+            const MAX_HL_RANGES = 2000;
+
+            const canCache = !!(State.bookKey && (!cacheMeta || cacheMeta.canCache !== false));
+            const queryKey = canCache ? buildBookSearchCacheKey({
+                bookSig: `txt:${State.detectedEncoding}:${State.rawText.length}`,
+                algoVer: (cacheMeta && cacheMeta.algoVer) || 11,
+                synVer: (cacheMeta && cacheMeta.synVer) || '',
+                keyword,
+                noise,
+                useSyn: !!synonymsEnabled,
+                adsPlan: isAds ? adsPlan : null
+            }) : '';
+
+            if (canCache && queryKey) {
+                const cached = await BookDB.getSearch(State.bookKey, queryKey);
+                if (token !== State.activeSearchToken) return null;
+                if (cached && Array.isArray(cached.hits) && Array.isArray(cached.groupMeta)) {
+                    const groupMap = new Map();
+                    for (const gm of cached.groupMeta) {
+                        groupMap.set(gm.groupIndex, {
+                            type: 'txt-group',
+                            path: `txt-group:${gm.groupIndex}`,
+                            groupIndex: gm.groupIndex,
+                            title: gm.title,
+                            percent: gm.percent,
+                            count: gm.count,
+                            hits: []
+                        });
+                    }
+                    let hlCount = 0;
+                    for (const h of cached.hits) {
+                        const g = groupMap.get(h.chapterIdx);
+                        if (g) g.hits.push(h);
+                        if (useHL && hlCount < MAX_HL_RANGES) {
+                            const chunk = State.chunks[h.chunkIdx];
+                            if (chunk && chunk.textNode && h.localEnd > h.localStart && h.localEnd <= chunk.text.length) {
+                                try {
+                                    const r = new Range();
+                                    r.setStart(chunk.textNode, h.localStart);
+                                    r.setEnd(chunk.textNode, h.localEnd);
+                                    getSearchHighlight(h.noise).add(r);
+                                    hlCount++;
+                                } catch (_) { }
+                            }
+                        }
+                    }
+                    if (useHL) publishSearchHighlights();
+                    const groups = Array.from(groupMap.values()).sort((a, b) => a.groupIndex - b.groupIndex);
+                    State.lastSearch = { keyword, isAds, hits: cached.hits, groups, groupMap };
+                    return {
+                        keyword,
+                        totalHits: cached.totalHits,
+                        shownHits: cached.hits.length,
+                        truncated: !!cached.truncated,
+                        groups
+                    };
+                }
             }
 
             const sw = await waitForSharedWasm();
             if (token !== State.activeSearchToken) return null;
             if (!sw) throw new Error('Wasm 搜索引擎未就绪');
-
-            const wasmKeywords = adaptKeywordsForWasm(specs, !!sw.weightedKeywords);
-            const useHL = searchHighlightSupported();
-            const MAX_RECORDED_HITS = 1500;
-            const MAX_HL_RANGES = 2000;
             const totalLen = Math.max(1, State.rawText.length);
 
             const hits = [];
@@ -1751,74 +1952,146 @@ select.tb-select {
             let totalHits = 0;
             let hlCount = 0;
 
-            let sliceStart = performance.now();
-            for (let ci = 0; ci < State.chunks.length; ci++) {
-                if (token !== State.activeSearchToken) return null;
-                const chunk = State.chunks[ci];
-                const res = sw.find_content_matches_multi(chunk.text, wasmKeywords, noise);
-                const arr = res && res.matches;
-                const cnt = arr ? Math.floor(arr.length / 3) : 0;
+            const recordChunkMatches = (chunk, ch, matchList) => {
+                for (const m of matchList) {
+                    const localStart = m.start;
+                    const localEnd = m.end;
+                    const packedNoise = m.noise;
+                    totalHits++;
 
-                if (cnt > 0) {
-                    const ch = State.chapters[chunk.chapterIdx];
-                    for (let i = 0; i < arr.length; i += 3) {
-                        const localStart = arr[i];
-                        const localEnd = arr[i + 1];
-                        const packedNoise = arr[i + 2];
-                        totalHits++;
+                    if (useHL && hlCount < MAX_HL_RANGES && localEnd > localStart && localEnd <= chunk.text.length) {
+                        try {
+                            const r = new Range();
+                            r.setStart(chunk.textNode, localStart);
+                            r.setEnd(chunk.textNode, localEnd);
+                            getSearchHighlight(packedNoise).add(r);
+                            hlCount++;
+                        } catch (_) { }
+                    }
 
-                        if (useHL && hlCount < MAX_HL_RANGES && localEnd > localStart && localEnd <= chunk.text.length) {
-                            try {
-                                const r = new Range();
-                                r.setStart(chunk.textNode, localStart);
-                                r.setEnd(chunk.textNode, localEnd);
-                                getSearchHighlight(packedNoise).add(r);
-                                hlCount++;
-                            } catch (_) { }
-                        }
+                    const charStart = chunk.startOffset + localStart;
+                    const charEnd = chunk.startOffset + localEnd;
+                    const pct = ((charStart / totalLen) * 100).toFixed(1) + '%';
 
-                        if (hits.length < MAX_RECORDED_HITS) {
-                            const charStart = chunk.startOffset + localStart;
-                            const charEnd = chunk.startOffset + localEnd;
-                            const pct = ((charStart / totalLen) * 100).toFixed(1) + '%';
-                            const compact = buildCompactAnchorPreview(chunk.text, localStart, localEnd, packedNoise);
-                            const hitObj = {
-                                hitIndex: hits.length,
-                                chunkIdx: ci,
-                                chapterIdx: chunk.chapterIdx,
-                                localStart,
-                                localEnd,
-                                charStart,
-                                charEnd,
-                                noise: packedNoise,
-                                percent: pct,
-                                preview: compact.preview,
-                                highlights: compact.highlights
-                            };
-                            hits.push(hitObj);
+                    let g = groupMap.get(chunk.chapterIdx);
+                    if (!g) {
+                        g = {
+                            type: 'txt-group',
+                            path: `txt-group:${chunk.chapterIdx}`,
+                            groupIndex: chunk.chapterIdx,
+                            title: ch ? ch.title : `第 ${chunk.chapterIdx + 1} 节`,
+                            percent: ch ? ch.percent : pct,
+                            count: 0,
+                            hits: []
+                        };
+                        groupMap.set(chunk.chapterIdx, g);
+                    }
+                    g.count++;
 
-                            let g = groupMap.get(chunk.chapterIdx);
-                            if (!g) {
-                                g = {
-                                    type: 'txt-group',
-                                    path: `txt-group:${chunk.chapterIdx}`,
-                                    groupIndex: chunk.chapterIdx,
-                                    title: ch ? ch.title : `第 ${chunk.chapterIdx + 1} 节`,
-                                    percent: ch ? ch.percent : pct,
-                                    count: 0,
-                                    hits: []
-                                };
-                                groupMap.set(chunk.chapterIdx, g);
-                            }
-                            g.count++;
-                            g.hits.push(hitObj);
-                        }
+                    if (hits.length < MAX_RECORDED_HITS) {
+                        const compact = buildCompactAnchorPreview(chunk.text, localStart, localEnd, packedNoise, matchList);
+                        const hitObj = {
+                            hitIndex: hits.length,
+                            chunkIdx: chunk.index,
+                            chapterIdx: chunk.chapterIdx,
+                            localStart,
+                            localEnd,
+                            charStart,
+                            charEnd,
+                            noise: packedNoise,
+                            termIdx: typeof m.termIdx === 'number' ? m.termIdx : 0,
+                            percent: pct,
+                            preview: compact.preview,
+                            highlights: compact.highlights
+                        };
+                        hits.push(hitObj);
+                        g.hits.push(hitObj);
                     }
                 }
+            };
 
-                if (performance.now() - sliceStart >= 10) {
-                    await new Promise(r => setTimeout(r, 0));
-                    sliceStart = performance.now();
+            let sliceStart = performance.now();
+
+            if (isAds) {
+                const terms = adsPlan.terms.map(t => ({
+                    noise: t.noise,
+                    wasmKeywords: adaptKeywordsForWasm(t.specs, !!sw.weightedKeywords)
+                }));
+                const posIndices = collectAdsPositiveIndices(adsPlan.expr);
+                const posSet = new Set(posIndices);
+
+                const chunksByChapter = new Map();
+                for (const c of State.chunks) {
+                    let list = chunksByChapter.get(c.chapterIdx);
+                    if (!list) { list = []; chunksByChapter.set(c.chapterIdx, list); }
+                    list.push(c);
+                }
+
+                for (const ch of State.chapters) {
+                    if (token !== State.activeSearchToken) return null;
+                    const chChunks = chunksByChapter.get(ch.index);
+                    if (!chChunks || chChunks.length === 0) continue;
+
+                    const termHitCache = new Map();
+                    const termMatchesByChunk = new Map();
+
+                    const hasTermInChapter = (tIdx) => {
+                        if (termHitCache.has(tIdx)) return termHitCache.get(tIdx);
+                        const term = terms[tIdx];
+                        if (!term || term.wasmKeywords.length === 0) {
+                            termHitCache.set(tIdx, false);
+                            return false;
+                        }
+                        const keepAll = posSet.has(tIdx);
+                        let found = false;
+                        let byChunk = null;
+                        for (const chunk of chChunks) {
+                            const matches = collectWasmMatches(sw, chunk.text, term.wasmKeywords, term.noise, tIdx);
+                            if (matches.length > 0) {
+                                found = true;
+                                if (!keepAll) break;
+                                if (!byChunk) { byChunk = new Map(); termMatchesByChunk.set(tIdx, byChunk); }
+                                byChunk.set(chunk.index, matches);
+                            }
+                        }
+                        termHitCache.set(tIdx, found);
+                        return found;
+                    };
+
+                    if (evalAdsExpr(adsPlan.expr, hasTermInChapter)) {
+                        for (const pIdx of posIndices) hasTermInChapter(pIdx);
+                        for (const chunk of chChunks) {
+                            const raw = [];
+                            for (const pIdx of posIndices) {
+                                const byChunk = termMatchesByChunk.get(pIdx);
+                                const m = byChunk && byChunk.get(chunk.index);
+                                if (m && m.length > 0) raw.push(...m);
+                            }
+                            if (raw.length > 0) {
+                                recordChunkMatches(chunk, ch, mergeWasmMatchSpans(raw));
+                            }
+                        }
+                    }
+
+                    if (performance.now() - sliceStart >= 10) {
+                        await new Promise(r => setTimeout(r, 0));
+                        sliceStart = performance.now();
+                    }
+                }
+            } else {
+                const wasmKeywords = adaptKeywordsForWasm(specs, !!sw.weightedKeywords);
+                for (let ci = 0; ci < State.chunks.length; ci++) {
+                    if (token !== State.activeSearchToken) return null;
+                    const chunk = State.chunks[ci];
+                    const matches = collectWasmMatches(sw, chunk.text, wasmKeywords, noise, 0);
+                    if (matches.length > 0) {
+                        recordChunkMatches(chunk, State.chapters[chunk.chapterIdx], matches);
+                    }
+
+                    if (performance.now() - sliceStart >= 10) {
+                        await new Promise(r => setTimeout(r, 0));
+                        sliceStart = performance.now();
+                    }
                 }
             }
 
@@ -1826,12 +2099,31 @@ select.tb-select {
             if (useHL) publishSearchHighlights();
 
             const groups = Array.from(groupMap.values()).sort((a, b) => a.groupIndex - b.groupIndex);
-            State.lastSearch = { keyword, hits, groups, groupMap };
+            const truncated = totalHits > hits.length;
+            State.lastSearch = { keyword, isAds, hits, groups, groupMap };
+
+            if (canCache && queryKey) {
+                const groupMeta = groups.map(g => ({
+                    groupIndex: g.groupIndex,
+                    title: g.title,
+                    percent: g.percent,
+                    count: g.count
+                }));
+                BookDB.putSearch(State.bookKey, queryKey, 'txt', {
+                    keyword,
+                    isAds,
+                    totalHits,
+                    truncated,
+                    hits,
+                    groupMeta
+                });
+            }
+
             return {
                 keyword,
                 totalHits,
                 shownHits: hits.length,
-                truncated: totalHits > hits.length,
+                truncated,
                 groups
             };
         }
@@ -1844,15 +2136,16 @@ select.tb-select {
                 const gIdx = Number(path.slice('txt-group:'.length));
                 const g = last.groupMap.get(gIdx);
                 if (!g) return null;
-                const MAX_ITEMS = 40;
-                const items = [];
-                const slice = g.hits.slice(0, MAX_ITEMS);
-                for (const h of slice) {
-                    const it = buildSnippetItem(h, 58, g.hits);
-                    if (it) items.push(it);
-                }
+                const { items, more } = buildMergedGroupSnippets(g.hits, {
+                    maxItems: 40,
+                    radius: 58,
+                    maxWindowChars: 180,
+                    snapToNewline: true,
+                    getUnitKey: (h) => h.chunkIdx,
+                    getUnitText: (h) => (State.chunks[h.chunkIdx] && State.chunks[h.chunkIdx].text) || ''
+                });
                 return {
-                    body: { hits: g.count, more: Math.max(0, g.hits.length - MAX_ITEMS), items },
+                    body: { hits: g.count, more: more + Math.max(0, g.count - g.hits.length), items },
                     comments: { hits: 0, docs: 0, more: 0, items: [] }
                 };
             }
@@ -2001,6 +2294,7 @@ select.tb-select {
                 return;
             }
             State.fileUrl = fileUrl;
+            State.bookKey = normalizeBookKey(fileUrl);
             State.title = decodeURIComponent(fileUrl.split('/').pop() || 'Untitled.txt');
             State.historyKey = 'txt.history_' + State.title;
             document.title = State.title;
