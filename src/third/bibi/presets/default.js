@@ -117,10 +117,10 @@ Bibi.preset({
 
 "default-page-progression-direction" : "ltr", // "ltr" or "rtl". Most of EPUBs have right property in itself, but....
 
-"accept-local-file"                  : "yes", // "yes" or "no" or "desktop" or "mobile". (If it is enabled, Bibi prepares UI for loading files. Conditions for acceptance are <03> at the bottom of this preset file.)
-"accept-bibizine"                    : true, // true or false (If true, Bibi accepts EPUB-like bibiZine formated book. If you are interested in it, please contact the author)
-"accept-blob-converted-data"         : true, // true or false (If true, Bibi accepts BLOB object converted from a EPUB File. If you are interested in it, please contact the author)
-"accept-base64-encoded-data"         : true, // true or false (If true, Bibi accepts Base64 string encoded from a EPUB File. If you are interested in it, please contact the author)
+"accept-local-file"                  : "no", // "yes" or "no" or "desktop" or "mobile". (Hardened: disabled external local file drop)
+"accept-bibizine"                    : false, // Hardened: disabled bibiZine ingestion
+"accept-blob-converted-data"         : false, // Hardened: disabled Blob URL EPUB ingestion
+"accept-base64-encoded-data"         : false, // Hardened: disabled Base64 URL EPUB ingestion
 
 "pagination-method"                  : "auto", // "auto" or "x". (It affects only for vertical-text reflowable books. More info is <04> at the bottom of this preset file.)
 "allow-placeholders"                 : true, // true or false. (true is highly recommended.)

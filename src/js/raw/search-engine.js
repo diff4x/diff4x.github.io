@@ -977,9 +977,8 @@ export function createSearchEngine(ctx) {
 
         let hist = store.last_li_a;
         if (!Array.isArray(hist)) hist = hist ? [hist] : [];
-        if (store.resource_type !== "html" || hist.length === 0) return;
-
-        const currentPath = hist[0];
+        const currentPath = store.last_html || (hist.length > 0 ? hist[0] : "");
+        if (store.resource_type !== "html" || !currentPath) return;
         const path = normalizeDocPath(currentPath);
         const title = payload.title || path.split('/').pop().replace('.html', '');
         const count = typeof payload.count === 'number' ? payload.count : 0;
@@ -1017,9 +1016,10 @@ export function createSearchEngine(ctx) {
 
     function isCurrentOpenHtml(normPath) {
         if (!normPath || store.resource_type !== 'html') return false;
+        if (store.last_html && normalizeDocPath(store.last_html) === normPath) return true;
         let hist = store.last_li_a;
         if (!Array.isArray(hist)) hist = hist ? [hist] : [];
-        if (hist.length > 0 && normalizeDocPath(hist[0]) === normPath) return true;
+        if (!store.last_html && hist.length > 0 && normalizeDocPath(hist[0]) === normPath) return true;
         try {
             const ifr = getContentIframe();
             const locPath = ifr && ifr.contentWindow && ifr.contentWindow.location && ifr.contentWindow.location.pathname;

@@ -1,0 +1,177 @@
+/**
+ * site-core.js —— 全站单一事实源（兼容 Window / iframe / Service Worker）
+ * 统一维护：MainDB Schema、每标签页 sessionStorage 隔离路由、createStore Proxy、协议名与音频路径校验。
+ */
+(function (root) {
+    'use strict';
+
+    const MAINDB_NAME = 'MainDB';
+    const MAINDB_VERSION = 3;
+
+    const TAB_SCOPED_KEYS = new Set([
+        'resource_type',
+        'content_src',
+        'pdf_path',
+        'epub_path',
+        'txt_path',
+        'image_path',
+        'video_path',
+        'song_path',
+        'imagelist',
+        'videolist',
+        'playlist',
+        'last_html',
+        'lightbox_stauts',
+        'jump_from_search',
+        'jump_from_search_ex',
+        'giscus_jump',
+        'keyword',
+        'bookmarkhtml_modifing',
+        'bookmarkhtml_linksHash',
+        'force_refresh_cache'
+    ]);
+
+    const BLOCKED_SCHEMES = new Set([
+        'javascript', 'data', 'vbscript', 'file', 'blob', 'about',
+        'http', 'https', 'ws', 'wss', 'ftp', 'mailto', 'tel'
+    ]);
+
+    function sanitizeProtocolName(raw) {
+        let s = raw;
+        if (typeof s === 'string') {
+            try {
+                const parsed = JSON.parse(s);
+                if (typeof parsed === 'string') s = parsed;
+            } catch (_) { }
+        }
+        s = String(s || '').trim().toLowerCase();
+        if (!/^[a-z][a-z0-9+.-]{0,31}$/.test(s)) return '';
+        if (BLOCKED_SCHEMES.has(s)) return '';
+        return s;
+    }
+
+    function sanitizeAudioPath(raw) {
+        if (typeof raw !== 'string') return '';
+        let s = raw.trim().replace(/\\/g, '/');
+        if (!s || s.length > 512) return '';
+        if (/[\x00-\x1F\x7F<>"'`]/.test(s)) return '';
+        if (/^[a-z][a-z0-9+.-]*:/i.test(s)) return '';
+        s = s.replace(/^(?:\.\.\/|\.\/|\/)+/, '');
+        if (!s.startsWith('audio/')) return '';
+        if (s.split('/').some(seg => seg === '' || seg === '.' || seg === '..')) return '';
+        if (!/\.(?:mp3|wav|flac|m4a|ogg|aac)$/i.test(s)) return '';
+        return s;
+    }
+
+    function sanitizeAudioList(list) {
+        if (!Array.isArray(list)) return [];
+        const out = [];
+        const seen = new Set();
+        for (const item of list) {
+            const clean = sanitizeAudioPath(item);
+            if (clean && !seen.has(clean)) {
+                seen.add(clean);
+                out.push(clean);
+            }
+        }
+        return out;
+    }
+
+    function ensureMainDBSchema(db) {
+        if (!db.objectStoreNames.contains('chunks')) db.createObjectStore('chunks');
+        if (!db.objectStoreNames.contains('update_logs')) db.createObjectStore('update_logs', { autoIncrement: true });
+        if (!db.objectStoreNames.contains('search_cache')) db.createObjectStore('search_cache');
+        if (!db.objectStoreNames.contains('sys_state')) db.createObjectStore('sys_state');
+        if (!db.objectStoreNames.contains('html_snapshots')) db.createObjectStore('html_snapshots');
+    }
+
+    function openMainDB(onBlocked) {
+        return new Promise((resolve, reject) => {
+            const req = indexedDB.open(MAINDB_NAME, MAINDB_VERSION);
+            req.onupgradeneeded = (e) => ensureMainDBSchema(e.target.result);
+            req.onsuccess = (e) => resolve(e.target.result);
+            req.onerror = (e) => reject(e.target.error || req.error);
+            if (typeof onBlocked === 'function') req.onblocked = onBlocked;
+        });
+    }
+
+    function getStorageForKey(key) {
+        return TAB_SCOPED_KEYS.has(key) ? root.sessionStorage : root.localStorage;
+    }
+
+    function cleanupLegacyTabKeys() {
+        try {
+            if (!root.localStorage) return;
+            for (const k of TAB_SCOPED_KEYS) {
+                if (root.localStorage.getItem(k) !== null) {
+                    root.localStorage.removeItem(k);
+                }
+            }
+        } catch (_) { }
+    }
+
+    function createStore(defaults = {}, opts = {}) {
+        const getters = (opts && opts.getters) || null;
+        const readonlyKeys = new Set((opts && opts.readonlyKeys) || []);
+        const fallback = (opts && typeof opts.fallback === 'function') ? opts.fallback : null;
+
+        return new Proxy({}, {
+            get(_, prop) {
+                if (typeof prop === 'symbol') return undefined;
+                if (getters && Object.prototype.hasOwnProperty.call(getters, prop)) {
+                    return getters[prop]();
+                }
+                if (prop === 'pinyinData') {
+                    try { return (root.top && root.top.pinyinData) || {}; } catch (_) { return {}; }
+                }
+                const st = getStorageForKey(prop);
+                const val = st ? st.getItem(prop) : null;
+                if (val === null) {
+                    if (Object.prototype.hasOwnProperty.call(defaults, prop)) return defaults[prop];
+                    return fallback ? fallback(prop) : undefined;
+                }
+                try { return JSON.parse(val); } catch { return val; }
+            },
+            set(_, prop, value) {
+                if (typeof prop === 'symbol') return false;
+                if (readonlyKeys.has(prop)) {
+                    console.warn(`store.${prop} 是只读内置对象，禁止覆盖！`);
+                    return false;
+                }
+                if (prop === 'pinyinData') return true;
+                if (prop === 'protocol_name') {
+                    const clean = sanitizeProtocolName(value);
+                    if (!clean) {
+                        console.warn('拒绝写入非法 protocol_name:', value);
+                        return false;
+                    }
+                    value = clean;
+                }
+                const st = getStorageForKey(prop);
+                if (st) st.setItem(prop, JSON.stringify(value));
+                return true;
+            },
+            deleteProperty(_, prop) {
+                if (typeof prop === 'symbol') return false;
+                if (readonlyKeys.has(prop)) return false;
+                if (prop === 'pinyinData') return true;
+                const st = getStorageForKey(prop);
+                if (st) st.removeItem(prop);
+                return true;
+            }
+        });
+    }
+
+    root.SiteCore = Object.freeze({
+        MAINDB_NAME,
+        MAINDB_VERSION,
+        TAB_SCOPED_KEYS,
+        ensureMainDBSchema,
+        openMainDB,
+        createStore,
+        cleanupLegacyTabKeys,
+        sanitizeProtocolName,
+        sanitizeAudioPath,
+        sanitizeAudioList
+    });
+})(typeof globalThis !== 'undefined' ? globalThis : self);

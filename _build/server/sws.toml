@@ -1,0 +1,96 @@
+# _build/server/sws.toml — 本地静态服务器安全配置（8000 端口）
+# 说明：
+# - host / port / root / log-level 由 CLI.bat 命令行传入，避免 TOML 覆盖 CLI 参数。
+# - 若 static-web-server 为 v3.x，可将 ignore-hidden-files = true 改为 include-hidden = false 或删去。
+
+[general]
+ignore-hidden-files = true
+directory-listing = false
+
+[advanced]
+
+# 1. 堵住 Windows 8.3 短文件名绕过（如 /_BUILD~1/..., /_build/SECRET~1/..., PROTOC~1.KEY）
+[[advanced.rewrites]]
+source = "**/*~[0-9]*"
+destination = "/__blocked__"
+
+[[advanced.rewrites]]
+source = "**/*~[0-9]*/**"
+destination = "/__blocked__"
+
+# 2. 堵住 Windows Win32 尾随点 / 尾随空格归一化绕过（如 protocol.key. 或 secrets./protocol.key）
+[[advanced.rewrites]]
+source = "**/*[ .]"
+destination = "/__blocked__"
+
+[[advanced.rewrites]]
+source = "**/*[ .]/**"
+destination = "/__blocked__"
+
+# 3. 禁访指定 Secret 文件与目录（全字母大小写通配，堵住 Windows 大小写绕过）
+#    保留 /_build/secrets/txn.txt 与 /_build/secrets/upcoming_tasks.json 供本地页面读取
+[[advanced.rewrites]]
+source = "/_[bB][uU][iI][lL][dD]/[sS][eE][cC][rR][eE][tT][sS]/[pP][rR][oO][tT][oO][cC][oO][lL].*"
+destination = "/__blocked__"
+
+[[advanced.rewrites]]
+source = "/_[bB][uU][iI][lL][dD]/[sS][eE][cC][rR][eE][tT][sS]/[lL][oO][cC][aA][lL].*"
+destination = "/__blocked__"
+
+[[advanced.rewrites]]
+source = "/_[bB][uU][iI][lL][dD]/[sS][eE][cC][rR][eE][tT][sS]/[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL][sS].*"
+destination = "/__blocked__"
+
+[[advanced.rewrites]]
+source = "/_[bB][uU][iI][lL][dD]/[sS][eE][cC][rR][eE][tT][sS]/[tT][oO][kK][eE][nN][sS]"
+destination = "/__blocked__"
+
+[[advanced.rewrites]]
+source = "/_[bB][uU][iI][lL][dD]/[sS][eE][cC][rR][eE][tT][sS]/[tT][oO][kK][eE][nN][sS]/**"
+destination = "/__blocked__"
+
+# 4. 禁访 _build 下配置、脚本、构建工具与服务端目录
+[[advanced.rewrites]]
+source = "/_[bB][uU][iI][lL][dD]/[cC][oO][nN][fF][iI][gG].*"
+destination = "/__blocked__"
+
+[[advanced.rewrites]]
+source = "/_[bB][uU][iI][lL][dD]/[sS][eE][rR][vV][eE][rR]/**"
+destination = "/__blocked__"
+
+[[advanced.rewrites]]
+source = "/_[bB][uU][iI][lL][dD]/[jJ][aA][rR]/**"
+destination = "/__blocked__"
+
+[[advanced.rewrites]]
+source = "/_[bB][uU][iI][lL][dD]/[rR][sS]/**"
+destination = "/__blocked__"
+
+[[advanced.rewrites]]
+source = "/_[bB][uU][iI][lL][dD]/[bB][aA][cC][kK][uU][pP]/**"
+destination = "/__blocked__"
+
+[[advanced.rewrites]]
+source = "/_[bB][uU][iI][lL][dD]/*.[bB][aA][tT]"
+destination = "/__blocked__"
+
+[[advanced.rewrites]]
+source = "/_[bB][uU][iI][lL][dD]/*.[pP][sS]1"
+destination = "/__blocked__"
+
+[[advanced.rewrites]]
+source = "/_[bB][uU][iI][lL][dD]/*.[vV][bB][sS]"
+destination = "/__blocked__"
+
+[[advanced.rewrites]]
+source = "/_[bB][uU][iI][lL][dD]/*.[jJ][aA][rR]"
+destination = "/__blocked__"
+
+# 5. 全站安全响应头（禁 eval/new Function，同时放行 'wasm-unsafe-eval' 与 Giscus）
+[[advanced.headers]]
+source = "**"
+[advanced.headers.headers]
+X-Content-Type-Options = "nosniff"
+X-Frame-Options = "SAMEORIGIN"
+Referrer-Policy = "strict-origin-when-cross-origin"
+Content-Security-Policy = "script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' https://giscus.app; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; frame-ancestors 'self';"

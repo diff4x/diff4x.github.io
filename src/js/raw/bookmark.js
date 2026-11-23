@@ -131,31 +131,7 @@ function emitEvent(type, payload, target = '*') {
 }
 
 function createStore(defaults = {}) {
-    return new Proxy({}, {
-        get(_, prop) {
-            if (prop === 'pinyinData') {
-                return window.top.pinyinData || {};
-            }
-
-            const val = localStorage.getItem(prop);
-            if (val === null) return defaults[prop];
-            try { return JSON.parse(val); } catch { return val; }
-        },
-        set(_, prop, value) {
-            if (prop === 'pinyinData') {
-                return true;
-            }
-
-            localStorage.setItem(prop, JSON.stringify(value));
-            return true;
-        },
-        deleteProperty(_, prop) {
-            if (prop === 'pinyinData') return true;
-
-            localStorage.removeItem(prop);
-            return true;
-        }
-    });
+    return window.top.SiteCore.createStore(defaults);
 }
 
 function setupDragAndDrop() {
@@ -169,7 +145,7 @@ function setupDragAndDrop() {
             block.classList.remove('dragover');
         });
 
-        block.addEventListener('drop', e => {
+        block.addEventListener('drop', async e => {
             e.preventDefault();
             block.classList.remove('dragover');
 
@@ -201,8 +177,20 @@ function setupDragAndDrop() {
             }
 
             const param = blockId + "}" + linkTitle + "}" + linkHref;
+            let sealedUrl = "";
+            try {
+                if (window.top && typeof window.top.sealProtocolUrl === "function") {
+                    sealedUrl = await window.top.sealProtocolUrl(2, param);
+                } else {
+                    const m = await import("/src/js/shared-utils.js");
+                    sealedUrl = await m.sealProtocolUrl(2, param);
+                }
+            } catch (err) {
+                alert("❌ 本地协议封包失败：" + (err && err.message ? err.message : String(err)));
+                return;
+            }
             emitEvent("reload_bookmark", null, "index");
-            location.href = store.protocol_name + "://2{" + encodeURIComponent(param);
+            location.href = sealedUrl;
         });
     });
 }

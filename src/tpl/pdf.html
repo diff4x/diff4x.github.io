@@ -1,2065 +1,1242 @@
-﻿<html dir="ltr" mozdisallowselectionprint>
+<!doctype html>
+<!--
+Copyright 2012 Mozilla Foundation
 
-<head>
-  <meta charset="utf-8">
-  <title>PDF.js viewer</title>
-  <link rel="stylesheet" href="../third/pdfjs/web/viewer.css">
-  <link rel="resource" type="application/l10n" href="../third/pdfjs/web/locale/locale.properties">
-  <script src="../third/pdfjs/build/pdf.js"></script>
-  <script src="../third/pdfjs/web/viewer.js"></script>
-</head>
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
 
-<body tabindex="1" class="loadingInProgress">
-  <div id="outerContainer">
-    <div id="sidebarContainer">
-      <div id="toolbarSidebar">
-        <div class="splitToolbarButton toggled">
-          <button id="viewThumbnail" class="toolbarButton toggled" title="Show Thumbnails" tabindex="2"
-            data-l10n-id="thumbs">
-            <span data-l10n-id="thumbs_label">Thumbnails</span>
-          </button>
-          <button id="viewOutline" class="toolbarButton"
-            title="Show Document Outline (double-click to expand/collapse all items)" tabindex="3"
-            data-l10n-id="document_outline">
-            <span data-l10n-id="document_outline_label">Document Outline</span>
-          </button>
-          <button id="viewAttachments" class="toolbarButton" title="Show Attachments" tabindex="4"
-            data-l10n-id="attachments">
-            <span data-l10n-id="attachments_label">Attachments</span>
-          </button>
-        </div>
-      </div>
-      <div id="sidebarContent">
-        <div id="thumbnailView">
-        </div>
-        <div id="outlineView" class="hidden">
-        </div>
-        <div id="attachmentsView" class="hidden">
-        </div>
-      </div>
-      <div id="sidebarResizer" class="hidden"></div>
-    </div> <!-- sidebarContainer -->
+    http://www.apache.org/licenses/LICENSE-2.0
 
-    <div id="mainContainer">
-      <div class="findbar hidden doorHanger" id="findbar">
-        <div id="findbarInputContainer">
-          <input id="findInput" class="toolbarField" title="Find" placeholder="Find in document" tabindex="91"
-            data-l10n-id="find_input">
-          <div class="splitToolbarButton">
-            <button id="findPrevious" class="toolbarButton findPrevious"
-              title="Find the previous occurrence of the phrase" tabindex="92" data-l10n-id="find_previous">
-              <span data-l10n-id="find_previous_label">Previous</span>
-            </button>
-            <div class="splitToolbarButtonSeparator"></div>
-            <button id="findNext" class="toolbarButton findNext" title="Find the next occurrence of the phrase"
-              tabindex="93" data-l10n-id="find_next">
-              <span data-l10n-id="find_next_label">Next</span>
-            </button>
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+
+Adobe CMap resources are covered by their own copyright but the same license:
+
+    Copyright 1990-2015 Adobe Systems Incorporated.
+
+See https://github.com/adobe-type-tools/cmap-resources
+-->
+<html dir="ltr" mozdisallowselectionprint>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+    <meta name="google" content="notranslate" />
+    <title>PDF.js viewer</title>
+
+  <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:; style-src 'self'; img-src 'self' blob: data:; media-src blob:; font-src 'self' data:; connect-src 'self' blob: data:; base-uri 'none'; form-action 'none';"
+    />
+
+<!-- This snippet is used in production (included from viewer.html) -->
+<link rel="resource" type="application/l10n" href="../third/pdfjs/web/locale/locale.json" />
+    <script src="../third/pdfjs/build/pdf.mjs" type="module"></script>
+
+    <link rel="stylesheet" href="../third/pdfjs/web/viewer.css" />
+    <link rel="stylesheet" href="../css/pdf-viewer.css" />
+
+    <script src="../third/pdfjs/web/viewer.mjs" type="module"></script>
+    <script src="../js/pdf-viewer.js" type="module"></script>
+  </head>
+
+  <body tabindex="0">
+    <div id="outerContainer">
+      <span id="viewer-alert" class="visuallyHidden" role="alert"></span>
+
+      <div id="mainContainer">
+        <div class="toolbar">
+          <div id="toolbarContainer">
+            <div id="toolbarViewer" class="toolbarHorizontalGroup">
+              <div id="toolbarViewerLeft" class="toolbarHorizontalGroup">
+                <button
+                  id="viewsManagerToggleButton"
+                  class="toolbarButton"
+                  type="button"
+                  tabindex="0"
+                  data-l10n-id="pdfjs-toggle-views-manager-button1"
+                  aria-expanded="false"
+                  aria-haspopup="true"
+                  aria-controls="viewsManager"
+                >
+                  <span data-l10n-id="pdfjs-toggle-views-manager-button1-label"></span>
+                </button>
+                <div
+                  id="viewsManager"
+                  class="menuContainer sidebar"
+                  hidden="true"
+                  role="dialog"
+                  aria-describedby="viewsManagerHeaderLabel"
+                  data-l10n-id="pdfjs-views-manager-sidebar"
+                >
+                  <div id="viewsManagerHeader">
+                    <div id="viewsManagerTitle">
+                      <div id="viewsManagerSelector">
+                        <button
+                          class="toolbarButton viewsManagerButton hasPopupMenu"
+                          type="button"
+                          id="viewsManagerSelectorButton"
+                          tabindex="0"
+                          data-l10n-id="pdfjs-views-manager-view-selector-button"
+                          aria-expanded="false"
+                          aria-haspopup="listbox"
+                          aria-controls="viewsManagerSelectorOptions"
+                        >
+                          <span data-l10n-id="pdfjs-views-manager-view-selector-button-label"></span>
+                        </button>
+                        <menu id="viewsManagerSelectorOptions" role="listbox" class="popupMenu withMark">
+                          <button id="thumbnailsViewMenu" role="option" type="button" tabindex="-1">
+                            <span data-l10n-id="pdfjs-views-manager-pages-option-label"></span>
+                          </button>
+                          <button id="outlinesViewMenu" role="option" type="button" tabindex="-1">
+                            <span data-l10n-id="pdfjs-views-manager-outlines-option-label"></span>
+                          </button>
+                          <button id="attachmentsViewMenu" role="option" type="button" tabindex="-1">
+                            <span data-l10n-id="pdfjs-views-manager-attachments-option-label"></span>
+                          </button>
+                          <button id="layersViewMenu" role="option" type="button" tabindex="-1">
+                            <span data-l10n-id="pdfjs-views-manager-layers-option-label"></span>
+                          </button>
+                        </menu>
+                      </div>
+                      <span id="viewsManagerHeaderLabel" class="viewsManagerLabel" role="heading" aria-level="2"></span>
+                      <button
+                        id="viewsManagerAddFileButton"
+                        class="toolbarButton viewsManagerButton"
+                        type="button"
+                        tabindex="0"
+                        data-l10n-id="pdfjs-views-manager-add-file-button"
+                        hidden="true"
+                      >
+                        <span data-l10n-id="pdfjs-views-manager-add-file-button-label"></span>
+                        <input id="viewsManagerAddFilePicker" type="file" accept="application/pdf,image/*" multiple />
+                      </button>
+                      <button
+                        id="viewsManagerCurrentOutlineButton"
+                        class="toolbarButton viewsManagerButton"
+                        type="button"
+                        tabindex="0"
+                        data-l10n-id="pdfjs-current-outline-item-button"
+                        hidden="true"
+                      >
+                        <span data-l10n-id="pdfjs-current-outline-item-button-label"></span>
+                      </button>
+                    </div>
+                    <div id="viewsManagerStatus">
+                      <div id="viewsManagerStatusAction">
+                        <span id="viewsManagerStatusActionLabelContainer" class="viewsManagerStatusLabel">
+                          <button
+                            id="viewsManagerStatusActionDeselectButton"
+                            class="hidden"
+                            type="button"
+                            tabindex="0"
+                            role="checkbox"
+                            aria-checked="true"
+                            aria-labelledby="viewsManagerStatusActionLabel"
+                          ></button>
+                          <span
+                            id="viewsManagerStatusActionLabel"
+                            class="viewsManagerStatusLabel"
+                            data-l10n-id="pdfjs-views-manager-pages-status-none-action-label"
+                          ></span>
+                        </span>
+                        <div id="actionSelector">
+                          <button
+                            id="viewsManagerStatusActionButton"
+                            class="viewsManagerButton hasPopupMenu"
+                            type="button"
+                            tabindex="0"
+                            aria-haspopup="menu"
+                            aria-controls="viewsManagerStatusActionOptions"
+                            aria-expanded="false"
+                          >
+                            <span data-l10n-id="pdfjs-views-manager-pages-status-action-button-label"></span>
+                          </button>
+                          <menu id="viewsManagerStatusActionOptions" class="popupMenu">
+                            <button id="viewsManagerStatusActionCopy" class="noIcon" role="menuitem" type="button" tabindex="-1" disabled>
+                              <span data-l10n-id="pdfjs-views-manager-pages-status-copy-button-label"></span>
+                            </button>
+                            <button id="viewsManagerStatusActionCut" class="noIcon" role="menuitem" type="button" tabindex="-1" disabled>
+                              <span data-l10n-id="pdfjs-views-manager-pages-status-cut-button-label"></span>
+                            </button>
+                            <button id="viewsManagerStatusActionDelete" class="noIcon" role="menuitem" type="button" tabindex="-1" disabled>
+                              <span data-l10n-id="pdfjs-views-manager-pages-status-delete-button-label"></span>
+                            </button>
+                            <button id="viewsManagerStatusActionExport" class="noIcon" role="menuitem" type="button" tabindex="-1" disabled>
+                              <span data-l10n-id="pdfjs-views-manager-pages-status-export-selected-button-label"></span>
+                            </button>
+                          </menu>
+                        </div>
+                      </div>
+                      <div id="viewsManagerStatusUndo" class="hidden">
+                        <span id="viewsManagerStatusUndoLabel" class="viewsManagerStatusLabel"></span>
+                        <div>
+                          <button id="viewsManagerStatusUndoButton" class="viewsManagerButton" type="button" tabindex="0">
+                            <span data-l10n-id="pdfjs-views-manager-status-undo-button-label"></span>
+                          </button>
+                          <button
+                            id="viewsManagerStatusUndoCloseButton"
+                            class="toolbarButton viewsManagerButton viewsCloseButton"
+                            type="button"
+                            tabindex="0"
+                            data-l10n-id="pdfjs-views-manager-status-close-button"
+                          >
+                            <span data-l10n-id="pdfjs-views-manager-status-close-button-label"></span>
+                          </button>
+                        </div>
+                      </div>
+                      <div id="viewsManagerStatusWarning" class="hidden">
+                        <span id="viewsManagerStatusWarningLabel" class="viewsManagerStatusLabel"></span>
+                        <button
+                          id="viewsManagerStatusWarningCloseButton"
+                          class="toolbarButton viewsManagerButton viewsCloseButton"
+                          type="button"
+                          tabindex="0"
+                          data-l10n-id="pdfjs-views-manager-status-close-button"
+                        >
+                          <span data-l10n-id="pdfjs-views-manager-status-close-button-label"></span>
+                        </button>
+                      </div>
+                      <div id="viewsManagerStatusWaiting" class="hidden">
+                        <span id="viewsManagerStatusWaitingLabel" class="viewsManagerStatusLabel"></span>
+                        <button
+                          id="viewsManagerStatusWaitingCloseButton"
+                          class="toolbarButton viewsManagerButton viewsCloseButton"
+                          type="button"
+                          tabindex="0"
+                          data-l10n-id="pdfjs-views-manager-status-close-button"
+                        >
+                          <span data-l10n-id="pdfjs-views-manager-status-close-button-label"></span>
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                  <div id="viewsManagerContent" tabindex="-1">
+                    <div id="thumbnailsView" class="thumbnailsView hidden" tabindex="-1"></div>
+                    <div id="outlinesView" class="treeView hidden"></div>
+                    <div id="attachmentsView" class="hidden"></div>
+                    <div id="layersView" class="treeView hidden"></div>
+                  </div>
+                  <div
+                    id="viewsManagerResizer"
+                    class="sidebarResizer"
+                    role="separator"
+                    aria-controls="viewsManager"
+                    tabindex="0"
+                    data-l10n-id="pdfjs-views-manager-sidebar-resizer"
+                  ></div>
+                </div>
+                <!-- sidebarContainer -->
+
+                <div class="toolbarButtonSpacer"></div>
+                <div class="toolbarButtonWithContainer">
+                  <button
+                    id="viewFindButton"
+                    class="toolbarButton"
+                    type="button"
+                    tabindex="0"
+                    data-l10n-id="pdfjs-findbar-button"
+                    aria-expanded="false"
+                    aria-controls="findbar"
+                  >
+                    <span data-l10n-id="pdfjs-findbar-button-label"></span>
+                  </button>
+                  <div class="hidden doorHanger toolbarHorizontalGroup" id="findbar">
+                    <div id="findInputContainer" class="toolbarHorizontalGroup">
+                      <span class="loadingInput end toolbarHorizontalGroup">
+                        <input id="findInput" class="toolbarField" tabindex="0" data-l10n-id="pdfjs-find-input" aria-invalid="false" />
+                      </span>
+                      <div class="toolbarHorizontalGroup">
+                        <button id="findPreviousButton" class="toolbarButton" type="button" tabindex="0" data-l10n-id="pdfjs-find-previous-button">
+                          <span data-l10n-id="pdfjs-find-previous-button-label"></span>
+                        </button>
+                        <div class="splitToolbarButtonSeparator"></div>
+                        <button id="findNextButton" class="toolbarButton" type="button" tabindex="0" data-l10n-id="pdfjs-find-next-button">
+                          <span data-l10n-id="pdfjs-find-next-button-label"></span>
+                        </button>
+                      </div>
+                    </div>
+
+                    <div id="findbarOptionsOneContainer" class="toolbarHorizontalGroup">
+                      <div class="toggleButton toolbarLabel">
+                        <input type="checkbox" id="findHighlightAll" tabindex="0" />
+                        <label for="findHighlightAll" data-l10n-id="pdfjs-find-highlight-checkbox"></label>
+                      </div>
+                      <div class="toggleButton toolbarLabel">
+                        <input type="checkbox" id="findMatchCase" tabindex="0" />
+                        <label for="findMatchCase" data-l10n-id="pdfjs-find-match-case-checkbox-label"></label>
+                      </div>
+                    </div>
+                    <div id="findbarOptionsTwoContainer" class="toolbarHorizontalGroup">
+                      <div class="toggleButton toolbarLabel">
+                        <input type="checkbox" id="findMatchDiacritics" tabindex="0" />
+                        <label for="findMatchDiacritics" data-l10n-id="pdfjs-find-match-diacritics-checkbox-label"></label>
+                      </div>
+                      <div class="toggleButton toolbarLabel">
+                        <input type="checkbox" id="findEntireWord" tabindex="0" />
+                        <label for="findEntireWord" data-l10n-id="pdfjs-find-entire-word-checkbox-label"></label>
+                      </div>
+                    </div>
+
+                    <div id="findbarMessageContainer" class="toolbarHorizontalGroup" aria-live="polite">
+                      <span id="findResultsCount" class="toolbarLabel"></span>
+                      <span id="findMsg" class="toolbarLabel"></span>
+                    </div>
+                  </div>
+                  <!-- findbar -->
+                </div>
+                <div class="toolbarHorizontalGroup hiddenSmallView">
+                  <button class="toolbarButton" type="button" id="previous" tabindex="0" data-l10n-id="pdfjs-previous-button">
+                    <span data-l10n-id="pdfjs-previous-button-label"></span>
+                  </button>
+                  <div class="splitToolbarButtonSeparator"></div>
+                  <button class="toolbarButton" type="button" id="next" tabindex="0" data-l10n-id="pdfjs-next-button">
+                    <span data-l10n-id="pdfjs-next-button-label"></span>
+                  </button>
+                </div>
+                <div class="toolbarHorizontalGroup">
+                  <span class="loadingInput start toolbarHorizontalGroup">
+                    <input
+                      type="number"
+                      id="pageNumber"
+                      class="toolbarField"
+                      value="1"
+                      min="1"
+                      tabindex="0"
+                      data-l10n-id="pdfjs-page-input"
+                      autocomplete="off"
+                    />
+                  </span>
+                  <span id="numPages" class="toolbarLabel"></span>
+                </div>
+              </div>
+              <div id="toolbarViewerMiddle" class="toolbarHorizontalGroup">
+                <div class="toolbarHorizontalGroup">
+                  <button id="zoomOutButton" class="toolbarButton" type="button" tabindex="0" data-l10n-id="pdfjs-zoom-out-button">
+                    <span data-l10n-id="pdfjs-zoom-out-button-label"></span>
+                  </button>
+                  <div class="splitToolbarButtonSeparator"></div>
+                  <button id="zoomInButton" class="toolbarButton" type="button" tabindex="0" data-l10n-id="pdfjs-zoom-in-button">
+                    <span data-l10n-id="pdfjs-zoom-in-button-label"></span>
+                  </button>
+                </div>
+                <span id="scaleSelectContainer" class="dropdownToolbarButton">
+                  <select id="scaleSelect" tabindex="0" data-l10n-id="pdfjs-zoom-select">
+                    <option id="pageAutoOption" value="auto" selected="selected" data-l10n-id="pdfjs-page-scale-auto"></option>
+                    <option id="pageActualOption" value="page-actual" data-l10n-id="pdfjs-page-scale-actual"></option>
+                    <option id="pageFitOption" value="page-fit" data-l10n-id="pdfjs-page-scale-fit"></option>
+                    <option id="pageWidthOption" value="page-width" data-l10n-id="pdfjs-page-scale-width"></option>
+                    <option
+                      id="customScaleOption"
+                      value="custom"
+                      disabled="disabled"
+                      hidden="true"
+                      data-l10n-id="pdfjs-page-scale-percent"
+                      data-l10n-args='{ "scale": 0 }'
+                    ></option>
+                    <option value="0.5" data-l10n-id="pdfjs-page-scale-percent" data-l10n-args='{ "scale": 50 }'></option>
+                    <option value="0.75" data-l10n-id="pdfjs-page-scale-percent" data-l10n-args='{ "scale": 75 }'></option>
+                    <option value="1" data-l10n-id="pdfjs-page-scale-percent" data-l10n-args='{ "scale": 100 }'></option>
+                    <option value="1.25" data-l10n-id="pdfjs-page-scale-percent" data-l10n-args='{ "scale": 125 }'></option>
+                    <option value="1.5" data-l10n-id="pdfjs-page-scale-percent" data-l10n-args='{ "scale": 150 }'></option>
+                    <option value="2" data-l10n-id="pdfjs-page-scale-percent" data-l10n-args='{ "scale": 200 }'></option>
+                    <option value="3" data-l10n-id="pdfjs-page-scale-percent" data-l10n-args='{ "scale": 300 }'></option>
+                    <option value="4" data-l10n-id="pdfjs-page-scale-percent" data-l10n-args='{ "scale": 400 }'></option>
+                  </select>
+                </span>
+                <span class="pdf-custom-controls">
+                  <button id="reverseColor" type="button" title="切换反色阅读">反色</button>
+                  <button id="pdfSearchScope" type="button" title="切换主站搜索框为搜本书或搜全站">搜本书</button>
+                </span>
+              </div>
+              <div id="toolbarViewerRight" class="toolbarHorizontalGroup">
+                <div id="editorModeButtons" class="toolbarHorizontalGroup">
+                  <div id="signatureProperties" class="toolbarButtonWithContainer" hidden="true">
+                    <button
+                      id="signaturePropertiesButton"
+                      class="toolbarButton"
+                      type="button"
+                      tabindex="0"
+                      aria-expanded="false"
+                      aria-haspopup="true"
+                      aria-controls="signaturePropertiesPanel"
+                      data-l10n-id="pdfjs-digital-signature-properties-button"
+                    >
+                      <span data-l10n-id="pdfjs-digital-signature-properties-button-label"></span>
+                    </button>
+                    <div class="editorParamsToolbar hidden doorHangerRight" id="signaturePropertiesPanel" role="region">
+                      <div id="signaturePropertiesContainer" class="signaturePropertiesContainer">
+                        <div id="signaturePropertiesBanner" class="sigBanner" hidden="true" role="status"></div>
+                        <ul id="signaturePropertiesList" class="signaturePropertiesList" tabindex="-1"></ul>
+                      </div>
+                    </div>
+                  </div>
+                  <div id="signaturePropertiesSeparator" class="verticalToolbarSeparator" hidden="true"></div>
+                  <div id="editorComment" class="toolbarButtonWithContainer" hidden="true">
+                    <button
+                      id="editorCommentButton"
+                      class="toolbarButton"
+                      type="button"
+                      tabindex="0"
+                      disabled="disabled"
+                      aria-expanded="false"
+                      aria-haspopup="true"
+                      aria-controls="editorCommentParamsToolbar"
+                      data-l10n-id="pdfjs-editor-comment-button"
+                    >
+                      <span data-l10n-id="pdfjs-editor-comment-button-label"></span>
+                    </button>
+                    <div class="editorParamsToolbar hidden menu" id="editorCommentParamsToolbar">
+                      <div id="editorCommentsSidebar" class="menuContainer comment sidebar" role="landmark" aria-labelledby="editorCommentsSidebarHeader">
+                        <div id="editorCommentsSidebarResizer" class="sidebarResizer" role="separator" aria-controls="editorCommentsSidebar" tabindex="0"></div>
+                        <div id="editorCommentsSidebarHeader" role="heading" aria-level="2">
+                          <span class="commentCount">
+                            <span id="editorCommentsSidebarTitle" data-l10n-id="pdfjs-editor-comments-sidebar-title" data-l10n-args='{ "count": 0 }'></span>
+                            <span id="editorCommentsSidebarCount"></span>
+                          </span>
+                          <button id="editorCommentsSidebarCloseButton" type="button" tabindex="0" data-l10n-id="pdfjs-editor-comments-sidebar-close-button">
+                            <span data-l10n-id="pdfjs-editor-comments-sidebar-close-button-label"></span>
+                          </button>
+                        </div>
+                        <div id="editorCommentsSidebarListContainer" tabindex="-1">
+                          <ul id="editorCommentsSidebarList"></ul>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                  <div id="editorSignature" class="toolbarButtonWithContainer" hidden="true">
+                    <button
+                      id="editorSignatureButton"
+                      class="toolbarButton"
+                      type="button"
+                      tabindex="0"
+                      disabled="disabled"
+                      aria-expanded="false"
+                      aria-haspopup="true"
+                      aria-controls="editorSignatureParamsToolbar"
+                      data-l10n-id="pdfjs-editor-signature-button"
+                    >
+                      <span data-l10n-id="pdfjs-editor-signature-button-label"></span>
+                    </button>
+                    <div class="editorParamsToolbar hidden doorHangerRight menu" id="editorSignatureParamsToolbar">
+                      <div id="addSignatureDoorHanger" class="menuContainer" role="region" data-l10n-id="pdfjs-editor-add-signature-container">
+                        <button
+                          id="editorSignatureAddSignature"
+                          class="toolbarButton labeled"
+                          type="button"
+                          tabindex="0"
+                          data-l10n-id="pdfjs-editor-signature-add-signature-button"
+                        >
+                          <span data-l10n-id="pdfjs-editor-signature-add-signature-button-label" class="editorParamsLabel"></span>
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                  <div id="editorHighlight" class="toolbarButtonWithContainer">
+                    <button
+                      id="editorHighlightButton"
+                      class="toolbarButton"
+                      type="button"
+                      disabled="disabled"
+                      aria-expanded="false"
+                      aria-haspopup="true"
+                      aria-controls="editorHighlightParamsToolbar"
+                      tabindex="0"
+                      data-l10n-id="pdfjs-editor-highlight-button"
+                    >
+                      <span data-l10n-id="pdfjs-editor-highlight-button-label"></span>
+                    </button>
+                    <div class="editorParamsToolbar hidden doorHangerRight" id="editorHighlightParamsToolbar">
+                      <div id="highlightParamsToolbarContainer" class="editorParamsToolbarContainer">
+                        <div id="editorHighlightColorPicker" class="colorPicker">
+                          <span id="highlightColorPickerLabel" class="editorParamsLabel" data-l10n-id="pdfjs-editor-highlight-colorpicker-label"></span>
+                        </div>
+                        <div id="editorHighlightThickness">
+                          <label
+                            for="editorFreeHighlightThickness"
+                            class="editorParamsLabel"
+                            data-l10n-id="pdfjs-editor-free-highlight-thickness-input"
+                          ></label>
+                          <div class="thicknessPicker">
+                            <input
+                              type="range"
+                              id="editorFreeHighlightThickness"
+                              class="editorParamsSlider"
+                              data-l10n-id="pdfjs-editor-free-highlight-thickness-title"
+                              value="12"
+                              min="8"
+                              max="24"
+                              step="1"
+                              tabindex="0"
+                            />
+                          </div>
+                        </div>
+                        <div id="editorHighlightVisibility">
+                          <div class="divider"></div>
+                          <div class="toggler">
+                            <label for="editorHighlightShowAll" class="editorParamsLabel" data-l10n-id="pdfjs-editor-highlight-show-all-button-label"></label>
+                            <button
+                              id="editorHighlightShowAll"
+                              class="toggle-button"
+                              type="button"
+                              data-l10n-id="pdfjs-editor-highlight-show-all-button"
+                              aria-pressed="true"
+                              tabindex="0"
+                            ></button>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                  <div id="editorFreeText" class="toolbarButtonWithContainer">
+                    <button
+                      id="editorFreeTextButton"
+                      class="toolbarButton"
+                      type="button"
+                      disabled="disabled"
+                      aria-expanded="false"
+                      aria-haspopup="true"
+                      aria-controls="editorFreeTextParamsToolbar"
+                      tabindex="0"
+                      data-l10n-id="pdfjs-editor-free-text-button"
+                    >
+                      <span data-l10n-id="pdfjs-editor-free-text-button-label"></span>
+                    </button>
+                    <div class="editorParamsToolbar hidden doorHangerRight" id="editorFreeTextParamsToolbar">
+                      <div class="editorParamsToolbarContainer">
+                        <div class="editorParamsSetter">
+                          <label for="editorFreeTextColor" class="editorParamsLabel" data-l10n-id="pdfjs-editor-free-text-color-input"></label>
+                          <input type="color" id="editorFreeTextColor" class="editorParamsColor" tabindex="0" />
+                        </div>
+                        <div class="editorParamsSetter">
+                          <label for="editorFreeTextFontSize" class="editorParamsLabel" data-l10n-id="pdfjs-editor-free-text-size-input"></label>
+                          <input type="range" id="editorFreeTextFontSize" class="editorParamsSlider" value="10" min="5" max="100" step="1" tabindex="0" />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                  <div id="editorInk" class="toolbarButtonWithContainer">
+                    <button
+                      id="editorInkButton"
+                      class="toolbarButton"
+                      type="button"
+                      disabled="disabled"
+                      aria-expanded="false"
+                      aria-haspopup="true"
+                      aria-controls="editorInkParamsToolbar"
+                      tabindex="0"
+                      data-l10n-id="pdfjs-editor-ink-button"
+                    >
+                      <span data-l10n-id="pdfjs-editor-ink-button-label"></span>
+                    </button>
+                    <div class="editorParamsToolbar hidden doorHangerRight" id="editorInkParamsToolbar">
+                      <div class="editorParamsToolbarContainer">
+                        <div class="editorParamsSetter">
+                          <label for="editorInkColor" class="editorParamsLabel" data-l10n-id="pdfjs-editor-ink-color-input"></label>
+                          <input type="color" id="editorInkColor" class="editorParamsColor" tabindex="0" />
+                        </div>
+                        <div class="editorParamsSetter">
+                          <label for="editorInkThickness" class="editorParamsLabel" data-l10n-id="pdfjs-editor-ink-thickness-input"></label>
+                          <input type="range" id="editorInkThickness" class="editorParamsSlider" value="1" min="1" max="20" step="1" tabindex="0" />
+                        </div>
+                        <div class="editorParamsSetter">
+                          <label for="editorInkOpacity" class="editorParamsLabel" data-l10n-id="pdfjs-editor-ink-opacity-input"></label>
+                          <input type="range" id="editorInkOpacity" class="editorParamsSlider" value="1" min="0.05" max="1" step="0.05" tabindex="0" />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                  <div id="editorStamp" class="toolbarButtonWithContainer">
+                    <button
+                      id="editorStampButton"
+                      class="toolbarButton"
+                      type="button"
+                      disabled="disabled"
+                      aria-expanded="false"
+                      aria-haspopup="true"
+                      aria-controls="editorStampParamsToolbar"
+                      tabindex="0"
+                      data-l10n-id="pdfjs-editor-stamp-button"
+                    >
+                      <span data-l10n-id="pdfjs-editor-stamp-button-label"></span>
+                    </button>
+                    <div class="editorParamsToolbar hidden doorHangerRight menu" id="editorStampParamsToolbar">
+                      <div class="menuContainer">
+                        <button
+                          id="editorStampAddImage"
+                          class="toolbarButton labeled"
+                          type="button"
+                          tabindex="0"
+                          data-l10n-id="pdfjs-editor-stamp-add-image-button"
+                        >
+                          <span class="editorParamsLabel" data-l10n-id="pdfjs-editor-stamp-add-image-button-label"></span>
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div id="editorModeSeparator" class="verticalToolbarSeparator"></div>
+
+                <div class="toolbarHorizontalGroup hiddenMediumView">
+                  <button id="printButton" class="toolbarButton" type="button" tabindex="0" data-l10n-id="pdfjs-print-button">
+                    <span data-l10n-id="pdfjs-print-button-label"></span>
+                  </button>
+
+                  <button id="downloadButton" class="toolbarButton" type="button" tabindex="0" data-l10n-id="pdfjs-save-button">
+                    <span data-l10n-id="pdfjs-save-button-label"></span>
+                  </button>
+                </div>
+
+                <div class="verticalToolbarSeparator hiddenMediumView"></div>
+
+                <div id="secondaryToolbarToggle" class="toolbarButtonWithContainer">
+                  <button
+                    id="secondaryToolbarToggleButton"
+                    class="toolbarButton"
+                    type="button"
+                    tabindex="0"
+                    data-l10n-id="pdfjs-tools-button"
+                    aria-expanded="false"
+                    aria-haspopup="true"
+                    aria-controls="secondaryToolbar"
+                  >
+                    <span data-l10n-id="pdfjs-tools-button-label"></span>
+                  </button>
+                  <div id="secondaryToolbar" class="hidden doorHangerRight menu">
+                    <div id="secondaryToolbarButtonContainer" class="menuContainer">
+                      <button id="secondaryOpenFile" class="toolbarButton labeled" type="button" tabindex="0" data-l10n-id="pdfjs-open-file-button">
+                        <span data-l10n-id="pdfjs-open-file-button-label"></span>
+                      </button>
+
+                      <div class="visibleMediumView">
+                        <button id="secondaryPrint" class="toolbarButton labeled" type="button" tabindex="0" data-l10n-id="pdfjs-print-button">
+                          <span data-l10n-id="pdfjs-print-button-label"></span>
+                        </button>
+
+                        <button id="secondaryDownload" class="toolbarButton labeled" type="button" tabindex="0" data-l10n-id="pdfjs-save-button">
+                          <span data-l10n-id="pdfjs-save-button-label"></span>
+                        </button>
+
+                      </div>
+
+                      <div class="horizontalToolbarSeparator"></div>
+
+                      <button id="presentationMode" class="toolbarButton labeled" type="button" tabindex="0" data-l10n-id="pdfjs-presentation-mode-button">
+                        <span data-l10n-id="pdfjs-presentation-mode-button-label"></span>
+                      </button>
+
+                      <a href="#" id="viewBookmark" class="toolbarButton labeled" tabindex="0" data-l10n-id="pdfjs-bookmark-button">
+                        <span data-l10n-id="pdfjs-bookmark-button-label"></span>
+                      </a>
+
+                      <div id="viewBookmarkSeparator" class="horizontalToolbarSeparator"></div>
+
+                      <button id="firstPage" class="toolbarButton labeled" type="button" tabindex="0" data-l10n-id="pdfjs-first-page-button">
+                        <span data-l10n-id="pdfjs-first-page-button-label"></span>
+                      </button>
+                      <button id="lastPage" class="toolbarButton labeled" type="button" tabindex="0" data-l10n-id="pdfjs-last-page-button">
+                        <span data-l10n-id="pdfjs-last-page-button-label"></span>
+                      </button>
+
+                      <div class="horizontalToolbarSeparator"></div>
+
+                      <button id="pageRotateCw" class="toolbarButton labeled" type="button" tabindex="0" data-l10n-id="pdfjs-page-rotate-cw-button">
+                        <span data-l10n-id="pdfjs-page-rotate-cw-button-label"></span>
+                      </button>
+                      <button id="pageRotateCcw" class="toolbarButton labeled" type="button" tabindex="0" data-l10n-id="pdfjs-page-rotate-ccw-button">
+                        <span data-l10n-id="pdfjs-page-rotate-ccw-button-label"></span>
+                      </button>
+
+                      <div class="horizontalToolbarSeparator"></div>
+
+                      <div id="cursorToolButtons" role="radiogroup">
+                        <button
+                          id="cursorSelectTool"
+                          class="toolbarButton labeled toggled"
+                          type="button"
+                          tabindex="0"
+                          data-l10n-id="pdfjs-cursor-text-select-tool-button"
+                          role="radio"
+                          aria-checked="true"
+                        >
+                          <span data-l10n-id="pdfjs-cursor-text-select-tool-button-label"></span>
+                        </button>
+                        <button
+                          id="cursorHandTool"
+                          class="toolbarButton labeled"
+                          type="button"
+                          tabindex="0"
+                          data-l10n-id="pdfjs-cursor-hand-tool-button"
+                          role="radio"
+                          aria-checked="false"
+                        >
+                          <span data-l10n-id="pdfjs-cursor-hand-tool-button-label"></span>
+                        </button>
+                      </div>
+
+                      <div class="horizontalToolbarSeparator"></div>
+
+                      <div id="scrollModeButtons" role="radiogroup">
+                        <button
+                          id="scrollPage"
+                          class="toolbarButton labeled"
+                          type="button"
+                          tabindex="0"
+                          data-l10n-id="pdfjs-scroll-page-button"
+                          role="radio"
+                          aria-checked="false"
+                        >
+                          <span data-l10n-id="pdfjs-scroll-page-button-label"></span>
+                        </button>
+                        <button
+                          id="scrollVertical"
+                          class="toolbarButton labeled toggled"
+                          type="button"
+                          tabindex="0"
+                          data-l10n-id="pdfjs-scroll-vertical-button"
+                          role="radio"
+                          aria-checked="true"
+                        >
+                          <span data-l10n-id="pdfjs-scroll-vertical-button-label"></span>
+                        </button>
+                        <button
+                          id="scrollHorizontal"
+                          class="toolbarButton labeled"
+                          type="button"
+                          tabindex="0"
+                          data-l10n-id="pdfjs-scroll-horizontal-button"
+                          role="radio"
+                          aria-checked="false"
+                        >
+                          <span data-l10n-id="pdfjs-scroll-horizontal-button-label"></span>
+                        </button>
+                        <button
+                          id="scrollWrapped"
+                          class="toolbarButton labeled"
+                          type="button"
+                          tabindex="0"
+                          data-l10n-id="pdfjs-scroll-wrapped-button"
+                          role="radio"
+                          aria-checked="false"
+                        >
+                          <span data-l10n-id="pdfjs-scroll-wrapped-button-label"></span>
+                        </button>
+                      </div>
+
+                      <div class="horizontalToolbarSeparator"></div>
+
+                      <div id="spreadModeButtons" role="radiogroup">
+                        <button
+                          id="spreadNone"
+                          class="toolbarButton labeled toggled"
+                          type="button"
+                          tabindex="0"
+                          data-l10n-id="pdfjs-spread-none-button"
+                          role="radio"
+                          aria-checked="true"
+                        >
+                          <span data-l10n-id="pdfjs-spread-none-button-label"></span>
+                        </button>
+                        <button
+                          id="spreadOdd"
+                          class="toolbarButton labeled"
+                          type="button"
+                          tabindex="0"
+                          data-l10n-id="pdfjs-spread-odd-button"
+                          role="radio"
+                          aria-checked="false"
+                        >
+                          <span data-l10n-id="pdfjs-spread-odd-button-label"></span>
+                        </button>
+                        <button
+                          id="spreadEven"
+                          class="toolbarButton labeled"
+                          type="button"
+                          tabindex="0"
+                          data-l10n-id="pdfjs-spread-even-button"
+                          role="radio"
+                          aria-checked="false"
+                        >
+                          <span data-l10n-id="pdfjs-spread-even-button-label"></span>
+                        </button>
+                      </div>
+
+                      <div id="imageAltTextSettingsSeparator" class="horizontalToolbarSeparator hidden"></div>
+                      <button
+                        id="imageAltTextSettings"
+                        type="button"
+                        class="toolbarButton labeled hidden"
+                        tabindex="0"
+                        data-l10n-id="pdfjs-image-alt-text-settings-button"
+                        aria-controls="altTextSettingsDialog"
+                      >
+                        <span data-l10n-id="pdfjs-image-alt-text-settings-button-label"></span>
+                      </button>
+
+                      <div class="horizontalToolbarSeparator"></div>
+
+                      <button
+                        id="documentProperties"
+                        class="toolbarButton labeled"
+                        type="button"
+                        tabindex="0"
+                        data-l10n-id="pdfjs-document-properties-button"
+                        aria-controls="documentPropertiesDialog"
+                      >
+                        <span data-l10n-id="pdfjs-document-properties-button-label"></span>
+                      </button>
+                    </div>
+                  </div>
+                  <!-- secondaryToolbar -->
+                </div>
+              </div>
+            </div>
+            <div id="loadingBar">
+              <div class="progress">
+                <div class="glimmer"></div>
+              </div>
+            </div>
           </div>
         </div>
 
-        <div id="findbarOptionsOneContainer">
-          <input type="checkbox" id="findHighlightAll" class="toolbarField" tabindex="94">
-          <label for="findHighlightAll" class="toolbarLabel" data-l10n-id="find_highlight">Highlight all</label>
-          <input type="checkbox" id="findMatchCase" class="toolbarField" tabindex="95">
-          <label for="findMatchCase" class="toolbarLabel" data-l10n-id="find_match_case_label">Match case</label>
-        </div>
-        <div id="findbarOptionsTwoContainer">
-          <input type="checkbox" id="findEntireWord" class="toolbarField" tabindex="96">
-          <label for="findEntireWord" class="toolbarLabel" data-l10n-id="find_entire_word_label">Whole words</label>
-          <span id="findResultsCount" class="toolbarLabel hidden"></span>
-        </div>
-
-        <div id="findbarMessageContainer">
-          <span id="findMsg" class="toolbarLabel"></span>
-        </div>
-      </div> <!-- findbar -->
-
-      <div id="secondaryToolbar" class="secondaryToolbar hidden doorHangerRight">
-        <div id="secondaryToolbarButtonContainer">
-          <button id="secondaryPresentationMode" class="secondaryToolbarButton presentationMode visibleLargeView"
-            title="Switch to Presentation Mode" tabindex="51" data-l10n-id="presentation_mode">
-            <span data-l10n-id="presentation_mode_label">Presentation Mode</span>
-          </button>
-
-          <button id="secondaryOpenFile" class="secondaryToolbarButton openFile visibleLargeView" title="Open File"
-            tabindex="52" data-l10n-id="open_file">
-            <span data-l10n-id="open_file_label">Open</span>
-          </button>
-
-          <button id="secondaryPrint" class="secondaryToolbarButton print visibleMediumView" title="Print" tabindex="53"
-            data-l10n-id="print">
-            <span data-l10n-id="print_label">Print</span>
-          </button>
-
-          <button id="secondaryDownload" class="secondaryToolbarButton download visibleMediumView" title="Download"
-            tabindex="54" data-l10n-id="download">
-            <span data-l10n-id="download_label">Download</span>
-          </button>
-
-          <a href="#" id="secondaryViewBookmark" class="secondaryToolbarButton bookmark visibleSmallView"
-            title="Current view (copy or open in new window)" tabindex="55" data-l10n-id="bookmark">
-            <span data-l10n-id="bookmark_label">Current View</span>
-          </a>
-
-          <div class="horizontalToolbarSeparator visibleLargeView"></div>
-
-          <button id="firstPage" class="secondaryToolbarButton firstPage" title="Go to First Page" tabindex="56"
-            data-l10n-id="first_page">
-            <span data-l10n-id="first_page_label">Go to First Page</span>
-          </button>
-          <button id="lastPage" class="secondaryToolbarButton lastPage" title="Go to Last Page" tabindex="57"
-            data-l10n-id="last_page">
-            <span data-l10n-id="last_page_label">Go to Last Page</span>
-          </button>
-
-          <div class="horizontalToolbarSeparator"></div>
-
-          <button id="pageRotateCw" class="secondaryToolbarButton rotateCw" title="Rotate Clockwise" tabindex="58"
-            data-l10n-id="page_rotate_cw">
-            <span data-l10n-id="page_rotate_cw_label">Rotate Clockwise</span>
-          </button>
-          <button id="pageRotateCcw" class="secondaryToolbarButton rotateCcw" title="Rotate Counterclockwise"
-            tabindex="59" data-l10n-id="page_rotate_ccw">
-            <span data-l10n-id="page_rotate_ccw_label">Rotate Counterclockwise</span>
-          </button>
-
-          <div class="horizontalToolbarSeparator scrollModeButtons"></div>
-          <button id="spreadNone" class="secondaryToolbarButton spreadModeButtons spreadNone toggled"
-            title="Do not join page spreads" tabindex="65" data-l10n-id="spread_none">
-            <span data-l10n-id="spread_none_label">No Spreads</span>
-          </button>
-          <button id="spreadOdd" class="secondaryToolbarButton spreadModeButtons spreadOdd"
-            title="Join page spreads starting with odd-numbered pages" tabindex="66" data-l10n-id="spread_odd">
-            <span data-l10n-id="spread_odd_label">Odd Spreads</span>
-          </button>
-          <button id="spreadEven" class="secondaryToolbarButton spreadModeButtons spreadEven"
-            title="Join page spreads starting with even-numbered pages" tabindex="67" data-l10n-id="spread_even">
-            <span data-l10n-id="spread_even_label">Even Spreads</span>
-          </button>
-
-          <div class="horizontalToolbarSeparator spreadModeButtons"></div>
-
-          <button id="documentProperties" class="secondaryToolbarButton documentProperties" title="Document Properties"
-            tabindex="68" data-l10n-id="document_properties">
-            <span data-l10n-id="document_properties_label">Document Properties"</span>
-          </button>
-        </div>
-      </div> <!-- secondaryToolbar -->
-
-      <div class="toolbar">
-        <div id="toolbarContainer">
-          <div id="toolbarViewer">
-            <div id="toolbarViewerLeft">
-              <button id="sidebarToggle" class="toolbarButton" title="Toggle Sidebar" tabindex="11"
-                data-l10n-id="toggle_sidebar">
-                <span data-l10n-id="toggle_sidebar_label">Toggle Sidebar</span>
-              </button>
-              <div class="toolbarButtonSpacer"></div>
-              <button id="viewFind" class="toolbarButton" title="Find in Document" tabindex="12" data-l10n-id="findbar">
-                <span data-l10n-id="findbar_label">Find</span>
-              </button>
-              <div class="splitToolbarButton hiddenSmallView">
-                <button class="toolbarButton pageUp" title="Previous Page" id="previous" tabindex="13"
-                  data-l10n-id="previous">
-                  <span data-l10n-id="previous_label">Previous</span>
-                </button>
-                <div class="splitToolbarButtonSeparator"></div>
-                <button class="toolbarButton pageDown" title="Next Page" id="next" tabindex="14" data-l10n-id="next">
-                  <span data-l10n-id="next_label">Next</span>
-                </button>
-              </div>
-              <input type="number" id="pageNumber" class="toolbarField pageNumber" title="Page" value="1" size="4"
-                min="1" tabindex="15" data-l10n-id="page" autocomplete="off">
-              <span id="numPages" class="toolbarLabel"></span>
-            </div>
-            <div id="toolbarViewerRight">
-
-              <button id="print" class="toolbarButton print hiddenMediumView" title="Print" tabindex="33"
-                data-l10n-id="print">
-                <span data-l10n-id="print_label">Print</span>
-              </button>
-
-              <button id="download" class="toolbarButton download hiddenMediumView" title="Download" tabindex="34"
-                data-l10n-id="download">
-                <span data-l10n-id="download_label">Download</span>
-              </button>
-              <a href="#" id="viewBookmark" class="toolbarButton bookmark hiddenSmallView"
-                title="Current view (copy or open in new window)" tabindex="35" data-l10n-id="bookmark">
-                <span data-l10n-id="bookmark_label">Current View</span>
-              </a>
-
-              <div class="verticalToolbarSeparator hiddenSmallView"></div>
-
-              <button id="secondaryToolbarToggle" class="toolbarButton" title="Tools" tabindex="36"
-                data-l10n-id="tools">
-                <span data-l10n-id="tools_label">Tools</span>
-              </button>
-            </div>
-            <div id="toolbarViewerMiddle">
-              <div class="splitToolbarButton">
-                <button id="zoomIn" class="toolbarButton zoomIn" title="Zoom In" tabindex="22" data-l10n-id="zoom_in">
-                  <span data-l10n-id="zoom_in_label">Zoom In</span>
-                </button>
-                <div class="splitToolbarButtonSeparator"></div>
-                <button id="zoomOut" class="toolbarButton zoomOut" title="Zoom Out" tabindex="21"
-                  data-l10n-id="zoom_out">
-                  <span data-l10n-id="zoom_out_label">Zoom Out</span>
-                </button>
-              </div>
-              <span id="scaleSelectContainer" class="dropdownToolbarButton">
-                <select id="scaleSelect" title="Zoom" tabindex="23" data-l10n-id="zoom">
-                  <option id="pageAutoOption" title="" value="auto" selected="selected" data-l10n-id="page_scale_auto">
-                    Automatic Zoom</option>
-                  <option id="pageActualOption" title="" value="page-actual" data-l10n-id="page_scale_actual">Actual
-                    Size</option>
-                  <option id="pageFitOption" title="" value="page-fit" data-l10n-id="page_scale_fit">Page Fit</option>
-                  <option id="pageWidthOption" title="" value="page-width" data-l10n-id="page_scale_width">Page Width
-                  </option>
-                  <option id="customScaleOption" title="" value="custom" disabled="disabled" hidden="true"></option>
-                  <option title="" value="0.5" data-l10n-id="page_scale_percent" data-l10n-args='{ "scale": 50 }'>50%
-                  </option>
-                  <option title="" value="0.75" data-l10n-id="page_scale_percent" data-l10n-args='{ "scale": 75 }'>75%
-                  </option>
-                  <option title="" value="1" data-l10n-id="page_scale_percent" data-l10n-args='{ "scale": 100 }'>100%
-                  </option>
-                  <option title="" value="1.25" data-l10n-id="page_scale_percent" data-l10n-args='{ "scale": 125 }'>125%
-                  </option>
-                  <option title="" value="1.5" data-l10n-id="page_scale_percent" data-l10n-args='{ "scale": 150 }'>150%
-                  </option>
-                  <option title="" value="2" data-l10n-id="page_scale_percent" data-l10n-args='{ "scale": 200 }'>200%
-                  </option>
-                  <option title="" value="3" data-l10n-id="page_scale_percent" data-l10n-args='{ "scale": 300 }'>300%
-                  </option>
-                  <option title="" value="4" data-l10n-id="page_scale_percent" data-l10n-args='{ "scale": 400 }'>400%
-                  </option>
-                </select>
-              </span>
-
-              <!--在这里-->
-              <button id="cursorSelectTool" class="custom_1 secondaryToolbarButton selectTool toggled"
-                title="双击切换为 Hand" tabindex="60" data-l10n-id="cursor_text_select_tool"></button>
-              <button id="cursorHandTool" class="custom_1 secondaryToolbarButton handTool" title="双击切换为 Select"
-                tabindex="61" data-l10n-id="cursor_hand_tool"></button>
-              <button id="scrollVertical"
-                class="custom_1 secondaryToolbarButton scrollModeButtons scrollVertical toggled"
-                title="Use Vertical Scrolling" tabindex="62" data-l10n-id="scroll_vertical"></button>
-              <button id="scrollHorizontal" class="custom_1 secondaryToolbarButton scrollModeButtons scrollHorizontal"
-                title="Use Horizontal Scrolling" tabindex="63" data-l10n-id="scroll_horizontal"></button>
-              <button id="scrollWrapped" class="custom_1 secondaryToolbarButton scrollModeButtons scrollWrapped"
-                title="Use Wrapped Scrolling" tabindex="64" data-l10n-id="scroll_wrapped"></button>
-              <button id="presentationMode" class="toolbarButton presentationMode hiddenLargeView"
-                title="Switch to Presentation Mode" tabindex="31" data-l10n-id="presentation_mode"></button>
-              <button id="openFile" class="toolbarButton openFile hiddenLargeView" title="Open File" tabindex="32"
-                data-l10n-id="open_file"></button>
-              <span style="margin-left: 20px; padding-top: 5px;color: #fff; font-size: small;"><span id="reverseColor" style="cursor: pointer;">反色</span><button id="pdfSearchScope" type="button" title="切换主站搜索框为搜本书或搜全站">搜本书</button></span>
-
-            </div>
-          </div>
-          <div id="loadingBar">
-            <div class="progress">
-              <div class="glimmer">
-              </div>
-            </div>
-          </div>
+        <div id="viewerContainer" tabindex="0">
+          <div id="viewer" class="pdfViewer"></div>
         </div>
       </div>
+      <!-- mainContainer -->
 
-      <menu type="context" id="viewerContextMenu">
-        <menuitem id="contextFirstPage" label="First Page" data-l10n-id="first_page">
-        </menuitem>
-        <menuitem id="contextLastPage" label="Last Page" data-l10n-id="last_page">
-        </menuitem>
-        <menuitem id="contextPageRotateCw" label="Rotate Clockwise" data-l10n-id="page_rotate_cw">
-        </menuitem>
-        <menuitem id="contextPageRotateCcw" label="Rotate Counter-Clockwise" data-l10n-id="page_rotate_ccw">
-        </menuitem>
-      </menu>
-
-      <div id="viewerContainer" tabindex="0">
-        <div id="viewer" class="pdfViewer"></div>
-      </div>
-
-      <div id="errorWrapper" hidden="ture">
-        <div id="errorMessageLeft">
-          <span id="errorMessage"></span>
-          <button id="errorShowMore" data-l10n-id="error_more_info">
-            More Information
-          </button>
-          <button id="errorShowLess" data-l10n-id="error_less_info" hidden='true'>
-            Less Information
-          </button>
-        </div>
-        <div id="errorMessageRight">
-          <button id="errorClose" data-l10n-id="error_close">
-            Close
-          </button>
-        </div>
-        <div class="clearBoth"></div>
-        <textarea id="errorMoreInfo" hidden='true' readonly="readonly"></textarea>
-      </div>
-    </div> <!-- mainContainer -->
-
-    <div id="overlayContainer" class="hidden">
-      <div id="passwordOverlay" class="container hidden">
-        <div class="dialog">
+      <div id="dialogContainer">
+        <dialog id="passwordDialog">
           <div class="row">
-            <p id="passwordText" data-l10n-id="password_label">Enter the password to open this PDF file:</p>
+            <label for="password" id="passwordText" data-l10n-id="pdfjs-password-label"></label>
           </div>
           <div class="row">
-            <input type="password" id="password" class="toolbarField">
+            <input type="password" id="password" class="toolbarField" />
           </div>
           <div class="buttonRow">
-            <button id="passwordCancel" class="overlayButton"><span
-                data-l10n-id="password_cancel">Cancel</span></button>
-            <button id="passwordSubmit" class="overlayButton"><span data-l10n-id="password_ok">OK</span></button>
+            <button id="passwordCancel" class="secondaryButton" type="button"><span data-l10n-id="pdfjs-password-cancel-button"></span></button>
+            <button id="passwordSubmit" class="primaryButton" type="button"><span data-l10n-id="pdfjs-password-ok-button"></span></button>
           </div>
-        </div>
-      </div>
-      <div id="documentPropertiesOverlay" class="container hidden">
-        <div class="dialog">
+        </dialog>
+        <dialog id="documentPropertiesDialog">
           <div class="row">
-            <span data-l10n-id="document_properties_file_name">File name:</span>
-            <p id="fileNameField">-</p>
+            <span id="fileNameLabel" data-l10n-id="pdfjs-document-properties-file-name"></span>
+            <p id="fileNameField" aria-labelledby="fileNameLabel">-</p>
           </div>
           <div class="row">
-            <span data-l10n-id="document_properties_file_size">File size:</span>
-            <p id="fileSizeField">-</p>
+            <span id="fileSizeLabel" data-l10n-id="pdfjs-document-properties-file-size"></span>
+            <p id="fileSizeField" aria-labelledby="fileSizeLabel">-</p>
           </div>
           <div class="separator"></div>
           <div class="row">
-            <span data-l10n-id="document_properties_title">Title:</span>
-            <p id="titleField">-</p>
+            <span id="titleLabel" data-l10n-id="pdfjs-document-properties-title"></span>
+            <p id="titleField" aria-labelledby="titleLabel">-</p>
           </div>
           <div class="row">
-            <span data-l10n-id="document_properties_author">Author:</span>
-            <p id="authorField">-</p>
+            <span id="authorLabel" data-l10n-id="pdfjs-document-properties-author"></span>
+            <p id="authorField" aria-labelledby="authorLabel">-</p>
           </div>
           <div class="row">
-            <span data-l10n-id="document_properties_subject">Subject:</span>
-            <p id="subjectField">-</p>
+            <span id="subjectLabel" data-l10n-id="pdfjs-document-properties-subject"></span>
+            <p id="subjectField" aria-labelledby="subjectLabel">-</p>
           </div>
           <div class="row">
-            <span data-l10n-id="document_properties_keywords">Keywords:</span>
-            <p id="keywordsField">-</p>
+            <span id="keywordsLabel" data-l10n-id="pdfjs-document-properties-keywords"></span>
+            <p id="keywordsField" aria-labelledby="keywordsLabel">-</p>
           </div>
           <div class="row">
-            <span data-l10n-id="document_properties_creation_date">Creation Date:</span>
-            <p id="creationDateField">-</p>
+            <span id="creationDateLabel" data-l10n-id="pdfjs-document-properties-creation-date"></span>
+            <p id="creationDateField" aria-labelledby="creationDateLabel">-</p>
           </div>
           <div class="row">
-            <span data-l10n-id="document_properties_modification_date">Modification Date:</span>
-            <p id="modificationDateField">-</p>
+            <span id="modificationDateLabel" data-l10n-id="pdfjs-document-properties-modification-date"></span>
+            <p id="modificationDateField" aria-labelledby="modificationDateLabel">-</p>
           </div>
           <div class="row">
-            <span data-l10n-id="document_properties_creator">Creator:</span>
-            <p id="creatorField">-</p>
-          </div>
-          <div class="separator"></div>
-          <div class="row">
-            <span data-l10n-id="document_properties_producer">PDF Producer:</span>
-            <p id="producerField">-</p>
-          </div>
-          <div class="row">
-            <span data-l10n-id="document_properties_version">PDF Version:</span>
-            <p id="versionField">-</p>
-          </div>
-          <div class="row">
-            <span data-l10n-id="document_properties_page_count">Page Count:</span>
-            <p id="pageCountField">-</p>
-          </div>
-          <div class="row">
-            <span data-l10n-id="document_properties_page_size">Page Size:</span>
-            <p id="pageSizeField">-</p>
+            <span id="creatorLabel" data-l10n-id="pdfjs-document-properties-creator"></span>
+            <p id="creatorField" aria-labelledby="creatorLabel">-</p>
           </div>
           <div class="separator"></div>
           <div class="row">
-            <span data-l10n-id="document_properties_linearized">Fast Web View:</span>
-            <p id="linearizedField">-</p>
+            <span id="producerLabel" data-l10n-id="pdfjs-document-properties-producer"></span>
+            <p id="producerField" aria-labelledby="producerLabel">-</p>
+          </div>
+          <div class="row">
+            <span id="versionLabel" data-l10n-id="pdfjs-document-properties-version"></span>
+            <p id="versionField" aria-labelledby="versionLabel">-</p>
+          </div>
+          <div class="row">
+            <span id="pageCountLabel" data-l10n-id="pdfjs-document-properties-page-count"></span>
+            <p id="pageCountField" aria-labelledby="pageCountLabel">-</p>
+          </div>
+          <div class="row">
+            <span id="pageSizeLabel" data-l10n-id="pdfjs-document-properties-page-size"></span>
+            <p id="pageSizeField" aria-labelledby="pageSizeLabel">-</p>
+          </div>
+          <div class="separator"></div>
+          <div class="row">
+            <span id="linearizedLabel" data-l10n-id="pdfjs-document-properties-linearized"></span>
+            <p id="linearizedField" aria-labelledby="linearizedLabel">-</p>
           </div>
           <div class="buttonRow">
-            <button id="documentPropertiesClose" class="overlayButton"><span
-                data-l10n-id="document_properties_close">Close</span></button>
+            <button id="documentPropertiesClose" class="secondaryButton" type="button">
+              <span data-l10n-id="pdfjs-document-properties-close-button"></span>
+            </button>
           </div>
-        </div>
-      </div>
-      <div id="printServiceOverlay" class="container hidden">
-        <div class="dialog">
+        </dialog>
+        <dialog class="dialog altText" id="altTextDialog" aria-labelledby="dialogLabel" aria-describedby="dialogDescription">
+          <div id="altTextContainer" class="mainContainer">
+            <div id="overallDescription">
+              <span id="dialogLabel" data-l10n-id="pdfjs-editor-alt-text-dialog-label" class="title"></span>
+              <span id="dialogDescription" data-l10n-id="pdfjs-editor-alt-text-dialog-description"></span>
+            </div>
+            <div id="addDescription">
+              <div class="radio">
+                <div class="radioButton">
+                  <input type="radio" id="descriptionButton" name="altTextOption" tabindex="0" aria-describedby="descriptionAreaLabel" checked />
+                  <label for="descriptionButton" data-l10n-id="pdfjs-editor-alt-text-add-description-label"></label>
+                </div>
+                <div class="radioLabel">
+                  <span id="descriptionAreaLabel" data-l10n-id="pdfjs-editor-alt-text-add-description-description"></span>
+                </div>
+              </div>
+              <div class="descriptionArea">
+                <textarea id="descriptionTextarea" aria-labelledby="descriptionAreaLabel" data-l10n-id="pdfjs-editor-alt-text-textarea" tabindex="0"></textarea>
+              </div>
+            </div>
+            <div id="markAsDecorative">
+              <div class="radio">
+                <div class="radioButton">
+                  <input type="radio" id="decorativeButton" name="altTextOption" aria-describedby="decorativeLabel" />
+                  <label for="decorativeButton" data-l10n-id="pdfjs-editor-alt-text-mark-decorative-label"></label>
+                </div>
+                <div class="radioLabel">
+                  <span id="decorativeLabel" data-l10n-id="pdfjs-editor-alt-text-mark-decorative-description"></span>
+                </div>
+              </div>
+            </div>
+            <div id="buttons">
+              <button id="altTextCancel" class="secondaryButton" type="button" tabindex="0">
+                <span data-l10n-id="pdfjs-editor-alt-text-cancel-button"></span>
+              </button>
+              <button id="altTextSave" class="primaryButton" type="button" tabindex="0"><span data-l10n-id="pdfjs-editor-alt-text-save-button"></span></button>
+            </div>
+          </div>
+        </dialog>
+        <dialog class="dialog newAltText" id="newAltTextDialog" aria-labelledby="newAltTextTitle" aria-describedby="newAltTextDescription" tabindex="0">
+          <div id="newAltTextContainer" class="mainContainer">
+            <div class="title">
+              <span id="newAltTextTitle" data-l10n-id="pdfjs-editor-new-alt-text-dialog-edit-label" role="sectionhead" tabindex="0"></span>
+            </div>
+            <div id="mainContent">
+              <div id="descriptionAndSettings">
+                <div id="descriptionInstruction">
+                  <div id="newAltTextDescriptionContainer">
+                    <div class="altTextSpinner" role="status" aria-live="polite"></div>
+                    <textarea
+                      id="newAltTextDescriptionTextarea"
+                      aria-labelledby="descriptionAreaLabel"
+                      data-l10n-id="pdfjs-editor-new-alt-text-textarea"
+                      tabindex="0"
+                    ></textarea>
+                  </div>
+                  <span id="newAltTextDescription" role="note" data-l10n-id="pdfjs-editor-new-alt-text-description"></span>
+                  <div id="newAltTextDisclaimer" role="note">
+                    <div>
+                      <span data-l10n-id="pdfjs-editor-new-alt-text-disclaimer1"></span>
+                      <a
+                        href="https://support.mozilla.org/en-US/kb/pdf-alt-text"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        id="newAltTextLearnMore"
+                        data-l10n-id="pdfjs-editor-new-alt-text-disclaimer-learn-more-url"
+                        tabindex="0"
+                      ></a>
+                    </div>
+                  </div>
+                </div>
+                <div id="newAltTextCreateAutomatically" class="toggler">
+                  <button id="newAltTextCreateAutomaticallyButton" class="toggle-button" type="button" aria-pressed="true" tabindex="0"></button>
+                  <label
+                    for="newAltTextCreateAutomaticallyButton"
+                    class="togglerLabel"
+                    data-l10n-id="pdfjs-editor-new-alt-text-create-automatically-button-label"
+                  ></label>
+                </div>
+                <div id="newAltTextDownloadModel" class="hidden">
+                  <span
+                    id="newAltTextDownloadModelDescription"
+                    data-l10n-id="pdfjs-editor-new-alt-text-ai-model-downloading-progress"
+                    aria-valuemin="0"
+                    data-l10n-args='{ "totalSize": 0, "downloadedSize": 0 }'
+                  ></span>
+                </div>
+              </div>
+              <div id="newAltTextImagePreview"></div>
+            </div>
+            <div id="newAltTextError" class="messageBar">
+              <div>
+                <div>
+                  <span class="title" data-l10n-id="pdfjs-editor-new-alt-text-error-title"></span>
+                  <span class="description" data-l10n-id="pdfjs-editor-new-alt-text-error-description"></span>
+                </div>
+                <button id="newAltTextCloseButton" class="closeButton" type="button" tabindex="0">
+                  <span data-l10n-id="pdfjs-editor-new-alt-text-error-close-button"></span>
+                </button>
+              </div>
+            </div>
+            <div id="newAltTextButtons" class="dialogButtonsGroup">
+              <button id="newAltTextCancel" type="button" class="secondaryButton hidden" tabindex="0">
+                <span data-l10n-id="pdfjs-editor-alt-text-cancel-button"></span>
+              </button>
+              <button id="newAltTextNotNow" type="button" class="secondaryButton" tabindex="0">
+                <span data-l10n-id="pdfjs-editor-new-alt-text-not-now-button"></span>
+              </button>
+              <button id="newAltTextSave" type="button" class="primaryButton" tabindex="0">
+                <span data-l10n-id="pdfjs-editor-alt-text-save-button"></span>
+              </button>
+            </div>
+          </div>
+        </dialog>
+
+        <dialog class="dialog" id="altTextSettingsDialog" aria-labelledby="altTextSettingsTitle">
+          <div id="altTextSettingsContainer" class="mainContainer">
+            <div class="title">
+              <span id="altTextSettingsTitle" data-l10n-id="pdfjs-editor-alt-text-settings-dialog-label" role="sectionhead" tabindex="0" class="title"></span>
+            </div>
+            <div id="automaticAltText">
+              <span data-l10n-id="pdfjs-editor-alt-text-settings-automatic-title"></span>
+              <div id="automaticSettings">
+                <div id="createModelSetting">
+                  <div class="toggler">
+                    <button id="createModelButton" type="button" class="toggle-button" aria-pressed="true" tabindex="0"></button>
+                    <label for="createModelButton" class="togglerLabel" data-l10n-id="pdfjs-editor-alt-text-settings-create-model-button-label"></label>
+                  </div>
+                  <div id="createModelDescription" class="description">
+                    <span data-l10n-id="pdfjs-editor-alt-text-settings-create-model-description"></span>
+                    <a
+                      href="https://support.mozilla.org/en-US/kb/pdf-alt-text"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      id="altTextSettingsLearnMore"
+                      data-l10n-id="pdfjs-editor-new-alt-text-disclaimer-learn-more-url"
+                      tabindex="0"
+                    ></a>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="dialogSeparator"></div>
+            <div id="altTextEditor">
+              <span data-l10n-id="pdfjs-editor-alt-text-settings-editor-title"></span>
+              <div id="showAltTextEditor">
+                <div class="toggler">
+                  <button id="showAltTextDialogButton" type="button" class="toggle-button" aria-pressed="true" tabindex="0"></button>
+                  <label for="showAltTextDialogButton" class="togglerLabel" data-l10n-id="pdfjs-editor-alt-text-settings-show-dialog-button-label"></label>
+                </div>
+                <div id="showAltTextDialogDescription" class="description">
+                  <span data-l10n-id="pdfjs-editor-alt-text-settings-show-dialog-description"></span>
+                </div>
+              </div>
+            </div>
+            <div id="buttons" class="dialogButtonsGroup">
+              <button id="altTextSettingsCloseButton" type="button" class="primaryButton" tabindex="0">
+                <span data-l10n-id="pdfjs-editor-alt-text-settings-close-button"></span>
+              </button>
+            </div>
+          </div>
+        </dialog>
+
+        <dialog class="dialog signatureDialog" id="addSignatureDialog" aria-labelledby="addSignatureDialogLabel">
+          <span id="addSignatureDialogLabel" data-l10n-id="pdfjs-editor-add-signature-dialog-label"></span>
+          <div id="addSignatureContainer" class="mainContainer">
+            <div class="title">
+              <span role="sectionhead" data-l10n-id="pdfjs-editor-add-signature-dialog-title" tabindex="0"></span>
+            </div>
+            <div role="tablist" id="addSignatureOptions">
+              <button
+                id="addSignatureTypeButton"
+                type="button"
+                role="tab"
+                aria-selected="true"
+                aria-controls="addSignatureTypeContainer"
+                data-l10n-id="pdfjs-editor-add-signature-type-button"
+                tabindex="0"
+              ></button>
+              <button
+                id="addSignatureDrawButton"
+                type="button"
+                role="tab"
+                aria-selected="false"
+                aria-controls="addSignatureDrawContainer"
+                data-l10n-id="pdfjs-editor-add-signature-draw-button"
+                tabindex="0"
+              ></button>
+              <button
+                id="addSignatureImageButton"
+                type="button"
+                role="tab"
+                aria-selected="false"
+                aria-controls="addSignatureImageContainer"
+                data-l10n-id="pdfjs-editor-add-signature-image-button"
+                tabindex="-1"
+              ></button>
+            </div>
+            <div id="addSignatureActionContainer" data-selected="type">
+              <div id="addSignatureTypeContainer" role="tabpanel" aria-labelledby="addSignatureTypeButton">
+                <input id="addSignatureTypeInput" type="text" data-l10n-id="pdfjs-editor-add-signature-type-input" tabindex="0" />
+              </div>
+              <div id="addSignatureDrawContainer" role="tabpanel" aria-labelledby="addSignatureDrawButton" tabindex="-1">
+                <svg id="addSignatureDraw" xmlns="http://www.w3.org/2000/svg" aria-labelledby="addSignatureDrawPlaceholder"></svg>
+                <span id="addSignatureDrawPlaceholder" data-l10n-id="pdfjs-editor-add-signature-draw-placeholder"></span>
+                <div id="thickness">
+                  <div>
+                    <label for="addSignatureDrawThickness" data-l10n-id="pdfjs-editor-add-signature-draw-thickness-range-label"></label>
+                    <input
+                      type="range"
+                      id="addSignatureDrawThickness"
+                      min="1"
+                      max="5"
+                      step="1"
+                      value="1"
+                      data-l10n-id="pdfjs-editor-add-signature-draw-thickness-range"
+                      data-l10n-args='{ "thickness": 1 }'
+                      tabindex="0"
+                    />
+                  </div>
+                </div>
+              </div>
+              <div id="addSignatureImageContainer" role="tabpanel" aria-labelledby="addSignatureImageButton" tabindex="-1">
+                <svg id="addSignatureImage" xmlns="http://www.w3.org/2000/svg" aria-labelledby="addSignatureImagePlaceholder"></svg>
+                <div id="addSignatureImagePlaceholder">
+                  <span data-l10n-id="pdfjs-editor-add-signature-image-placeholder"></span>
+                  <label id="addSignatureImageBrowse" for="addSignatureFilePicker" tabindex="0">
+                    <a data-l10n-id="pdfjs-editor-add-signature-image-browse-link"></a>
+                  </label>
+                  <input id="addSignatureFilePicker" type="file" />
+                </div>
+              </div>
+              <div id="addSignatureControls">
+                <div id="horizontalContainer">
+                  <div id="addSignatureDescriptionContainer">
+                    <label for="addSignatureDescInput" data-l10n-id="pdfjs-editor-add-signature-description-label"></label>
+                    <span id="addSignatureDescription" class="inputWithClearButton">
+                      <input id="addSignatureDescInput" type="text" data-l10n-id="pdfjs-editor-add-signature-description-input" tabindex="0" />
+                      <button class="clearInputButton" type="button" tabindex="0" aria-hidden="true"></button>
+                    </span>
+                  </div>
+                  <button id="clearSignatureButton" class="secondaryButton" type="button" data-l10n-id="pdfjs-editor-add-signature-clear-button" tabindex="0">
+                    <span data-l10n-id="pdfjs-editor-add-signature-clear-button-label"></span>
+                  </button>
+                </div>
+                <div id="addSignatureSaveContainer">
+                  <input type="checkbox" id="addSignatureSaveCheckbox" />
+                  <label for="addSignatureSaveCheckbox" data-l10n-id="pdfjs-editor-add-signature-save-checkbox"></label>
+                  <span></span>
+                  <span id="addSignatureSaveWarning" data-l10n-id="pdfjs-editor-add-signature-save-warning-message"></span>
+                </div>
+              </div>
+              <div id="addSignatureError" hidden="true" class="messageBar">
+                <div>
+                  <div>
+                    <span id="addSignatureErrorTitle" class="title" data-l10n-id="pdfjs-editor-add-signature-image-upload-error-title"></span>
+                    <span id="addSignatureErrorDescription" class="description" data-l10n-id="pdfjs-editor-add-signature-image-upload-error-description"></span>
+                  </div>
+                  <button id="addSignatureErrorCloseButton" class="closeButton" type="button" tabindex="0">
+                    <span data-l10n-id="pdfjs-editor-add-signature-error-close-button"></span>
+                  </button>
+                </div>
+              </div>
+              <div class="dialogButtonsGroup">
+                <button id="addSignatureCancelButton" type="button" class="secondaryButton" tabindex="0">
+                  <span data-l10n-id="pdfjs-editor-add-signature-cancel-button"></span>
+                </button>
+                <button id="addSignatureAddButton" type="button" class="primaryButton" disabled tabindex="0">
+                  <span data-l10n-id="pdfjs-editor-add-signature-add-button"></span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </dialog>
+
+        <dialog class="dialog signatureDialog" id="editSignatureDescriptionDialog" aria-labelledby="editSignatureDescriptionTitle">
+          <div class="mainContainer">
+            <div class="title">
+              <span id="editSignatureDescriptionTitle" role="sectionhead" data-l10n-id="pdfjs-editor-edit-signature-dialog-title" tabindex="0"></span>
+            </div>
+            <div id="editSignatureDescriptionAndView">
+              <div id="editSignatureDescriptionContainer">
+                <label for="editSignatureDescInput" data-l10n-id="pdfjs-editor-add-signature-description-label"></label>
+                <span id="editSignatureDescription" class="inputWithClearButton">
+                  <input id="editSignatureDescInput" type="text" data-l10n-id="pdfjs-editor-add-signature-description-input" tabindex="0" />
+                  <button class="clearInputButton" type="button" tabindex="0" aria-hidden="true"></button>
+                </span>
+              </div>
+              <svg id="editSignatureView" xmlns="http://www.w3.org/2000/svg"></svg>
+            </div>
+            <div class="dialogButtonsGroup">
+              <button id="editSignatureCancelButton" type="button" class="secondaryButton" tabindex="0">
+                <span data-l10n-id="pdfjs-editor-add-signature-cancel-button"></span>
+              </button>
+              <button id="editSignatureUpdateButton" type="button" class="primaryButton" disabled tabindex="0">
+                <span data-l10n-id="pdfjs-editor-edit-signature-update-button"></span>
+              </button>
+            </div>
+          </div>
+        </dialog>
+
+        <dialog class="dialog commentManager" id="commentManagerDialog" aria-labelledby="commentManagerTitle">
+          <div class="mainContainer">
+            <div class="title" id="commentManagerToolbar">
+              <span id="commentManagerTitle" role="sectionhead" data-l10n-id="pdfjs-editor-edit-comment-dialog-title-when-adding"></span>
+            </div>
+            <textarea id="commentManagerTextInput" data-l10n-id="pdfjs-editor-edit-comment-dialog-text-input" tabindex="0"></textarea>
+            <div class="dialogButtonsGroup">
+              <button id="commentManagerCancelButton" type="button" class="secondaryButton" tabindex="0">
+                <span data-l10n-id="pdfjs-editor-edit-comment-dialog-cancel-button"></span>
+              </button>
+              <button id="commentManagerSaveButton" type="button" class="primaryButton" disabled tabindex="0">
+                <span data-l10n-id="pdfjs-editor-edit-comment-dialog-save-button-when-adding"></span>
+              </button>
+            </div>
+          </div>
+        </dialog>
+
+        <dialog id="printServiceDialog">
           <div class="row">
-            <span data-l10n-id="print_progress_message">Preparing document for printing</span>
+            <span data-l10n-id="pdfjs-print-progress-message"></span>
           </div>
           <div class="row">
             <progress value="0" max="100"></progress>
-            <span data-l10n-id="print_progress_percent" data-l10n-args='{ "progress": 0 }'
-              class="relative-progress">0%</span>
+            <span data-l10n-id="pdfjs-print-progress-percent" data-l10n-args='{ "progress": 0 }' class="relative-progress">0%</span>
           </div>
           <div class="buttonRow">
-            <button id="printCancel" class="overlayButton"><span
-                data-l10n-id="print_progress_close">Cancel</span></button>
+            <button id="printCancel" class="secondaryButton" type="button"><span data-l10n-id="pdfjs-print-progress-close-button"></span></button>
           </div>
+        </dialog>
+      </div>
+      <!-- dialogContainer -->
+
+      <div id="editorUndoBar" class="messageBar" role="status" aria-labelledby="editorUndoBarMessage" tabindex="-1" hidden>
+        <div>
+          <div>
+            <span id="editorUndoBarMessage" class="description"></span>
+          </div>
+          <button id="editorUndoBarUndoButton" class="secondaryButton" type="button" tabindex="0" data-l10n-id="pdfjs-editor-undo-bar-undo-button">
+            <span data-l10n-id="pdfjs-editor-undo-bar-undo-button-label"></span>
+          </button>
+          <button id="editorUndoBarCloseButton" class="closeButton" type="button" tabindex="0" data-l10n-id="pdfjs-editor-undo-bar-close-button">
+            <span data-l10n-id="pdfjs-editor-undo-bar-close-button-label"></span>
+          </button>
         </div>
       </div>
-    </div> <!-- overlayContainer -->
-  </div> <!-- outerContainer -->
-  <div id="printContainer"></div>
-  <!-- custom -->
-  <style>
-    .custom_1 {
-      min-width: auto !important;
-      margin-top: 3px;
-    }
-
-    .reverseColor {
-      filter: invert(100%) hue-rotate(180deg);
-    }
-
-    .x {
-      display: none !important
-    }
-
-    .y {
-      top: 0 !important
-    }
-    button#openFile {
-    background: chartreuse!important;
-}
-div#errorWrapper {
-    display: none!important;
-}
-#pdfSearchScope {
-    margin-left: 10px;
-    padding: 1px 7px;
-    font-size: 12px;
-    line-height: 1.4;
-    border-radius: 3px;
-    border: 1px solid rgba(255, 255, 255, 0.28);
-    background: rgba(255, 255, 255, 0.12);
-    color: #e5e7eb;
-    cursor: pointer;
-    vertical-align: middle;
-}
-#pdfSearchScope:hover {
-    background: rgba(255, 255, 255, 0.22);
-}
-#pdfSearchScope.is-global {
-    background: #3b82f6;
-    border-color: #60a5fa;
-    color: #fff;
-}
-.pdf-hit-pulse {
-    position: fixed;
-    pointer-events: none;
-    border: 2px solid #ea580c;
-    background: rgba(249, 115, 22, 0.22);
-    border-radius: 3px;
-    z-index: 9999;
-    animation: pdfHitPulse 1.05s ease-out forwards;
-}
-@keyframes pdfHitPulse {
-    0% { transform: scale(1.16); opacity: 1; }
-    100% { transform: scale(1); opacity: 0; }
-}
-::highlight(pdf-hl-0) { background-color: rgba(255, 224, 0, 0.44); color: transparent; }
-::highlight(pdf-hl-1) { background-color: rgba(255, 224, 0, 0.36); color: transparent; }
-::highlight(pdf-hl-2) { background-color: rgba(255, 224, 0, 0.30); color: transparent; }
-::highlight(pdf-hl-3) { background-color: rgba(255, 224, 0, 0.25); color: transparent; }
-::highlight(pdf-hl-4) { background-color: rgba(255, 224, 0, 0.21); color: transparent; }
-::highlight(pdf-hl-5) { background-color: rgba(255, 224, 0, 0.18); color: transparent; }
-::highlight(pdf-syn-0) { background-color: rgba(56, 189, 248, 0.38); color: transparent; }
-::highlight(pdf-syn-1) { background-color: rgba(56, 189, 248, 0.32); color: transparent; }
-::highlight(pdf-syn-2) { background-color: rgba(56, 189, 248, 0.27); color: transparent; }
-::highlight(pdf-syn-3) { background-color: rgba(56, 189, 248, 0.23); color: transparent; }
-::highlight(pdf-syn-4) { background-color: rgba(56, 189, 248, 0.20); color: transparent; }
-::highlight(pdf-syn-5) { background-color: rgba(56, 189, 248, 0.17); color: transparent; }
-::highlight(pdf-syn2-0) { background-color: rgba(56, 189, 248, 0.28); color: transparent; }
-::highlight(pdf-syn2-1) { background-color: rgba(56, 189, 248, 0.24); color: transparent; }
-::highlight(pdf-syn2-2) { background-color: rgba(56, 189, 248, 0.21); color: transparent; }
-::highlight(pdf-syn2-3) { background-color: rgba(56, 189, 248, 0.18); color: transparent; }
-::highlight(pdf-syn2-4) { background-color: rgba(56, 189, 248, 0.15); color: transparent; }
-::highlight(pdf-syn2-5) { background-color: rgba(56, 189, 248, 0.13); color: transparent; }
-::highlight(pdf-active-hit) { background-color: rgba(249, 115, 22, 0.48); color: transparent; }
-  </style>
-
-  <script>
-    ////////////////////////////////////////////////////////
-    //                                                    //
-    //               搜索"在这里"                          //
-    //                                                    //
-    ////////////////////////////////////////////////////////
-    var scrollHor = document.querySelector('#scrollHorizontal');
-    var viewerCont = document.querySelector('#viewerContainer');
-    var cursorHan = document.querySelector('#cursorHandTool');
-    var cursorSel = document.querySelector('#cursorSelectTool');
-    var reverseColor = document.querySelector('#reverseColor');
-    var flag = 1;
-    var flag2 = 1;
-
-    function wheelScrollLeft(event) {
-      event.preventDefault();
-      viewerCont.scrollLeft += event.deltaY;
-    }
-
-    function fullScreen() {
-      var el = document.documentElement;
-      var rfs = el.requestFullScreen || el.webkitRequestFullScreen ||
-        el.mozRequestFullScreen || el.msRequestFullScreen;
-      if (typeof rfs != "undefined" && rfs) {
-        rfs.call(el);
-      } else if (typeof window.ActiveXObject != "undefined") {
-        var wscript = new ActiveXObject("WScript.Shell");
-        if (wscript != null) {
-          wscript.SendKeys("{F11}");
-        }
-      }
-    }
-
-    function exitFullScreen(el) {
-      var el = document
-      var cfs = el.cancelFullScreen || el.mozCancelFullScreen || el.msExitFullscreen || el.webkitExitFullscreen ||
-        el.exitFullscreen,
-        wscript
-      if (cfs) {
-        cfs.call(el);
-        return;
-      } else if (typeof window.ActiveXObject !== "undefined") {
-        var wscript = new ActiveXObject("WScript.Shell");
-        if (wscript != null) {
-          wscript.SendKeys("{F11}");
-        }
-      } else {
-        alert('浏览器不支持全屏API或已被禁用')
-      }
-    }
-
-    window.onload = function () {
-
-      setInterval(function () {
-        if (scrollHor.matches('.toggled')) {
-          viewerCont.addEventListener("wheel", wheelScrollLeft, false);
-        } else {
-          viewerCont.removeEventListener("wheel", wheelScrollLeft, false);
-        }
-      }, 500);
-
-      viewerCont.ondblclick = function () {
-        if (cursorHan.matches('.toggled')) {
-          cursorSel.click();
-        } else {
-          cursorHan.click();
-        }
-      };
-
-      reverseColor.onclick = function () {
-        if (flag2 == 1) {
-          document.querySelector('#viewerContainer').classList.add("reverseColor");
-          flag2 = 0;
-        } else {
-          document.querySelector('#viewerContainer').classList.remove("reverseColor");
-          flag2 = 1;
-        }
-      }
-
-      // document.body.onmousedown = function (e) {
-      //   if (e.button == 1) {
-      //     e.preventDefault();
-      //     if (flag == 1) {
-      //       document.getElementsByClassName("toolbar")[0].classList.add("x");
-      //       document.querySelector('#viewerContainer').classList.add("y");
-      //       fullScreen();
-      //       flag = 0;
-      //     } else {
-      //       document.getElementsByClassName("toolbar")[0].classList.remove("x");
-      //       document.querySelector('#viewerContainer').classList.remove("y");
-      //       exitFullScreen();
-      //       flag = 1;
-      //     }
-      //   }
-      // }
-
-document.body.onmousedown = function (e) {
-  if (e.button == 1) {
-    e.preventDefault();
-    const parentDoc = window.parent.document;
-    const isFullscreen = !!parentDoc.fullscreenElement;
-
-    if (!isFullscreen) {
-      document.getElementsByClassName("toolbar")[0].classList.add("x");
-      document.querySelector('#viewerContainer').classList.add("y");
-      
-      // 调用父级全屏
-      parentDoc.documentElement.requestFullscreen().catch(err => console.warn(err));
-      // 通知 index 隐藏侧边栏 UI
-      emitEvent("lightbox", { status: "1" }, "index"); 
-      flag = 0;
-    } else {
-      document.getElementsByClassName("toolbar")[0].classList.remove("x");
-      document.querySelector('#viewerContainer').classList.remove("y");
-      
-      // 退出父级全屏
-      if (parentDoc.exitFullscreen) parentDoc.exitFullscreen();
-      // 通知 index 恢复侧边栏 UI
-      emitEvent("lightbox", { status: "0" }, "index"); 
-      flag = 1;
-    }
-  }
-}
-
-    }
-
-
-function createStore(defaults = {}) {
-    return new Proxy({}, {
-        get(_, prop) {
-            if (prop === 'pinyinData') {
-                return window.top.pinyinData || {};
-            }
-
-            const val = localStorage.getItem(prop);
-            if (val === null) return defaults[prop];
-            try { return JSON.parse(val); } catch { return val; } 
-        },
-        set(_, prop, value) {
-            // 防止子页面把拼音字典写回本地硬盘
-            if (prop === 'pinyinData') {
-                return true; 
-            }
-
-            localStorage.setItem(prop, JSON.stringify(value));
-            return true;
-        },
-        deleteProperty(_, prop) {
-            if (prop === 'pinyinData') return true;
-            
-            localStorage.removeItem(prop);
-            return true;
-        }
-    });
-}
-    
-function pinyin_func() {
-    const dict = window.top.pinyinData;
-    if (!dict || Object.keys(dict).length === 0) {
-        setTimeout(pinyin_func, 500);
-        return;
-    }
-
-    let tooltip = document.createElement("div");
-    tooltip.className = "pinyin-tooltip";
-    document.body.appendChild(tooltip);
-
-    document.addEventListener("mouseup", function(event) {
-        const selection = window.getSelection().toString().trim();
-        if (selection.length === 1 && dict[selection]) {
-            tooltip.innerText = dict[selection];
-            tooltip.style.left = event.pageX + "px";
-            tooltip.style.top = event.pageY + "px";
-            tooltip.style.display = "block";
-        } else {
-            tooltip.style.display = "none";
-        }
-    });
-}
-    
-const store = createStore();
-
-pinyin_func();
-if (window.top && window.top.VirtualCursor) {
-    window.top.VirtualCursor.attach(window);
-}
-const childId = 'content';
-window.childId = childId;
-if (window.__LITE_BUS__) {
-    window.__LITE_BUS__.close();
-}
-
-window.__LITE_BUS__ = new BroadcastChannel('bus');
-const BUS = window.__LITE_BUS__;
-
-function syncToolbarOnParentFullscreen() {
-    try {
-        const isFs = !!window.parent.document.fullscreenElement;
-        if (!isFs) {
-            const tb = document.getElementsByClassName("toolbar")[0];
-            const vc = document.querySelector('#viewerContainer');
-            if (tb) tb.classList.remove("x");
-            if (vc) vc.classList.remove("y");
-            flag = 1;
-        }
-    } catch (_) { }
-}
-try {
-    window.parent.document.addEventListener('fullscreenchange', syncToolbarOnParentFullscreen);
-} catch (_) { }
-
-window.addEventListener('pagehide', (e) => {
-    if (e.persisted) return;
-    try {
-        window.parent.document.removeEventListener('fullscreenchange', syncToolbarOnParentFullscreen);
-    } catch (_) { }
-    if (typeof window.__PDF_SEARCH_CLEANUP__ === 'function') {
-        try { window.__PDF_SEARCH_CLEANUP__(); } catch (_) { }
-    }
-    if (window.__LITE_BUS__) {
-        window.__LITE_BUS__.close();
-        window.__LITE_BUS__ = null;
-    }
-});
-
-const ctxId = window.top === window.self ? 'index' : window.childId; 
-
-function getTabId() {
-    try { return (window.top && window.top.__TAB_ID__) || ''; } catch (_) { return ''; }
-}
-
-function emitEvent(type, payload, target = '*') {
-    if (!window.__LITE_BUS__) return;
-    try {
-        window.__LITE_BUS__.postMessage({
-            type,
-            payload,
-            from: ctxId,
-            target,
-            tabId: getTabId()
-        });
-    } catch (e) { }
-}
-function initExcerptTrigger() {
-    let btn = document.getElementById('excerpt-pop-btn');
-    if (!btn) {
-        btn = document.createElement('div');
-        btn.id = 'excerpt-pop-btn';
-        btn.textContent = '✏️';
-        btn.style.cssText = 'position: fixed; background: #516194; color: rgb(255, 255, 255); padding: 0 5px; border-radius: 6px; cursor: pointer; z-index: 2147483647; box-shadow: rgba(0, 0, 0, 0.4) 0px 4px 12px; display: none; user-select: none;';
-        document.body.appendChild(btn);
-
-        const getSelectionEndRect = (sel, fallbackEvent) => {
-            if (sel && sel.rangeCount > 0) {
-                try {
-                    if (sel.focusNode) {
-                        const caret = document.createRange();
-                        caret.setStart(sel.focusNode, sel.focusOffset);
-                        caret.collapse(true);
-                        const rect = caret.getBoundingClientRect();
-                        if (rect && rect.height > 0) return rect;
-
-                        if (sel.focusNode.nodeType === Node.TEXT_NODE && sel.focusNode.length > 0) {
-                            const r2 = document.createRange();
-                            if (sel.focusOffset > 0) {
-                                r2.setStart(sel.focusNode, sel.focusOffset - 1);
-                                r2.setEnd(sel.focusNode, sel.focusOffset);
-                                const rr = r2.getBoundingClientRect();
-                                if (rr && rr.height > 0) {
-                                    return { left: rr.right, right: rr.right, top: rr.top, bottom: rr.bottom, width: 0, height: rr.height };
-                                }
-                            } else {
-                                r2.setStart(sel.focusNode, 0);
-                                r2.setEnd(sel.focusNode, 1);
-                                const rr = r2.getBoundingClientRect();
-                                if (rr && rr.height > 0) {
-                                    return { left: rr.left, right: rr.left, top: rr.top, bottom: rr.bottom, width: 0, height: rr.height };
-                                }
-                            }
-                        }
-                    }
-                } catch (_) { }
-
-                try {
-                    const range = sel.getRangeAt(0);
-                    const rects = Array.from(range.getClientRects()).filter(r => r.width > 0 || r.height > 0);
-                    if (rects.length > 0) {
-                        let isBackward = false;
-                        if (sel.anchorNode && sel.focusNode) {
-                            if (sel.anchorNode === sel.focusNode) {
-                                isBackward = sel.focusOffset < sel.anchorOffset;
-                            } else {
-                                isBackward = !!(sel.anchorNode.compareDocumentPosition(sel.focusNode) & Node.DOCUMENT_POSITION_PRECEDING);
-                            }
-                        }
-                        const r = isBackward ? rects[0] : rects[rects.length - 1];
-                        const x = isBackward ? r.left : r.right;
-                        return { left: x, right: x, top: r.top, bottom: r.bottom, width: 0, height: r.height };
-                    }
-                } catch (_) { }
-            }
-            if (fallbackEvent && typeof fallbackEvent.clientX === 'number') {
-                return {
-                    left: fallbackEvent.clientX,
-                    right: fallbackEvent.clientX,
-                    top: fallbackEvent.clientY - 12,
-                    bottom: fallbackEvent.clientY + 6,
-                    width: 0,
-                    height: 18
-                };
-            }
-            return null;
-        };
-
-        const doExcerpt = () => {
-            const sel = window.getSelection();
-            const text = sel ? sel.toString().trim() : '';
-            if (Array.from(text).length > 1) {
-                emitEvent('SAVE_EXCERPT', text, 'index');
-
-                const oldText = btn.textContent;
-                btn.textContent = '✅ 已摘抄';
-                btn.style.background = '#10b981';
-                setTimeout(() => {
-                    btn.style.display = 'none';
-                    btn.textContent = oldText;
-                    btn.style.background = '#516194';
-                    if (sel) sel.removeAllRanges();
-                    lastProcessedText = "";
-                }, 800);
-            }
-        };
-
-        const shieldEvents = ['mousedown', 'mouseup', 'click', 'touchstart', 'touchend', 'pointerdown', 'pointerup'];
-
-        shieldEvents.forEach(evt => {
-            window.addEventListener(evt, (e) => {
-                if (e.target && e.target.closest && e.target.closest('#excerpt-pop-btn')) {
-                    e.stopPropagation();
-                    e.stopImmediatePropagation();
-
-                    if (evt === 'mousedown') {
-                        e.preventDefault();
-                    }
-
-                    if (evt === 'click') {
-                        doExcerpt();
-                    }
-                }
-            }, true);
-        });
-
-        let lastProcessedText = "";
-
-        document.addEventListener('mousedown', (e) => {
-            if (e.target && e.target.closest && e.target.closest('#excerpt-pop-btn')) return;
-            btn.style.display = 'none';
-            lastProcessedText = "";
-        });
-
-        document.addEventListener('mouseup', (e) => {
-            if (e.target && e.target.closest && e.target.closest('#excerpt-pop-btn')) return;
-
-            setTimeout(() => {
-                const sel = window.getSelection();
-                const text = sel ? sel.toString().trim() : '';
-
-                if (Array.from(text).length > 1) {
-                    if (text !== lastProcessedText) {
-                        const endRect = getSelectionEndRect(sel, e);
-                        if (endRect) {
-                            btn.style.visibility = 'hidden';
-                            btn.style.display = 'block';
-                            const bw = btn.offsetWidth || 32;
-                            const bh = btn.offsetHeight || 24;
-                            const endX = (endRect.left + endRect.right) / 2;
-                            const left = Math.max(8, Math.min(window.innerWidth - bw - 8, endX - bw / 2));
-                            let top = endRect.bottom + 6;
-                            if (top + bh > window.innerHeight - 8 && endRect.top - bh - 6 >= 8) {
-                                top = endRect.top - bh - 6;
-                            } else {
-                                top = Math.max(8, Math.min(window.innerHeight - bh - 8, top));
-                            }
-                            btn.style.left = Math.round(left) + 'px';
-                            btn.style.top = Math.round(top) + 'px';
-                            btn.style.visibility = 'visible';
-                            lastProcessedText = text;
-                        }
-                    }
-                } else {
-                    btn.style.display = 'none';
-                    lastProcessedText = "";
-                }
-            }, 10);
-        });
-    }
-}
-initExcerptTrigger();
-  </script>
-  <script type="module">
-    import {
-      searchHlTier,
-      searchHlBucket,
-      adaptKeywordsForWasm,
-      collectAdsPositiveIndices,
-      evalAdsExpr,
-      mergeWasmMatchSpans,
-      collectWasmMatches,
-      buildMergedGroupSnippets
-    } from '../js/shared-utils.js';
-    import { BookDB, normalizeBookKey, buildBookSearchCacheKey } from '../js/book-db.js';
-
-    const HL_SUPPORTED = !!(window.CSS && CSS.highlights && typeof Highlight !== 'undefined');
-    const TIER_SIZE = 6;
-    const pdfHlPools = new Array(TIER_SIZE * 3).fill(null);
-    const activeHitPool = HL_SUPPORTED ? (() => { const h = new Highlight(); h.priority = 200; return h; })() : null;
-
-    function pdfHlNameBySlot(slot) {
-      if (slot < TIER_SIZE) return `pdf-hl-${slot}`;
-      if (slot < TIER_SIZE * 2) return `pdf-syn-${slot - TIER_SIZE}`;
-      return `pdf-syn2-${slot - TIER_SIZE * 2}`;
-    }
-
-    function pdfHlSlot(noise) {
-      return searchHlTier(noise) * TIER_SIZE + searchHlBucket(noise);
-    }
-
-    function getPdfHlPool(slot) {
-      if (!pdfHlPools[slot]) {
-        const h = new Highlight();
-        const tier = Math.floor(slot / TIER_SIZE);
-        const bucket = slot % TIER_SIZE;
-        h.priority = tier === 0 ? (100 - bucket * 10) : (tier === 1 ? (40 - bucket * 5) : (20 - bucket * 3));
-        pdfHlPools[slot] = h;
-      }
-      return pdfHlPools[slot];
-    }
-
-    function publishPdfHighlights() {
-      if (!HL_SUPPORTED) return;
-      for (let slot = 0; slot < pdfHlPools.length; slot++) {
-        const h = pdfHlPools[slot];
-        const name = pdfHlNameBySlot(slot);
-        if (h && h.size > 0) CSS.highlights.set(name, h);
-        else CSS.highlights.delete(name);
-      }
-      if (activeHitPool && activeHitPool.size > 0) CSS.highlights.set('pdf-active-hit', activeHitPool);
-      else CSS.highlights.delete('pdf-active-hit');
-    }
-
-    const State = {
-      docGen: 0,
-      pdfDoc: null,
-      numPages: 0,
-      title: '',
-      bookKey: '',
-      // pages[pageIndex] = { pageNumber, text, items: [{ start, end }] }
-      pages: [],
-      extractedCount: 0,
-      extractDone: false,
-      extractBoosted: false,
-      extractPromise: null,
-      extractWaiters: [],
-      // sections: [{ index, title, startPage, endPage, label }]
-      sections: [],
-      groupUnit: '页',
-      outlinePromise: null,
-      // 搜索状态
-      activeSearchToken: 0,
-      lastSearch: null, // { keyword, wasmKeywords, noise, hits, groups, groupMap, pageHitsMap }
-      activeHit: null,
-      pendingJump: null,
-      jumpSeq: 0,
-      // 高亮跟踪：pageIndex -> Array<{ slot, range }>
-      pageRangesMap: new Map(),
-      searchScope: 'txt',
-      provider: null
-    };
-
-    const scopeBtn = document.getElementById('pdfSearchScope');
-
-    function syncScopeUI(scope) {
-      State.searchScope = scope === 'global' ? 'global' : 'txt';
-      if (!scopeBtn) return;
-      const isGlobal = State.searchScope === 'global';
-      scopeBtn.textContent = isGlobal ? '搜全站' : '搜本书';
-      scopeBtn.classList.toggle('is-global', isGlobal);
-      scopeBtn.title = isGlobal
-        ? '当前为全站搜索，点击切回搜本书'
-        : '当前为搜本书，点击切换为搜全站';
-    }
-
-    function openMainBookSearch({ forceBook = false } = {}) {
-      const bridge = window.top && (window.top.__DOC_SEARCH_BRIDGE__ || window.top.__TXT_SEARCH_BRIDGE__);
-      if (forceBook && bridge && typeof bridge.setScope === 'function' && State.searchScope !== 'txt') {
-        bridge.setScope('txt', { rerun: false });
-      }
-      if (typeof window.emitEvent === 'function') {
-        window.emitEvent('quick_search', '', 'index');
-      }
-    }
-
-    // 直接接管 Ctrl+F / Cmd+F、\ 以及工具栏放大镜 #viewFind
-    window.addEventListener('keydown', (e) => {
-      const cmd = (e.ctrlKey || e.metaKey) && !e.altKey;
-      if (cmd && (e.key === 'f' || e.key === 'F' || e.keyCode === 70)) {
-        e.preventDefault();
-        e.stopImmediatePropagation();
-        openMainBookSearch({ forceBook: true });
-        return;
-      }
-      if (e.key === '\\' && !e.ctrlKey && !e.metaKey && !e.altKey) {
-        const tag = (document.activeElement && document.activeElement.tagName || '').toUpperCase();
-        if (tag !== 'INPUT' && tag !== 'TEXTAREA' && tag !== 'SELECT') {
-          e.preventDefault();
-          e.stopImmediatePropagation();
-          openMainBookSearch({ forceBook: false });
-        }
-      }
-    }, true);
-
-    const viewFindBtn = document.getElementById('viewFind');
-    if (viewFindBtn) {
-      viewFindBtn.title = '搜本书 (Ctrl+F / \\)';
-      viewFindBtn.addEventListener('click', (e) => {
-        e.preventDefault();
-        e.stopImmediatePropagation();
-        openMainBookSearch({ forceBook: true });
-      }, true);
-    }
-
-    if (scopeBtn) {
-      scopeBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const bridge = window.top && (window.top.__DOC_SEARCH_BRIDGE__ || window.top.__TXT_SEARCH_BRIDGE__);
-        const next = State.searchScope === 'txt' ? 'global' : 'txt';
-        syncScopeUI(next);
-        if (bridge && typeof bridge.setScope === 'function') {
-          bridge.setScope(next, { rerun: true });
-        }
-      });
-    }
-
-    // 监听 BUS 清除高亮通知
-    if (window.__LITE_BUS__) {
-      window.__LITE_BUS__.addEventListener('message', (e) => {
-        const { type, target, tabId } = e.data || {};
-        const myTab = typeof window.getTabId === 'function' ? window.getTabId() : '';
-        if (tabId && myTab && tabId !== myTab) return;
-        if (target !== '*' && target !== 'content') return;
-        if (type === 'DESTROY_HIGHLIGHT') clearAllHighlights();
-      });
-    }
-
-    // =========================================================================
-    // 1. 文本拼接、大纲解析与后台静默预提取
-    // =========================================================================
-    function buildPageTextFromStrings(strList) {
-      const items = new Array(strList.length);
-      let text = '';
-      for (let i = 0; i < strList.length; i++) {
-        const s = typeof strList[i] === 'string' ? strList[i] : '';
-        if (i > 0 && text.length > 0 && s.length > 0) {
-          const prevCh = text.charCodeAt(text.length - 1);
-          const nextCh = s.charCodeAt(0);
-          const isPrevAscii = (prevCh >= 48 && prevCh <= 57) || (prevCh >= 65 && prevCh <= 90) || (prevCh >= 97 && prevCh <= 122);
-          const isNextAscii = (nextCh >= 48 && nextCh <= 57) || (nextCh >= 65 && nextCh <= 90) || (nextCh >= 97 && nextCh <= 122);
-          if (isPrevAscii && isNextAscii) text += ' ';
-        }
-        const start = text.length;
-        text += s;
-        items[i] = { start, end: text.length };
-      }
-      return { text, items };
-    }
-
-    function buildFixedPageSections(numPages) {
-      const sections = [];
-      if (numPages <= 30) {
-        for (let p = 1; p <= numPages; p++) {
-          sections.push({
-            index: sections.length,
-            title: `第 ${p} 页`,
-            startPage: p,
-            endPage: p,
-            label: `p.${p}`
-          });
-        }
-        return { sections, groupUnit: '页' };
-      }
-      const step = numPages <= 200 ? 20 : (numPages <= 600 ? 30 : 50);
-      for (let s = 1; s <= numPages; s += step) {
-        const e = Math.min(numPages, s + step - 1);
-        const pct = (((s - 1) / Math.max(1, numPages)) * 100).toFixed(0) + '%';
-        sections.push({
-          index: sections.length,
-          title: s === e ? `第 ${s} 页` : `第 ${s}–${e} 页`,
-          startPage: s,
-          endPage: e,
-          label: pct
-        });
-      }
-      return { sections, groupUnit: '段' };
-    }
-
-    async function resolveDestPageNumber(pdfDoc, dest) {
-      try {
-        let explicit = dest;
-        if (typeof dest === 'string') {
-          explicit = await pdfDoc.getDestination(dest);
-        }
-        if (!Array.isArray(explicit) || explicit.length === 0) return null;
-        const ref = explicit[0];
-        if (Number.isInteger(ref)) return ref + 1;
-        if (ref && typeof ref === 'object') {
-          const idx = await pdfDoc.getPageIndex(ref);
-          return Number.isInteger(idx) ? idx + 1 : null;
-        }
-      } catch (_) { }
-      return null;
-    }
-
-    async function parseOutlineSections(pdfDoc, docGen) {
-      const numPages = pdfDoc.numPages || 0;
-      try {
-        const outline = await pdfDoc.getOutline();
-        if (docGen !== State.docGen) return;
-        if (!Array.isArray(outline) || outline.length === 0) {
-          const fb = buildFixedPageSections(numPages);
-          State.sections = fb.sections;
-          State.groupUnit = fb.groupUnit;
-          return;
-        }
-
-        // 展平至最多 2 级大纲（避免极细条目过碎）
-        const flat = [];
-        const walk = (items, depth) => {
-          for (const it of items) {
-            if (!it) continue;
-            const title = String(it.title || '').replace(/\0/g, '').trim();
-            if (title && it.dest) flat.push({ title, dest: it.dest, depth });
-            if (depth < 1 && Array.isArray(it.items) && it.items.length > 0 && flat.length < 400) {
-              walk(it.items, depth + 1);
-            }
-          }
-        };
-        walk(outline, 0);
-
-        const resolved = [];
-        for (let i = 0; i < flat.length; i++) {
-          if (docGen !== State.docGen) return;
-          const p = await resolveDestPageNumber(pdfDoc, flat[i].dest);
-          if (p && p >= 1 && p <= numPages) {
-            resolved.push({ title: flat[i].title, page: p, order: i });
-          }
-        }
-        if (docGen !== State.docGen) return;
-
-        // 按页码排序并按首现页去重
-        resolved.sort((a, b) => a.page - b.page || a.order - b.order);
-        const dedup = [];
-        for (const item of resolved) {
-          if (dedup.length > 0 && dedup[dedup.length - 1].page === item.page) continue;
-          dedup.push(item);
-        }
-
-        if (dedup.length < 2) {
-          const fb = buildFixedPageSections(numPages);
-          State.sections = fb.sections;
-          State.groupUnit = fb.groupUnit;
-          return;
-        }
-
-        const sections = [];
-        if (dedup[0].page > 1) {
-          sections.push({
-            index: 0,
-            title: '封面 / 前言',
-            startPage: 1,
-            endPage: dedup[0].page - 1,
-            label: 'p.1'
-          });
-        }
-        for (let i = 0; i < dedup.length; i++) {
-          const startPage = dedup[i].page;
-          const endPage = i + 1 < dedup.length ? Math.max(startPage, dedup[i + 1].page - 1) : numPages;
-          sections.push({
-            index: sections.length,
-            title: dedup[i].title,
-            startPage,
-            endPage,
-            label: `p.${startPage}`
-          });
-        }
-        State.sections = sections;
-        State.groupUnit = '节';
-      } catch (_) {
-        if (docGen !== State.docGen) return;
-        const fb = buildFixedPageSections(numPages);
-        State.sections = fb.sections;
-        State.groupUnit = fb.groupUnit;
-      }
-    }
-
-    function getSectionForPage(pageNumber) {
-      const secs = State.sections;
-      if (!secs || secs.length === 0) {
-        return { index: pageNumber - 1, title: `第 ${pageNumber} 页`, startPage: pageNumber, endPage: pageNumber, label: `p.${pageNumber}` };
-      }
-      let lo = 0, hi = secs.length - 1, ans = secs[0];
-      while (lo <= hi) {
-        const mid = (lo + hi) >> 1;
-        if (secs[mid].startPage <= pageNumber) { ans = secs[mid]; lo = mid + 1; }
-        else hi = mid - 1;
-      }
-      return ans;
-    }
-
-    function idleYield() {
-      if (State.extractBoosted) return new Promise(r => setTimeout(r, 0));
-      if (typeof requestIdleCallback === 'function') {
-        return new Promise(r => requestIdleCallback(() => r(), { timeout: 220 }));
-      }
-      return new Promise(r => setTimeout(r, 24));
-    }
-
-    function notifyExtractProgress() {
-      for (const fn of State.extractWaiters) {
-        try { fn(State.extractedCount, State.numPages); } catch (_) { }
-      }
-    }
-
-    function startBackgroundPreExtraction(pdfDoc, docGen) {
-      const numPages = pdfDoc.numPages || 0;
-      const bookKey = State.bookKey;
-      State.pages = new Array(numPages);
-      State.extractedCount = 0;
-      State.extractDone = false;
-      State.extractBoosted = false;
-
-      let outlineRestored = false;
-      State.outlinePromise = null;
-
-      State.extractPromise = (async () => {
-        // 1. 优先命中 BookDB 提取缓存（只读 PDF 免逐页解析）
-        if (bookKey) {
-          const cached = await BookDB.getExtract(bookKey);
-          if (docGen !== State.docGen) return;
-          if (cached && cached.kind === 'pdf' && cached.numPages === numPages && Array.isArray(cached.pages) && cached.pages.length === numPages) {
-            State.pages = cached.pages;
-            State.extractedCount = numPages;
-            State.extractDone = true;
-            if (Array.isArray(cached.sections) && cached.sections.length > 0) {
-              State.sections = cached.sections;
-              State.groupUnit = cached.groupUnit || State.groupUnit;
-              outlineRestored = true;
-            }
-            if (!outlineRestored) {
-              State.outlinePromise = parseOutlineSections(pdfDoc, docGen);
-            }
-            notifyExtractProgress();
-            return;
-          }
-        }
-
-        State.outlinePromise = parseOutlineSections(pdfDoc, docGen);
-
-        // 2. 未命中缓存：先让首屏页面渲染完成（最多等 350ms），再后台静默提取
-        try {
-          const oneRendered = window.PDFViewerApplication && window.PDFViewerApplication.pdfViewer && window.PDFViewerApplication.pdfViewer.onePageRendered;
-          if (oneRendered) {
-            await Promise.race([oneRendered, new Promise(r => setTimeout(r, 350))]);
-          } else {
-            await new Promise(r => setTimeout(r, 250));
-          }
-        } catch (_) { }
-
-        let nextPage = 1;
-        while (nextPage <= numPages) {
-          if (docGen !== State.docGen) return;
-          const batchSize = State.extractBoosted ? 6 : 3;
-          const batchPages = [];
-          for (let k = 0; k < batchSize && nextPage <= numPages; k++, nextPage++) {
-            batchPages.push(nextPage);
-          }
-
-          await Promise.all(batchPages.map(async (pNum) => {
-            try {
-              const pdfPage = await pdfDoc.getPage(pNum);
-              if (docGen !== State.docGen) return;
-              const tc = await pdfPage.getTextContent({ normalizeWhitespace: true });
-              if (docGen !== State.docGen) return;
-              const strList = (tc && Array.isArray(tc.items)) ? tc.items.map(it => (it && typeof it.str === 'string') ? it.str : '') : [];
-              const built = buildPageTextFromStrings(strList);
-              State.pages[pNum - 1] = {
-                pageNumber: pNum,
-                text: built.text,
-                items: built.items
-              };
-            } catch (err) {
-              if (docGen !== State.docGen) return;
-              State.pages[pNum - 1] = { pageNumber: pNum, text: '', items: [] };
-            } finally {
-              if (docGen === State.docGen) {
-                State.extractedCount++;
-              }
-            }
-          }));
-
-          if (docGen !== State.docGen) return;
-          notifyExtractProgress();
-          if (nextPage <= numPages) await idleYield();
-        }
-
-        if (docGen === State.docGen) {
-          State.extractDone = true;
-          notifyExtractProgress();
-
-          // 3. 后台提取与大纲解析全部完成后持久化至 BookDB
-          if (bookKey) {
-            const pOutline = State.outlinePromise;
-            Promise.resolve(pOutline).then(() => {
-              if (docGen !== State.docGen) return;
-              BookDB.putExtract(bookKey, 'pdf', {
-                kind: 'pdf',
-                numPages,
-                pages: State.pages,
-                sections: State.sections,
-                groupUnit: State.groupUnit
-              }, { numPages, groupUnit: State.groupUnit });
-            }).catch(() => { });
-          }
-        }
-      })();
-    }
-
-    // =========================================================================
-    // 2. CSS Custom Highlight（透明文字层无重影 + 按页增量补绘）
-    // =========================================================================
-    function clearPageHighlights(pageIndex) {
-      const prev = State.pageRangesMap.get(pageIndex);
-      if (prev && prev.length > 0) {
-        for (const entry of prev) {
-          const pool = pdfHlPools[entry.slot];
-          if (pool) pool.delete(entry.range);
-        }
-        State.pageRangesMap.delete(pageIndex);
-      }
-    }
-
-    function clearAllHighlights() {
-      State.pageRangesMap.clear();
-      for (let i = 0; i < pdfHlPools.length; i++) {
-        if (pdfHlPools[i]) pdfHlPools[i].clear();
-      }
-      if (activeHitPool) activeHitPool.clear();
-      State.activeHit = null;
-      State.pendingJump = null;
-      publishPdfHighlights();
-    }
-
-    function mapSpanToTextLayerRanges(textLayer, itemsMeta, matchStart, matchEnd) {
-      const textDivs = textLayer.textDivs;
-      const ranges = [];
-      if (!Array.isArray(textDivs) || textDivs.length === 0 || !Array.isArray(itemsMeta) || itemsMeta.length === 0) {
-        return ranges;
-      }
-
-      // 二分定位首个 end > matchStart 的 item
-      let lo = 0, hi = itemsMeta.length - 1, idx = itemsMeta.length;
-      while (lo <= hi) {
-        const mid = (lo + hi) >> 1;
-        if (itemsMeta[mid].end > matchStart) { idx = mid; hi = mid - 1; }
-        else lo = mid + 1;
-      }
-
-      for (let i = idx; i < itemsMeta.length && i < textDivs.length; i++) {
-        const meta = itemsMeta[i];
-        if (meta.start >= matchEnd) break;
-        const div = textDivs[i];
-        if (!div) continue;
-        const node = div.firstChild;
-        if (!node || node.nodeType !== Node.TEXT_NODE) continue;
-        const nodeLen = node.length;
-        if (nodeLen === 0) continue;
-
-        const from = Math.max(0, matchStart - meta.start);
-        const to = Math.min(nodeLen, matchEnd - meta.start);
-        if (to > from) {
-          try {
-            const r = new Range();
-            r.setStart(node, from);
-            r.setEnd(node, to);
-            ranges.push(r);
-          } catch (_) { }
-        }
-      }
-      return ranges;
-    }
-
-    function paintPageHighlights(pageIndex) {
-      if (!HL_SUPPORTED) return;
-      clearPageHighlights(pageIndex);
-
-      const last = State.lastSearch;
-      if (!last) {
-        publishPdfHighlights();
-        return;
-      }
-
-      const app = window.PDFViewerApplication;
-      const pageView = app && app.pdfViewer && app.pdfViewer.getPageView(pageIndex);
-      const textLayer = pageView && pageView.textLayer;
-      if (!textLayer || !textLayer.renderingDone || !Array.isArray(textLayer.textDivs) || textLayer.textDivs.length === 0) {
-        return;
-      }
-
-      const pageHits = last.pageHitsMap.get(pageIndex);
-      if (!pageHits || pageHits.length === 0) return;
-
-      const pageData = State.pages[pageIndex];
-      const strList = textLayer.textContentItemsStr || [];
-      let itemsMeta = (pageData && Array.isArray(pageData.items) && pageData.items.length === textLayer.textDivs.length)
-        ? pageData.items
-        : null;
-      let hitsToPaint = pageHits;
-
-      // 若 textLayer 分段数与提取缓存偶发不一致，实时用该页 textContentItemsStr 校准
-      if (!itemsMeta && strList.length === textLayer.textDivs.length) {
-        const sw = window.top && window.top.sharedWasm;
-        if (sw && sw.ready && typeof sw.find_content_matches_multi === 'function') {
-          const live = buildPageTextFromStrings(strList);
-          itemsMeta = live.items;
-          if (last.isAds && Array.isArray(last.adsPositiveTerms)) {
-            const raw = [];
-            for (const pt of last.adsPositiveTerms) {
-              raw.push(...collectWasmMatches(sw, live.text, pt.wasmKeywords, pt.noise, pt.termIdx));
-            }
-            hitsToPaint = mergeWasmMatchSpans(raw).map(m => ({ localStart: m.start, localEnd: m.end, noise: m.noise }));
-          } else {
-            const matches = collectWasmMatches(sw, live.text, last.wasmKeywords, last.noise, 0);
-            hitsToPaint = matches.map(m => ({ localStart: m.start, localEnd: m.end, noise: m.noise }));
-          }
-        }
-      }
-      if (!itemsMeta) return;
-
-      const added = [];
-      for (const hit of hitsToPaint) {
-        const slot = pdfHlSlot(hit.noise);
-        const pool = getPdfHlPool(slot);
-        const ranges = mapSpanToTextLayerRanges(textLayer, itemsMeta, hit.localStart, hit.localEnd);
-        for (const r of ranges) {
-          pool.add(r);
-          added.push({ slot, range: r });
-        }
-      }
-      if (added.length > 0) State.pageRangesMap.set(pageIndex, added);
-
-      // 若当前激活焦点命中恰好在此页，同步重绘焦点高亮
-      if (activeHitPool && State.activeHit && State.activeHit.pageIndex === pageIndex) {
-        activeHitPool.clear();
-        const activeRanges = mapSpanToTextLayerRanges(textLayer, itemsMeta, State.activeHit.localStart, State.activeHit.localEnd);
-        for (const r of activeRanges) activeHitPool.add(r);
-      }
-
-      publishPdfHighlights();
-    }
-
-    function paintAllRenderedPages() {
-      const app = window.PDFViewerApplication;
-      if (!app || !app.pdfViewer) return;
-      const total = app.pdfViewer.pagesCount || 0;
-      for (let i = 0; i < total; i++) {
-        const pv = app.pdfViewer.getPageView(i);
-        if (pv && pv.textLayer && pv.textLayer.renderingDone) {
-          paintPageHighlights(i);
-        }
-      }
-    }
-
-    // =========================================================================
-    // 3. Wasm 宽容 + 近义搜索与分组聚合
-    // =========================================================================
-    async function waitForSharedWasm(timeoutMs = 5000) {
-      const start = Date.now();
-      while (Date.now() - start < timeoutMs) {
-        const sw = window.top && window.top.sharedWasm;
-        if (sw && sw.ready && typeof sw.find_content_matches_multi === 'function') return sw;
-        if (sw && sw.failed) return null;
-        await new Promise(r => setTimeout(r, 40));
-      }
-      return null;
-    }
-
-    function u16ToCodePointIdx(str, u16Idx) {
-      const clamped = Math.max(0, Math.min(str.length, u16Idx));
-      let cp = 0;
-      for (let i = 0; i < clamped; i++) {
-        const c = str.charCodeAt(i);
-        if (c >= 0xD800 && c <= 0xDBFF && i + 1 < clamped) {
-          const n = str.charCodeAt(i + 1);
-          if (n >= 0xDC00 && n <= 0xDFFF) i++;
-        }
-        cp++;
-      }
-      return cp;
-    }
-
-    function buildCompactPreview(pageText, localStart, localEnd, noise, allPageHits = null) {
-      const BEFORE = 10, AFTER = 18;
-      const s = Math.max(0, localStart - BEFORE);
-      const e = Math.min(pageText.length, localEnd + AFTER);
-      const pre = s > 0 ? '…' : '';
-      const suf = e < pageText.length ? '…' : '';
-      const cleanSlice = pageText.slice(s, e).replace(/[\t\r\n]/g, ' ');
-      const preview = pre + cleanSlice + suf;
-      const shift = pre.length;
-
-      if (Array.isArray(allPageHits) && allPageHits.length > 0) {
-        const highlights = [];
-        for (const m of allPageHits) {
-          if (m.end <= s) continue;
-          if (m.start >= e) break;
-          const rs = shift + (Math.max(s, m.start) - s);
-          const re = shift + (Math.min(e, m.end) - s);
-          if (re > rs) {
-            highlights.push([u16ToCodePointIdx(preview, rs), u16ToCodePointIdx(preview, re), m.noise]);
-          }
-        }
-        if (highlights.length > 0) return { preview, highlights };
-      }
-      const hs = u16ToCodePointIdx(preview, shift + (localStart - s));
-      const he = u16ToCodePointIdx(preview, shift + (localEnd - s));
-      return { preview, highlights: [[hs, he, noise]] };
-    }
-
-    function buildSnippetItem(hit, radius = 64, samePageHits = null) {
-      const pageData = State.pages[hit.pageIndex];
-      if (!pageData || !pageData.text) return null;
-      const text = pageData.text;
-      const s = Math.max(0, hit.localStart - radius);
-      const e = Math.min(text.length, hit.localEnd + radius);
-      const pre = (s > 0 ? '…' : '') + `[p.${hit.pageNumber}] `;
-      const suf = e < text.length ? '…' : '';
-      const body = text.slice(s, e).replace(/[\t\r\n]/g, ' ');
-      const t = pre + body + suf;
-      const shift = pre.length;
-
-      const h = [];
-      const candidates = samePageHits || [hit];
-      for (const item of candidates) {
-        if (item.pageIndex !== hit.pageIndex) continue;
-        if (item.localEnd <= s || item.localStart >= e) continue;
-        const rs = Math.max(s, item.localStart) - s + shift;
-        const re = Math.min(e, item.localEnd) - s + shift;
-        if (re > rs) h.push([rs, re, item.noise]);
-      }
-      return { t, h };
-    }
-
-    async function runPdfSearch({ keyword, specs, noise, synonymsEnabled, adsPlan, token, reportStatus, cacheMeta }) {
-      State.activeSearchToken = token;
-      clearAllHighlights();
-
-      const isAds = !!(adsPlan && Array.isArray(adsPlan.terms) && adsPlan.terms.length > 0 && adsPlan.expr);
-      if (!keyword || !State.pdfDoc || (!isAds && (!Array.isArray(specs) || specs.length === 0))) {
-        State.lastSearch = null;
-        return { totalHits: 0, shownHits: 0, truncated: false, groups: [], groupUnit: State.groupUnit };
-      }
-
-      // 若后台静默预提取仍在进行，自动提速并实时回报进度
-      if (!State.extractDone && State.extractPromise) {
-        State.extractBoosted = true;
-        const onProg = (done, total) => {
-          if (token === State.activeSearchToken && typeof reportStatus === 'function') {
-            reportStatus(`正在提取 PDF 文本 ${done}/${total} 页...`);
-          }
-        };
-        onProg(State.extractedCount, State.numPages);
-        State.extractWaiters.push(onProg);
-        try {
-          await State.extractPromise;
-        } finally {
-          State.extractWaiters = State.extractWaiters.filter(fn => fn !== onProg);
-        }
-        if (token !== State.activeSearchToken) return null;
-      }
-
-      if (State.outlinePromise) {
-        await State.outlinePromise;
-        if (token !== State.activeSearchToken) return null;
-      }
-
-      const totalChars = State.pages.reduce((sum, p) => sum + ((p && p.text) ? p.text.trim().length : 0), 0);
-      if (totalChars === 0) {
-        State.lastSearch = null;
-        return {
-          keyword,
-          totalHits: 0,
-          shownHits: 0,
-          truncated: false,
-          groups: [],
-          groupUnit: State.groupUnit,
-          statusMsg: '该 PDF 无可选文本层（可能为扫描版）'
-        };
-      }
-
-      const canCache = !!(State.bookKey && (!cacheMeta || cacheMeta.canCache !== false));
-      const queryKey = canCache ? buildBookSearchCacheKey({
-        bookSig: `pdf:${State.numPages}:${State.sections.length}`,
-        algoVer: (cacheMeta && cacheMeta.algoVer) || 11,
-        synVer: (cacheMeta && cacheMeta.synVer) || '',
-        keyword,
-        noise,
-        useSyn: !!synonymsEnabled,
-        adsPlan: isAds ? adsPlan : null
-      }) : '';
-
-      if (canCache && queryKey) {
-        const cached = await BookDB.getSearch(State.bookKey, queryKey);
-        if (token !== State.activeSearchToken) return null;
-        if (cached && Array.isArray(cached.hits) && Array.isArray(cached.groupMeta)) {
-          const swLive = window.top && window.top.sharedWasm;
-          const weighted = !!(swLive && swLive.weightedKeywords);
-          let cachedWasmKws = [];
-          let cachedAdsPos = null;
-          if (isAds) {
-            const terms = adsPlan.terms.map((t, idx) => ({
-              termIdx: idx,
-              noise: t.noise,
-              wasmKeywords: adaptKeywordsForWasm(t.specs, weighted)
-            }));
-            cachedAdsPos = collectAdsPositiveIndices(adsPlan.expr).map(idx => terms[idx]).filter(Boolean);
-          } else {
-            cachedWasmKws = adaptKeywordsForWasm(specs, weighted);
-          }
-
-          const groupMap = new Map();
-          for (const gm of cached.groupMeta) {
-            groupMap.set(gm.groupIndex, {
-              type: 'txt-group',
-              path: `txt-group:${gm.groupIndex}`,
-              groupIndex: gm.groupIndex,
-              title: gm.title,
-              percent: gm.percent,
-              count: gm.count,
-              hits: []
-            });
-          }
-          const pageHitsMap = new Map();
-          const hasExplicitPageHits = Array.isArray(cached.pageHitsEntries);
-          if (hasExplicitPageHits) {
-            for (const [pi, arr] of cached.pageHitsEntries) pageHitsMap.set(pi, arr);
-          }
-          for (const h of cached.hits) {
-            const g = groupMap.get(h.sectionIdx);
-            if (g) g.hits.push(h);
-            if (!hasExplicitPageHits) {
-              let pArr = pageHitsMap.get(h.pageIndex);
-              if (!pArr) { pArr = []; pageHitsMap.set(h.pageIndex, pArr); }
-              pArr.push({ localStart: h.localStart, localEnd: h.localEnd, noise: h.noise });
-            }
-          }
-          const groups = Array.from(groupMap.values()).sort((a, b) => a.groupIndex - b.groupIndex);
-          State.lastSearch = {
-            keyword,
-            isAds,
-            adsPositiveTerms: cachedAdsPos,
-            wasmKeywords: cachedWasmKws,
-            noise,
-            hits: cached.hits,
-            groups,
-            groupMap,
-            pageHitsMap
-          };
-          paintAllRenderedPages();
-          return {
-            keyword,
-            totalHits: cached.totalHits,
-            shownHits: cached.hits.length,
-            truncated: !!cached.truncated,
-            groups,
-            groupUnit: cached.groupUnit || State.groupUnit
-          };
-        }
-      }
-
-      const sw = await waitForSharedWasm();
-      if (token !== State.activeSearchToken) return null;
-      if (!sw) throw new Error('Wasm 搜索引擎未就绪');
-
-      if (typeof reportStatus === 'function') reportStatus('搜索中...');
-      const MAX_RECORDED_HITS = 1500;
-
-      const hits = [];
-      const groupMap = new Map();
-      const pageHitsMap = new Map();
-      let totalHits = 0;
-
-      const recordPageMatches = (pi, pageData, sec, matchList) => {
-        const pHits = pageHitsMap.get(pi) || [];
-        for (const m of matchList) {
-          const localStart = m.start;
-          const localEnd = m.end;
-          const packedNoise = m.noise;
-          totalHits++;
-          pHits.push({ localStart, localEnd, noise: packedNoise });
-
-          let g = groupMap.get(sec.index);
-          if (!g) {
-            g = {
-              type: 'txt-group',
-              path: `txt-group:${sec.index}`,
-              groupIndex: sec.index,
-              title: sec.title,
-              percent: sec.label,
-              count: 0,
-              hits: []
-            };
-            groupMap.set(sec.index, g);
-          }
-          g.count++;
-
-          if (hits.length < MAX_RECORDED_HITS) {
-            const compact = buildCompactPreview(pageData.text, localStart, localEnd, packedNoise, matchList);
-            const hitObj = {
-              hitIndex: hits.length,
-              pageIndex: pi,
-              pageNumber: pageData.pageNumber,
-              sectionIdx: sec.index,
-              localStart,
-              localEnd,
-              noise: packedNoise,
-              termIdx: typeof m.termIdx === 'number' ? m.termIdx : 0,
-              percent: `p.${pageData.pageNumber}`,
-              preview: compact.preview,
-              highlights: compact.highlights
-            };
-            hits.push(hitObj);
-            g.hits.push(hitObj);
-          }
-        }
-        if (pHits.length > 0) pageHitsMap.set(pi, pHits);
-      };
-
-      let sliceStart = performance.now();
-      let wasmKeywords = [];
-      let adsPositiveTerms = null;
-
-      if (isAds) {
-        const terms = adsPlan.terms.map((t, idx) => ({
-          termIdx: idx,
-          noise: t.noise,
-          wasmKeywords: adaptKeywordsForWasm(t.specs, !!sw.weightedKeywords)
-        }));
-        const posIndices = collectAdsPositiveIndices(adsPlan.expr);
-        const posSet = new Set(posIndices);
-        adsPositiveTerms = posIndices.map(idx => terms[idx]).filter(Boolean);
-
-        const secs = (State.sections && State.sections.length > 0)
-          ? State.sections
-          : buildFixedPageSections(State.numPages).sections;
-
-        for (const sec of secs) {
-          if (token !== State.activeSearchToken) return null;
-          const startPi = Math.max(0, sec.startPage - 1);
-          const endPi = Math.min(State.pages.length - 1, sec.endPage - 1);
-          if (endPi < startPi) continue;
-
-          const termHitCache = new Map();
-          const termMatchesByPage = new Map();
-
-          const hasTermInSection = (tIdx) => {
-            if (termHitCache.has(tIdx)) return termHitCache.get(tIdx);
-            const term = terms[tIdx];
-            if (!term || term.wasmKeywords.length === 0) {
-              termHitCache.set(tIdx, false);
-              return false;
-            }
-            const keepAll = posSet.has(tIdx);
-            let found = false;
-            let byPage = null;
-            for (let pi = startPi; pi <= endPi; pi++) {
-              const pageData = State.pages[pi];
-              if (!pageData || !pageData.text) continue;
-              const matches = collectWasmMatches(sw, pageData.text, term.wasmKeywords, term.noise, tIdx);
-              if (matches.length > 0) {
-                found = true;
-                if (!keepAll) break;
-                if (!byPage) { byPage = new Map(); termMatchesByPage.set(tIdx, byPage); }
-                byPage.set(pi, matches);
-              }
-            }
-            termHitCache.set(tIdx, found);
-            return found;
-          };
-
-          if (evalAdsExpr(adsPlan.expr, hasTermInSection)) {
-            for (const pIdx of posIndices) hasTermInSection(pIdx);
-            for (let pi = startPi; pi <= endPi; pi++) {
-              const pageData = State.pages[pi];
-              if (!pageData || !pageData.text) continue;
-              const raw = [];
-              for (const pIdx of posIndices) {
-                const byPage = termMatchesByPage.get(pIdx);
-                const m = byPage && byPage.get(pi);
-                if (m && m.length > 0) raw.push(...m);
-              }
-              if (raw.length > 0) {
-                recordPageMatches(pi, pageData, sec, mergeWasmMatchSpans(raw));
-              }
-            }
-          }
-
-          if (performance.now() - sliceStart >= 10) {
-            await new Promise(r => setTimeout(r, 0));
-            sliceStart = performance.now();
-          }
-        }
-      } else {
-        wasmKeywords = adaptKeywordsForWasm(specs, !!sw.weightedKeywords);
-        for (let pi = 0; pi < State.pages.length; pi++) {
-          if (token !== State.activeSearchToken) return null;
-          const pageData = State.pages[pi];
-          if (!pageData || !pageData.text) continue;
-
-          const matches = collectWasmMatches(sw, pageData.text, wasmKeywords, noise, 0);
-          if (matches.length > 0) {
-            recordPageMatches(pi, pageData, getSectionForPage(pageData.pageNumber), matches);
-          }
-
-          if (performance.now() - sliceStart >= 10) {
-            await new Promise(r => setTimeout(r, 0));
-            sliceStart = performance.now();
-          }
-        }
-      }
-
-      if (token !== State.activeSearchToken) return null;
-
-      const groups = Array.from(groupMap.values()).sort((a, b) => a.groupIndex - b.groupIndex);
-      const truncated = totalHits > hits.length;
-      State.lastSearch = { keyword, isAds, adsPositiveTerms, wasmKeywords, noise, hits, groups, groupMap, pageHitsMap };
-
-      if (canCache && queryKey) {
-        const groupMeta = groups.map(g => ({
-          groupIndex: g.groupIndex,
-          title: g.title,
-          percent: g.percent,
-          count: g.count
-        }));
-        BookDB.putSearch(State.bookKey, queryKey, 'pdf', {
-          keyword,
-          isAds,
-          totalHits,
-          truncated,
-          groupUnit: State.groupUnit,
-          hits,
-          groupMeta,
-          pageHitsEntries: truncated ? Array.from(pageHitsMap.entries()) : null
-        });
-      }
-
-      paintAllRenderedPages();
-
-      return {
-        keyword,
-        totalHits,
-        shownHits: hits.length,
-        truncated,
-        groups,
-        groupUnit: State.groupUnit
-      };
-    }
-
-    function getPdfSnippets(path) {
-      const last = State.lastSearch;
-      if (!last || typeof path !== 'string') return null;
-
-      if (path.startsWith('txt-group:')) {
-        const gIdx = Number(path.slice('txt-group:'.length));
-        const g = last.groupMap.get(gIdx);
-        if (!g) return null;
-        const { items, more } = buildMergedGroupSnippets(g.hits, {
-          maxItems: 40,
-          radius: 54,
-          maxWindowChars: 170,
-          snapToNewline: false,
-          getUnitKey: (h) => h.pageIndex,
-          getUnitText: (h) => (State.pages[h.pageIndex] && State.pages[h.pageIndex].text) || '',
-          getPrefix: (h, s) => (s > 0 ? '…' : '') + `[p.${h.pageNumber}] `
-        });
-        return {
-          body: { hits: g.count, more: more + Math.max(0, g.count - g.hits.length), items },
-          comments: { hits: 0, docs: 0, more: 0, items: [] }
-        };
-      }
-
-      if (path.startsWith('txt-hit:')) {
-        const hIdx = Number(path.slice('txt-hit:'.length));
-        const h = last.hits[hIdx];
-        if (!h) return null;
-        const g = last.groupMap.get(h.sectionIdx);
-        const it = buildSnippetItem(h, 130, g ? g.hits : [h]);
-        return {
-          body: { hits: 1, more: 0, items: it ? [it] : [] },
-          comments: { hits: 0, docs: 0, more: 0, items: [] }
-        };
-      }
-      return null;
-    }
-
-    // =========================================================================
-    // 4. 跨页锚记定位、居中滚动与脉冲反馈
-    // =========================================================================
-    function flashPulseAtRect(rect) {
-      if (!rect || (rect.width === 0 && rect.height === 0)) return;
-      const el = document.createElement('div');
-      el.className = 'pdf-hit-pulse';
-      el.style.left = (rect.left - 4) + 'px';
-      el.style.top = (rect.top - 3) + 'px';
-      el.style.width = Math.max(18, rect.width + 8) + 'px';
-      el.style.height = Math.max(18, rect.height + 6) + 'px';
-      document.body.appendChild(el);
-      setTimeout(() => el.remove(), 1100);
-    }
-
-    function centerRectInViewer(rect) {
-      const vc = document.getElementById('viewerContainer');
-      if (!vc || !rect) return;
-      const vr = vc.getBoundingClientRect();
-      const targetTop = vc.scrollTop + (rect.top - vr.top) - (vr.height - rect.height) / 2;
-      const targetLeft = vc.scrollLeft + (rect.left - vr.left) - (vr.width - rect.width) / 2;
-      vc.scrollTop = Math.max(0, targetTop);
-      vc.scrollLeft = Math.max(0, targetLeft);
-    }
-
-    function focusHitOnRenderedPage(hit) {
-      const app = window.PDFViewerApplication;
-      const pageView = app && app.pdfViewer && app.pdfViewer.getPageView(hit.pageIndex);
-      const textLayer = pageView && pageView.textLayer;
-      if (!textLayer || !textLayer.renderingDone || !Array.isArray(textLayer.textDivs) || textLayer.textDivs.length === 0) {
-        return false;
-      }
-
-      const pageData = State.pages[hit.pageIndex];
-      const itemsMeta = (pageData && Array.isArray(pageData.items) && pageData.items.length === textLayer.textDivs.length)
-        ? pageData.items
-        : buildPageTextFromStrings(textLayer.textContentItemsStr || []).items;
-
-      const ranges = mapSpanToTextLayerRanges(textLayer, itemsMeta, hit.localStart, hit.localEnd);
-      if (HL_SUPPORTED && activeHitPool) {
-        activeHitPool.clear();
-        for (const r of ranges) activeHitPool.add(r);
-        publishPdfHighlights();
-      }
-
-      const firstRect = ranges.length > 0 ? ranges[0].getBoundingClientRect() : null;
-      if (firstRect && (firstRect.width > 0 || firstRect.height > 0)) {
-        centerRectInViewer(firstRect);
-        requestAnimationFrame(() => {
-          const updated = ranges[0].getBoundingClientRect();
-          flashPulseAtRect(updated);
-        });
-      }
-      return true;
-    }
-
-    function jumpToPdfHit(hitIndex) {
-      const last = State.lastSearch;
-      if (!last) return;
-      const hit = last.hits[hitIndex];
-      if (!hit) return;
-
-      State.activeHit = hit;
-      const seq = ++State.jumpSeq;
-
-      if (focusHitOnRenderedPage(hit)) {
-        State.pendingJump = null;
-        return;
-      }
-
-      // 目标页尚未渲染：先跳转页面，等 textlayerrendered 触发后再精确定位
-      State.pendingJump = { hit, seq };
-      const app = window.PDFViewerApplication;
-      if (app && app.pdfViewer) {
-        app.page = hit.pageNumber;
-      }
-    }
-
-    // =========================================================================
-    // 5. 绑定 PDF.js 生命周期与主站桥接
-    // =========================================================================
-    function onPdfDocumentReady(pdfDoc) {
-      if (!pdfDoc || pdfDoc === State.pdfDoc) return;
-      State.docGen++;
-      const docGen = State.docGen;
-      State.pdfDoc = pdfDoc;
-      State.numPages = pdfDoc.numPages || 0;
-      State.lastSearch = null;
-      clearAllHighlights();
-
-      const params = new URLSearchParams(window.location.search);
-      const fileUrl = params.get('file') || '';
-      State.title = decodeURIComponent((fileUrl.split('/').pop() || document.title || 'PDF').split('#')[0]);
-      State.bookKey = (docGen === 1 && fileUrl) ? normalizeBookKey(fileUrl) : '';
-
-      const initSections = buildFixedPageSections(State.numPages);
-      State.sections = initSections.sections;
-      State.groupUnit = initSections.groupUnit;
-
-      startBackgroundPreExtraction(pdfDoc, docGen);
-
-      const bridge = window.top && (window.top.__DOC_SEARCH_BRIDGE__ || window.top.__TXT_SEARCH_BRIDGE__);
-      if (bridge) {
-        if (!State.provider) {
-          State.provider = {
-            kind: 'pdf',
-            title: State.title,
-            runSearch: runPdfSearch,
-            getSnippets: getPdfSnippets,
-            jumpTo: jumpToPdfHit,
-            clearHighlights: clearAllHighlights,
-            onScopeChange: syncScopeUI
-          };
-          bridge.register(State.provider);
-        } else {
-          State.provider.title = State.title;
-        }
-      }
-    }
-
-    window.__PDF_SEARCH_CLEANUP__ = () => {
-      State.docGen++;
-      clearAllHighlights();
-      const bridge = window.top && (window.top.__DOC_SEARCH_BRIDGE__ || window.top.__TXT_SEARCH_BRIDGE__);
-      if (bridge && State.provider) bridge.unregister(State.provider);
-    };
-
-    async function initPdfSearchBridge() {
-      let tries = 0;
-      while (!window.PDFViewerApplication && tries < 100) {
-        await new Promise(r => setTimeout(r, 30));
-        tries++;
-      }
-      const app = window.PDFViewerApplication;
-      if (!app) return;
-      try { await app.initializedPromise; } catch (_) { }
-
-      if (app.eventBus) {
-        app.eventBus.on('documentinit', () => {
-          if (app.pdfDocument) onPdfDocumentReady(app.pdfDocument);
-        });
-        app.eventBus.on('textlayerrendered', (evt) => {
-          if (!evt || !Number.isInteger(evt.pageNumber)) return;
-          const pageIndex = evt.pageNumber - 1;
-          if (State.lastSearch) paintPageHighlights(pageIndex);
-          if (State.pendingJump && State.pendingJump.hit.pageIndex === pageIndex) {
-            const pj = State.pendingJump;
-            State.pendingJump = null;
-            focusHitOnRenderedPage(pj.hit);
-          }
-        });
-        // 拦截 PDF 内部 Find 动作，统一导向主站搜索框
-        app.eventBus.on('namedaction', (evt) => {
-          if (evt && evt.action === 'Find') {
-            if (app.findBar && app.findBar.opened) app.findBar.close();
-            openMainBookSearch({ forceBook: true });
-          }
-        });
-      }
-
-      if (app.pdfDocument) {
-        onPdfDocumentReady(app.pdfDocument);
-      }
-    }
-
-    initPdfSearchBridge();
-  </script>
-</body>
-
+      <!-- editorUndoBar -->
+    </div>
+    <!-- outerContainer -->
+    <div id="printContainer"></div>
+  </body>
 </html>

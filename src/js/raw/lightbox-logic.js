@@ -1,56 +1,63 @@
-export const iframeCommonLogic = function () {
-    window.$ = (s) => document.querySelector(s);
-    window.$$ = (s) => document.querySelectorAll(s);
-    window.createStore = function (defaults = {}) {
-        return new Proxy({}, {
+/**
+ * lightbox-logic.js —— 图片 / 视频灯箱渲染与交互模块（零内联脚本，CSP: script-src 'none'）
+ */
+import { escapeHtml, saveMediaPosition } from './shared-utils.js';
+
+export function safeInlineJson(val) {
+    return JSON.stringify(val)
+        .replace(/</g, '\\u003c')
+        .replace(/>/g, '\\u003e')
+        .replace(/&/g, '\\u0026')
+        .replace(/\u2028/g, '\\u2028')
+        .replace(/\u2029/g, '\\u2029');
+}
+
+function attachIframeCommon(win) {
+    const doc = win.document;
+    const $ = (s) => doc.querySelector(s);
+    const $$ = (s) => doc.querySelectorAll(s);
+    const store = (window.top && window.top.SiteCore)
+        ? window.top.SiteCore.createStore({ lightbox_stauts: "0" })
+        : new Proxy({}, {
             get(_, prop) {
-                const val = localStorage.getItem(prop);
-                if (val === null) return defaults[prop];
-                try { return JSON.parse(val); } catch { return val; }
+                const raw = sessionStorage.getItem(prop) ?? localStorage.getItem(prop);
+                if (raw === null) return prop === 'lightbox_stauts' ? "0" : undefined;
+                try { return JSON.parse(raw); } catch { return raw; }
             },
             set(_, prop, value) {
-                localStorage.setItem(prop, JSON.stringify(value));
-                return true;
-            },
-            deleteProperty(_, prop) {
-                localStorage.removeItem(prop);
+                sessionStorage.setItem(prop, JSON.stringify(value));
                 return true;
             }
         });
-    };
-    window.childId = 'content';
 
-    if (window.__LITE_BUS__) {
-        window.__LITE_BUS__.close();
+    win.childId = 'content';
+    if (win.__LITE_BUS__) {
+        try { win.__LITE_BUS__.close(); } catch (_) { }
     }
-    window.__LITE_BUS__ = new BroadcastChannel('bus');
-    const BUS = window.__LITE_BUS__;
+    const BUS = new BroadcastChannel('bus');
+    win.__LITE_BUS__ = BUS;
 
-    window.addEventListener('pagehide', (e) => {
+    win.addEventListener('pagehide', (e) => {
         if (e.persisted) return;
-        if (window.__LITE_BUS__) {
-            window.__LITE_BUS__.close();
-            window.__LITE_BUS__ = null;
+        if (win.__LITE_BUS__) {
+            try { win.__LITE_BUS__.close(); } catch (_) { }
+            win.__LITE_BUS__ = null;
         }
     });
 
-    const ctxId = window.top === window.self ? 'index' : window.childId;
-    const getTabId = () => { try { return (window.top && window.top.__TAB_ID__) || ''; } catch (_) { return ''; } };
-    window.emitEvent = function (type, payload, target = '*') {
-        if (!window.__LITE_BUS__) return;
+    const ctxId = 'content';
+    const getTabId = () => {
+        try { return (window.top && window.top.__TAB_ID__) || ''; } catch (_) { return ''; }
+    };
+    const emitEvent = (type, payload, target = '*') => {
+        if (!win.__LITE_BUS__) return;
         try {
-            window.__LITE_BUS__.postMessage({
-                type,
-                payload,
-                from: ctxId,
-                target,
-                tabId: getTabId()
-            });
+            win.__LITE_BUS__.postMessage({ type, payload, from: ctxId, target, tabId: getTabId() });
         } catch (_) { }
     };
 
     if (window.top && window.top.VirtualCursor) {
-        window.top.VirtualCursor.attach(window);
+        try { window.top.VirtualCursor.attach(win); } catch (_) { }
     }
 
     BUS.addEventListener('message', (e) => {
@@ -58,12 +65,12 @@ export const iframeCommonLogic = function () {
         const myTab = getTabId();
         if (tabId && myTab && tabId !== myTab) return;
         if (target !== '*' && target !== ctxId) return;
-        if (type === 'SIM_POINTER') {
-            window.handleSimPointer(payload);
+        if (type === 'SIM_POINTER' && typeof win.handleSimPointer === 'function') {
+            win.handleSimPointer(payload);
         }
     });
 
-    window.bindSwipeGestures = function (element, callbacks, thresholdPercent = 0.15) {
+    const bindSwipeGestures = (element, callbacks, thresholdPercent = 0.15) => {
         let startX = 0, startY = 0;
         let isMultiTouch = false;
 
@@ -78,48 +85,76 @@ export const iframeCommonLogic = function () {
         }, { passive: true });
 
         element.addEventListener('touchmove', (e) => {
-            if (e.touches.length > 1) {
-                isMultiTouch = true;
-            }
+            if (e.touches.length > 1) isMultiTouch = true;
         }, { passive: false });
 
         element.addEventListener('touchend', (e) => {
             if (isMultiTouch) return;
-
             const currentScale = callbacks.getScale ? callbacks.getScale() : 1.0;
             if (currentScale > 1.05) return;
-
             if (e.changedTouches.length !== 1) return;
+
             const deltaX = e.changedTouches[0].clientX - startX;
             const deltaY = e.changedTouches[0].clientY - startY;
-
-            const dynamicThreshold = Math.min(window.innerWidth, window.innerHeight) * thresholdPercent;
+            const dynamicThreshold = Math.min(win.innerWidth, win.innerHeight) * thresholdPercent;
 
             if (Math.abs(deltaX) > dynamicThreshold || Math.abs(deltaY) > dynamicThreshold) {
                 if (Math.abs(deltaX) > Math.abs(deltaY)) {
                     if (deltaX > 0 && callbacks.onRight) callbacks.onRight();
                     else if (deltaX < 0 && callbacks.onLeft) callbacks.onLeft();
-                } else {
-                    if (callbacks.onVertical) callbacks.onVertical();
+                } else if (callbacks.onVertical) {
+                    callbacks.onVertical();
                 }
-            } else {
-                if (callbacks.onSnapBack) callbacks.onSnapBack();
+            } else if (callbacks.onSnapBack) {
+                callbacks.onSnapBack();
             }
         });
     };
-};
 
-export const imageLogic = function () {
-    const store = createStore({ lightbox_stauts: "0" });
+    const mountIndexJumpInput = (container, idx, total, onJump) => {
+        container.textContent = '';
+        container.appendChild(doc.createTextNode(`${idx + 1}/${total}`));
+        const inp = doc.createElement('input');
+        inp.id = 'jump';
+        inp.style.width = '60px';
+        inp.addEventListener('click', () => inp.select());
+        inp.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter' || e.keyCode === 13) {
+                e.preventDefault();
+                const val = parseInt(inp.value, 10);
+                if (!Number.isNaN(val) && val > 0 && val <= total) onJump(val - 1);
+            }
+        });
+        container.appendChild(inp);
+        return inp;
+    };
+
+    return { doc, $, $$, store, emitEvent, bindSwipeGestures, mountIndexJumpInput };
+}
+
+function mountImageLogic(win, payload) {
+    const { doc, $, $$, store, emitEvent, bindSwipeGestures, mountIndexJumpInput } = attachIframeCommon(win);
     const img = $('#img');
     const loader = $('#loader');
+    const imageUrl = (payload && payload.imageUrl) || '';
 
-    if (img.src.split("/").pop().startsWith("pano_")) {
-        img.style.border = "2px red solid";
-        img.title = "双击进入全景";
+    if (img) {
+        img.onload = () => {
+            if (loader) loader.style.display = 'none';
+            img.style.visibility = 'visible';
+        };
+        img.onerror = () => {
+            if (loader) loader.style.display = 'none';
+        };
+    }
+
+    const fileName = imageUrl.split('/').pop() || '';
+    if (fileName.startsWith('pano_')) {
+        img.style.border = '2px red solid';
+        img.title = '双击进入全景';
     } else {
-        img.style.border = "none";
-        img.title = "";
+        img.style.border = 'none';
+        img.title = '';
     }
 
     let scale = 1.0;
@@ -128,7 +163,7 @@ export const imageLogic = function () {
     const scaleStep = 0.1;
     let dragMoved = false;
 
-    img.addEventListener('wheel', e => {
+    img.addEventListener('wheel', (e) => {
         e.preventDefault();
         scale = Math.max(minScale, Math.min(scale + (e.deltaY < 0 ? scaleStep : -scaleStep), maxScale));
         img.style.transform = `translate(${img.dataset.tx || 0}px, ${img.dataset.ty || 0}px) scale(${scale})`;
@@ -148,19 +183,18 @@ export const imageLogic = function () {
     }, { passive: false });
 
     img.addEventListener('touchmove', (e) => {
-        if (e.touches.length === 2) {
+        if (e.touches.length === 2 && initialDistance > 0) {
             if (e.cancelable) e.preventDefault();
             const currentDistance = Math.hypot(
                 e.touches[0].clientX - e.touches[1].clientX,
                 e.touches[0].clientY - e.touches[1].clientY
             );
-            scale = initialScale * (currentDistance / initialDistance);
-            scale = Math.max(minScale, Math.min(scale, maxScale));
-            img.style.transform = `translate(${img.dataset.tx}px, ${img.dataset.ty}px) scale(${scale})`;
+            scale = Math.max(minScale, Math.min(initialScale * (currentDistance / initialDistance), maxScale));
+            img.style.transform = `translate(${img.dataset.tx || 0}px, ${img.dataset.ty || 0}px) scale(${scale})`;
         }
     }, { passive: false });
 
-    function enableDrag(target) {
+    const enableDrag = (target) => {
         let isDragging = false, startX = 0, startY = 0;
         target.dataset.tx = target.dataset.tx || 0;
         target.dataset.ty = target.dataset.ty || 0;
@@ -168,27 +202,24 @@ export const imageLogic = function () {
         const onMove = (e) => {
             if (!isDragging) return;
             if (e.touches && e.touches.length > 1) return;
-
             const clientX = e.touches ? e.touches[0].clientX : e.clientX;
             const clientY = e.touches ? e.touches[0].clientY : e.clientY;
             const tx = clientX - startX, ty = clientY - startY;
-
-            if (Math.abs(tx) > 5 || Math.abs(ty) > 5) {
-                dragMoved = true;
-            }
-
-            target.dataset.tx = tx; target.dataset.ty = ty;
+            if (Math.abs(tx) > 5 || Math.abs(ty) > 5) dragMoved = true;
+            target.dataset.tx = tx;
+            target.dataset.ty = ty;
             target.style.transform = `translate(${tx}px, ${ty}px) scale(${scale})`;
             if (e.cancelable) e.preventDefault();
         };
 
         const onUp = () => {
-            isDragging = false; target.style.cursor = "grab";
-            document.removeEventListener('mousemove', onMove);
-            document.removeEventListener('mouseup', onUp);
-            document.removeEventListener('touchmove', onMove);
-            document.removeEventListener('touchend', onUp);
-            setTimeout(() => dragMoved = false, 100);
+            isDragging = false;
+            target.style.cursor = 'grab';
+            doc.removeEventListener('mousemove', onMove);
+            doc.removeEventListener('mouseup', onUp);
+            doc.removeEventListener('touchmove', onMove);
+            doc.removeEventListener('touchend', onUp);
+            setTimeout(() => { dragMoved = false; }, 100);
         };
 
         const onDown = (e) => {
@@ -199,112 +230,113 @@ export const imageLogic = function () {
             const clientY = e.touches ? e.touches[0].clientY : e.clientY;
             startX = clientX - parseFloat(target.dataset.tx);
             startY = clientY - parseFloat(target.dataset.ty);
-            target.style.cursor = "grabbing";
+            target.style.cursor = 'grabbing';
 
-            document.addEventListener('mousemove', onMove, { passive: false });
-            document.addEventListener('mouseup', onUp);
-            document.addEventListener('touchmove', onMove, { passive: false });
-            document.addEventListener('touchend', onUp);
+            doc.addEventListener('mousemove', onMove, { passive: false });
+            doc.addEventListener('mouseup', onUp);
+            doc.addEventListener('touchmove', onMove, { passive: false });
+            doc.addEventListener('touchend', onUp);
             if (!e.touches && e.cancelable) e.preventDefault();
         };
 
         target.addEventListener('mousedown', onDown);
         target.addEventListener('touchstart', onDown, { passive: false });
-        target.style.cursor = "grab";
+        target.style.cursor = 'grab';
     };
 
     enableDrag(img);
 
-    const path = store.image_path || ("gallery/" + decodeURIComponent(img.src).split("/gallery/")[1]);
-    const imagelist = store.imagelist || [];
+    const path = store.image_path || (imageUrl.includes('/gallery/') ? ('gallery/' + decodeURIComponent(imageUrl).split('/gallery/')[1]) : '');
+    const imagelist = Array.isArray(store.imagelist) ? store.imagelist : [];
     const idx = imagelist.indexOf(path);
-    const _cat = path.split(path.split("/").pop())[0].split("gallery/")[1];
-    const category = (!_cat || _cat === "") ? "未分类" : _cat;
+    const _cat = path.includes('gallery/') ? path.slice(path.indexOf('gallery/') + 8, Math.max(path.indexOf('gallery/') + 8, path.lastIndexOf('/') + 1)) : '';
+    const category = (!_cat || _cat === '') ? '未分类' : _cat;
 
     const go = (nPath) => {
+        if (!nPath) return;
         scale = 1.0;
-        img.style.transition = "none";
-        img.dataset.tx = 0; img.dataset.ty = 0;
-        img.style.transform = `translate(0px, 0px) scale(1.0)`;
+        img.style.transition = 'none';
+        img.dataset.tx = 0;
+        img.dataset.ty = 0;
+        img.style.transform = 'translate(0px, 0px) scale(1.0)';
 
         store.image_path = nPath;
-        emitEvent("image", null, "index");
-        emitEvent("SYNC_CURRENT", nPath, "side");
+        emitEvent('image', null, 'index');
+        emitEvent('SYNC_CURRENT', nPath, 'side');
     };
 
-    $("#p").onclick = () => go(imagelist[(idx - 1 + imagelist.length) % imagelist.length]);
-    $("#n").onclick = () => go(imagelist[(idx + 1) % imagelist.length]);
-    $("#i").innerHTML = `${idx + 1}/${imagelist.length}<input style='width:60px' id='jump' onclick='this.select()'>`;
-    $("#c").innerHTML = `[${category}]`;
+    $('#p').onclick = () => { if (imagelist.length) go(imagelist[(idx - 1 + imagelist.length) % imagelist.length]); };
+    $('#n').onclick = () => { if (imagelist.length) go(imagelist[(idx + 1) % imagelist.length]); };
+    const jumpInput = mountIndexJumpInput($('#i'), idx, imagelist.length, (targetIdx) => go(imagelist[targetIdx]));
+    $('#c').textContent = `[${category}]`;
 
-    const sc = $(".span-container");
-    if (store.lightbox_stauts === "1") sc.classList.add("hide");
-    $("#f").onclick = () => {
-        store.lightbox_stauts = store.lightbox_stauts !== "1" ? "1" : "0";
-        store.lightbox_stauts === "1" ? sc.classList.add("hide") : sc.classList.remove("hide");
-        emitEvent("lightbox", { status: store.lightbox_stauts }, "index")
+    const sc = $('.span-container');
+    if (store.lightbox_stauts === '1') sc.classList.add('hide');
+    $('#f').onclick = () => {
+        store.lightbox_stauts = store.lightbox_stauts !== '1' ? '1' : '0';
+        sc.classList.toggle('hide', store.lightbox_stauts === '1');
+        emitEvent('lightbox', { status: store.lightbox_stauts }, 'index');
     };
 
     const toggleFullscreen = (e) => {
         if (e) e.preventDefault();
-        const parentDoc = window.parent.document;
+        const parentDoc = win.parent.document;
         const isFullscreen = !!parentDoc.fullscreenElement;
-
         if (!isFullscreen) {
             parentDoc.documentElement.requestFullscreen().catch(err => console.warn(err));
-            if (store.lightbox_stauts !== "1") $("#f").click();
+            if (store.lightbox_stauts !== '1') $('#f').click();
         } else {
             if (parentDoc.exitFullscreen) parentDoc.exitFullscreen();
-            if (store.lightbox_stauts === "1") $("#f").click();
+            if (store.lightbox_stauts === '1') $('#f').click();
         }
     };
 
-    const fsBtn = $("#fs");
+    const fsBtn = $('#fs');
     if (fsBtn) fsBtn.onclick = toggleFullscreen;
 
-    document.addEventListener('mousedown', (e) => {
+    doc.addEventListener('mousedown', (e) => {
         if (e.button === 1) toggleFullscreen(e);
     });
 
-    $("#jump").onkeypress = (e) => {
-        if (e.keyCode === 13) {
-            e.preventDefault();
-            const val = parseInt(e.target.value);
-            if (!isNaN(val) && val > 0 && val <= imagelist.length) go(imagelist[val - 1]);
-        }
+    doc.onkeydown = (e) => {
+        if (doc.activeElement === jumpInput) return;
+        if (e.code === 'Space') { e.preventDefault(); jumpInput.focus(); }
+        else if (e.key === 'ArrowLeft') $('#p').click();
+        else if (e.key === 'ArrowRight') $('#n').click();
     };
 
-    document.onkeydown = e => {
-        if (e.code === 'Space') { e.preventDefault(); $('#jump').focus(); }
-        else if (e.key === 'ArrowLeft') $("#p").click();
-        else if (e.key === 'ArrowRight') $("#n").click();
-    };
-
-    if (window.bindSwipeGestures) {
-        window.bindSwipeGestures(document.body, {
-            onLeft: () => $("#n").click(),
-            onRight: () => $("#p").click(),
-            getScale: () => scale,
-            onSnapBack: () => {
-                if (scale === 1.0) {
-                    img.dataset.tx = 0;
-                    img.dataset.ty = 0;
-                    img.style.transition = "transform 0.25s ease-out";
-                    img.style.transform = `translate(0px, 0px) scale(1.0)`;
-                    setTimeout(() => img.style.transition = "none", 260);
-                }
+    bindSwipeGestures(doc.body, {
+        onLeft: () => $('#n').click(),
+        onRight: () => $('#p').click(),
+        getScale: () => scale,
+        onSnapBack: () => {
+            if (scale === 1.0) {
+                img.dataset.tx = 0;
+                img.dataset.ty = 0;
+                img.style.transition = 'transform 0.25s ease-out';
+                img.style.transform = 'translate(0px, 0px) scale(1.0)';
+                setTimeout(() => { img.style.transition = 'none'; }, 260);
             }
-        });
-    }
-
-    $$("img").forEach(im => {
-        const pop = () => { if (im.src.split("/").pop().startsWith("pano_")) window.open("src/tpl/pano.html?src=" + im.src, "_blank"); };
-        im.ondblclick = pop;
-        let lastTap = 0;
-        im.ontouchend = (e) => { const now = Date.now(); if (now - lastTap < 300) { pop(); e.preventDefault(); } lastTap = now; };
+        }
     });
 
-    const addbgBtn = $("#addbg");
+    $$('img').forEach((im) => {
+        const pop = () => {
+            const name = (im.src.split('/').pop() || '');
+            if (name.startsWith('pano_')) {
+                win.open('src/tpl/pano.html?src=' + encodeURIComponent(im.src), '_blank');
+            }
+        };
+        im.ondblclick = pop;
+        let lastTap = 0;
+        im.ontouchend = (e) => {
+            const now = Date.now();
+            if (now - lastTap < 300) { pop(); e.preventDefault(); }
+            lastTap = now;
+        };
+    });
+
+    const addbgBtn = $('#addbg');
     addbgBtn.addEventListener('click', (e) => {
         e.stopPropagation();
         try {
@@ -315,8 +347,7 @@ export const imageLogic = function () {
                 interval: 3600000,
                 layout: 'contain'
             };
-
-            const added = !config.list.includes(path);
+            const added = !!path && !config.list.includes(path);
             if (added) {
                 config.list.push(path);
                 store.wallpaper_config = config;
@@ -325,209 +356,166 @@ export const imageLogic = function () {
             addbgBtn.textContent = added ? '已设为壁纸 ✓' : '已在壁纸列表中';
             setTimeout(() => { addbgBtn.textContent = origText; }, 1000);
         } catch (err) {
-            console.error("添加壁纸失败", err);
+            console.error('添加壁纸失败', err);
         }
     });
-};
 
-export const videoLogic = function () {
-    const store = createStore({ lightbox_stauts: "0" });
+    setTimeout(() => {
+        if (img) img.src = imageUrl;
+    }, 40);
+}
+
+function mountVideoLogic(win, payload) {
+    const { doc, $, store, emitEvent, bindSwipeGestures, mountIndexJumpInput } = attachIframeCommon(win);
     const video = $('#video');
-    const rawVidSrc = (video && video.currentSrc) || (video && video.src) || ($('#source') && $('#source').src) || '';
-    const path = store.video_path || (rawVidSrc.includes("/video/") ? "video/" + decodeURIComponent(rawVidSrc).split("/video/")[1] : "");
-    const videolist = store.videolist || [];
+    const track = $('#main-track');
+    const videoUrl = (payload && payload.videoUrl) || '';
+    const isMkv = videoUrl.toLowerCase().endsWith('.mkv');
+    const filename = videoUrl.split('/').pop() || '';
+    const basename = filename.includes('.') ? filename.substring(0, filename.lastIndexOf('.')) : filename;
+    const vttUrl = isMkv ? `video/vtt/${basename}.vtt` : '';
+
+    const path = store.video_path || (videoUrl.includes('/video/') ? ('video/' + decodeURIComponent(videoUrl).split('/video/')[1]) : '');
+    const videolist = Array.isArray(store.videolist) ? store.videolist : [];
     const idx = videolist.indexOf(path);
-    const _cat = path.split(path.split("/").pop())[0].split("video/")[1];
-    const category = (!_cat || _cat === "") ? "未分类" : _cat;
+    const _cat = path.includes('video/') ? path.slice(path.indexOf('video/') + 6, Math.max(path.indexOf('video/') + 6, path.lastIndexOf('/') + 1)) : '';
+    const category = (!_cat || _cat === '') ? '未分类' : _cat;
+
     const go = (nPath) => {
+        if (!nPath) return;
         store.video_path = nPath;
-        emitEvent("video", null, "index");
-        emitEvent("SYNC_CURRENT", nPath, "side");
+        emitEvent('video', null, 'index');
+        emitEvent('SYNC_CURRENT', nPath, 'side');
     };
 
-    $("#p").onclick = () => go(videolist[(idx - 1 + videolist.length) % videolist.length]);
-    $("#n").onclick = () => go(videolist[(idx + 1) % videolist.length]);
-    $("#i").innerHTML = `${idx + 1}/${videolist.length}<input style='width:60px' id='jump' onclick='this.select()'>`;
-    $("#c").innerHTML = `[${category}]`;
+    $('#p').onclick = () => { if (videolist.length) go(videolist[(idx - 1 + videolist.length) % videolist.length]); };
+    $('#n').onclick = () => { if (videolist.length) go(videolist[(idx + 1) % videolist.length]); };
+    mountIndexJumpInput($('#i'), idx, videolist.length, (targetIdx) => go(videolist[targetIdx]));
+    $('#c').textContent = `[${category}]`;
 
-    const sc = $(".span-container");
-    if (store.lightbox_stauts === "1") sc.classList.add("hide");
-    $("#f").onclick = () => {
-        store.lightbox_stauts = store.lightbox_stauts !== "1" ? "1" : "0";
-        store.lightbox_stauts === "1" ? sc.classList.add("hide") : sc.classList.remove("hide");
-        emitEvent("lightbox", { status: store.lightbox_stauts }, "index");
+    const sc = $('.span-container');
+    if (store.lightbox_stauts === '1') sc.classList.add('hide');
+    $('#f').onclick = () => {
+        store.lightbox_stauts = store.lightbox_stauts !== '1' ? '1' : '0';
+        sc.classList.toggle('hide', store.lightbox_stauts === '1');
+        emitEvent('lightbox', { status: store.lightbox_stauts }, 'index');
     };
 
     const toggleFullscreen = (e) => {
         if (e) e.preventDefault();
-        const parentDoc = window.parent.document;
+        const parentDoc = win.parent.document;
         const isFullscreen = !!parentDoc.fullscreenElement;
-
         if (!isFullscreen) {
             parentDoc.documentElement.requestFullscreen().catch(err => console.warn(err));
-            if (store.lightbox_stauts !== "1") $("#f").click();
+            if (store.lightbox_stauts !== '1') $('#f').click();
         } else {
             if (parentDoc.exitFullscreen) parentDoc.exitFullscreen();
-            if (store.lightbox_stauts === "1") $("#f").click();
+            if (store.lightbox_stauts === '1') $('#f').click();
         }
     };
 
-    const fsBtn = $("#fs");
+    const fsBtn = $('#fs');
     if (fsBtn) fsBtn.onclick = toggleFullscreen;
 
-    document.addEventListener('mousedown', (e) => {
+    doc.addEventListener('mousedown', (e) => {
         if (e.button === 1) toggleFullscreen(e);
     });
 
-    if (window.bindSwipeGestures) {
-        window.bindSwipeGestures(document.body, { onLeft: () => $("#n").click(), onRight: () => $("#p").click() });
-    }
-
-    $("#jump").onkeypress = (e) => {
-        if (e.keyCode === 13) {
-            e.preventDefault();
-            const val = parseInt(e.target.value);
-            if (!isNaN(val) && val > 0 && val <= videolist.length) go(videolist[val - 1]);
-        }
-    };
+    bindSwipeGestures(doc.body, {
+        onLeft: () => $('#n').click(),
+        onRight: () => $('#p').click()
+    });
 
     video.volume = 0.2;
+    if (path) video.dataset.path = path;
 
-    window.addEventListener('pagehide', () => {
-        if (window._isBombing || (window.top && window.top._isBombing)) return;
-        try {
-            const dur = video.duration, t = video.currentTime;
-            if (!Number.isFinite(dur) || dur <= 0) return;
-            const key = String(path).replace(/^(?:\.{1,2}\/|\/)+/, '');
-            if (!key) return;
-            let map = {};
-            try {
-                const o = JSON.parse(localStorage.getItem('media_positions'));
-                if (o && typeof o === 'object' && !Array.isArray(o)) map = o;
-            } catch (e) { }
-            delete map[key];
-            if (Number.isFinite(t) && t >= 1 && dur - t > 2) map[key] = Math.round(t * 10) / 10;
-            const keys = Object.keys(map);
-            if (keys.length > 500) keys.slice(0, keys.length - 500).forEach(k => delete map[k]);
-            localStorage.setItem('media_positions', JSON.stringify(map));
-        } catch (e) { }
+    win.addEventListener('pagehide', () => {
+        if (win._isBombing || (window.top && window.top._isBombing)) return;
+        saveMediaPosition(video);
     });
 
     let currentOffset = 0;
-    window.adjustDelay = function (seconds) {
-        const track = video.textTracks[0];
-        if (!track || !track.cues || track.cues.length === 0) return;
-        for (let i = 0; i < track.cues.length; i++) {
-            const cue = track.cues[i];
+    const adjustDelay = (seconds) => {
+        const textTrack = video.textTracks[0];
+        if (!textTrack || !textTrack.cues || textTrack.cues.length === 0) return;
+        for (let i = 0; i < textTrack.cues.length; i++) {
+            const cue = textTrack.cues[i];
             const dur = Math.max(0, cue.endTime - cue.startTime);
             const nextStart = Math.max(0, cue.startTime + seconds);
             cue.startTime = nextStart;
             cue.endTime = nextStart + dur;
         }
         currentOffset += seconds;
-        const di = document.getElementById('delay-info');
+        const di = doc.getElementById('delay-info');
         if (di) di.innerText = `偏移: ${currentOffset > 0 ? '+' : ''}${currentOffset.toFixed(1)}s`;
     };
+    win.adjustDelay = adjustDelay;
 
-    document.onkeydown = e => {
-        if (document.activeElement && document.activeElement.tagName === 'INPUT') return;
+    doc.onkeydown = (e) => {
+        if (doc.activeElement && doc.activeElement.tagName === 'INPUT') return;
         const key = e.key.toLowerCase();
         if (key === '[') adjustDelay(-0.5);
         else if (key === ']') adjustDelay(0.5);
-        else if (key === 'z') $("#p").click();
-        else if (key === 'c') $("#n").click();
+        else if (key === 'z') $('#p').click();
+        else if (key === 'c') $('#n').click();
         else if (e.key === 'ArrowRight' || key === 'd') video.currentTime += 3;
         else if (e.key === 'ArrowLeft' || key === 'a') video.currentTime -= 3;
         else if (e.key === 'ArrowUp' || key === 'w') { e.preventDefault(); video.volume = Math.min(1, video.volume + 0.1); }
         else if (e.key === 'ArrowDown' || key === 's') { e.preventDefault(); video.volume = Math.max(0, video.volume - 0.1); }
         else if (e.code === 'Space' || key === ' ') {
-            if (document.activeElement === video) return;
+            if (doc.activeElement === video) return;
             e.preventDefault();
             video.paused ? video.play() : video.pause();
         } else if (key === 'x') {
-            document.fullscreenElement !== video ? video.requestFullscreen() : document.exitFullscreen();
+            doc.fullscreenElement !== video ? video.requestFullscreen() : doc.exitFullscreen();
         }
     };
-};
 
+    setTimeout(() => {
+        if (video) {
+            video.src = videoUrl;
+            if (isMkv && track) track.src = vttUrl;
+        }
+    }, 60);
+}
 
-export function generateDoc(type, payload) {
+export function generateDoc(type, payload = {}) {
     const commonStyles = `@charset "UTF-8";@import url("../src/css/font.css");html,body,pre,textarea{font-family:'Noto Serif SC'}html{background-color:#000;touch-action:none;}body{margin:0;display:flex;justify-content:center;align-items:center;height:100vh;position:relative;overflow:hidden;touch-action:none;}.span-container{position:absolute;bottom:10px;right:10px;background:plum;z-index:999}.span-container span{margin-bottom:5px;padding:0 10px;cursor:pointer}.hide{opacity:.2!important}#f{display:none}`;
-
-    const baseTag = `<base href="${window.location.href}">`;
+    const baseTag = `<base href="${escapeHtml(window.location.href)}">`;
+    const cspMeta = `<meta http-equiv="Content-Security-Policy" content="script-src 'none'; object-src 'none'; base-uri 'self';">`;
     const viewportMeta = `<meta name="viewport" content="width=1024, viewport-fit=cover" />`;
-    let htmlStr = '';
 
     if (type === 'image') {
-        const { imageUrl } = payload;
-        const jsUrl = JSON.stringify(imageUrl);
-
-        htmlStr = `<!DOCTYPE html><html><head><meta charset="utf-8"/>${baseTag}${viewportMeta}<style>${commonStyles} img{z-index:1;max-height:100vh;max-width:100vw;visibility:hidden}#loader{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:9999}.bar-spinner{width:40px;height:40px;position:relative;animation:spin 1s linear infinite}.bar{width:4px;height:20px;background:pink;border-radius:2px;position:absolute;top:10px;left:18px;transform-origin:center bottom}@keyframes spin{0%{transform:rotate(0deg)}100%{transform:rotate(360deg)}}</style></head><body>
-        <div id="loader"><div class="bar-spinner"><div class="bar"></div></div></div>
-        <img id="img">
-        <div class="span-container"><span id="addbg">As Wallpaper</span><span id="fs" title="全屏(或按鼠标中键)">[F]</span><span id="c"></span><span id="p">prev</span><span id="i"></span><span id="n">next</span><span id="f"></span></div>
-        <script>
-            (function() {
-                var _img = document.getElementById('img');
-                var _loader = document.getElementById('loader');
-                if (_img) {
-                    _img.onload = function() {
-                        if(_loader) _loader.style.display = 'none';
-                        _img.style.visibility = 'visible';
-                    };
-                    _img.onerror = function() {
-                        if(_loader) _loader.style.display = 'none';
-                    };
-                }
-                setTimeout(function() {
-                    if (_img) _img.src = ${jsUrl};
-                }, 40);
-                try {
-                    (${iframeCommonLogic.toString()})();
-                    (${imageLogic.toString()})();
-                } catch(e) {
-                    console.warn(e);
-                }
-            })();
-        </script></body></html>`;
+        return (`<!DOCTYPE html><html><head><meta charset="utf-8"/>${baseTag}${cspMeta}${viewportMeta}<style>${commonStyles} img{z-index:1;max-height:100vh;max-width:100vw;visibility:hidden}#loader{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:9999}.bar-spinner{width:40px;height:40px;position:relative;animation:spin 1s linear infinite}.bar{width:4px;height:20px;background:pink;border-radius:2px;position:absolute;top:10px;left:18px;transform-origin:center bottom}@keyframes spin{0%{transform:rotate(0deg)}100%{transform:rotate(360deg)}}</style></head><body>` +
+            `<div id="loader"><div class="bar-spinner"><div class="bar"></div></div></div>` +
+            `<img id="img">` +
+            `<div class="span-container"><span id="addbg">As Wallpaper</span><span id="fs" title="全屏(或按鼠标中键)">[F]</span><span id="c"></span><span id="p">prev</span><span id="i"></span><span id="n">next</span><span id="f"></span></div>` +
+            `</body></html>`).trim();
     }
+
     if (type === 'video') {
-        const { videoUrl } = payload;
+        const videoUrl = String((payload && payload.videoUrl) || '');
         const isMkv = videoUrl.toLowerCase().endsWith('.mkv');
-        const filename = videoUrl.split('/').pop();
-        const basename = filename.includes('.') ? filename.substring(0, filename.lastIndexOf('.')) : filename;
-        const vttUrl = isMkv ? `video/vtt/${basename}.vtt` : '';
-
-        const jsVideoUrl = JSON.stringify(videoUrl);
-        const jsVttUrl = JSON.stringify(vttUrl);
-        const jsIsMkv = JSON.stringify(isMkv);
-
         const trackHtml = isMkv ? `<track id="main-track" label="中文" kind="subtitles" srclang="zh" default>` : '';
         const delayUiHtml = isMkv ? `<span id="delay-info" title="按 [ 提前0.5s，按 ] 延后0.5s" style="color:#ffeb3b;margin-right:10px;">偏移: 0.0s</span>` : '';
 
-        htmlStr = `<!DOCTYPE html><html><head><meta charset="utf-8"/>${baseTag}${viewportMeta}<style>${commonStyles} video{max-width:100%;max-height:100%}video::cue{font-size:26px;color:#fff;background:rgba(0,0,0,0.9);text-shadow:2px 2px 4px rgba(0,0,0,0.8);font-family:'Noto Serif SC'}</style></head><body>
-        <video id="video" controls loop playsinline>${trackHtml}</video>
-        <div class="span-container">${delayUiHtml}<span id="fs" title="全屏(或按鼠标中键)">[F]</span><span id="c"></span><span id="p">prev</span><span id="i"></span><span id="n">next</span><span id="f"></span></div>
-        <script>
-            (function() {
-                var _video = document.getElementById('video');
-                var _track = document.getElementById('main-track');
-                setTimeout(function() {
-                    if (_video) {
-                        _video.src = ${jsVideoUrl};
-                        if (${jsIsMkv} && _track) {
-                            _track.src = ${jsVttUrl};
-                        }
-                    }
-                }, 60);
-                try {
-                    (${iframeCommonLogic.toString()})();
-                    (${videoLogic.toString()})();
-                } catch(e) {
-                    console.warn('Video iframe logic init error:', e);
-                }
-            })();
-        </script></body></html>`;
+        return (`<!DOCTYPE html><html><head><meta charset="utf-8"/>${baseTag}${cspMeta}${viewportMeta}<style>${commonStyles} video{max-width:100%;max-height:100%}video::cue{font-size:26px;color:#fff;background:rgba(0,0,0,0.9);text-shadow:2px 2px 4px rgba(0,0,0,0.8);font-family:'Noto Serif SC'}</style></head><body>` +
+            `<video id="video" controls loop playsinline>${trackHtml}</video>` +
+            `<div class="span-container">${delayUiHtml}<span id="fs" title="全屏(或按鼠标中键)">[F]</span><span id="c"></span><span id="p">prev</span><span id="i"></span><span id="n">next</span><span id="f"></span></div>` +
+            `</body></html>`).trim();
     }
-    return htmlStr.replace(/>\s+</g, '><').replace(/\n/g, '').trim();
+
+    return '';
+}
+
+export function renderLightboxFrame(iframe, type, payload) {
+    if (!iframe || !iframe.contentWindow) return;
+    const win = iframe.contentWindow;
+    const doc = win.document;
+    const html = generateDoc(type, payload);
+    doc.open();
+    doc.write(html);
+    doc.close();
+    if (type === 'image') mountImageLogic(win, payload);
+    else if (type === 'video') mountVideoLogic(win, payload);
 }

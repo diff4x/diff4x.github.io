@@ -2,6 +2,7 @@
 <html lang="zh-CN" data-theme="light">
 <head>
 <meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="script-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'self';">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Markdown Preview</title>
 <link rel="stylesheet" href="../css/font.css">
@@ -645,7 +646,11 @@ html,body{height:auto;overflow:visible}#panes,.pv-wrap{display:block}.pv{overflo
     const text = normLF(getVal()).replace(/^\uFEFF/, '');
     if (ok) {
       const { text: src, store } = protectMath(text);
-      out.innerHTML = DOMPurify.sanitize(restoreMath(marked.parse(src), store));
+      out.innerHTML = DOMPurify.sanitize(restoreMath(marked.parse(src), store), {
+        FORBID_TAGS: ['script', 'style', 'iframe', 'object', 'embed', 'form', 'svg', 'math', 'template'],
+        FORBID_ATTR: ['srcdoc', 'formaction'],
+        ALLOW_UNKNOWN_PROTOCOLS: false
+      });
       fixBold(out);
       highlightCode(out);
     } else out.textContent = text;
@@ -717,8 +722,6 @@ html,body{height:auto;overflow:visible}#panes,.pv-wrap{display:block}.pv{overflo
     if (!isEditable || saving) return;
     const text = getVal();
     if (!text) return alert('内容为空，已中止固化');
-    const proto = readStore('protocol_name');
-    if (!proto) return alert('未配置 protocol_name');
 
     saving = true; saveBtn.disabled = true; statusEl.textContent = '固化中...';
     try {
@@ -728,7 +731,20 @@ html,body{height:auto;overflow:visible}#panes,.pv-wrap{display:block}.pv{overflo
         return;
       }
       const expected = normLF(text);
-      location.href = proto + '://9{' + encodeURIComponent(relPath);
+      let sealedUrl = '';
+      try {
+        if (window.top && typeof window.top.sealProtocolUrl === 'function') {
+          sealedUrl = await window.top.sealProtocolUrl(9, relPath);
+        } else {
+          const m = await import('/src/js/shared-utils.js');
+          sealedUrl = await m.sealProtocolUrl(9, relPath);
+        }
+      } catch (err) {
+        alert('❌ 本地协议封包失败：' + (err && err.message ? err.message : String(err)));
+        statusEl.textContent = '固化失败';
+        return;
+      }
+      location.href = sealedUrl;
 
       let done = false;
       for (let i = 0; i < 30; i++) {

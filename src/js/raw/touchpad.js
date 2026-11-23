@@ -182,7 +182,7 @@ export function initTouchpad(ctx) {
 
     panel.innerHTML = `
     <div class="tp-col-scroll" style="width: 15%; min-width: 50px; display: flex; flex-direction: column;">
-        <div class="tp-btn" data-btn="scroll_lock_toggle" title="停止/恢复光标联动滚屏" style="flex:0 0 36px; border-bottom: 1px solid var(--tp-line); display:flex; align-items:center; justify-content:center; font-size:12px; color:#cfd3dc;">停滚</div>
+        <div class="tp-btn" data-btn="scroll_lock_toggle" title="停止/恢复光标联动滚屏" style="flex:0 0 36px; border-bottom: 1px solid var(--tp-line); display:flex; align-items:center; justify-content:center; font-size:12px; white-space:nowrap; color:#cfd3dc;">暂停跟随</div>
         <div class="tp-btn tp-scroll-btn" data-scroll="-160" style="flex:1; border-bottom: 1px solid var(--tp-line); display:flex; align-items:center; justify-content:center; color:var(--tp-accent); font-weight:bold;">▲</div>
         <div class="tp-btn tp-scroll-btn" data-scroll="160" style="flex:1; display:flex; align-items:center; justify-content:center; color:var(--tp-accent); font-weight:bold;">▼</div>
     </div>

@@ -15,7 +15,25 @@ function bindPagehideSave() {
     });
 }
 
-export function openAudioPlayer(_song, _level, ctx) {
+function normalizeAudioPath(raw) {
+    if (typeof raw !== 'string') return '';
+    let s = raw.split('#')[0].split('?')[0].trim();
+    if (/%[0-9A-Fa-f]{2}/.test(s)) {
+        try { s = decodeURIComponent(s); } catch (_) { }
+    }
+    const idx = s.indexOf('/audio/');
+    if (idx !== -1) s = s.slice(idx + 1);
+    return s.replace(/\\/g, '/').replace(/^(?:\.\.\/|\.\/|\/)+/, '');
+}
+
+function getCleanFavList(store) {
+    const raw = store.favList;
+    if (!Array.isArray(raw)) return [];
+    const sc = window.SiteCore || (window.top && window.top.SiteCore);
+    return sc ? sc.sanitizeAudioList(raw) : raw.filter(x => typeof x === 'string');
+}
+
+export function openAudioPlayer(_song, _level, ctx, opts = {}) {
     const { store, emitEvent, adjSearchRight } = ctx;
     bindPagehideSave();
     saveMediaPosition($("#_audio"));
@@ -24,11 +42,19 @@ export function openAudioPlayer(_song, _level, ctx) {
     const oldBtn = $("#audio_btn"); if (oldBtn) oldBtn.remove();
 
     let playMode = 'list';
-    let songs = store.playlist || [];
+    const hasInitial = Array.isArray(opts.initialSongs) && opts.initialSongs.length > 0;
+    let songs = hasInitial ? opts.initialSongs.slice() : (Array.isArray(store.playlist) ? store.playlist.slice() : []);
     let currentSongIndex = Math.max(0, songs.indexOf(_song));
 
     const stage = document.getElementById('stage');
-    stage.insertAdjacentHTML('beforeend', `<div id="audio"> <div class="audio-progress"><div class="audio-progress-bar" id="a_bar"></div></div> <div class="audio_div"> <div class="header" id="a_hdr">${(_level && _level.includes("audio/")) ? (_level.split("audio/")[1] || "未分类/") : "未分类/"}</div> <ul class="playlist" id="_playlist"></ul><br> <button id="btn_prv">Prev</button><button id="btn_nxt">Next</button><br> <button id="btn_favs">Favorite Songs</button><button id="btn_all">All</button><br> <button id="btn_shf">Shuffle</button><button id="btn_slp">Single Loop</button><button id="btn_llp">List Loop</button><br> <button id="fav">+Fav-</button><audio id="_audio" controls></audio><button id="btn_cls">destroy</button> </div> </div>`);
+    stage.insertAdjacentHTML('beforeend',
+        `<div id="audio"><div class="audio-progress"><div class="audio-progress-bar" id="a_bar"></div></div>` +
+        `<div class="audio_div"><div class="header" id="a_hdr"></div><ul class="playlist" id="_playlist"></ul><br>` +
+        `<button id="btn_prv">Prev</button><button id="btn_nxt">Next</button><br>` +
+        `<button id="btn_favs">Favorite Songs</button><button id="btn_all">All</button><br>` +
+        `<button id="btn_shf">Shuffle</button><button id="btn_slp">Single Loop</button><button id="btn_llp">List Loop</button><br>` +
+        `<button id="fav">+Fav-</button><audio id="_audio" controls></audio><button id="btn_cls">destroy</button></div></div>`
+    );
     document.body.insertAdjacentHTML('beforeend', `<button id="audio_btn" title="单击显隐, 双击销毁"> 🎵 </button>`);
 
     const playerContainer = $("#audio"), progressBar = $("#a_bar"), header = $("#a_hdr"),
@@ -38,39 +64,84 @@ export function openAudioPlayer(_song, _level, ctx) {
         shuffleButton = $("#btn_shf"), singleLoopButton = $("#btn_slp"), listLoopButton = $("#btn_llp"),
         favBtn = $("#fav"), buttonElement = $("#audio_btn"), closeBtn = $("#btn_cls"),
         progressContainer = playerContainer.querySelector('.audio-progress');
+
+    const defaultHeader = (_level && _level.includes("audio/")) ? (_level.split("audio/")[1] || "未分类/") : "未分类/";
+    header.textContent = opts.initialTitle || defaultHeader;
     audioPlayer.volume = 0.15;
 
-    const renderListHTML = (list) => list.map((s, i) =>
-        `<li data-idx="${i}" data-path="${s.includes('/') ? s : _level + s}" title="${s.includes('/') ? s.split(s.split('/').pop())[0].split('audio/')[1] : ''}">${s.split('/').pop()}</li>`
-    ).join('');
+    const resolveFullPath = (s) => {
+        const str = String(s ?? '');
+        return str.includes('/') ? str : ((_level || 'audio/') + str);
+    };
+
+    const renderPlaylist = (list) => {
+        const frag = document.createDocumentFragment();
+        list.forEach((s, i) => {
+            const fullPath = resolveFullPath(s);
+            const fileName = fullPath.split('/').pop() || fullPath;
+            const audioIdx = fullPath.indexOf('audio/');
+            const lastSlash = fullPath.lastIndexOf('/');
+            const dirPart = (audioIdx !== -1 && lastSlash >= audioIdx + 6)
+                ? fullPath.slice(audioIdx + 6, lastSlash + 1)
+                : '';
+            const li = document.createElement('li');
+            li.dataset.idx = String(i);
+            li.dataset.path = fullPath;
+            if (dirPart) li.title = dirPart;
+            li.textContent = fileName;
+            frag.appendChild(li);
+        });
+        playlistElement.replaceChildren(frag);
+    };
+
+    const getCurrentTrackPath = () => {
+        const li = playlistElement.children[currentSongIndex];
+        return normalizeAudioPath((li && li.dataset.path) || audioPlayer.getAttribute('src') || audioPlayer.src || '');
+    };
 
     const loadPlaylist = (newSongs, titleText) => {
-        if (!newSongs || newSongs.length === 0) return;
-        songs = newSongs; currentSongIndex = 0; header.textContent = titleText;
-        playlistElement.innerHTML = renderListHTML(songs);
-        playlistElement.firstElementChild.click();
+        if (!Array.isArray(newSongs) || newSongs.length === 0) return;
+        songs = newSongs.slice();
+        currentSongIndex = 0;
+        header.textContent = titleText;
+        renderPlaylist(songs);
+        backfill();
+        playSong();
     };
 
     playlistElement.onclick = (e) => {
-        if (e.target.tagName === 'LI') {
-            currentSongIndex = parseInt(e.target.dataset.idx);
+        const li = e.target.closest && e.target.closest('li');
+        if (!li || !playlistElement.contains(li)) return;
+        const idx = parseInt(li.dataset.idx, 10);
+        if (Number.isInteger(idx) && idx >= 0 && idx < songs.length) {
+            currentSongIndex = idx;
             playSong();
         }
     };
 
     progressContainer.onclick = (e) => {
-        const percent = (e.clientY - progressContainer.getBoundingClientRect().top) / progressContainer.clientHeight;
-        audioPlayer.currentTime = percent * audioPlayer.duration;
+        const dur = audioPlayer.duration;
+        const rect = progressContainer.getBoundingClientRect();
+        if (!Number.isFinite(dur) || dur <= 0 || rect.height <= 0) return;
+        const percent = Math.max(0, Math.min(1, (e.clientY - rect.top) / rect.height));
+        audioPlayer.currentTime = percent * dur;
     };
+
     prevButton.onclick = () => {
-        currentSongIndex = playMode === 'shuffle' ? Math.floor(Math.random() * songs.length) : (currentSongIndex - 1 + songs.length) % songs.length;
+        if (songs.length === 0) return;
+        currentSongIndex = playMode === 'shuffle'
+            ? Math.floor(Math.random() * songs.length)
+            : (currentSongIndex - 1 + songs.length) % songs.length;
         playSong();
     };
     nextButton.onclick = () => {
-        currentSongIndex = playMode === 'shuffle' ? Math.floor(Math.random() * songs.length) : (currentSongIndex + 1) % songs.length;
+        if (songs.length === 0) return;
+        currentSongIndex = playMode === 'shuffle'
+            ? Math.floor(Math.random() * songs.length)
+            : (currentSongIndex + 1) % songs.length;
         playSong();
     };
-    favListBtn.onclick = () => loadPlaylist(store.favList, 'Favorite Songs');
+    favListBtn.onclick = () => loadPlaylist(getCleanFavList(store), 'Favorite Songs');
     allBtn.onclick = () => {
         if (!window.data || window.data.length === 0) return;
         const allSongs = [];
@@ -79,6 +150,7 @@ export function openAudioPlayer(_song, _level, ctx) {
         }
         loadPlaylist(allSongs, 'All');
     };
+
     const updateModeUI = () => {
         shuffleButton.classList.toggle("active2", playMode === 'shuffle');
         singleLoopButton.classList.toggle("active2", playMode === 'single');
@@ -87,21 +159,26 @@ export function openAudioPlayer(_song, _level, ctx) {
     shuffleButton.onclick = () => { playMode = playMode === 'shuffle' ? 'list' : 'shuffle'; updateModeUI(); };
     singleLoopButton.onclick = () => { playMode = playMode === 'single' ? 'list' : 'single'; updateModeUI(); };
     listLoopButton.onclick = () => { playMode = playMode === 'list' ? 'single' : 'list'; updateModeUI(); };
+
     favBtn.onclick = () => {
-        let items = store.favList || [];
-        const currentSrc = decodeURIComponent(audioPlayer.src);
-        let purePath = currentSrc.includes('/audio/') ? "audio/" + currentSrc.split('/audio/')[1] : currentSrc;
-        if (items.includes(purePath)) {
-            items = items.filter(item => item !== purePath);
+        const purePath = getCurrentTrackPath();
+        if (!purePath) return;
+        let items = getCleanFavList(store);
+        const sc = window.SiteCore || (window.top && window.top.SiteCore);
+        const validPath = sc ? sc.sanitizeAudioPath(purePath) : purePath;
+        if (!validPath) return;
+        if (items.includes(validPath)) {
+            items = items.filter(item => item !== validPath);
             favBtn.classList.remove("active");
         } else {
-            items.push(purePath);
+            items.push(validPath);
             favBtn.classList.add("active");
         }
         store.favList = items;
         backfill();
         emitEvent('UPDATE_FAV_LIST', null, 'side');
     };
+
     closeBtn.onclick = () => {
         saveMediaPosition(audioPlayer);
         playerContainer.remove();
@@ -114,18 +191,25 @@ export function openAudioPlayer(_song, _level, ctx) {
         if (typeof adjSearchRight === 'function') adjSearchRight();
     };
     buttonElement.ondblclick = closeBtn.onclick;
+
     audioPlayer.ontimeupdate = () => {
-        progressBar.style.height = (audioPlayer.currentTime / audioPlayer.duration) * 100 + "%";
+        const dur = audioPlayer.duration;
+        if (!Number.isFinite(dur) || dur <= 0) {
+            progressBar.style.height = "0%";
+            return;
+        }
+        progressBar.style.height = Math.max(0, Math.min(100, (audioPlayer.currentTime / dur) * 100)) + "%";
     };
 
     audioPlayer.onended = () => {
         if (playMode === 'single') audioPlayer.play().catch(() => { });
         else nextButton.click();
     };
+
     const syncUIState = () => {
-        const currentSrc = decodeURIComponent(audioPlayer.src);
-        let purePath = currentSrc.includes('/audio/') ? "audio/" + currentSrc.split('/audio/')[1] : currentSrc;
-        favBtn.classList.toggle("active", (store.favList || []).includes(purePath));
+        const purePath = getCurrentTrackPath();
+        const favSet = new Set(getCleanFavList(store).map(normalizeAudioPath));
+        favBtn.classList.toggle("active", !!purePath && favSet.has(purePath));
         const listItems = Array.from(playlistElement.children);
         listItems.forEach((item, index) => item.classList.toggle("current", index === currentSongIndex));
 
@@ -137,12 +221,14 @@ export function openAudioPlayer(_song, _level, ctx) {
             playerContainer.style.display = originalDisplay;
         }
     };
+
     const backfill = () => {
-        const favItems = store.favList || [];
+        const favSet = new Set(getCleanFavList(store).map(normalizeAudioPath));
         Array.from(playlistElement.children).forEach(item => {
-            item.classList.toggle("fav", favItems.some(f => f.endsWith(item.textContent)));
+            item.classList.toggle("fav", favSet.has(normalizeAudioPath(item.dataset.path || '')));
         });
     };
+
     const playSong = () => {
         const targetLi = playlistElement.children[currentSongIndex];
         if (!targetLi) return;
@@ -156,13 +242,16 @@ export function openAudioPlayer(_song, _level, ctx) {
     updateModeUI();
     if (typeof adjSearchRight === 'function') adjSearchRight();
 
-    playlistElement.innerHTML = renderListHTML(songs);
+    renderPlaylist(songs);
     backfill();
     playSong();
 }
 
 export function playFavList(ctx) {
     const { store } = ctx;
+    const favs = getCleanFavList(store);
+    if (favs.length === 0) return;
+
     const existingPlayer = $("#audio");
     const existingHeader = existingPlayer ? existingPlayer.querySelector('.header') : null;
     if (existingPlayer && existingHeader && existingHeader.textContent === 'Favorite Songs') {
@@ -172,25 +261,22 @@ export function playFavList(ctx) {
         }
         return;
     }
-    if (!Array.isArray(store.favList) || store.favList.length === 0) return;
+
     store.resource_type = "audio";
-    const firstFav = store.favList[0];
+    const firstFav = favs[0];
     store.song_path = firstFav;
     if (!existingPlayer) {
-        const fileName = firstFav.split("/").pop();
         const dir = firstFav.includes("/") ? firstFav.substring(0, firstFav.lastIndexOf('/') + 1) : "audio/";
-        openAudioPlayer(fileName, dir, ctx);
+        openAudioPlayer(firstFav, dir, ctx, { initialSongs: favs, initialTitle: 'Favorite Songs' });
+        return;
     }
-    setTimeout(() => {
-        const buttons = document.querySelectorAll('#audio button');
-        const favListBtn = Array.from(buttons).find(b => b.textContent === 'Favorite Songs');
-        if (favListBtn) favListBtn.click();
-        const playerContainer = $("#audio");
-        if (playerContainer && playerContainer.style.display === 'none') {
-            const toggleBtn = $("#audio_btn");
-            if (toggleBtn) toggleBtn.click();
-        }
-    }, 50);
+
+    const favListBtn = document.getElementById('btn_favs');
+    if (favListBtn) favListBtn.click();
+    if (existingPlayer.style.display === 'none') {
+        const toggleBtn = $("#audio_btn");
+        if (toggleBtn) toggleBtn.click();
+    }
 }
 
 export function playPresetAudio(payload, ctx) {

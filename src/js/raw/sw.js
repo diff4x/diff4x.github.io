@@ -1,6 +1,8 @@
-importScripts('/src/js/core-list.js?v=1795340414859');
+importScripts('/src/js/core-list.js?v=1795450637420');
+const _scMeta = typeof FILE_MANIFEST === 'object' && FILE_MANIFEST && FILE_MANIFEST['/src/js/site-core.js'];
+importScripts('/src/js/site-core.js' + (_scMeta && _scMeta.hash ? ('?v=' + _scMeta.hash) : ''));
 
-self.SW_VERSION = '1795340414859';
+self.SW_VERSION = '1795450637420';
 self.EMERGENCY = 'repair_command_id=2';
 
 const CACHE_NAME_CORE = 'core-cache-' + BUILD_VERSION;
@@ -46,42 +48,25 @@ const getConnectionType = () => {
     return conn.effectiveType;
 };
 
-const MAINDB_NAME = 'MainDB';
-const MAINDB_VERSION = 3;
 let mainDbOpenPromise = null;
 
 function openMainDB() {
     if (mainDbOpenPromise) return mainDbOpenPromise;
 
-    mainDbOpenPromise = new Promise((resolve, reject) => {
-        const req = indexedDB.open(MAINDB_NAME, MAINDB_VERSION);
-
-        req.onupgradeneeded = (e) => {
-            const db = e.target.result;
-            if (!db.objectStoreNames.contains('chunks')) db.createObjectStore('chunks');
-            if (!db.objectStoreNames.contains('update_logs')) db.createObjectStore('update_logs', { autoIncrement: true });
-            if (!db.objectStoreNames.contains('search_cache')) db.createObjectStore('search_cache');
-            if (!db.objectStoreNames.contains('sys_state')) db.createObjectStore('sys_state');
-            if (!db.objectStoreNames.contains('html_snapshots')) db.createObjectStore('html_snapshots');
-        };
-
-        req.onsuccess = (e) => {
-            const db = e.target.result;
-            db.onversionchange = () => {
-                db.close();
-                mainDbOpenPromise = null;
-            };
-            resolve(db);
-        };
-
-        req.onerror = (e) => {
+    mainDbOpenPromise = self.SiteCore.openMainDB(() => {
+        console.warn('⚠️ [SW] MainDB 升级被其他连接阻塞');
+    }).then((db) => {
+        db.onversionchange = () => {
+            db.close();
             mainDbOpenPromise = null;
-            reject(e.target.error);
         };
-
-        req.onblocked = () => {
-            console.warn('⚠️ [SW] MainDB 升级被其他连接阻塞');
+        db.onclose = () => {
+            mainDbOpenPromise = null;
         };
+        return db;
+    }).catch((err) => {
+        mainDbOpenPromise = null;
+        throw err;
     });
 
     return mainDbOpenPromise;
@@ -124,6 +109,7 @@ self.addEventListener('install', event => {
         const CRITICAL_URLS = new Set([
             '/',
             '/index.html',
+            '/src/js/site-core.js',
             '/src/js/index.js',
             '/src/js/shared-utils.js',
             '/src/js/book-db.js',
@@ -519,6 +505,7 @@ self.addEventListener('fetch', event => {
     }
 
     if (
+        url.pathname.endsWith('/src/js/site-core.js') ||
         url.pathname.endsWith('/src/js/worker.js') ||
         url.pathname.endsWith('/src/js/synonyms.js') ||
         url.pathname.endsWith('compute_intensive_task_processor.min.js') ||
@@ -547,6 +534,10 @@ self.addEventListener('fetch', event => {
         url.pathname.startsWith('/gallery/') ||
         url.pathname.startsWith('/ebook/') ||
         url.pathname.includes('/cmaps/') ||
+        url.pathname.includes('/third/pdfjs/web/standard_fonts/') ||
+        url.pathname.includes('/third/pdfjs/web/iccs/') ||
+        url.pathname.includes('/third/pdfjs/web/wasm/') ||
+        url.pathname.includes('/third/pdfjs/web/images/') ||
         url.pathname.match(/\.(woff|woff2|eot|ttf|svg)$/)
     ) {
         event.respondWith(

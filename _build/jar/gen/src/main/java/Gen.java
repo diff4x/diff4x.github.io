@@ -14,7 +14,9 @@ public class Gen {
             Config.init();
 
             if (args.length == 0) {
+                clearGenStatus();
                 Generator.run();
+                writeGenStatus("OK");
             } else {
                 String toolName = args[0].toLowerCase();
                 String[] toolArgs = Arrays.copyOfRange(args, 1, args.length);
@@ -53,7 +55,27 @@ public class Gen {
             }
         } catch (Exception e) {
             logger.error("发生致命错误: ", e);
+            if (args.length == 0) writeGenStatus("FAIL: " + e);
+            // 以非 0 退出码结束, 让调用方（CLI.bat / IDE / CI）能感知失败, 而不是把残缺产物当成功发布
+            System.exit(1);
         }
+    }
+
+    /** CLI.bat 通过 -Dgen.status=<文件> 指定状态文件; 未指定则不写。成功写 "OK", 失败写 "FAIL: ..." */
+    private static void writeGenStatus(String msg) {
+        String p = System.getProperty("gen.status");
+        if (p == null || p.isEmpty()) return;
+        try {
+            java.nio.file.Files.write(java.nio.file.Paths.get(p), msg.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        } catch (Exception e) {
+            logger.warn("写入 gen 状态文件失败: {}", e.toString());
+        }
+    }
+
+    private static void clearGenStatus() {
+        String p = System.getProperty("gen.status");
+        if (p == null || p.isEmpty()) return;
+        try { java.nio.file.Files.deleteIfExists(java.nio.file.Paths.get(p)); } catch (Exception ignored) { }
     }
 
     /**

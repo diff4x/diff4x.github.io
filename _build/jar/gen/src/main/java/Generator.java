@@ -16,7 +16,9 @@ import java.nio.file.Paths;
 import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
+import java.nio.file.StandardCopyOption;
 import java.util.zip.CRC32;
 
 public class Generator {
@@ -26,9 +28,13 @@ public class Generator {
     private static final Map<String, Object> liteDataTree = new HashMap<>();
     private static final List<Pattern> gitIgnorePatterns = new ArrayList<>();
     private static final Set<String> localOnlySet = new HashSet<>();
+    /** 由 `git check-ignore` 判定为"被忽略"的 html 相对路径; 与 gitIgnorePatterns 取并集, 只会让隔离更保守 */
+    private static final Set<String> gitIgnoredByGit = new HashSet<>();
+    /** 本次构建识别出的私有页（不含 .html）, 供构建末尾的泄漏断言使用 */
+    private static final Set<String> privatePageNames = new TreeSet<>();
 
     public static void run() throws Exception {
-        gitIgnorePatterns.clear(); localOnlySet.clear();
+        gitIgnorePatterns.clear(); localOnlySet.clear(); gitIgnoredByGit.clear(); privatePageNames.clear();
         initLiteDataTree();
         injectScriptToIndexHtml();
         parseGitIgnore();
@@ -51,7 +57,7 @@ public class Generator {
 
         orphanIds.removeAll();
         for (JsonNode r : records) if (!currentTitles.contains(r.get("title").asText())) orphanIds.add(r.get("id").asInt());
-        try (FileWriter writer = new FileWriter(Config.cmtMapper)) { Utils.JSON_MAPPER.writeValue(writer, rootNode); }
+        try (Writer writer = Files.newBufferedWriter(Config.cmtMapper.toPath(), StandardCharsets.UTF_8)) { Utils.JSON_MAPPER.writeValue(writer, rootNode); }
 
         scanAllMedias();
 
@@ -65,6 +71,9 @@ public class Generator {
         if (newBuildVersion != null) {
             updateSwVersion(newBuildVersion);
         }
+
+        // 兜底: 构建产物写完后, 再确认私有页的正文没有出现在任何公网产物里
+        assertNoPrivateLeak(shadowDataMap, generatedDataFiles, coreBundle);
     }
 
     private static void initLiteDataTree() {
@@ -101,134 +110,337 @@ public class Generator {
         }
     }
 
+    /**
+     * 解析 .gitignore —— 失败即中止。
+     * 公私隔离是否生效取决于这里: 找不到 .gitignore 却继续构建, 会把全部私有页正文写进公网产物。
+     */
     private static void parseGitIgnore() {
-        Path gitIgnorePath = Paths.get(Config.PATH_GITIGNORE);
-        if (!Files.exists(gitIgnorePath)) return;
+        Path gitIgnorePath = Config.gitignoreFile;
+        if (gitIgnorePath == null || !Files.isRegularFile(gitIgnorePath)) {
+            throw new IllegalStateException("找不到 .gitignore: " + gitIgnorePath
+                    + "。无法判定哪些页面是私有的, 为避免私有正文被发布, 已拒绝构建。");
+        }
+        List<String> lines;
         try {
-            List<String> lines = Files.readAllLines(gitIgnorePath, StandardCharsets.UTF_8);
-            for (String line : lines) {
-                line = line.trim();
-                if (!line.isEmpty() && !line.startsWith("#")) {
-                    if (line.startsWith("/")) line = line.substring(1); 
-                    String raw = line;
-                    if (raw.endsWith("/")) raw = raw.substring(0, raw.length() - 1);
-                    localOnlySet.add(raw);
-                    localOnlySet.add(raw.replace('/', '\\'));
-                    String regex = line.replace(".", "\\.").replace("*", ".*").replace("?", ".");
-                    if (line.endsWith("/")) regex = "^.*" + regex + ".*$";
-                    else if (!regex.contains(".*")) regex = "^.*" + regex + ".*$";
-                    else regex = "^.*" + regex + "$";
-                    gitIgnorePatterns.add(Pattern.compile(regex, Pattern.CASE_INSENSITIVE));
-                }
+            lines = Files.readAllLines(gitIgnorePath, StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            throw new IllegalStateException("无法读取 .gitignore: " + gitIgnorePath, e);
+        }
+        for (String line : lines) {
+            line = line.trim();
+            if (line.isEmpty() || line.startsWith("#")) continue;
+            if (line.startsWith("!")) continue; // 否定规则只会让文件"更公开", 宁可忽略; 另由 git check-ignore 兜底
+            if (line.startsWith("/")) line = line.substring(1);
+            String raw = line;
+            if (raw.endsWith("/")) raw = raw.substring(0, raw.length() - 1);
+            localOnlySet.add(raw);
+            localOnlySet.add(raw.replace('/', '\\'));
+            String regex = globToRegex(line);
+            if (line.endsWith("/")) regex = "^.*" + regex + ".*$";
+            else if (!line.contains("*")) regex = "^.*" + regex + ".*$";
+            else regex = "^.*" + regex + "$";
+            try {
+                gitIgnorePatterns.add(Pattern.compile(regex, Pattern.CASE_INSENSITIVE));
+            } catch (RuntimeException e) {
+                throw new IllegalStateException(".gitignore 规则无法解析: \"" + line + "\"（" + e.getMessage() + "）", e);
             }
-        } catch (IOException e) { logger.warn("无法读取 .gitignore", e); }
+        }
+        boolean allowEmpty = "true".equalsIgnoreCase(Config.props.getProperty("allow_empty_gitignore", "false").trim());
+        if (gitIgnorePatterns.isEmpty() && !allowEmpty) {
+            throw new IllegalStateException(".gitignore 中没有任何有效规则, 无法确认私有页已被隔离。"
+                    + "若确实没有私有内容, 请在 config.properties 设置 allow_empty_gitignore=true。");
+        }
+//        logger.info("已加载 {} 条 .gitignore 规则", gitIgnorePatterns.size());
+    }
+
+    /** 把 glob 转成 Java 正则: * → .*, ? → ., 其余正则元字符一律转义（旧实现只转义了 "."） */
+    private static String globToRegex(String glob) {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < glob.length(); i++) {
+            char c = glob.charAt(i);
+            if (c == '*') sb.append(".*");
+            else if (c == '?') sb.append('.');
+            else if ("\\.[]{}()+-^$|".indexOf(c) >= 0) sb.append('\\').append(c);
+            else sb.append(c);
+        }
+        return sb.toString();
+    }
+
+    /** 私有页判定 = 自带规则命中 或 git 自己认为被忽略（并集: 只会更保守, 绝不会把 git 忽略的文件当成公开） */
+    private static boolean isPrivateHtml(String relativeHtmlPath) {
+        for (Pattern p : gitIgnorePatterns) if (p.matcher(relativeHtmlPath).matches()) return true;
+        return gitIgnoredByGit.contains(relativeHtmlPath);
+    }
+
+    /** 一次性询问 git 哪些路径被忽略（--no-index: 即使已被跟踪也按规则判定）。git 不可用时返回空集并告警。 */
+    private static Set<String> queryGitIgnored(List<String> relPaths) {
+        Set<String> result = new HashSet<>();
+        if (relPaths.isEmpty()) return result;
+        try {
+            ProcessBuilder pb = new ProcessBuilder("git", "check-ignore", "--no-index", "-z", "--stdin");
+            pb.directory(Config.projectRoot.toFile());
+            pb.redirectError(new File(System.getProperty("os.name", "").toLowerCase().contains("win") ? "NUL" : "/dev/null"));
+            Process proc = pb.start();
+            try (OutputStream os = proc.getOutputStream()) {
+                for (String p : relPaths) { os.write(p.getBytes(StandardCharsets.UTF_8)); os.write(0); }
+            }
+            ByteArrayOutputStream bos = new ByteArrayOutputStream();
+            try (InputStream is = proc.getInputStream()) {
+                byte[] buf = new byte[8192]; int n;
+                while ((n = is.read(buf)) > 0) bos.write(buf, 0, n);
+            }
+            int code = proc.waitFor();
+            if (code == 0 || code == 1) {
+                for (String p : new String(bos.toByteArray(), StandardCharsets.UTF_8).split("\0")) if (!p.isEmpty()) result.add(p);
+//                logger.info("git check-ignore: {} 个页面被 git 判定为忽略", result.size());
+            } else {
+                logger.warn("git check-ignore 返回 {}（可能不在 git 仓库内）, 仅使用 .gitignore 规则判定私有页", code);
+            }
+        } catch (IOException | InterruptedException e) {
+            logger.warn("无法调用 git 校验忽略规则（{}）, 仅使用 .gitignore 规则判定私有页", e.toString());
+        }
+        return result;
+    }
+
+    private static int intProp(String key, int def) {
+        try { return Integer.parseInt(Config.props.getProperty(key, String.valueOf(def)).trim()); }
+        catch (NumberFormatException e) { return def; }
     }
 
     private static void processHtmlFilesAndImages(ObjectNode coreBundle, ArrayNode records, Set<String> currentTitles, int[] maxId, Map<Integer, String> fatDataMap, Map<Integer, String> shadowDataMap, Map<Integer, String> publicDocsForDf) {
         Set<String> imageSet = buildGalleryImageSet();
+        Map<String, String> imageLowerToActual = new HashMap<>();
+        for (String img : imageSet) imageLowerToActual.put(img.toLowerCase(), img);
         Set<String> usedImagesSet = new HashSet<>();
         Pattern fullImgPattern = Pattern.compile("^\\s*(\\.\\./gallery/[^\\s\"'<>]+\\.(?:jpg|jpeg|png|gif|webp))\\s*$", Pattern.CASE_INSENSITIVE);
         Pattern flatImgPattern = Pattern.compile("^\\s*([^\\s\"'<>/\\\\]+\\.(?:jpg|jpeg|png|gif|webp))\\s*$", Pattern.CASE_INSENSITIVE);
 
+        // 默认只"报告"失效的图片引用, 不再改写源文件。要恢复旧的自动清理行为, 需显式设置 prune_missing_images=true。
+        final boolean pruneMissing = "true".equalsIgnoreCase(Config.props.getProperty("prune_missing_images", "false").trim());
+        if (pruneMissing && (!Files.isDirectory(Config.galleryDir) || imageSet.isEmpty())) {
+            throw new IllegalStateException("prune_missing_images=true, 但 gallery 目录不存在或没有任何图片（" + Config.galleryDir
+                    + "）。若继续, 所有页面的图片引用行都会被当作失效并删除, 已拒绝。");
+        }
+        final boolean checkPrivatePrefix = !"false".equalsIgnoreCase(Config.props.getProperty("private_prefix_check", "true").trim());
+
+        List<Path> htmlList;
         try (Stream<Path> htmlFiles = Files.list(Config.htmlDir)) {
-            htmlFiles.filter(p -> p.toString().endsWith(".html")).sorted().forEach(path -> {
-                String fileName = path.getFileName().toString().replace(".html", "");
-                String relativeHtmlPath = "html/" + path.getFileName().toString();
-                boolean isGitIgnored = gitIgnorePatterns.stream().anyMatch(p -> p.matcher(relativeHtmlPath).matches());
+            htmlList = htmlFiles.filter(p -> p.toString().endsWith(".html")).sorted().collect(Collectors.toList());
+        } catch (IOException e) {
+            throw new IllegalStateException("无法列出 html 目录: " + Config.htmlDir, e);
+        }
+        if (htmlList.isEmpty()) {
+            throw new IllegalStateException("html 目录中没有任何 .html 文件: " + Config.htmlDir + "（拒绝构建空站点）");
+        }
+
+        List<String> relPaths = new ArrayList<>();
+        for (Path p : htmlList) relPaths.add("html/" + p.getFileName().toString());
+        gitIgnoredByGit.clear();
+        gitIgnoredByGit.addAll(queryGitIgnored(relPaths));
+
+        List<String> failures = new ArrayList<>();
+        List<String> missingImages = new ArrayList<>();
+        List<String> caseMismatches = new ArrayList<>();
+        Map<Path, List<String>> pendingRewrites = new LinkedHashMap<>();
+        int prunedLines = 0;
+
+        for (Path path : htmlList) {
+            String fileName = path.getFileName().toString().replace(".html", "");
+            String relativeHtmlPath = "html/" + path.getFileName().toString();
+            try {
+                boolean isGitIgnored = isPrivateHtml(relativeHtmlPath);
                 boolean isExcludedData = isExcluded(fileName);
+                if (isGitIgnored) {
+                    privatePageNames.add(fileName);
+                } else if (checkPrivatePrefix && fileName.startsWith("__")) {
+                    throw new IllegalStateException("页面以 \"__\" 开头（约定为私有页）, 却未被 .gitignore / git 判定为忽略。"
+                            + "请补充 .gitignore 规则, 否则它的正文会被发布（确实要公开可设 private_prefix_check=false）。");
+                }
 
-                try {
-                    List<String> lines = Files.readAllLines(path, StandardCharsets.UTF_8);
-                    List<String> newLines = new ArrayList<>(lines.size());
-                    StringBuilder htmlContentBuilder = new StringBuilder();
-                    StringBuilder searchTextBuilder = new StringBuilder();
-                    boolean fileModified = false;
+                List<String> lines = Files.readAllLines(path, StandardCharsets.UTF_8);
+                List<String> newLines = new ArrayList<>(lines.size());
+                StringBuilder htmlContentBuilder = new StringBuilder();
+                StringBuilder searchTextBuilder = new StringBuilder();
+                boolean fileModified = false;
 
-                    for (String line : lines) {
-                        boolean keepLine = true;
-                        Matcher mFull = fullImgPattern.matcher(line);
-                        Matcher mFlat = flatImgPattern.matcher(line);
+                for (String line : lines) {
+                    boolean keepLine = true;
+                    String imgRef = null;
+                    Matcher mFull = fullImgPattern.matcher(line);
+                    Matcher mFlat = flatImgPattern.matcher(line);
+                    if (mFull.matches()) imgRef = mFull.group(1);
+                    else if (mFlat.matches()) imgRef = "../gallery/img/" + mFlat.group(1);
 
-                        if (mFull.matches()) {
-                            String imgRef = mFull.group(1);
-                            if (!imageSet.contains(imgRef)) keepLine = false;
-                            else usedImagesSet.add(imgRef);
-                        } else if (mFlat.matches()) {
-                            String virtualFullPath = "../gallery/img/" + mFlat.group(1);
-                            if (!imageSet.contains(virtualFullPath)) keepLine = false;
-                            else usedImagesSet.add(virtualFullPath);
-                        }
-
-                        if (keepLine) {
-                            newLines.add(line);
-                            htmlContentBuilder.append(line).append("\n"); 
-                            Matcher mHeading = HEADING_LINE_PATTERN.matcher(line);
-                            searchTextBuilder.append(mHeading.matches() ? mHeading.group(2) : line).append("\n");
+                    if (imgRef != null) {
+                        if (imageSet.contains(imgRef)) {
+                            usedImagesSet.add(imgRef);
                         } else {
-                            fileModified = true;
+                            String actual = imageLowerToActual.get(imgRef.toLowerCase());
+                            if (actual != null) {
+                                // Windows 下能显示, 但 GitHub Pages（区分大小写）会 404 —— 只告警, 不删
+                                usedImagesSet.add(actual);
+                                caseMismatches.add(fileName + ": " + imgRef + "  ≠  " + actual);
+                            } else {
+                                missingImages.add(fileName + ": " + imgRef);
+                                if (pruneMissing) { keepLine = false; prunedLines++; }
+                            }
                         }
                     }
 
-                    if (fileModified) Files.write(path, newLines, StandardCharsets.UTF_8);
-                    String htmlContent = htmlContentBuilder.toString();
+                    if (keepLine) {
+                        newLines.add(line);
+                        htmlContentBuilder.append(line).append("\n");
+                        Matcher mHeading = HEADING_LINE_PATTERN.matcher(line);
+                        searchTextBuilder.append(mHeading.matches() ? mHeading.group(2) : line).append("\n");
+                    } else {
+                        fileModified = true;
+                    }
+                }
 
-                    if (!isGitIgnored && !isExcludedData) coreBundle.put("/" + Config.PREFIX_HTML + path.getFileName().toString(), htmlContent);
+                if (fileModified) pendingRewrites.put(path, newLines);
+                String htmlContent = htmlContentBuilder.toString();
 
-                    Document doc = Jsoup.parse(htmlContent);
-                    Document searchDoc = Jsoup.parse(searchTextBuilder.toString());
-                    String timeStamp = doc.getElementById("anchor") != null ? Objects.requireNonNull(doc.getElementById("anchor")).text() : "";
-                    String title = doc.title().trim();
-                    if (title.isEmpty()) title = fileName;
+                if (!isGitIgnored && !isExcludedData) coreBundle.put("/" + Config.PREFIX_HTML + path.getFileName().toString(), htmlContent);
 
-                    int currentRecordId = -1;
-                    if (!title.isEmpty()) {
-                        currentTitles.add(title);
-                        boolean exists = false;
-                        for (JsonNode r : records) {
-                            if (r.get("title").asText().equals(title)) {
-                                currentRecordId = r.get("id").asInt(); exists = true; break;
-                            }
-                        }
-                        if (!exists) {
-                            currentRecordId = ++maxId[0];
-                            ObjectNode newRecord = Utils.JSON_MAPPER.createObjectNode();
-                            newRecord.put("id", currentRecordId); newRecord.put("title", title);
-                            records.add(newRecord);
-                        }
+                Document doc = Jsoup.parse(htmlContent);
+                Document searchDoc = Jsoup.parse(searchTextBuilder.toString());
+                String timeStamp = doc.getElementById("anchor") != null ? Objects.requireNonNull(doc.getElementById("anchor")).text() : "";
+                String title = doc.title().trim();
+                if (title.isEmpty()) title = fileName;
 
-                        String cleanText = searchDoc.body().text().replaceAll("\r\n|\r|\n", " ").replaceAll(" +", " ").replaceAll("\\$\\{", "&#36;{").replaceAll("`", "&#715;");
-
-                        if (!isGitIgnored && !isExcludedData) {
-                            fatDataMap.put(currentRecordId, cleanText);
-                            String dfText = cleanText;
-                            Element anchorInSearch = searchDoc.getElementById("anchor");
-                            if (anchorInSearch != null) {
-                                anchorInSearch.remove();
-                                dfText = searchDoc.body().text().replaceAll("\r\n|\r|\n", " ").replaceAll(" +", " ");
-                            }
-                            publicDocsForDf.put(currentRecordId, title + " " + dfText);
-                        } else if (isGitIgnored) {
-                            fatDataMap.put(currentRecordId, "localOnly");
-                            shadowDataMap.put(currentRecordId, cleanText);
-                        } else {
-                            fatDataMap.put(currentRecordId, "");
+                int currentRecordId = -1;
+                if (!title.isEmpty()) {
+                    currentTitles.add(title);
+                    boolean exists = false;
+                    for (JsonNode r : records) {
+                        if (r.get("title").asText().equals(title)) {
+                            currentRecordId = r.get("id").asInt(); exists = true; break;
                         }
                     }
+                    if (!exists) {
+                        currentRecordId = ++maxId[0];
+                        ObjectNode newRecord = Utils.JSON_MAPPER.createObjectNode();
+                        newRecord.put("id", currentRecordId); newRecord.put("title", title);
+                        records.add(newRecord);
+                    }
 
-                    String virtualPath = Config.PATH_UNCATEGORIZED + fileName + ".html";
-                    Matcher matcher = anchorPattern.matcher(htmlContent);
-                    if (matcher.find()) virtualPath = Config.PREFIX_HTML + matcher.group(2).replace("|", "/") + "/" + fileName + ".html";
+                    String cleanText = searchDoc.body().text().replaceAll("\r\n|\r|\n", " ").replaceAll(" +", " ").replaceAll("\\$\\{", "&#36;{").replaceAll("`", "&#715;");
 
-                    String finalInfo = timeStamp;
-                    if (isGitIgnored) finalInfo = finalInfo.isEmpty() ? "localOnly" : finalInfo + "-localOnly";
+                    if (!isGitIgnored && !isExcludedData) {
+                        fatDataMap.put(currentRecordId, cleanText);
+                        String dfText = cleanText;
+                        Element anchorInSearch = searchDoc.getElementById("anchor");
+                        if (anchorInSearch != null) {
+                            anchorInSearch.remove();
+                            dfText = searchDoc.body().text().replaceAll("\r\n|\r|\n", " ").replaceAll(" +", " ");
+                        }
+                        publicDocsForDf.put(currentRecordId, title + " " + dfText);
+                    } else if (isGitIgnored) {
+                        fatDataMap.put(currentRecordId, "localOnly");
+                        shadowDataMap.put(currentRecordId, cleanText);
+                    } else {
+                        fatDataMap.put(currentRecordId, "");
+                    }
+                }
 
-                    addPathToTree("html", virtualPath, new Object[]{currentRecordId, "html", finalInfo});
+                String virtualPath = Config.PATH_UNCATEGORIZED + fileName + ".html";
+                Matcher matcher = anchorPattern.matcher(htmlContent);
+                if (matcher.find()) virtualPath = Config.PREFIX_HTML + matcher.group(2).replace("|", "/") + "/" + fileName + ".html";
 
-                } catch (IOException e) { throw new RuntimeException(e); }
-            });
+                String finalInfo = timeStamp;
+                if (isGitIgnored) finalInfo = finalInfo.isEmpty() ? "localOnly" : finalInfo + "-localOnly";
 
-            generateIdleImageList(imageSet, usedImagesSet);
-        } catch (Exception e) { logger.error("⚠️ HTML 主控流发生异常", e); }
+                addPathToTree("html", virtualPath, new Object[]{currentRecordId, "html", finalInfo});
+
+            } catch (Exception e) {
+                // 单页失败不再被吞掉: 先继续处理其余页面以便一次性列出全部问题, 最后统一失败
+                failures.add(path.getFileName() + "  →  " + e);
+                logger.error("页面处理失败: {}", path.getFileName(), e);
+            }
+        }
+
+        if (!failures.isEmpty()) {
+            throw new IllegalStateException("有 " + failures.size() + " 个页面处理失败, 已中止构建以免发布残缺站点:\n  " + String.join("\n  ", failures));
+        }
+        if (!missingImages.isEmpty()) {
+            logger.warn("发现 {} 处指向不存在图片的引用（{}）:\n  {}", missingImages.size(),
+                    pruneMissing ? "将按 prune_missing_images=true 清理" : "未改动源文件",
+                    String.join("\n  ", missingImages.subList(0, Math.min(30, missingImages.size()))));
+        }
+        if (!caseMismatches.isEmpty()) {
+            logger.warn("发现 {} 处图片引用与 gallery 实际文件名大小写不一致（线上会 404）:\n  {}", caseMismatches.size(),
+                    String.join("\n  ", caseMismatches.subList(0, Math.min(30, caseMismatches.size()))));
+        }
+        if (!pendingRewrites.isEmpty()) applyPrunedRewrites(pendingRewrites, prunedLines);
+
+        generateIdleImageList(imageSet, usedImagesSet);
+    }
+
+    /** 仅在 prune_missing_images=true 时执行: 先校验上限、先备份、再改写 */
+    private static void applyPrunedRewrites(Map<Path, List<String>> pending, int prunedLines) {
+        int cap = intProp("prune_max_lines", 30);
+        if (prunedLines > cap) {
+            throw new IllegalStateException("本次将删除 " + prunedLines + " 行失效图片引用, 超过安全上限 prune_max_lines=" + cap
+                    + "（疑似 gallery 目录异常）。已中止, 未改动任何源文件。");
+        }
+        try {
+            // 注意: 备份目录位于仓库内, 请把 _build/backup/ 加入 .gitignore, 避免被 git add -A 提交
+            Path backupDir = Config.buildRoot.resolve("backup").resolve("html_" + new java.text.SimpleDateFormat("yyyyMMdd_HHmmss").format(new Date()));
+            Files.createDirectories(backupDir);
+            for (Map.Entry<Path, List<String>> e : pending.entrySet()) {
+                Files.copy(e.getKey(), backupDir.resolve(e.getKey().getFileName().toString()), StandardCopyOption.REPLACE_EXISTING);
+                Files.write(e.getKey(), e.getValue(), StandardCharsets.UTF_8);
+            }
+            logger.warn("已删除 {} 行失效图片引用（涉及 {} 个文件）, 原文件已备份到 {}", prunedLines, pending.size(), backupDir);
+        } catch (IOException ex) {
+            throw new IllegalStateException("改写源文件失败", ex);
+        }
+    }
+
+    /**
+     * 构建末尾的隔离断言: 私有页的正文不得出现在任何公网产物里。
+     * 取私有正文 25% / 50% / 75% 处各 40 字符作指纹, 三段同时出现在同一产物中才判定泄漏（避免引用同一句话造成误报）。
+     */
+    private static void assertNoPrivateLeak(Map<Integer, String> shadowDataMap, List<String> generatedDataFiles, ObjectNode coreBundle) {
+        if (privatePageNames.isEmpty()) return;
+        List<String> problems = new ArrayList<>();
+        for (String name : privatePageNames) {
+            if (coreBundle.has("/" + Config.PREFIX_HTML + name + ".html")) problems.add("core-bundle.json 含有私有页: " + name);
+        }
+        List<String> blobs = new ArrayList<>();
+        List<String> blobNames = new ArrayList<>();
+        try {
+            for (String f : generatedDataFiles) {
+                blobs.add(new String(Files.readAllBytes(Config.dataDir.resolve(f)), StandardCharsets.UTF_8));
+                blobNames.add(f);
+            }
+            if (Files.exists(Config.coreBundleOut)) {
+                blobs.add(new String(Files.readAllBytes(Config.coreBundleOut), StandardCharsets.UTF_8));
+                blobNames.add(Config.FILE_CORE_BUNDLE);
+            }
+            Path syn = Config.jsOutputDir.resolve("synonyms.js");
+            if (Files.exists(syn)) {
+                blobs.add(new String(Files.readAllBytes(syn), StandardCharsets.UTF_8));
+                blobNames.add("synonyms.js");
+            }
+        } catch (IOException e) {
+            throw new IllegalStateException("隔离检查无法读取产物", e);
+        }
+        for (Map.Entry<Integer, String> e : shadowDataMap.entrySet()) {
+            String t = e.getValue();
+            if (t == null || t.length() < 200) continue;
+            int n = t.length();
+            String[] samples = { t.substring(n / 4, n / 4 + 40), t.substring(n / 2, n / 2 + 40), t.substring(n * 3 / 4, n * 3 / 4 + 40) };
+            for (int i = 0; i < blobs.size(); i++) {
+                boolean all = true;
+                for (String sm : samples) if (!blobs.get(i).contains(sm)) { all = false; break; }
+                if (all) problems.add("公网产物 " + blobNames.get(i) + " 含有私有页（recordId=" + e.getKey() + "）的正文片段");
+            }
+        }
+        if (!problems.isEmpty()) {
+            throw new IllegalStateException("隔离检查失败, 已中止（请勿提交 / 推送本次产物）:\n  " + String.join("\n  ", problems));
+        }
+//        logger.info("隔离检查通过: 共 {} 个私有页, 公网产物中未发现其正文", privatePageNames.size());
     }
 
     private static Set<String> buildGalleryImageSet() {
@@ -410,12 +622,8 @@ public class Generator {
             try (Stream<Path> htmlWalk = Files.list(htmlDir)) {
                 htmlWalk.filter(p -> p.toString().endsWith(".html")).sorted().forEach(p -> {
                     String fileName = p.getFileName().toString().replace(".html", "");
-                    boolean isGitIgnored = false;
                     String relativeHtmlPath = "html/" + p.getFileName().toString();
-
-                    for (Pattern pattern : gitIgnorePatterns) {
-                        if (pattern.matcher(relativeHtmlPath).matches()) { isGitIgnored = true; break; }
-                    }
+                    boolean isGitIgnored = isPrivateHtml(relativeHtmlPath);
 
                     if (!isGitIgnored) {
                         if (isExcluded(fileName)) swManifest.put("/" + Config.PREFIX_HTML + p.getFileName(), new FileMeta(calculateFingerprint(p), "no_cache"));
@@ -431,10 +639,12 @@ public class Generator {
 
             String coreFilesProp = Config.props.getProperty("coreFiles", "");
             if (!coreFilesProp.isEmpty()) {
+                List<String> missingCore = new ArrayList<>();
                 for (String path : coreFilesProp.split("\\|")) {
                     String webPath = path.trim();
                     if (webPath.isEmpty()) continue;
                     Path physicalFile = findPhysicalFile(projectRoot, webPath);
+                    if (!Files.exists(physicalFile)) { missingCore.add(webPath); continue; }
                     String hash = calculateFingerprint(physicalFile);
                     if (webPath.equals("/") || webPath.endsWith(".html") || webPath.endsWith(".css") || webPath.endsWith(".json") || webPath.endsWith(".md")) {
                         try {
@@ -442,6 +652,10 @@ public class Generator {
                             swManifest.put(webPath, new FileMeta(hash, Config.FILE_CORE_BUNDLE));
                         } catch (IOException e) { swManifest.put(webPath, new FileMeta(hash, "standalone")); }
                     } else swManifest.put(webPath, new FileMeta(hash, "standalone"));
+                }
+                // 旧实现会给缺失文件记 "0_0" 哈希并照常发布清单, 用户端 SW 安装时 404, 更新直接卡死
+                if (!missingCore.isEmpty()) {
+                    throw new IllegalStateException("config.properties 的 coreFiles 中有文件不存在:\n  " + String.join("\n  ", missingCore));
                 }
             }
 
@@ -459,7 +673,7 @@ public class Generator {
                 }
             }
 
-            try (FileWriter writer = new FileWriter(Config.PATH_CORE_BUNDLE_OUT)) { Utils.JSON_MAPPER.writeValue(writer, coreBundle); }
+            try (Writer writer = Files.newBufferedWriter(Config.coreBundleOut, StandardCharsets.UTF_8)) { Utils.JSON_MAPPER.writeValue(writer, coreBundle); }
 
             boolean hasChanged = false; String oldVersion = null; Map<String, String> oldHashes = new HashMap<>();
             if (Files.exists(fileListPath)) {
@@ -520,7 +734,7 @@ public class Generator {
             Files.write(fileListPath, sb.toString().getBytes(StandardCharsets.UTF_8));
             return buildVersion;
 
-        } catch (IOException e) { logger.error("生成清单失败", e); return null; }
+        } catch (IOException e) { throw new IllegalStateException("生成清单失败", e); }
     }
 
     private static String normalizeWebPath(String p) {
@@ -530,7 +744,7 @@ public class Generator {
         return s.startsWith("/") ? s : "/" + s;
     }
 
-    private static Path projectRootPath() { return Paths.get("..").toAbsolutePath().normalize(); }
+    private static Path projectRootPath() { return Config.projectRoot; }
 
     private static Path findPhysicalFile(Path projectRoot, String webPath) {
         String rootStr = projectRoot.toAbsolutePath().normalize().toString();
@@ -567,7 +781,8 @@ public class Generator {
     private static void updateSwVersion(String buildVersion) {
         try {
             Path swPath = Config.jsInputDir.resolve(Config.FILE_SW_JS);
-            if (Files.exists(swPath)) {
+            if (!Files.exists(swPath)) throw new IllegalStateException("找不到 " + swPath + ", 无法写入新的 SW 版本号");
+            {
                 List<String> lines = Files.readAllLines(swPath, StandardCharsets.UTF_8);
                 boolean foundVersion = false;
                 for (int i = 0; i < lines.size(); i++) {
@@ -580,7 +795,7 @@ public class Generator {
                 if (!foundVersion) lines.add(0, "self.SW_VERSION = '" + buildVersion + "';");
                 Files.write(swPath, lines, StandardCharsets.UTF_8);
             }
-        } catch (IOException ignored) {}
+        } catch (IOException e) { throw new IllegalStateException("更新 sw.js 版本号失败", e); }
     }
 
     static class FileMeta {

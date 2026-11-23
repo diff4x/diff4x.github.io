@@ -25,21 +25,7 @@ const $ = sel => document.querySelector(sel);
 const $$ = sel => document.querySelectorAll(sel);
 
 function createStore(defaults = {}) {
-    return new Proxy({}, {
-        get(_, key) {
-            const raw = localStorage.getItem(key);
-            if (raw === null) return defaults[key];
-            try { return JSON.parse(raw); } catch { return raw; }
-        },
-        set(_, key, value) {
-            localStorage.setItem(key, JSON.stringify(value));
-            return true;
-        },
-        deleteProperty(_, key) {
-            localStorage.removeItem(key);
-            return true;
-        }
-    });
+    return window.top.SiteCore.createStore(defaults);
 }
 
 function getTabId() {
@@ -203,16 +189,40 @@ window.onload = () => {
     adj_width();
     go_top();
 
+    const callLocalProto = async (act, param = "") => {
+        if (window.top && typeof window.top.invokeProtocol === "function") {
+            return window.top.invokeProtocol(act, param);
+        }
+        const m = await import("/src/js/shared-utils.js");
+        return m.invokeProtocol(act, param);
+    };
+
     bindDualClick(document.getElementById("a1"), e => {
         e.preventDefault();
-        window.top.location.href = store.protocol_name + "://4";
+        callLocalProto(4);
     }, e => {
         e.preventDefault();
-        window.top.location.href = store.protocol_name + "://6";
+        callLocalProto(6);
     }, DUAL_CLICK_DELAY_MS);
 
-    document.getElementById("a2").setAttribute("href", store.protocol_name + "://3{/Dropbox/diff4x.github.io");
-    document.getElementById("a3").setAttribute("href", store.protocol_name + "://8");
+    const a2 = document.getElementById("a2");
+    if (a2) {
+        a2.removeAttribute("href");
+        a2.style.cursor = "pointer";
+        a2.addEventListener("click", e => {
+            e.preventDefault();
+            callLocalProto(3);
+        });
+    }
+    const a3 = document.getElementById("a3");
+    if (a3) {
+        a3.removeAttribute("href");
+        a3.style.cursor = "pointer";
+        a3.addEventListener("click", e => {
+            e.preventDefault();
+            callLocalProto(8);
+        });
+    }
 };
 
 function buildCatalogFromLiteData(data) {

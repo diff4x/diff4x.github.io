@@ -8,5 +8,7 @@ gallery/diary/
 src/js/data/shadow*
 big/
 err.log
-
-secrets/
+_build/backup/
+_build/secrets/
+_build/synonyms/oov_report.txt
+_build/synonyms/synonyms.raw.js

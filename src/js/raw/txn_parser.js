@@ -18,27 +18,14 @@ if ('serviceWorker' in navigator) {
 // LS 代理与记忆库 (升级版：基于文件名自动分发默认值)
 // ==================================
 function createStore() {
-    return new Proxy({}, {
-        get(_, prop) {
-            const val = localStorage.getItem(prop);
-            if (val === null) {
-                // 如果没有历史记录，根据属性后缀自动返回结构化的默认初始状态
-                if (prop.endsWith('_trend')) return { endYear: null, endMonth: null, activeCat: 'net' };
-                if (prop.endsWith('_view')) return { type: 'default', y: null, m: null };
-                if (prop.endsWith('_filter')) return null;
-                if (prop.endsWith('_page')) return {};
-                if (prop.endsWith('_scroll')) return 0;
-                return undefined;
-            }
-            try { return JSON.parse(val); } catch { return val; }
-        },
-        set(_, prop, value) {
-            localStorage.setItem(prop, JSON.stringify(value));
-            return true;
-        },
-        deleteProperty(_, prop) {
-            localStorage.removeItem(prop);
-            return true;
+    return SiteCore.createStore({}, {
+        fallback(prop) {
+            if (prop.endsWith('_trend')) return { endYear: null, endMonth: null, activeCat: 'net' };
+            if (prop.endsWith('_view')) return { type: 'default', y: null, m: null };
+            if (prop.endsWith('_filter')) return null;
+            if (prop.endsWith('_page')) return {};
+            if (prop.endsWith('_scroll')) return 0;
+            return undefined;
         }
     });
 }
@@ -1508,15 +1495,22 @@ if (store.online_flag === "0") {
   `;
   document.head.appendChild(pointerStyle);
   
-  document.addEventListener('click', e => {
-    const protocol = store.protocol_name;
+  const jumpTxnLine = async (lineText) => {
+    try {
+      const m = await import('/src/js/shared-utils.js');
+      await m.invokeProtocol(7, String(lineText));
+    } catch (err) {
+      alert('❌ 本地协议调用失败：' + (err && err.message ? err.message : String(err)));
+    }
+  };
 
+  document.addEventListener('click', e => {
     // 1. 表格物理行号定位跳转
     const td = e.target.closest('td');
     if (td && td.closest('#output table') && td.cellIndex === 7) {
       const lineText = td.textContent.trim();
       if (lineText && !isNaN(lineText)) {
-        window.location.href = `${protocol}://7{${lineText}`;
+        jumpTxnLine(lineText);
       }
       return;
     }
@@ -1526,7 +1520,7 @@ if (store.online_flag === "0") {
     if (errLink) {
       const lineText = errLink.dataset.line;
       if (lineText) {
-        window.location.href = `${protocol}://7{${lineText}`;
+        jumpTxnLine(lineText);
       }
       return;
     }

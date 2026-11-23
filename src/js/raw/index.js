@@ -44,6 +44,25 @@ const TAB_ID = window.__TAB_ID__ || (window.__TAB_ID__ = (
 const BUS = window.__LITE_BUS__;
 const ctxId = window.top === window.self ? 'index' : window.childId;
 const isLocalEnv = (location.hostname === 'localhost' || location.hostname === '127.0.0.1' || location.protocol === 'file:') && location.port !== '9000';
+
+// 首屏同步从 URL #fragment 吸收本地协议密钥并立即抹掉地址栏痕迹（不进入 HTTP 请求/日志）
+(function ingestLocalProtoKey() {
+    if (!isLocalEnv) return;
+    const m = /^#__diff4x_key=([0-9a-f]{64})$/i.exec(window.location.hash || '');
+    if (!m) return;
+    try { localStorage.setItem('__diff4x_proto_key__', m[1].toLowerCase()); } catch (_) { }
+    try { history.replaceState(null, '', window.location.pathname + window.location.search); }
+    catch (_) { window.location.hash = ''; }
+})();
+
+window.sealProtocolUrl = async (action, param = '') => {
+    const m = await import('./shared-utils.js');
+    return m.sealProtocolUrl(action, param);
+};
+window.invokeProtocol = async (action, param = '') => {
+    const m = await import('./shared-utils.js');
+    return m.invokeProtocol(action, param);
+};
 const $ = (selector) => document.querySelector(selector);
 const idleRun = (fn) => window.requestIdleCallback ? requestIdleCallback(fn) : setTimeout(fn, 50);
 const AsyncUtils = createAsyncUtils();
@@ -61,11 +80,17 @@ let searchUI = null;
 let commentsMod = null;
 let commentsPromise = null;
 
-const store = createStore({
+SiteCore.cleanupLegacyTabKeys();
+const store = SiteCore.createStore({
     resource_type: "",
     content_src: "",
     searchHistory: [],
     force_refresh_cache: "0"
+}, {
+    getters: {
+        SearchCache: () => (searchEngine ? searchEngine.searchResultCache : null)
+    },
+    readonlyKeys: ['SearchCache']
 });
 store.github_page = github_page;
 store.readme_md = (typeof readme_md !== "undefined" && readme_md) ? readme_md : "/README.md";
@@ -342,12 +367,8 @@ BUS.addEventListener('message', async (e) => {
             store.resource_type = "image";
             iframes.content.src = "about:blank";
             setTimeout(async () => {
-                const { generateDoc } = await import('./lightbox-logic.js');
-                const html = generateDoc('image', { imageUrl: '../' + store.image_path });
-                const doc = iframes.content.contentWindow.document;
-                doc.open();
-                doc.write(html);
-                doc.close();
+                const { renderLightboxFrame } = await import('./lightbox-logic.js');
+                renderLightboxFrame(iframes.content, 'image', { imageUrl: '../' + store.image_path });
             }, 20);
             break;
 
@@ -356,12 +377,8 @@ BUS.addEventListener('message', async (e) => {
             store.resource_type = "video";
             iframes.content.src = "about:blank";
             setTimeout(async () => {
-                const { generateDoc } = await import('./lightbox-logic.js');
-                const html = generateDoc('video', { videoUrl: '../' + store.video_path });
-                const doc = iframes.content.contentWindow.document;
-                doc.open();
-                doc.write(html);
-                doc.close();
+                const { renderLightboxFrame } = await import('./lightbox-logic.js');
+                renderLightboxFrame(iframes.content, 'video', { videoUrl: '../' + store.video_path });
             }, 20);
             break;
 
@@ -580,33 +597,6 @@ function emitEvent(type, payload, target = '*') {
     } catch (e) { }
 }
 
-function createStore(defaults = {}) {
-    return new Proxy({}, {
-        get(_, prop) {
-            if (prop === 'SearchCache') return searchEngine ? searchEngine.searchResultCache : null;
-            if (prop === 'pinyinData') return window.top.pinyinData || {};
-            const val = localStorage.getItem(prop);
-            if (val === null) return defaults[prop];
-            try { return JSON.parse(val); } catch { return val; }
-        },
-        set(_, prop, value) {
-            if (prop === 'SearchCache') {
-                console.warn("store.SearchCache 是只读内置对象，禁止覆盖！");
-                return false;
-            }
-            if (prop === 'pinyinData') return true;
-            localStorage.setItem(prop, JSON.stringify(value));
-            return true;
-        },
-        deleteProperty(_, prop) {
-            if (prop === 'SearchCache') return false;
-            if (prop === 'pinyinData') return true;
-            localStorage.removeItem(prop);
-            return true;
-        }
-    });
-}
-
 function createDBProxy(dbName, storeName) {
     let dbInstance = null;
     let initPromise = null;
@@ -615,24 +605,15 @@ function createDBProxy(dbName, storeName) {
         if (dbInstance) return dbInstance;
         if (initPromise) return initPromise;
 
-        initPromise = new Promise((resolve, reject) => {
-            const request = indexedDB.open(dbName, 3);
-            request.onupgradeneeded = (e) => {
-                const db = e.target.result;
-                if (!db.objectStoreNames.contains(storeName)) db.createObjectStore(storeName);
-                if (!db.objectStoreNames.contains('update_logs')) db.createObjectStore('update_logs', { autoIncrement: true });
-                if (!db.objectStoreNames.contains('search_cache')) db.createObjectStore('search_cache');
-                if (!db.objectStoreNames.contains('sys_state')) db.createObjectStore('sys_state');
-                if (!db.objectStoreNames.contains('html_snapshots')) db.createObjectStore('html_snapshots');
-            };
-            request.onsuccess = (e) => {
-                dbInstance = e.target.result;
-                initPromise = null;
-                dbInstance.onclose = () => { dbInstance = null; };
-                dbInstance.onversionchange = () => { dbInstance.close(); dbInstance = null; };
-                resolve(dbInstance);
-            };
-            request.onerror = (e) => { initPromise = null; reject(e.target.error); };
+        initPromise = SiteCore.openMainDB().then((db) => {
+            dbInstance = db;
+            initPromise = null;
+            dbInstance.onclose = () => { dbInstance = null; };
+            dbInstance.onversionchange = () => { dbInstance.close(); dbInstance = null; };
+            return dbInstance;
+        }).catch((err) => {
+            initPromise = null;
+            throw err;
         });
 
         return initPromise;

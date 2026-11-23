@@ -962,11 +962,11 @@ export function createSearchUI(ctx) {
 
         let history = store.last_li_a;
         if (!Array.isArray(history)) history = history ? [history] : [];
+        const currentPath = store.last_html || (history.length > 0 ? history[0] : "");
 
         let currentIndex = -1;
         let isBilingualOpen = false;
-        if (store.resource_type === "html" && history.length > 0) {
-            const currentPath = history[0];
+        if (store.resource_type === "html" && currentPath) {
             const strippedPath = normalizeDocPath(currentPath);
             currentIndex = finalResults.findIndex(r => r.path === currentPath || normalizeDocPath(r.path) === strippedPath);
             try {

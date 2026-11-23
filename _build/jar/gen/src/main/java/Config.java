@@ -45,6 +45,10 @@ public class Config {
 
 
     public static Path buildRoot;
+    /** 仓库根目录（buildRoot 的上一级）。所有"相对仓库根"的路径统一以它为基准, 不再依赖进程的当前工作目录。 */
+    public static Path projectRoot;
+    public static Path gitignoreFile;
+    public static Path coreBundleOut;
     public static Path htmlDir;
     public static Path galleryDir;
     public static Path audioDir;
@@ -84,8 +88,18 @@ public class Config {
             buildRoot = Paths.get(".");
         }
 
+        projectRoot = buildRoot.resolve("..").toAbsolutePath().normalize();
+        gitignoreFile = projectRoot.resolve(".gitignore");
+        coreBundleOut = projectRoot.resolve("src/js/data/core-bundle.json");
+
         try (InputStream input = Files.newInputStream(buildRoot.resolve(CONFIG_FILE))) {
             props.load(input);
+        }
+        Path localConfig = buildRoot.resolve("secrets/local.properties");
+        if (Files.isRegularFile(localConfig)) {
+            try (InputStream localIn = Files.newInputStream(localConfig)) {
+                props.load(localIn);
+            }
         }
 
         htmlDir = buildRoot.resolve(props.getProperty("htmlDir"));
@@ -104,7 +118,7 @@ public class Config {
         String eb = props.getProperty("esbuild_path", "").trim();
         esbuildPath = eb.isEmpty() ? "" : buildRoot.resolve(eb).normalize().toAbsolutePath().toString();
 
-        urlToCheck = props.getProperty("URL_TO_CHECK", "http://diff4x.github.io/ping.txt");
+        urlToCheck = props.getProperty("URL_TO_CHECK", "");
         cwebpPath = buildRoot.resolve(props.getProperty("cwebpPath")).normalize().toAbsolutePath().toString();
         String op2 = props.getProperty("gallery_img_outputDir2", "");
         webpOutputDir2 = op2.isEmpty() ? "" : buildRoot.resolve(op2).toAbsolutePath().toString();

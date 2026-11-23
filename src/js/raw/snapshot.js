@@ -19,9 +19,17 @@ export function takeSnapshot(ctx, reload = false) {
 
             if (href.includes('/html/')) {
                 mainType = 'html';
+                let currentHtml = store.last_html || '';
+                if (!currentHtml) {
+                    try {
+                        const p = decodeURIComponent(cWin.location.pathname || '');
+                        const idx = p.indexOf('/html/');
+                        if (idx !== -1) currentHtml = p.slice(idx + 1);
+                    } catch (_) { }
+                }
                 let history = store.last_li_a;
                 if (!Array.isArray(history)) history = history ? [history] : [];
-                mainPath = history.length > 0 ? history[0] : "src/tpl/bookmark.html";
+                mainPath = currentHtml || (history.length > 0 ? history[0] : "src/tpl/bookmark.html");
             } else if (href.includes('pdf.html')) {
                 mainType = 'pdf';
                 mainPath = store.pdf_path;

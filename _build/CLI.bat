@@ -27,10 +27,12 @@ cd /d "%A%" >nul 2>&1
 :: [2] 配置加载
 :: =====================================================
 set "config_file=%A%config.properties"
+set "local_config_file=%A%secrets\local.properties"
 
 :: Java / 工具链路径
 set "jre_path="
 set "vscode_path="
+set "katrain_dir="
 set "static-web-server_path="
 set "esbuild_path="
 
@@ -62,55 +64,75 @@ for /f "usebackq tokens=1,* delims==" %%A in ("%config_file%") do (
     if "%%A"=="css_input_dir" set "css_input_dir=%%B"
     if "%%A"=="css_output_dir" set "css_output_dir=%%B"
     if "%%A"=="github_page" set "github_page=%%B"
+    if "%%A"=="katrain_dir" set "katrain_dir=%%B"
+)
+
+if exist "%local_config_file%" (
+    for /f "usebackq eol=# tokens=1,* delims==" %%A in ("%local_config_file%") do (
+        if "%%A"=="jre_path" set "jre_path=%%B"
+        if "%%A"=="vscode_path" set "vscode_path=%%B"
+        if "%%A"=="katrain_dir" set "katrain_dir=%%B"
+        if "%%A"=="static-web-server_path" set "static-web-server_path=%%B"
+        if "%%A"=="root_path" set "root_path=%%B"
+        if "%%A"=="port" set "port=%%B"
+        if "%%A"=="log_level" set "log_level=%%B"
+        if "%%A"=="esbuild_path" set "esbuild_path=%%B"
+        if "%%A"=="github_page" set "github_page=%%B"
+    )
 )
 
 
 :: =====================================================
 :: [3] 输入路由层（CLI参数 / URL Scheme 入口）
+::
+:: 安全约定（重要）:
+::   协议 URL 来自浏览器, 属于不可信输入。URL 中的任何文本都不得被拼进
+::   cmd 命令行或 PowerShell 命令串; 一律经环境变量交给 protocol_guard.ps1
+::   校验, 校验通过后批处理只会接触「动作编号」与 base64（字符集 A-Za-z0-9+/=）。
+::   两种入口:
+::     a) 推荐: 注册表直接调用 protocol_guard.ps1 -Mode Launch, 校验后以
+::        `CLI.bat __proto` 重新进入本脚本（URL 完全不经过 cmd 解析）
+::     b) 兼容: 旧注册方式 cmd /c CLI.bat "%1" —— 立即转交 guard 校验
+::        （仍有一次 %~1 经过 cmd 解析, 请用菜单 [7] registering-protocol 重新注册以切换到 a）
 :: =====================================================
+set "guard_ps1=%A%protocol_guard.ps1"
+if "%~1"=="__proto" goto proto_route
+
 set "input_arg=%~1"
 if "!input_arg!"=="" goto run_menu
 
 :: 判断是否为 URL Scheme（包含 ://）
 :: (废弃 pipe 管道，改用纯字符串检查，避免衍生 2 个子 CMD 引发额外的 AutoRun 报错)
 if not "!input_arg:://=!"=="!input_arg!" (
+    set "CLI_RAW=!input_arg!"
+    set "input_arg="
+    set "G_OK="
+    rem guard 只输出 KEY=VALUE（值仅为数字 / base64）, 末行 OK=1 代表校验通过
+    for /f "tokens=1,* delims==" %%K in ('powershell -NoProfile -ExecutionPolicy Bypass -File "!guard_ps1!" -Mode Emit 2^>nul') do set "G_%%K=%%L"
+    set "CLI_RAW="
+    goto proto_route
+)
+goto run_menu
 
-    :: ------------------------------
-    :: URL 解码 (外层包裹 2>nul 彻底吞噬子 CMD 的 stderr 报错)
-    :: ------------------------------
-    (
-        for /f "delims=" %%A in ('powershell -NoProfile -nologo -command "[uri]::UnescapeDataString(\"!input_arg!\")"') do (
-            set "unescaped_arg=%%A"
-        )
-    ) 2>nul
-
-    :: ------------------------------
-    :: 拆分 header 与 params（以 { 分割）
-    :: ------------------------------
-    for /f "tokens=1,* delims={" %%i in ("!unescaped_arg!") do (
-        set "headers=%%i"
-        set "params=%%j"
-    )
-
-    :: ------------------------------
-    :: 提取 action（协议编号）
-    :: ------------------------------
-    for /f "tokens=2 delims=/" %%a in ("!headers!") do set "action=%%a"
-
-    :: ------------------------------
-    :: 路由分发表
-    :: ------------------------------
-    if "!action!"=="1" goto case_edit
-    if "!action!"=="2" goto case_bookmark
-    if "!action!"=="3" goto case_explorer
-    if "!action!"=="4" goto run_menu
-    if "!action!"=="5" goto case_overwrite
-    if "!action!"=="6" goto run_gen
-    if "!action!"=="7" goto case_jump_txn_file_line
-    if "!action!"=="8" goto case_go
-    if "!action!"=="9" goto case_overwrite_md
+:: ------------------------------
+:: 路由分发表（G_* 由 protocol_guard.ps1 校验后提供）
+:: ------------------------------
+:proto_route
+if not "!G_OK!"=="1" (
+    echo [REJECTED] 非法或不受支持的协议请求, 已拒绝执行.
+    pause
     goto end
 )
+if "!G_ACTION!"=="1" goto case_edit
+if "!G_ACTION!"=="2" goto case_bookmark
+if "!G_ACTION!"=="3" goto case_explorer
+if "!G_ACTION!"=="4" goto run_menu
+if "!G_ACTION!"=="5" goto case_overwrite
+if "!G_ACTION!"=="6" goto run_gen
+if "!G_ACTION!"=="7" goto case_jump_txn_file_line
+if "!G_ACTION!"=="8" goto case_go
+if "!G_ACTION!"=="9" goto case_overwrite_md
+goto end
 
 
 :: =====================================================
@@ -147,28 +169,27 @@ if errorlevel 1 goto run_gen
 
 :: =====================================================
 :: [5] URL动作：Edit（打开编辑页面）
+::
+:: 以下各动作: G_* 由 protocol_guard.ps1 校验后提供（数字 / base64）。
+:: 需要原文时一律经 -Mode Decode 在 PowerShell 内解码, 不把原文拼进命令串。
 :: =====================================================
 :case_edit
 set "jar_path=%A%jar\gen.jar"
+set "b64=!G_P_B64!"
+set "CLI_DEC_IN=!G_P_B64!"
+set "params="
+for /f "delims=" %%A in ('powershell -NoProfile -ExecutionPolicy Bypass -File "!guard_ps1!" -Mode Decode 2^>nul') do set "params=%%A"
+if not defined params goto end
+set "html_file=%B%html\!params!.html"
 
-:: 去掉末尾 /
-if "!params:~-1!"=="/" set "params=!params:~0,-1!"
-
-set "html_file=%B%html\%params%.html"
-
-if not exist "%html_file%" (
-    echo File not found: %html_file%
+if not exist "!html_file!" (
+    echo File not found: !html_file!
     pause
     goto end
 )
 
-:: Base64编码参数
-(
-    for /f "delims=" %%A in ('powershell -NoProfile -nologo -command "[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes('%params%'))"') do set "b64=%%A"
-) 2>nul
-
-call :RunJavaAndGetPID "-Dfile.encoding=UTF-8" "-jar" "%jar_path%" "stamp" "%b64%"
-start "" wscript.exe "%A%jar\log_watch.vbs" "%JAVA_PID%" "%vscode_path%" "%html_file%"
+call :RunJavaAndGetPID "-Dfile.encoding=UTF-8" "-jar" "%jar_path%" "stamp" "!b64!"
+start "" wscript.exe "%A%jar\log_watch.vbs" "%JAVA_PID%" "%vscode_path%" "!html_file!"
 goto end
 
 
@@ -177,78 +198,58 @@ goto end
 :: =====================================================
 :case_bookmark
 set "jar_path=%A%jar\gen.jar"
-set "mess=!params!"
+set "CLI_BLOCK_B64=!G_BLOCK_B64!"
+set "CLI_TITLE_B64=!G_TITLE_B64!"
+set "CLI_HREF_B64=!G_HREF_B64!"
+set "CLI_TITLE3="
 
-for /f "tokens=1,2,3 delims=}" %%i in ("!mess!") do (
-    set "block=%%i"
-    set "title=%%j"
-    set "href=%%k"
+:: 标题为空（即 标题 == 链接）时交互输入; 手输文本只经环境变量进入 PowerShell
+if "!G_NEED_TITLE!"=="1" set /p "CLI_TITLE3=Enter the title [optional]:"
+
+set "b64="
+for /f "delims=" %%x in ('powershell -NoProfile -ExecutionPolicy Bypass -File "!guard_ps1!" -Mode Compose 2^>nul') do set "b64=%%x"
+if not defined b64 (
+    echo [ERROR] 书签参数无效, 已放弃.
+    pause
+    goto end
 )
 
-if "!href:~-1!"=="/" set "href=!href:~0,-1!"
-
-set "block2=!block!"
-set "title2=!title!"
-set "href2=!href!"
-
-:: 标题为空时交互输入
-if "%title2%"=="%href2%" (
-    if "%block2%"=="del" (
-        set "psCommand=[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes('!block2!|!title2!|!href2!'))"
-    ) else (
-        set /p title3="Enter the title [optional]:"
-        set "psCommand=[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes('!block2!|!title3!|!href2!'))"
-    )
-) else (
-    set "psCommand=[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes('!block2!|!title2!|!href2!'))"
-)
-
-(
-    for /f "delims=" %%x in ('powershell -NoProfile -nologo -Command "!psCommand!"') do set "b64=%%x"
-) 2>nul
-
-call :RunJavaAndGetPID "-Dfile.encoding=UTF-8" "-jar" "%jar_path%" "bookmark" "%b64%"
+call :RunJavaAndGetPID "-Dfile.encoding=UTF-8" "-jar" "%jar_path%" "bookmark" "!b64!"
 start "" wscript.exe "%A%jar\log_watch.vbs" "%JAVA_PID%"
 goto end
 
 
 :: =====================================================
-:: [7] URL动作：Explorer（打开目录）
+:: [7] URL动作：Explorer（直接打开当前仓库根目录，无参）
 :: =====================================================
 :case_explorer
-start "" "d:!params:%%20= !"
+powershell -NoProfile -ExecutionPolicy Bypass -File "!guard_ps1!" -Mode OpenFolder
 goto end
 
 
 :: =====================================================
-:: [8] URL动作：Clipboard Overwrite（剪贴板写入文件）
+:: [8] URL动作：Clipboard Overwrite（剪贴板写入 html\<标题>.html，不触发全量构建）
 :: =====================================================
 :case_overwrite
-set "title=!params!"
-if "!title:~-1!"=="/" set "title=!title:~0,-1!"
-set "target_file=%B%html\!title!.html"
-
-powershell -NoProfile -nologo -command "Add-Type -AssemblyName System.Windows.Forms; $txt = [System.Windows.Forms.Clipboard]::GetText(); if($txt.Length -gt 0) { [IO.File]::WriteAllText('!target_file!', $txt, [Text.Encoding]::UTF8); [System.Windows.Forms.Clipboard]::Clear(); }" >nul 2>&1
-
-goto run_gen
+set "CLI_DEC_IN=!G_P_B64!"
+powershell -NoProfile -ExecutionPolicy Bypass -STA -File "!guard_ps1!" -Mode WriteClipboard -Kind html
+if errorlevel 1 (
+    echo [ERROR] 写入失败.
+    pause
+)
+goto end
 
 
 :: =====================================================
-:: [9] URL动作：Clipboard Overwrite MD（剪贴板覆写指定 Markdown 文件）
+:: [9] URL动作：Clipboard Overwrite MD（剪贴板覆写仓库内指定 Markdown 文件）
 :: =====================================================
 :case_overwrite_md
-set "md_rel=!params!"
-if "!md_rel:~0,1!"=="/" set "md_rel=!md_rel:~1!"
-if "!md_rel:~-1!"=="/" set "md_rel=!md_rel:~0,-1!"
-if not defined md_rel goto end
-if /i not "!md_rel:~-3!"==".md" goto end
-if not "!md_rel:..=!"=="!md_rel!" goto end
-if not "!md_rel::=!"=="!md_rel!" goto end
-set "md_rel=!md_rel:/=\!"
-set "target_md=%B%!md_rel!"
-
-powershell -NoProfile -nologo -command "Add-Type -AssemblyName System.Windows.Forms; $txt = [System.Windows.Forms.Clipboard]::GetText(); if($txt.Length -gt 0) { $enc = New-Object System.Text.UTF8Encoding($false); $tmp = '!target_md!.tmp'; [IO.File]::WriteAllText($tmp, $txt, $enc); Move-Item -LiteralPath $tmp -Destination '!target_md!' -Force; [System.Windows.Forms.Clipboard]::Clear(); }" >nul 2>&1
-
+set "CLI_DEC_IN=!G_P_B64!"
+powershell -NoProfile -ExecutionPolicy Bypass -STA -File "!guard_ps1!" -Mode WriteClipboard -Kind md
+if errorlevel 1 (
+    echo [ERROR] 写入失败.
+    pause
+)
 goto end
 
 
@@ -256,9 +257,8 @@ goto end
 :: URL动作：打开 txn 跳转到指定行
 :: =====================================================
 :case_jump_txn_file_line
-set "line_num=!params!"
-
-if "!line_num:~-1!"=="/" set "line_num=!line_num:~0,-1!"
+set "line_num=!G_LINE!"
+if not defined line_num goto end
 
 set "txn_file=%A%secrets\txn.txt"
 if not exist "!txn_file!" (
@@ -275,7 +275,14 @@ goto end
 :: URL动作：打开KaTrain
 :: =====================================================
 :case_go
-powershell -NoProfile -Command "Start-Process -FilePath 'uv' -ArgumentList 'run python -m katrain' -WorkingDirectory 'D:\game\Go\client\katrain-1.18.1' -WindowStyle Hidden"
+if not defined katrain_dir (
+    echo [ERROR] 未在 _build\secrets\local.properties 配置 katrain_dir！
+    pause
+    goto end
+)
+set "KATRAIN_DIR=!katrain_dir!"
+powershell -NoProfile -Command "Start-Process -FilePath 'uv' -ArgumentList 'run python -m katrain' -WorkingDirectory $env:KATRAIN_DIR -WindowStyle Hidden"
+set "KATRAIN_DIR="
 goto end
 
 
@@ -311,6 +318,8 @@ for /r "%js_input_dir%" %%F in (*.js) do (
         call :CalcFileHash "%%F"
 
         set "do_build=1"
+
+        set "ONE_ERR=0"
         if exist "%modtime_list%" if exist "%js_output_dir%\!rel!" (
             findstr /L /x /c:"!rel!|!file_hash!" "%modtime_list%" >nul 2>&1
             if not errorlevel 1 set "do_build=0"
@@ -319,7 +328,7 @@ for /r "%js_input_dir%" %%F in (*.js) do (
         if !do_build! == 1 (
             echo [JS] Building !rel!
             "%esbuild_path%" "%%F" --outfile="%js_output_dir%\!rel!" --minify --target=es2020 --charset=utf8 --sourcemap
-            if errorlevel 1 set "GEN_ERROR=1"
+            if errorlevel 1 ( set "GEN_ERROR=1" & set "ONE_ERR=1" )
 
             if exist "%js_output_dir%\!rel!.map" (
                 move /y "%js_output_dir%\!rel!.map" "%JS_MAP_DIR%\!rel!.map" >nul
@@ -329,7 +338,7 @@ for /r "%js_input_dir%" %%F in (*.js) do (
             echo [JS] Skipped !rel!
         )
 
-        >>"%new_list%" echo !rel!^|!file_hash!
+        if "!ONE_ERR!"=="0" >>"%new_list%" echo !rel!^|!file_hash!
     )
 )
 
@@ -341,6 +350,8 @@ for /r "%css_input_dir%" %%F in (*.css) do (
         call :CalcFileHash "%%F"
 
         set "do_build=1"
+
+        set "ONE_ERR=0"
         if exist "%modtime_list%" if exist "%css_output_dir%\!rel!" (
             findstr /L /x /c:"!rel!|!file_hash!" "%modtime_list%" >nul 2>&1
             if not errorlevel 1 set "do_build=0"
@@ -349,7 +360,7 @@ for /r "%css_input_dir%" %%F in (*.css) do (
         if !do_build! == 1 (
             echo [CSS] Building !rel!
             "%esbuild_path%" "%%F" --outfile="%css_output_dir%\!rel!" --minify --target=es2020 --charset=utf8 --sourcemap
-            if errorlevel 1 set "GEN_ERROR=1"
+            if errorlevel 1 ( set "GEN_ERROR=1" & set "ONE_ERR=1" )
 
             if exist "%css_output_dir%\!rel!.map" (
                 move /y "%css_output_dir%\!rel!.map" "%CSS_MAP_DIR%\!rel!.map" >nul
@@ -358,7 +369,7 @@ for /r "%css_input_dir%" %%F in (*.css) do (
         ) else (
             echo [CSS] Skipped !rel!
         )
-        >>"%new_list%" echo !rel!^|!file_hash!
+        if "!ONE_ERR!"=="0" >>"%new_list%" echo !rel!^|!file_hash!
     )
 )
 
@@ -368,6 +379,7 @@ if exist "!raw_font_path!" (
     for %%F in ("!raw_font_path!") do (
         call :CalcFileHash "%%F"
         set "do_build=1"
+        set "ONE_ERR=0"
 
         if exist "%modtime_list%" if exist "%B%src\css\font.css" (
             findstr /L /x /c:"font.css|!file_hash!" "%modtime_list%" >nul 2>&1
@@ -377,11 +389,11 @@ if exist "!raw_font_path!" (
         if !do_build! == 1 (
             echo [CSS] Building font.css
             "%esbuild_path%" "%%F" --outfile="%B%src\css\font.css" --minify --target=es2020 --charset=utf8
-            if errorlevel 1 set "GEN_ERROR=1"
+            if errorlevel 1 ( set "GEN_ERROR=1" & set "ONE_ERR=1" )
         ) else (
             echo [CSS] Skipped font.css
         )
-        >>"%new_list%" echo font.css^|!file_hash!
+        if "!ONE_ERR!"=="0" >>"%new_list%" echo font.css^|!file_hash!
     )
 )
 
@@ -390,8 +402,11 @@ if exist "!raw_font_path!" (
 :: =====================================================
 set "jar_gen=%A%jar\gen.jar"
 echo [INFO] Running gen.jar to generate latest manifests...
+:: gen.jar 通过 -Dgen.status 指定的文件汇报结果（OK / FAIL: ...）; 这里只能靠 PID 轮询等待, 拿不到退出码
+set "GEN_STATUS=%TEMP%\diff4x_gen_status.txt"
+if exist "%GEN_STATUS%" del /f /q "%GEN_STATUS%" >nul 2>&1
 
-call :RunJavaAndGetPID "-Dfile.encoding=UTF-8" "-jar" "%jar_gen%"
+call :RunJavaAndGetPID "-Dfile.encoding=UTF-8" "-Dgen.status=%GEN_STATUS%" "-jar" "%jar_gen%"
 start "" wscript.exe "%A%jar\log_watch.vbs" "%JAVA_PID%"
 
 :wait_java_gen
@@ -401,10 +416,22 @@ if not errorlevel 1 (
     goto wait_java_gen
 )
 
+:: 构建失败即停: 不再压缩、不提交、不推送, 产物保持上一次状态
+findstr /b /c:"OK" "%GEN_STATUS%" >nul 2>&1
+if errorlevel 1 (
+    echo.
+    echo [ERROR] gen.jar 构建失败, 已中止后续压缩与推送。详情见日志窗口 / gen_status:
+    if exist "%GEN_STATUS%" type "%GEN_STATUS%"
+    set "GEN_ERROR=1"
+    pause
+    goto end
+)
+
 for /r "%js_input_dir%" %%F in (core-list.js sw.js) do (
     set "rel=%%~nxF"
     call :CalcFileHash "%%F"
     set "do_build=1"
+    set "ONE_ERR=0"
     set "target_out=%js_output_dir%\!rel!"
     if "!rel!"=="sw.js" set "target_out=%B%sw.js"
 
@@ -417,7 +444,7 @@ for /r "%js_input_dir%" %%F in (core-list.js sw.js) do (
         echo [JS] Building !rel!
         
         "%esbuild_path%" "%%F" --outfile="%js_output_dir%\!rel!" --minify --target=es2020 --charset=utf8 --sourcemap
-        if errorlevel 1 set "GEN_ERROR=1"
+        if errorlevel 1 ( set "GEN_ERROR=1" & set "ONE_ERR=1" )
 
         if exist "%js_output_dir%\!rel!.map" (
             move /y "%js_output_dir%\!rel!.map" "%JS_MAP_DIR%\!rel!.map" >nul
@@ -432,7 +459,7 @@ for /r "%js_input_dir%" %%F in (core-list.js sw.js) do (
     ) else (
         echo [JS] Skipped !rel!
     )
-    >>"%new_list%" echo !rel!^|!file_hash!
+    if "!ONE_ERR!"=="0" >>"%new_list%" echo !rel!^|!file_hash!
 )
 
 if exist "%new_list%" (
@@ -552,8 +579,17 @@ goto end
 :: [13] 静态服务器启动
 :: =====================================================
 :run_static-web-server
-start "Local" /min "%static-web-server_path%" --host 127.0.0.1 -d "%root_path%" -p "%port%" -g "%log_level%"
-start "" "http://localhost:%port%"
+set "PROTO_KEY="
+for /f "delims=" %%K in ('powershell -NoProfile -ExecutionPolicy Bypass -File "!guard_ps1!" -Mode EnsureKey -Rotate') do set "PROTO_KEY=%%K"
+if not defined PROTO_KEY (
+    echo [ERROR] 初始化本地协议密钥失败！
+    pause
+    goto end
+)
+powershell -NoProfile -Command "Get-NetTCPConnection -LocalAddress 127.0.0.1 -LocalPort %port% -State Listen -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }"
+start "Local" /min "%static-web-server_path%" -w "%A%server\sws.toml" --host 127.0.0.1 -d "%root_path%" -p "%port%" -g "%log_level%"
+start "" "http://localhost:%port%/#__diff4x_key=!PROTO_KEY!"
+set "PROTO_KEY="
 goto end
 
 
@@ -620,7 +656,15 @@ echo Registering protocol '%protocol_name%' directly to registry...
 
 reg add "HKCR\%protocol_name%" /ve /d "%protocol_name% Protocol" /f >nul
 reg add "HKCR\%protocol_name%" /v "URL Protocol" /t REG_SZ /d "" /f >nul
-reg add "HKCR\%protocol_name%\shell\open\command" /ve /d "cmd.exe /d /c \"\"%protocol_bat%\" \"%%1\"\"" /f >nul
+set "protocol_guard=%A%protocol_guard.ps1"
+set "ps_exe=%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe"
+if not exist "%protocol_guard%" (
+    echo [ERROR] protocol_guard.ps1 not found: %protocol_guard%
+    pause
+    goto end
+)
+:: URL 直接交给 PowerShell 的 argv（不经过 cmd 解析），由 guard 校验后再回调 CLI.bat __proto
+reg add "HKCR\%protocol_name%\shell\open\command" /ve /d "\"%ps_exe%\" -NoProfile -ExecutionPolicy Bypass -File \"%protocol_guard%\" -Mode Launch \"%%1\"" /f >nul
 
 if errorlevel 1 (
     echo [ERROR] Failed to register protocol.
@@ -635,7 +679,8 @@ goto end
 :: =====================================================
 :run_simulation
 echo Starting Simulation Environment on port 9000...
-start "Simulation" /min "%static-web-server_path%" --host 127.0.0.1 -d "%root_path%" -p "9000" -g "info"
+powershell -NoProfile -Command "Get-NetTCPConnection -LocalAddress 127.0.0.1 -LocalPort 9000 -State Listen -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }"
+start "Simulation" /min "%static-web-server_path%" -w "%A%server\sws-sim.toml" --host 127.0.0.1 -d "%root_path%" -p "9000" -g "info"
 start chrome --incognito "http://localhost:9000"
 goto end
 

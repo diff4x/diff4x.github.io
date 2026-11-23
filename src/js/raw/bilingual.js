@@ -3,21 +3,7 @@ if (window.top && window.top.VirtualCursor) {
 }
 
 (function () {
-    const store = new Proxy({}, {
-        get(_, prop) {
-            const val = localStorage.getItem(prop);
-            if (val === null) return undefined;
-            try { return JSON.parse(val); } catch { return val; }
-        },
-        set(_, prop, value) {
-            localStorage.setItem(prop, JSON.stringify(value));
-            return true;
-        },
-        deleteProperty(_, prop) {
-            localStorage.removeItem(prop);
-            return true;
-        }
-    });
+    const store = window.top.SiteCore.createStore();
 
     if (store.online_flag === "1") {
         document.getElementById('control-panel').classList.add("hidden")
@@ -261,20 +247,27 @@ if (window.top && window.top.VirtualCursor) {
                 return;
             }
 
-            const proto = String(store.protocol_name || '').trim();
-            if (!proto) {
-                alert("❌ 未配置自定义协议 protocol_name，无法调用外部固化程序！");
-                return;
-            }
-
             const safeTitle = document.title.trim() || "Unknown";
-            const protocolUrl = proto + `://5{` + encodeURIComponent(safeTitle);
 
             let baselineHtml = "";
             try {
                 const res = await fetch(location.href, { cache: 'no-store' });
                 if (res.ok) baselineHtml = await res.text();
             } catch (_) { }
+
+            // 先生成认证加密信封，失败则中止（保护本地草稿不被销毁、不进入锁屏）
+            let protocolUrl = "";
+            try {
+                if (window.top && typeof window.top.sealProtocolUrl === "function") {
+                    protocolUrl = await window.top.sealProtocolUrl(5, safeTitle);
+                } else {
+                    const m = await import("/src/js/shared-utils.js");
+                    protocolUrl = await m.sealProtocolUrl(5, safeTitle);
+                }
+            } catch (err) {
+                alert("❌ 本地协议封包失败，已保留草稿并中止固化：" + (err && err.message ? err.message : String(err)));
+                return;
+            }
 
             try { await destroyDraft(); } catch (_) { }
 
@@ -284,6 +277,10 @@ if (window.top && window.top.VirtualCursor) {
             lockScreen.innerHTML = `<div id="bil-lock-text">⌛固化中..</div>`;
 
             window.location.href = protocolUrl;
+
+            const normText = (s) => (s || '').replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n');
+            const expectedHtml = normText(htmlString);
+            const baseNorm = normText(baselineHtml);
 
             let pollCount = 0;
             let unlocked = false;
@@ -298,12 +295,12 @@ if (window.top && window.top.VirtualCursor) {
                     lockScreen.style.display = "none";
                 };
                 lockScreen.appendChild(btn);
-            }, 8000);
+            }, 6000);
 
             const pollTimer = setInterval(async () => {
                 if (unlocked) { clearInterval(pollTimer); return; }
                 pollCount++;
-                if (pollCount > 28) {
+                if (pollCount > 45) {
                     clearInterval(pollTimer);
                     const lbl = document.getElementById('bil-lock-text');
                     if (lbl) lbl.textContent = '⚠️ 等待固化超时，请确认外部终端完成后手动刷新';
@@ -312,8 +309,8 @@ if (window.top && window.top.VirtualCursor) {
                 try {
                     const r = await fetch(location.href + (location.search ? '&' : '?') + '_t=' + Date.now(), { cache: 'no-store' });
                     if (r.ok) {
-                        const latest = await r.text();
-                        if (baselineHtml && latest && latest !== baselineHtml) {
+                        const latestNorm = normText(await r.text());
+                        if ((baseNorm && latestNorm && latestNorm !== baseNorm) || (expectedHtml && latestNorm === expectedHtml)) {
                             unlocked = true;
                             clearTimeout(unlockTimer);
                             clearInterval(pollTimer);
@@ -321,7 +318,7 @@ if (window.top && window.top.VirtualCursor) {
                         }
                     }
                 } catch (_) { }
-            }, 1500);
+            }, 400);
         });
     }
 })();

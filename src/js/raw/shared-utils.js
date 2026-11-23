@@ -6,7 +6,42 @@
 export const $ = (selector) => document.querySelector(selector);
 export const $$ = (selector) => document.querySelectorAll(selector);
 
-export function createLocalStoreProxy(defaults = {}) {
+function getSiteCore() {
+    try {
+        if (window.top && window.top.SiteCore) return window.top.SiteCore;
+    } catch (_) { }
+    return (typeof globalThis !== 'undefined' && globalThis.SiteCore) ? globalThis.SiteCore : null;
+}
+
+const FALLBACK_BLOCKED_SCHEMES = new Set([
+    'javascript', 'data', 'vbscript', 'file', 'blob', 'about',
+    'http', 'https', 'ws', 'wss', 'ftp', 'mailto', 'tel'
+]);
+
+export function sanitizeProtocolName(raw) {
+    const sc = getSiteCore();
+    if (sc && typeof sc.sanitizeProtocolName === 'function') return sc.sanitizeProtocolName(raw);
+    let s = raw;
+    if (typeof s === 'string') {
+        try {
+            const parsed = JSON.parse(s);
+            if (typeof parsed === 'string') s = parsed;
+        } catch (_) { }
+    }
+    s = String(s || '').trim().toLowerCase();
+    if (!/^[a-z][a-z0-9+.-]{0,31}$/.test(s) || FALLBACK_BLOCKED_SCHEMES.has(s)) return '';
+    return s;
+}
+
+export function sanitizeAudioList(list) {
+    const sc = getSiteCore();
+    if (sc && typeof sc.sanitizeAudioList === 'function') return sc.sanitizeAudioList(list);
+    return Array.isArray(list) ? list.filter(x => typeof x === 'string') : [];
+}
+
+export function createLocalStoreProxy(defaults = {}, opts = {}) {
+    const sc = getSiteCore();
+    if (sc && typeof sc.createStore === 'function') return sc.createStore(defaults, opts);
     return new Proxy({}, {
         get(_, key) {
             const raw = localStorage.getItem(key);
@@ -444,4 +479,117 @@ export function buildMergedGroupSnippets(groupHits, opts) {
     }
 
     return { items, more: Math.max(0, windows.length - items.length) };
+}
+
+// =========================================================================
+// 本地自定义协议：#fragment 密钥吸收 + Encrypt-then-MAC 一次性信封
+// =========================================================================
+export const PROTO_KEY_STORAGE = '__diff4x_proto_key__';
+const _protoEncoder = new TextEncoder();
+
+function hexToBytes(hex) {
+    if (typeof hex !== 'string' || !/^[0-9a-f]{64}$/i.test(hex)) return null;
+    const out = new Uint8Array(32);
+    for (let i = 0; i < 32; i++) out[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+    return out;
+}
+
+function bytesToHex(bytes) {
+    let s = '';
+    for (let i = 0; i < bytes.length; i++) s += bytes[i].toString(16).padStart(2, '0');
+    return s;
+}
+
+function bytesToBase64Url(bytes) {
+    let bin = '';
+    for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+    return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+export function ingestProtocolKeyFromHash(isLocalEnv) {
+    if (!isLocalEnv) return false;
+    const h = window.location.hash || '';
+    const m = /^#__diff4x_key=([0-9a-f]{64})$/i.exec(h);
+    if (!m) return false;
+    try {
+        localStorage.setItem(PROTO_KEY_STORAGE, m[1].toLowerCase());
+    } catch (_) { }
+    try {
+        history.replaceState(null, '', window.location.pathname + window.location.search);
+    } catch (_) {
+        window.location.hash = '';
+    }
+    return true;
+}
+
+async function deriveProtoSubKeys(masterBytes) {
+    const concat = (a, b) => {
+        const u = new Uint8Array(a.length + b.length);
+        u.set(a, 0);
+        u.set(b, a.length);
+        return u;
+    };
+    const [encRaw, macRaw] = await Promise.all([
+        crypto.subtle.digest('SHA-256', concat(masterBytes, _protoEncoder.encode('diff4x-proto-enc-v1'))),
+        crypto.subtle.digest('SHA-256', concat(masterBytes, _protoEncoder.encode('diff4x-proto-mac-v1')))
+    ]);
+    const [encKey, macKey] = await Promise.all([
+        crypto.subtle.importKey('raw', encRaw, { name: 'AES-CBC' }, false, ['encrypt']),
+        crypto.subtle.importKey('raw', macRaw, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'])
+    ]);
+    return { encKey, macKey };
+}
+
+export async function sealProtocolUrl(action, param = '') {
+    if (!window.crypto || !crypto.subtle) {
+        throw new Error('当前非安全上下文，Web Crypto API 不可用');
+    }
+    const proto = sanitizeProtocolName(localStorage.getItem('protocol_name'));
+    if (!proto) throw new Error('非法或未配置 protocol_name');
+
+    const keyHex = (localStorage.getItem(PROTO_KEY_STORAGE) || '').trim();
+    const masterBytes = hexToBytes(keyHex);
+    if (!masterBytes) {
+        throw new Error('缺少本地协议密钥，请通过 CLI.bat [4] 重新打开本地站点');
+    }
+
+    const { encKey, macKey } = await deriveProtoSubKeys(masterBytes);
+    const nonce = bytesToHex(crypto.getRandomValues(new Uint8Array(16)));
+    const iv = crypto.getRandomValues(new Uint8Array(16));
+    const payload = JSON.stringify({
+        v: 1,
+        act: Number(action),
+        p: String(param ?? ''),
+        ts: Math.floor(Date.now() / 1000),
+        nonce,
+        origin: window.location.origin
+    });
+
+    const ctBuf = await crypto.subtle.encrypt({ name: 'AES-CBC', iv }, encKey, _protoEncoder.encode(payload));
+    const ct = new Uint8Array(ctBuf);
+
+    const body = new Uint8Array(1 + 16 + ct.length);
+    body[0] = 1;
+    body.set(iv, 1);
+    body.set(ct, 17);
+
+    const tagBuf = await crypto.subtle.sign('HMAC', macKey, body);
+    const tag = new Uint8Array(tagBuf);
+
+    const packet = new Uint8Array(body.length + 32);
+    packet.set(body, 0);
+    packet.set(tag, body.length);
+
+    return `${proto}://env/v1.${bytesToBase64Url(packet)}`;
+}
+
+export async function invokeProtocol(action, param = '') {
+    try {
+        const url = await sealProtocolUrl(action, param);
+        window.location.href = url;
+        return true;
+    } catch (err) {
+        alert('❌ 本地协议调用失败：' + (err && err.message ? err.message : String(err)));
+        return false;
+    }
 }

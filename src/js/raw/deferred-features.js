@@ -236,6 +236,12 @@ export async function showChangelog(ctx, opts = {}) {
             if (link) {
                 const path = link.dataset.path;
                 const bucket = link.dataset.bucket;
+
+                if (bucket === 'md') {
+                    openMdViewer({ file: path });
+                    return;
+                }
+
                 let typeSelector = '';
 
                 if (bucket === 'html') typeSelector = '#html a';
@@ -308,6 +314,7 @@ async function buildFilesHtml(ctx) {
         let msgHtml = safeLogMsg;
 
         const match = log.msg.match(/(\/)?(html|gallery|video|audio|ebook)\/(.+)$/);
+        const mdMatch = !match && log.msg.match(/(\/)?(README\.md)(?:\?[^\s]*)?$/i);
 
         if (match) {
             const fullMatch = match[0];
@@ -336,6 +343,19 @@ async function buildFilesHtml(ctx) {
                 }
             } else if (lockIcon) {
                 msgHtml = safeLogMsg.replace(safeFullMatch, lockIcon + safeFullMatch);
+            }
+        } else if (mdMatch) {
+            const fullMatch = mdMatch[0];
+            const safeFullMatch = escapeHtml(fullMatch);
+            const cleanPath = `/${mdMatch[2]}`;
+
+            if (!seenPaths.has(cleanPath)) {
+                seenPaths.add(cleanPath);
+
+                if (isAddOrUpdate) {
+                    const linkHtml = `<span class="log-link" data-path="${escapeHtml(cleanPath)}" data-bucket="md" style="cursor: pointer; text-decoration: underline; font-weight: bold;" title="在 md_viewer 中打开">${safeFullMatch}</span>`;
+                    msgHtml = safeLogMsg.replace(safeFullMatch, linkHtml);
+                }
             }
         }
         html += `<div style="color: ${textColor}; margin-bottom: 2px;">${dateStr} ${msgHtml}</div>`;
@@ -489,7 +509,10 @@ const ProtocolUIFactory = {
 };
 
 const restoreData = async (data, selections) => {
-    if (selections.includes('favList') && data.favList !== undefined) store.favList = data.favList;
+    if (selections.includes('favList') && data.favList !== undefined) {
+        const sc = window.SiteCore || (window.top && window.top.SiteCore);
+        store.favList = sc ? sc.sanitizeAudioList(data.favList) : [];
+    }
     if (selections.includes('marks') && data.marks !== undefined) store.ss_marks_lifepod = data.marks;
     if (selections.includes('last_li_a') && data.last_li_a !== undefined) store.last_li_a = data.last_li_a;
     if (selections.includes('layout') && data.layout_content_flex !== undefined) store.layout_content_flex = data.layout_content_flex;
@@ -605,8 +628,12 @@ export function bomb(ctx) {
                     savedSnapStr = sessionStorage.getItem('ss_restore_strict');
                 }
                 const backupData = await getSelectedData(selections);
+                const savedProtoKey = store.online_flag === '0' ? localStorage.getItem('__diff4x_proto_key__') : null;
                 await doWipe();
                 await restoreData(backupData, selections);
+                if (savedProtoKey) {
+                    try { localStorage.setItem('__diff4x_proto_key__', savedProtoKey); } catch (_) { }
+                }
                 if (savedSnapStr) {
                     try { sessionStorage.setItem('ss_restore_strict', savedSnapStr); } catch (_) { }
                 }
@@ -1195,6 +1222,7 @@ export function openMdViewer(opts = {}) {
 
         popup = document.createElement('div');
         popup.id = 'md-viewer-popup';
+        popup.dataset.file = file;
         popup.classList.add('elastic-anim');
         popup.style.cssText = 'display:none;left:0px;top:0px;width:100%;height:100%;border-radius:0;';
 
@@ -1327,9 +1355,22 @@ export function openMdViewer(opts = {}) {
             } catch (_) { }
             popup.style.display = 'none';
         };
-    } else if (hash) {
+    } else {
         const iframe = document.getElementById('md-viewer-frame');
-        try { iframe?.contentWindow?.postMessage({ type: 'SCROLL_HASH', hash }, location.origin); } catch (_) { }
+        if (iframe && popup.dataset.file !== file) {
+            try {
+                if (iframe.contentWindow && iframe.contentWindow._mdDirty && !confirm('有未固化的修改，确定切换文档？')) {
+                    popup.style.display = 'flex';
+                    return;
+                }
+            } catch (_) { }
+            popup.dataset.file = file;
+            const qs = new URLSearchParams({ file });
+            if (hash) qs.set('hash', hash);
+            iframe.src = `src/tpl/md_viewer.html?${qs.toString()}`;
+        } else if (hash) {
+            try { iframe?.contentWindow?.postMessage({ type: 'SCROLL_HASH', hash }, location.origin); } catch (_) { }
+        }
     }
 
     popup.style.display = 'flex';

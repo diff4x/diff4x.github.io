@@ -1,0 +1,44 @@
+# _build/server/sws-sim.toml — 线上仿真服务器安全配置（9000 端口）
+# 彻底封禁 _build 全目录与本地 shadow 切片，与线上 GitHub Pages 暴露面保持一致。
+
+[general]
+ignore-hidden-files = true
+directory-listing = false
+
+[advanced]
+
+[[advanced.rewrites]]
+source = "**/*~[0-9]*"
+destination = "/__blocked__"
+
+[[advanced.rewrites]]
+source = "**/*~[0-9]*/**"
+destination = "/__blocked__"
+
+[[advanced.rewrites]]
+source = "**/*[ .]"
+destination = "/__blocked__"
+
+[[advanced.rewrites]]
+source = "**/*[ .]/**"
+destination = "/__blocked__"
+
+[[advanced.rewrites]]
+source = "/_[bB][uU][iI][lL][dD]"
+destination = "/__blocked__"
+
+[[advanced.rewrites]]
+source = "/_[bB][uU][iI][lL][dD]/**"
+destination = "/__blocked__"
+
+[[advanced.rewrites]]
+source = "/[sS][rR][cC]/[jJ][sS]/[dD][aA][tT][aA]/[sS][hH][aA][dD][oO][wW]*"
+destination = "/__blocked__"
+
+[[advanced.headers]]
+source = "**"
+[advanced.headers.headers]
+X-Content-Type-Options = "nosniff"
+X-Frame-Options = "SAMEORIGIN"
+Referrer-Policy = "strict-origin-when-cross-origin"
+Content-Security-Policy = "script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' https://giscus.app; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; frame-ancestors 'self';"

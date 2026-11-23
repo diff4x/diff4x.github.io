@@ -2,6 +2,7 @@
 <html lang="zh-CN" data-ui="light">
 <head>
 <meta charset="UTF-8">
+<meta http-equiv="Content-Security-Policy" content="script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; worker-src 'self' blob:; object-src 'none'; base-uri 'self';">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>TXT Viewer</title>
 <style>
@@ -2325,7 +2326,10 @@ select.tb-select {
                 applyDecodedDocument(State.history.encoding || 'auto', { keepOffset: false });
                 registerWithMainSearch();
             } catch (err) {
-                stage.innerHTML = `<div class="txt-loading">无法加载文件：${err.message}</div>`;
+                const errEl = document.createElement('div');
+                errEl.className = 'txt-loading';
+                errEl.textContent = `无法加载文件：${err && err.message ? err.message : String(err)}`;
+                stage.replaceChildren(errEl);
             }
         }
 

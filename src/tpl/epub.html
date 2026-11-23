@@ -8,6 +8,7 @@
 	<head>
 
 		<meta charset="utf-8" />
+		<meta http-equiv="Content-Security-Policy" content="script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; worker-src 'self' blob:; object-src 'none'; base-uri 'self';" />
 		<meta name="viewport" content="width=device-width, initial-scale=1.0, minimum-scale=1.0, maximum-scale=1.0" />
 		<meta http-equiv="X-UA-Compatible" content="IE=edge" />
 
@@ -332,8 +333,29 @@
 				return { text: parts.join(''), nodes, anchorOffsets };
 			}
 
+			function hardenChapterDocument(doc) {
+				if (!doc || doc._epubHardened) return;
+				doc._epubHardened = true;
+				if (doc.head && !doc.querySelector('meta[http-equiv="Content-Security-Policy"]')) {
+					const meta = doc.createElement('meta');
+					meta.httpEquiv = 'Content-Security-Policy';
+					meta.content = "script-src 'none'; object-src 'none';";
+					doc.head.prepend(meta);
+				}
+				doc.querySelectorAll('script, iframe, object, embed').forEach(el => el.remove());
+				doc.querySelectorAll('*').forEach(el => {
+					for (const attr of Array.from(el.attributes)) {
+						const name = attr.name.toLowerCase();
+						if (name.startsWith('on') || ((name === 'href' || name === 'src') && /^\s*javascript:/i.test(attr.value))) {
+							el.removeAttribute(attr.name);
+						}
+					}
+				});
+			}
+
 			function prepareItemForSearch(item) {
 				if (!item || item.IsPlaceholder || !item.contentDocument || !item.contentWindow) return;
+				hardenChapterDocument(item.contentDocument);
 				ensureItemHighlightStyle(item.contentDocument);
 				if (!State.boundItems.has(item)) {
 					State.boundItems.add(item);

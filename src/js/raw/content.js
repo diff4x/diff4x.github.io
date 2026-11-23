@@ -24,7 +24,7 @@
                             const isSearchActive = nav && nav.innerHTML.trim() !== '';
                             if (isSearchActive) {
                                 nav.innerHTML = '';
-                                localStorage.setItem('jump_from_search_ex', JSON.stringify("1"));
+                                sessionStorage.setItem('jump_from_search_ex', JSON.stringify("1"));
                                 if (typeof search === 'function') {
                                     search();
                                 }
@@ -321,31 +321,7 @@ document.addEventListener('keydown', (e) => {
 })();
 
 function createStore(defaults = {}) {
-    return new Proxy({}, {
-        get(_, prop) {
-            if (prop === 'pinyinData') {
-                return window.top.pinyinData || {};
-            }
-
-            const val = localStorage.getItem(prop);
-            if (val === null) return defaults[prop];
-            try { return JSON.parse(val); } catch { return val; }
-        },
-        set(_, prop, value) {
-            if (prop === 'pinyinData') {
-                return true;
-            }
-
-            localStorage.setItem(prop, JSON.stringify(value));
-            return true;
-        },
-        deleteProperty(_, prop) {
-            if (prop === 'pinyinData') return true;
-
-            localStorage.removeItem(prop);
-            return true;
-        }
-    });
+    return window.top.SiteCore.createStore(defaults);
 }
 
 async function format() {
@@ -420,13 +396,19 @@ async function format() {
         bar.innerHTML = `
             <span id='s_nav'></span>
             <span id='diff-btn'></span>
-            <span id='cm' title='0 comment' style="display:none" onclick='emitEvent("sh_comments", document.getElementById("stamp")?.innerText || "", "index");'>💬</span>
+            <span id='cm' title='0 comment' style="display:none">💬</span>
             <span id='stamp' title='${format_date(parts[0])}'>${parts[1]} > ${document.title}</span>
             <div style='top:0;left:0'>
                 <div id='processBar' style='height: 3px; background: violet; width: 0%;'></div>
             </div>
         `;
         document.body.appendChild(bar);
+        const cmEl = document.getElementById("cm");
+        if (cmEl) {
+            cmEl.addEventListener("click", () => {
+                emitEvent("sh_comments", document.getElementById("stamp")?.innerText || "", "index");
+            });
+        }
 
         initDiffUI();
 
@@ -451,8 +433,19 @@ async function format() {
             };
 
             document.getElementById("s_nav").insertAdjacentHTML("afterend",
-                `<span style='float: left' id='edit' onclick="location.href='` + store.protocol_name + `://1{' + encodeURIComponent(document.title)">edit</span>`
+                `<span style='float: left' id='edit'>edit</span>`
             );
+            const editEl = document.getElementById("edit");
+            if (editEl) {
+                editEl.addEventListener("click", async () => {
+                    if (window.top && typeof window.top.invokeProtocol === "function") {
+                        await window.top.invokeProtocol(1, document.title);
+                    } else {
+                        const m = await import("/src/js/shared-utils.js");
+                        await m.invokeProtocol(1, document.title);
+                    }
+                });
+            }
         }
     }
 }
@@ -2001,19 +1994,7 @@ async function initDiffUI() {
             '/html/' + fileName, 'html/' + fileName
         ];
 
-        const idb = await new Promise((resolve, reject) => {
-            const req = indexedDB.open('MainDB', 3);
-            req.onupgradeneeded = (e) => {
-                const db = e.target.result;
-                if (!db.objectStoreNames.contains('chunks')) db.createObjectStore('chunks');
-                if (!db.objectStoreNames.contains('update_logs')) db.createObjectStore('update_logs', { autoIncrement: true });
-                if (!db.objectStoreNames.contains('search_cache')) db.createObjectStore('search_cache');
-                if (!db.objectStoreNames.contains('sys_state')) db.createObjectStore('sys_state');
-                if (!db.objectStoreNames.contains('html_snapshots')) db.createObjectStore('html_snapshots');
-            };
-            req.onsuccess = (e) => resolve(e.target.result);
-            req.onerror = (e) => reject(e.target.error);
-        });
+        const idb = await window.top.SiteCore.openMainDB();
 
         if (idb.objectStoreNames.contains('html_snapshots')) {
             const tx = idb.transaction('html_snapshots', 'readonly');
