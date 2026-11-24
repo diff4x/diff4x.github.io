@@ -73,7 +73,7 @@
 - 线上评论：`html` 页面左上角点按评论气泡，登录 GitHub 账号参与评论
 - 拼音与摘抄：`html`、`pdf`、`epub`、`txt`、`README` 页面中，选中单字提示拼音，选中多字提示摘抄
 - 全屏浏览：`gallery`、`video`、`pdf`、`txt` 下 `鼠标中击` 进入全屏
-- 壁纸收集：`gallery` 中 `As wallpaper` 将图片加入壁纸列表，在 Bookmark 页面右下角集中管理
+- 壁纸收集：`gallery` 中 `As Wallpaper` 将图片加入壁纸列表，在 Bookmark 页面右下角集中管理
 
 ## 侧边栏
 
@@ -93,12 +93,12 @@
   | `Excerpts` | 摘抄薄 |
   | `go_board` | 打开网页棋盘 |
   | `street_view_uploader` | Google 全景图上传 |
-  | `txn_parser` | 解析当前流水 |
+  | `txn_parser` | 解析当前流水（仅本地环境读取 `_build/secrets/txn.txt`；汇率经外部 API 获取，见 10.4） |
 
 ## 播放器
 
 - 音频：允许 `fav` 标记和常规循环，左上角 `🎵` 单击显隐双击销毁
-- 视频：允许外挂字幕与延迟微调
+- 视频：`mkv` 文件允许外挂字幕（读取 `video/vtt/<同名>.vtt`；`vtt/` 在 `.gitignore` 中，仅本地可用）与延迟微调（`[` 提前、`]` 延后，每次 0.5 s）
 - 图片灯箱：支持拖拽与滚轮缩放
 - 全景图：`gallery` 中文件名以 `pano_` 为前缀的图片，双击进入沉浸式浏览
 
@@ -131,19 +131,19 @@
 | :--- | :--- |
 | `gen` | **核心构建**：增量压缩前端资源，扫描各资源目录和 `html/` 正文生成数据切片，按需重建同义词库并更新文件哈希账本 |
 | `new` | **创建新页**：交互式指定标题与分类链代入固定 HTML 模板；分类链中的子分类以 `\|` 分隔 |
-| `keep2html` | **笔记转换**：将 Google Keep 已归档的笔记转换为 HTML 文件 |
-| `webp` | **图片压缩**：将配置的截图目录下的图片转为 `webp` 格式落盘至 `gallery/img/`，自动复制文件名到剪贴板 |
+| `keep2html` | **笔记转换**：取 `keep_takeout_zip_folder` 中最新的 Takeout `zip`（自动解压），将已归档且未删除的 Google Keep 笔记转换为 HTML 文件；图片缩放后转 `webp`（GIF 经 `gif2webp`）。支持单篇与多合一两种模式（规则见「预设规则」） |
+| `webp` | **图片压缩**：将 `imgInputDir`（截图目录）顶层的 `jpg` / `png` 按交互参数缩放（默认最大宽 800）并转为 `webp`（默认质量 80），以时间戳序号命名落盘至 `gallery/img/`（可选改存 `webpOutputDir2`）；原图移入该截图目录的 `history/`；可选把 `html/` 中的旧文件名引用回写为新文件名；文件名自动复制到剪贴板 |
 | `static-web-server` | **本地运维**：轮换协议主密钥并启动本地静态服务器（`8000`、`error`、`sws.toml`），在常规窗口中打开站点首页 |
-| `push` | **提交与发布**：交互输入提交说明并执行 `git add` / `commit` / `push` |
+| `push` | **提交与发布**：交互输入提交说明并执行 `git add -A` / `commit` / `push` |
 | `gen_and_push` | **构建并发布**：顺序执行 `gen`，构建通过后自动进入 `push` |
-| `registering-protocol` | **一次性协议注册**：注册 `diff4x://` 自定义协议并绑定 `protocol_guard.ps1`（需管理员权限） |
+| `registering-protocol` | **一次性协议注册**：注册自定义协议（协议名取自 `github_page` 域名的首段，当前为 `diff4x://`）并绑定 `protocol_guard.ps1`（需管理员权限） |
 | `simulation` | **线上仿真**：启动本地仿真服务器（`9000`、`info`、`sws-sim.toml`），在隐身窗口中打开站点首页 |
-| `vpn-heartbeat-tray` | **后台服务**：任务栏常驻网络状态标识，轮询 Google Tasks API，附带 Windows 系统工具入口 |
+| `vpn-heartbeat-tray` | **后台服务**：任务栏常驻网络状态标识（每 10 s 探测一次，绿 / 红），每 5 分钟轮询 Google Tasks API，附带 Windows 系统工具入口（事件查看器 / 设备管理器 / 服务） |
 
 ## 内容栏
 
 - `html` 页面左上角点按 `edit` 调用本地 `VS Code` 编辑实体文件，自动覆写时间戳
-- `html` 页面右上角双击标题重载内容栏
+- `html` 页面右上角双击标题重载内容栏（仅本地环境）
 - 左单击 `bookmark` 页面中的 `README` 弹出 markdown 浏览器加载站点手册（本地环境下支持左右分栏编辑，点击 `Save` 或按 `Ctrl+S` 原地固化）
   - 中击跳转到本项目的线上 GitHub 仓库
 - 可向 `bookmark` 中拖入外部链接，或内部拖动链接进行书签的增删移，这些操作是即时固化的
@@ -161,13 +161,15 @@
   | `KaTrain` | 启动本地 KaTrain |
   | `txn_parser` | 解析当前流水 |
 
+  > `CLI.bat`、`root/`、`KaTrain` 三项仅在本地环境显示；`txn_parser` 在线上同样可见，但流水文件只在本地读取。
+
 ## 预设规则
 
 - HTML
   - **正文**：直接写在 `<pre>` 标签内，无需 `<br>`
   - **标题**：行首 N 个 `#` 加空格，自动转换为 `<h{N}>` 参与目录生成
   - **层级缩进**：行首使用 4 的倍数个空格（`4`、`8`、`12`、`16`）缩进时自动进行块级着色
-  - **链接**：相对路径或完整 `URL` 自动解析包裹为 `<img>` 或 `<a>`
+  - **链接**：相对路径或完整 `URL` 自动解析包裹为 `<img>` 或 `<a>`；只写文件名（不含 `/`）的图片默认指向 `../gallery/img/`
   - **表格**：写在 `<p>` 标签中，以 `|` 分列，自动渲染为 `<table><td>`
   - **代码块着色**：使用 `<code c>` 格式，其中 `c` 表示目标渲染语言
   - **配图**：`gallery/img` 默认作为 HTML 页面同级引用源
@@ -181,6 +183,8 @@
   - Keep 笔记正文中的 `[[IMG序号]]` 占位标记，决定生成的 HTML 页面中相应位置引用的图片序号
   - **单篇转换**：笔记需包含两个标签，其中一个固定为 `single`，另一个作为生成的 HTML 分类；笔记标题作为 HTML 的 `title`
   - **多合一转换**：笔记需包含共同的标签名，此标签名作为 HTML 的 `title`，原单篇笔记的标题作为 `<h1>`，分类名在 CLI 中交互指定
+  - 只处理已归档（`Archived`）且未进回收站的笔记；多合一按笔记创建时间升序拼接
+  - **日记**：单篇转换中分类为 `日记` 的笔记，图片转存至 `gallery/diary/`（已在 `.gitignore`，仅本地），页面内以 `../gallery/diary/<文件>` 引用；其余分类的图片落在 `gallery/img/`，页面内只写文件名
 
 ## 同义词维护
 
@@ -188,6 +192,8 @@
   - `cilin.txt`：保持只读，补丁外置
   - `synonyms_custom.json`：主要维护区，现代双向词组、单向别名、技术词停扩与词林清洗规则
   - `oov_report.txt`：本地新词雷达，定期挑出未来搜索会用到、且存在中英文或同义表达的高频词，补充到 `synonyms_custom.json` 的 `groups` 或 `aliases` 中
+  - `synonyms.sha256`：重建防抖状态（源码哈希 | 产物哈希），随仓库提交；`synonyms.raw.js` 为未压缩中间产物，与 `oov_report.txt` 一样已在 `.gitignore`
+  - 也可单独执行 `java -jar gen.jar synonyms`，按已生成的数据切片重建同义词库
 
 - `synonyms_custom.json`
 
@@ -210,8 +216,8 @@
 - 含义如下：
   - `groups`（双向同义词组）：组内词互相扩展。`exclusive` 默认为 `true`（独占覆盖），会自动将这些词从词林的旧义项中剥离
   - `aliases`（单向别名）：搜索键名可召回目标词，但搜索目标词不会反向召回键名。适合俗称、黑话或上下位归类
-  - `stopExpand`（全局停扩黑名单）：列出的现代技术词禁止从词林 `=` 行扩展，防止语义漂移
-  - `dropEqCodes`（词林整行降级）：将指定的 7 位编码行由 `=` 降级为 `@`（停止扩展，但保留词表）
+  - `stopExpand`（全局停扩黑名单）：列出的现代技术词（至少 2 个字符）禁止从词林 `=` 行扩展，防止语义漂移
+  - `dropEqCodes`（词林整行降级）：将指定的 7 位编码行由 `=` 降级为 `@`（停止扩展，但保留词表）；词数少于 2 的 `=` 行也会被自动降级
   - `pruneWords`（按行精准剔词）：仅从指定编码行中删除个别噪声词
   - `splitFixes`（修复粘连词）：修正词林中因漏空格而连写的词
 
@@ -232,7 +238,7 @@
     | 徒步 / 登山 | `Fb01A` | 行走动作 |
     | 露营 / 户外装备 | `Bp29D` / `Bp11A` | 器物与服饰 |
 
-- 分桶权重表（N：公开 HTML 总数）
+- 分桶权重表（N：参与统计的公开 HTML 页数，不含 `_` 大型文档与私有页；公开媒体文件名只补 `DF = 1`，不计入 N）
 
   | 标记 | 条件 | 候选词乘数 | 义项消歧贡献 | 含义说明 |
   | :--- | :--- | :---: | :---: | :--- |
@@ -282,7 +288,7 @@
 | 数据长什么样 | 六、数据模型 |
 | 搜索如何又快又准 | 七、搜索子系统 · 十一、算法精粹 |
 | 离线、更新、自愈 | 八、离线、更新与自愈 · 九、存储全表 |
-| 本地与线上的区别、如何回写本地文件 | 十、双态一体与本地能力桥 |
+| 本地与线上的区别、如何回写本地文件、站点会访问哪些外部地址 | 十、双态一体与本地能力桥（含 10.4） |
 | 改代码前该注意什么 | 十二、不变量与踩坑清单 |
 
 ---
@@ -295,7 +301,7 @@
 | **重活前置，轻活后置** | 能在构建期算好的，绝不留给浏览器 | 构建期做清洗、切片、词频统计、同义词表、哈希清单、压缩；运行期的渲染、检索、Diff 交给 Wasm 与 Worker |
 | **双态一体** | 同一份代码按运行环境切换能力 | `store.online_flag`：本地可写，线上只读（见十） |
 | **公私硬隔离** | 私有**正文**永不进入任何公网产物（标题、分类、文件名、时间戳作为目录元数据会公开） | 构建期按 `.gitignore` 分流并用 `git check-ignore` 复核；规则缺失即拒绝构建；构建末尾再断言公网产物不含私有正文（见 4.2） |
-| **零框架低依赖** | 降低长期维护与迁移成本 | 原生 ESM；无 npm 运行时依赖；第三方库以同源静态文件内置于 `src/third/` |
+| **零框架低依赖** | 降低长期维护与迁移成本 | 原生 ESM；无 npm 运行时依赖；第三方库以同源静态文件内置于 `src/third/`（例外：`street_view_uploader.html`，见 10.4） |
 | **按需加载** | 首屏只拿最小核心 | 检索栈首屏并行预热；评论、更新日志、摘抄、触控板等一律 `import()` 懒加载 |
 | **版本不撕裂，故障可自愈** | 任一时刻「代码 / 清单 / 数据」三者一致；坏了能自己修 | 清单由 SW 合成、切片原子落盘、安装熔断、阶段看门狗、三级自愈（见八） |
 
@@ -305,14 +311,14 @@
 
 ```text
 📂 _build
- ┣ 📂 backup
+ ┣ 📂 backup                           # 本机备份：ai_pack_*.zip / ai_apply_*/ / html_*/（.gitignore）
  ┣ 📂 esbuild | libwebp                # JS/CSS 压缩与 WebP 转码
  ┣ 📂 server                           # 本地静态服务器 (static-web-server) 与 sws.toml / sws-sim.toml
- ┣ 📂 pack_apply                       # 打包与回填
- ┣ 📂 jar                              # Java 8 构建器源码与 gen.jar
- ┣ 📂 rs                               # Rust/Wasm 引擎源码 (lib.rs)
+ ┣ 📂 pack_apply                       # 打包与回填（pack_apply.bat / .ps1 + presets.json）
+ ┣ 📂 jar                              # Java 8 构建器源码（gen/src/main/java/*.java）、gen.jar、log_watch.vbs（Java 退出后弹出新增的 err.log）
+ ┣ 📂 rs                               # Rust/Wasm 引擎源码 (src/lib.rs)
  ┣ 📂 secrets                          # 本地凭据、protocol.key、local.properties、到期任务、账单流水 (.gitignore)
- ┣ 📂 synonyms                         # cilin.txt / synonyms_custom.json / oov_report.txt
+ ┣ 📂 synonyms                         # cilin.txt / synonyms_custom.json / synonyms.sha256 / oov_report.txt
  ┣ 📂 woff2_split                      # 字体分片
  ┣ 📜 CLI.bat                          # 构建菜单 + 自定义 URL 协议入口
  ┣ 📜 protocol_guard.ps1               # 自定义协议认证加密信封（Encrypt-then-MAC）与校验唯一入口
@@ -320,10 +326,10 @@
 📂 audio | ebook | gallery | video     # 媒体目录（物理目录树即站内分类）
 📂 html                                # HTML 正文（单层目录，分类由页内 #anchor 决定）
 📂 src
- ┣ 📂 css | js                         # raw/ 源码 → 同名压缩产物；source-map/；js/data/ 数据切片
+ ┣ 📂 css | js                         # raw/ 源码 → 同名压缩产物；source-map/；js/data/ 数据切片；css/font/font.css → css/font.css
  ┣ 📂 third                            # 同源第三方库 (bibi / pdfjs / prism / markdown / photo-sphere-viewer / other)
  ┣ 📂 wasm                             # Wasm 产物与胶水代码
- ┣ 📂 tpl                              # 视图模板 (side / bookmark / txt / pdf / epub / pano / md_viewer / ...)
+ ┣ 📂 tpl                              # 视图模板 (side / bookmark / txt / pdf / epub / pano / md_viewer / go_board / street_view_uploader / txn_parser) 与页面模板 (new / bilingual)
  ┗ 📜 cmt_mapper.json                  # Giscus 评论 ID ↔ 页面标题
 📜 index.html                          # 单页壳（含由构建期注入的 PARAM 参数块）
 📜 sw.js                               # Service Worker（由 raw/sw.js 压缩而来，须位于根目录以获得全站作用域）
@@ -339,8 +345,8 @@
 ### 4.1 一条命令：`CLI.bat gen`
 
 ```text
-Phase 1  增量压缩     src/js/raw/*.js · src/css/raw/*.css · font.css  →  esbuild (minify · es2020 · sourcemap)
-                      以 SHA-256 (certutil) 对账 modtime_list.txt 与产物存在性，未变则跳过
+Phase 1  增量压缩     src/js/raw/*.js · src/css/raw/*.css · src/css/font/font.css  →  esbuild (minify · es2020 · sourcemap；font.css 无 sourcemap)
+                      以 SHA-256 (certutil) 对账 modtime_list.txt 与产物存在性，未变则跳过；新表 new_list.tmp 仅在 gen.jar 成功后才覆盖旧表
                       跳过 core-list.js / sw.js / synonyms.js —— 它们由 gen.jar 生成
 Phase 2  数据与清单   java -jar gen.jar          （步骤见下表）
 Phase 3  尾项压缩     压缩 gen.jar 刚改写的 raw/core-list.js 与 raw/sw.js（sw.js 输出到站点根目录）
@@ -354,13 +360,13 @@ Phase 3  尾项压缩     压缩 gen.jar 刚改写的 raw/core-list.js 与 raw/s
 | ② 判定私有 | 解析 `.gitignore` 得到私有路径集合，并用 `git check-ignore` 复核后取并集（只会更保守）；`.gitignore` 缺失或没有有效规则即**拒绝构建**（fail-closed） |
 | ③ 扫描 HTML | 核对正文里的图片引用：失效引用与大小写不一致只告警，**默认不改写源文件**（需显式 `prune_missing_images=true`，且受 `prune_max_lines` 上限约束并先备份）；产出 `gallery/img/idle-list.txt`（闲置图片清单）；读取 `#anchor` 的时间戳与分类链、页面标题；剥离 `#` 标题符得到检索纯文本；按 4.2 分流；为新标题分配自增 ID 并登记孤儿评论（`cmt_mapper.json`） |
 | ④ 扫描媒体 | 递归扫描 gallery / audio / video / ebook，继承 `.gitignore` 的 localOnly 标记，汇入目录树 |
-| ⑤ 切片 | 生成 `lite_data.js` 与 `fat_data_N.json`（按 `sliceSize`，当前约 300 KB 一片）；私有页另出 `shadow_data_N.json` + `shadowIndex.js` |
-| ⑥ 同义词 | `SynonymBuilder.buildIfNeeded`：只用公开语料统计词频（DF），源或产物哈希变化才重编并调用 esbuild 生成 `synonyms.js` |
-| ⑦ 清单 | 生成 `core-bundle.json` 与 `core-list.js`：对全站静态文件算 CRC32，**仅当任一哈希变化**才生成新的 `BUILD_VERSION`（毫秒时间戳） |
+| ⑤ 切片 | 生成 `lite_data.js` 与 `fat_data_N.json`（按 `sliceSize`，当前 300 KB 一片，字节数按字符数 ×3 估算）；私有页另出 `shadow_data_N.json` + `shadowIndex.js` |
+| ⑥ 同义词 | `SynonymBuilder.buildIfNeeded`：只用公开语料统计词频（DF），源或产物哈希变化才重编并调用 esbuild 生成 `synonyms.js`（esbuild 不可用时降级写出未压缩版）；同时写出本地诊断报告 `oov_report.txt` |
+| ⑦ 清单 | 生成 `core-bundle.json` 与 `core-list.js`：对公开 HTML、数据切片、`coreFiles` 与 README 算 CRC32（媒体文件不在其内），**仅当任一哈希变化**才生成新的 `BUILD_VERSION`（毫秒时间戳） |
 | ⑧ 同步 SW | 把新版本号写回 `raw/sw.js` 的 `importScripts(...?v=)` 与 `self.SW_VERSION`（`sw.js` 缺失或写入失败即报错） |
 | ⑨ 隔离断言 | 校验 `core-bundle.json` 不含私有页路径，且私有正文指纹（25% / 50% / 75% 处各 40 字符，三段同时出现才算）不出现在 `lite_data` / `fat_data` / `core-bundle.json` / `synonyms.js` 中 |
 
-**失败即停**：任一页面处理失败、`coreFiles` 里有文件不存在、隔离断言不通过，`gen.jar` 都以非 0 退出码结束，并写出 `-Dgen.status` 指定的状态文件；`CLI.bat` 据此中止压缩、提交与推送。esbuild 编译失败的文件不会写入增量表，下次会重编。可选开关见 `config.properties`：`prune_missing_images` / `prune_max_lines` / `private_prefix_check` / `allow_empty_gitignore`。`_build/backup/` 应加入 `.gitignore`。
+**失败即停**：任一页面处理失败、`coreFiles` 里有文件不存在、隔离断言不通过，`gen.jar` 都以非 0 退出码结束，并写出 `-Dgen.status` 指定的状态文件；`CLI.bat` 据此中止尾项压缩（Phase 3）、提交与推送，且不更新增量表（Phase 1 已完成的压缩不回滚，下次会重编）。esbuild 编译失败的文件同样不会写入增量表。以下可选开关**并不出现在 `config.properties` 中**，由 `Generator.java` 按缺省值读取，需要时写进 `config.properties` 或 `secrets/local.properties`：`prune_missing_images`（默认 `false`）/ `prune_max_lines`（默认 `30`）/ `private_prefix_check`（默认 `true`：`__` 前缀页未被 `.gitignore` 命中则拒绝构建）/ `allow_empty_gitignore`（默认 `false`）。`_build/backup/` 应加入 `.gitignore`。
 
 ### 4.2 公私分流（最关键的一次分岔）
 
@@ -377,7 +383,7 @@ Phase 3  尾项压缩     压缩 gen.jar 刚改写的 raw/core-list.js 与 raw/s
 
 | 层 | 选型 |
 | :--- | :--- |
-| **构建** | Windows Batch（`CLI.bat`）· PowerShell 5.1（`protocol_guard.ps1` / `pack_apply`）· Java 8（`gen.jar`：Jackson / Jsoup / SLF4J）· Rust（`wasm-pack`：`wasm-bindgen` / `serde` / `regex` / `similar`）· `esbuild` · `libwebp` · `certutil` · `static-web-server` |
+| **构建** | Windows Batch（`CLI.bat`）· PowerShell 5.1（`protocol_guard.ps1` / `pack_apply`）· Java 8（`gen.jar`：Jackson / Jsoup / SLF4J / Google API Client + OAuth + Tasks / Swing·AWT·ImageIO）· Rust（`wasm-pack`：`wasm-bindgen` / `js-sys` / `serde` / `serde_json` / `serde-wasm-bindgen` / `regex` / `lazy_static` / `similar`）· `esbuild` · `libwebp`（`cwebp` / `gif2webp`）· `certutil` · `static-web-server` |
 | **运行** | ES Modules · Web Crypto API · Service Worker · Cache Storage · IndexedDB · Web Worker · WebAssembly · `BroadcastChannel` · `MessageChannel` · `CompressionStream` · CSS Custom Highlight API · `requestIdleCallback` |
 | **同源内置的第三方** | PDF.js · Bibi（EPUB）· Prism · marked + DOMPurify + highlight.js（+ 本地编辑时按需 CodeMirror 5）· Photo Sphere Viewer + three.js · encoding.js · confetti |
 
@@ -415,10 +421,10 @@ index.html（壳）
 | PDF / EPUB / TXT | `pdf.html`（PDF.js v6 + `pdf-viewer.{js,css}`）/ `epub.html`（Bibi）/ `txt.html`（自研） | 统一经 `__DOC_SEARCH_BRIDGE__` 接入主站搜索；阅读进度与书签存 localStorage；PDF 支持涂鸦/文字批注与可调页间缝隙 |
 | 图片 / 视频 | `lightbox-logic.js` 的 `renderLightboxFrame()` | 无模板文件：向 `about:blank` 的 iframe 写入纯静态 DOM + `script-src 'none'` 严格 CSP，所有事件由父模块直接绑定（零内联脚本） |
 | 全景图 | `pano.html`（Photo Sphere Viewer） | `gallery/` 中 `pano_` 前缀图片双击进入 |
-| 双语页 | HTML 页 + `bilingual.js` | 中英对照编辑、草稿暂存、一键固化 |
-| 独立工具 | `txn_parser.html` · `go_board.html` · `street_view_uploader.html` | 新标签页独立运行，主动脱离主壳 |
+| 双语页 | HTML 页 + `bilingual.js` | 中英对照编辑、草稿暂存、一键固化；页面骨架取自 `src/tpl/bilingual.html`（与 `new.html` 同属复制进 `html/` 的页面模板，不是运行期视图） |
+| 独立工具 | `txn_parser.html` · `go_board.html` · `street_view_uploader.html` | 由侧栏菜单以新标签页打开；`txn_parser` 被嵌入时还会主动跳出 iframe。`go_board` 与 `street_view_uploader` 未设 CSP `<meta>`，后者还依赖外部脚本（见 10.4） |
 
-内容页自带「反脱壳」：被直接访问（`top === self`）时会跳回站点首页，保证任何页面都运行在壳之内。
+「反脱壳」：`html/` 正文页（`content.js`）与书签页（`bookmark.html`）被直接访问（`top === self`）时会跳回站点首页，保证这两类页面始终运行在壳之内；`txn_parser.html` 方向相反，被嵌入时会跳出 iframe；PDF / EPUB / TXT / 全景 / `md_viewer` 没有此跳转，`top === self` 在这些视图里只用于确定 BUS 上下文 ID。
 
 ### 5.2 三个通信面
 
@@ -477,7 +483,7 @@ index.html   成人确认 → 注入的 PARAM 常量 → index.js
 | `synonyms.js` | `src/js/` | 词林 + DF 分桶 + 现代词覆盖（v5.1） | Worker 内近义扩展 |
 | `cmt_mapper.json` | `src/` | `records: [{id, title}]` + `orphanIds` | 评论与页面绑定；其 `id` 同时用作检索的 recordId |
 
-**运行期内存形态**：全文常驻 Worker 内的 Wasm；主线程只持有扁平的轻量数组 `window.data`（每 4 项一条：标题、占位、路径、类型），正文永不进入主线程。`recordId` 经由标题与 `cmt_mapper.json` 绑定，页面改名即视为新页面。
+**运行期内存形态**：全文常驻 Worker 内的 Wasm；主线程只持有扁平的轻量数组 `window.data`（每 4 项一条：标题、占位、路径、类型），正文永不进入主线程。`recordId` 经由标题与 `cmt_mapper.json` 绑定，页面标题（`<title>`）变更即视为新页面，文件名不参与绑定。
 
 ---
 
@@ -548,7 +554,7 @@ Wasm（lib.rs）      Bloom 预筛 · DocFilter · 单遍扫描 · 评分 · 布
 
 | 桶 | 内容 | 生命周期 |
 | :--- | :--- | :--- |
-| `core-cache-{BUILD_VERSION}` | 壳、HTML、CSS、JS、Wasm、`synonyms.js`、README、`sw-manifest.json` | 随版本整桶更替；新 SW `activate` 时删除旧桶 |
+| `core-cache-{BUILD_VERSION}` | 壳、HTML、CSS、JS、Wasm、`synonyms.js`、README、`sw-manifest.json`（仅限清单内文件：未登记 `coreFiles` 的文件，如 `md_viewer.html`，SW 不做运行时缓存） | 随版本整桶更替；新 SW `activate` 时删除旧桶 |
 | `media-cache` | gallery / video / audio / ebook、字体、PDF cmaps / `standard_fonts` / `iccs` / `wasm` / `images` | Cache-First，常驻；检测到文件被删才定向清理 |
 
 ### 8.2 安装：增量、分流、熔断
@@ -614,7 +620,7 @@ controllerchange
 | IndexedDB | `ExcerptsDB` v1 | `books`：按书名 / HTML 归档的摘抄 | 单例连接 |
 | IndexedDB | `SideDB` v1 | `marks`：侧栏已阅标记 | 单例连接，断线自动重连 |
 | IndexedDB | `AlignDrafts` v1 | `draft_texts`：双语页编辑草稿 | 防抖暂存；固化前销毁 |
-| localStorage | `store` | 布局、浏览历史、搜索历史（至多 100）、收藏、滚动位置、媒体进度、壁纸、筛选 / 噪值 / 近义偏好、PDF / EPUB / TXT 进度与书签、流水账本偏好与汇率缓存 | 定时 `lsAlert()` 巡检容量 |
+| localStorage | `store` | 布局、浏览历史、搜索历史（至多 100）、收藏、滚动位置、媒体进度（至多 500 条）、壁纸、筛选 / 噪值 / 近义偏好、PDF / EPUB / TXT 进度与书签、流水账本偏好与汇率缓存 | 定时 `lsAlert()` 巡检容量 |
 | sessionStorage | `ss_restore_strict` + 20 个每标签页状态键 | 热更新 / `@bomb` / `@rebirth` 一次性现场快照，以及 `SiteCore` 隔离的每标签页当前路径、资源类型、搜索词与灯箱状态 | 随标签页生命周期销毁 |
 
 ---
@@ -635,7 +641,7 @@ controllerchange
 | 到期任务提醒 | ✔ 轮询 `_build/secrets/upcoming_tasks.json`（由托盘进程写出） | ✘ |
 | Service Worker | Network-Only，新版自动接管，探测 2 s | 强缓存，用户确认后接管，探测 10 s |
 
-`CLI.bat [4]` 启动本地服务前会自动清理同端口旧进程、通过 `-Mode EnsureKey -Rotate` 轮换 32 字节会话主密钥（落盘至 `_build/secrets/protocol.key`），并以 `_build/server/sws.toml` 启动 `static-web-server`（HTTP 层禁访 `protocol.*`、`local.*`、`credentials.*`、`tokens/**` 及 `_build` 脚本/配置，同时阻断 Windows 大小写、8.3 短名 `~1` 与尾点/尾空格归一化绕过，仅放行 `txn.txt` 与 `upcoming_tasks.json`，并下发全局禁 `eval` CSP 头）。`CLI.bat [8] simulation` 挂载 `sws-sim.toml` 整目录封禁 `_build/**` 与 `shadow*` 切片，在 `9000` 端口以隐身窗口验证线上行为。
+`CLI.bat [4]` 启动本地服务前会自动清理同端口旧进程、通过 `-Mode EnsureKey -Rotate` 轮换 32 字节会话主密钥（落盘至 `_build/secrets/protocol.key`），并以 `_build/server/sws.toml` 启动 `static-web-server`（黑名单式禁访：`_build/secrets/` 下的 `protocol.*`、`local.*`、`credentials.*`、`tokens`，以及 `_build/config.*`、`_build/server/`、`_build/jar/`、`_build/rs/`、`_build/backup/` 和 `_build` 顶层的 `*.bat` / `*.ps1` / `*.vbs` / `*.jar`，同时阻断 Windows 大小写、8.3 短名 `~1` 与尾点/尾空格归一化绕过；`secrets/` 下的 `txn.txt`、`upcoming_tasks.json` 因未命中规则而保持可读；另关闭隐藏文件与目录列表，并对所有响应下发 `nosniff`、`X-Frame-Options: SAMEORIGIN`、`Referrer-Policy: strict-origin-when-cross-origin` 与禁 `eval` 的 CSP 头——脚本源仅 `'self'`、`'unsafe-inline'`、`'wasm-unsafe-eval'` 和 `https://giscus.app`，并带 `frame-ancestors 'self'`）。`CLI.bat [8] simulation` 挂载 `sws-sim.toml` 整目录封禁 `_build/**` 与 `shadow*` 切片，在 `9000` 端口以隐身窗口验证线上行为。
 
 本机私有路径（VS Code、JDK、KaTrain、截图与 Keep 目录等）已从 `config.properties` 剥离至 `_build/secrets/local.properties`（`.gitignore` 忽略，`CLI.bat` 与 `Config.java` 自动合并覆盖）。
 
@@ -646,14 +652,15 @@ controllerchange
 * **零 HTTP 暴露密钥分发**：`CLI.bat [4]` 打开 `http://localhost:<port>/#__diff4x_key=<64位hex>`（`#fragment` 不进 HTTP 请求与日志）；`index.js` 首屏同步吸收写入当前 Origin 专属 `localStorage['__diff4x_proto_key__']`，随即 `history.replaceState` 抹掉地址栏痕迹；`@bomb` Plan A 清理本地存储时自动保留该密钥。
 * **Encrypt-then-MAC 一次性信封**：协议固定格式 `diff4x://env/v1.<base64url(packet)>`（路径位保留 Base64url 大小写，**彻底拒收所有明文 `diff4x://1{...` 请求**）。主密钥经域分离 SHA-256 派生 `K_enc` 与 `K_mac`；明文 JSON 内嵌 `v`、`act`、`p`、`ts`、`nonce`、`origin`，经 `AES-256-CBC` 加密后对 `[0x01]||IV||CT` 计算 `HMAC-SHA256`。
 * **服务端强校验**：注册表直接调用 `protocol_guard.ps1 -Mode Launch "%1"`（绕过 `cmd` 二次解析），严格按序执行：常量时间验签 → AES 解密 → 真实 UTC 纪元时间窗（±30 s）→ Origin 白名单（仅 `http://localhost:<port>` / `http://127.0.0.1:<port>`）→ 跨进程 Mutex Nonce 去重（90 s 滑动窗防重放）→ 业务参数白/黑名单与仓库根落点检查；批处理仅接触动作编号与 base64，绝不向任何命令串拼接原文；拒收原因写入 `%TEMP%\diff4x_proto_reject.log`。
+* **参数与存储细节**：信封 URL 上限 8192 字符，`nonce` 为 32 位 hex，记录于 `%TEMP%\diff4x_proto_nonces.txt`；允许的 Origin 端口取自 `config.properties` 的 `port`（`protocol_guard.ps1` 不读取 `local.properties`）；协议名取自 `github_page` 域名首段，浏览器端 `store.protocol_name` 经 scheme 白名单校验；`-Mode SelfTest` 覆盖加解密、验签、篡改、过期 / 未来时间戳、非法 Origin（线上站、`9000` 仿真、DNS Rebinding）、路径穿越、`javascript:` 链接与非法行号等用例。
 
 | `n` | 路由 | 发起方 → 执行 | 回写确认 |
 | :---: | :--- | :--- | :--- |
 | `1` | `:case_edit` | `content.js` 的 `edit` → `Stamper` 覆写时间戳，并用 VS Code 打开源文件 | — |
-| `2` | `:case_bookmark` | `bookmark.js` 拖拽 → 先封包成功再 `BookmarkManager` 增删移并更新 `#end_flag` | 主控清缓存并重载书签页，直至 `linksHash` 变化（上限约 30 次） |
+| `2` | `:case_bookmark` | `bookmark.js` 拖拽 → 先封包成功再 `BookmarkManager` 增删移并更新 `#end_flag`（参数为 `块ID}标题}链接`，块ID 为 `del` 表示删除；标题缺省即等于链接时由 `CLI.bat` 交互补全；新增与移动的链接都置于目标块顶部） | 主控清缓存并重载书签页，直至 `linksHash` 变化（上限约 30 次） |
 | `3` | `:case_explorer` | 侧栏 `root/`（无参）→ 资源管理器直接打开 `$Script:Root` 仓库根目录（公网 JS 不含本机路径） | — |
 | `4` | `:run_menu` | 侧栏单击 `CLI.bat` → 呼出交互菜单 | — |
-| `5` | `:case_overwrite` | `bilingual.js` 固化：克隆文档并剥离运行期注入节点 → 写剪贴板 → 先封包成功再销毁草稿 → PowerShell 读剪贴板覆写 `html/<title>.html`（不触发 `gen`） | 每 400 ms 拉取原页比对，内容变化或写入一致即仅刷新当前双语页自身；超时给出手动解锁 |
+| `5` | `:case_overwrite` | `bilingual.js` 固化：克隆文档并剥离运行期注入节点 → 写剪贴板 → 先封包成功再销毁草稿 → PowerShell 读剪贴板以 UTF-8 带 BOM 覆写 `html/<title>.html`（`.tmp` 原子替换，写后清空剪贴板，不触发 `gen`） | 每 400 ms 拉取原页比对，内容变化或写入一致即仅刷新当前双语页自身；超时给出手动解锁 |
 | `6` | `:run_gen` | 侧栏双击 `CLI.bat` → 静默全量构建 | — |
 | `7` | `:case_jump_txn_file_line` | `txn_parser.js` 点击流水行 → `code -g txn.txt:<行>` | — |
 | `8` | `:case_go` | 侧栏 `KaTrain` → 读取 `secrets/local.properties` 的 `katrain_dir` 经 `$env:KATRAIN_DIR` 启动 KaTrain | — |
@@ -661,10 +668,25 @@ controllerchange
 
 ### 10.3 全站纵深防御（CSP 与反注入）
 
-* **全站禁 `eval`**：`sws.toml` / `sws-sim.toml` 响应头与各 HTML 模板 `<meta>` 统一移除 `'unsafe-eval'`、精准放行 `'wasm-unsafe-eval'`；其中图片/视频灯箱达到 `script-src 'none'`，`pdf.html` 达到 `script-src 'self' 'wasm-unsafe-eval'; style-src 'self'`，`bilingual.html` 达到 `script-src 'self' 'wasm-unsafe-eval'`。
+* **全站禁 `eval`**：`sws.toml` / `sws-sim.toml` 响应头与各 HTML 模板 `<meta>` 统一移除 `'unsafe-eval'`、精准放行 `'wasm-unsafe-eval'`；其中图片/视频灯箱达到 `script-src 'none'`，`pdf.html` 达到 `script-src 'self' 'wasm-unsafe-eval'; style-src 'self'`，`bilingual.html` 达到 `script-src 'self' 'wasm-unsafe-eval'`。例外：`go_board.html` 与 `street_view_uploader.html` 没有 CSP `<meta>`（见 10.4）。
 * **多点反注入收口**：`pdf.html` 锁定 `enableScripting: false`；`epub.html` 对章节 iframe 剥离脚本并注入 `script-src 'none'`；`md_viewer.html` 收紧 `DOMPurify`；`pano.html` 强校验同源 `/gallery/`；`txt.html` 异常提示改用 `textContent`；`audio-player.js` 与 `@rebirth` 对 `favList` 执行路径白名单校验并全面 DOM 构造渲染。
 
-另有一条**非协议**通道：`CLI.bat vpn-heartbeat-tray`（`gen.jar tray`）常驻托盘，探测网络状态，定时拉取 Google Tasks 并把临期任务写入 `secrets/upcoming_tasks.json`，前端只读取该文件。
+另有一条**非协议**通道：`CLI.bat vpn-heartbeat-tray`（`gen.jar tray`）常驻托盘：每 10 s 以 GET 探测 `URL_TO_CHECK`（`config.properties`，当前为 `https://www.google.com`）并切换绿 / 红图标；同一进程内每 5 分钟（心跳显示断网时静默跳过）以只读权限拉取 Google Tasks，把到期日不晚于今后 7 天的任务（含已过期者）写入 `secrets/upcoming_tasks.json`，前端只读取该文件。首次授权经浏览器与本机 `8888` 回环端口完成，凭据位于 `secrets/credentials.json` 与 `secrets/tokens/`；凭据失效时自动清除并重新授权，两次弹窗授权至少间隔 4 小时。
+
+### 10.4 外部网络请求清单
+
+站点自身的脚本、样式与数据均为同源静态文件。本次审计在 `src/js/raw/`、`src/tpl/` 中检索到的跨源请求如下（`bookmark.html` 里的外链书签由用户点击跳转，不在此列）：
+
+| 地址 | 用途 | 发起方 |
+| :--- | :--- | :--- |
+| `giscus.app`（`client.js` 与评论 iframe） | 评论嵌入 | 浏览器（`comments.js`） |
+| `raw.githubusercontent.com/{data_repo}/main/comments.json` | 评论快照同步（定时及切回可见时） | 浏览器（`comments.js`） |
+| `api.github.com/repos/diff4x/diff4x.github.io` | `bookmark` 页版权声明 `hover` 显示线上仓库体积 | 浏览器（`bookmark.js`） |
+| `api.frankfurter.app`、`open.er-api.com` | `txn_parser` 汇率（缓存键 `fx_rates`） | 浏览器（`txn_parser.js`） |
+| `cdn.tailwindcss.com`、`accounts.google.com/gsi/client`、`streetviewpublish.googleapis.com` | `street_view_uploader` 的样式、Google 登录与全景图发布 | 浏览器（该页自身） |
+| `URL_TO_CHECK`、Google Tasks API | 托盘心跳与到期任务 | 本机 Java 进程 |
+
+其中 `street_view_uploader.html` 是本次检索中唯一直接引入外部脚本的页面，且没有 CSP `<meta>`；`giscus.app` 的脚本由 `comments.js` 动态注入，并被 `sws.toml` 的 CSP 头放行。
 
 ---
 
@@ -683,7 +705,7 @@ controllerchange
 
 ### 11.2 近义词（`SynonymBuilder.java` → `synonyms.js` v5.1，运行于 Worker）
 
-* **三路查词**：A 路整词直达（所有键经 `compactKey` 归一，含带空格的现代词组）；B 路独立词边界保护（命中 `#` / `@` 独立词或 `stopExpand` 技术词时禁止拆字扩出古典杂义）；C 路 DP 最优分词 + 词林树最近公共祖先（LCA）消歧，同句其余词的 5 级词林码作上下文，共享层级越深权重越大（同 5 级 ×1.85、同 4 级 ×1.45、同 2 级 ×1.18）。
+* **三路查词**：A 路整词直达（所有键经 `compactKey` 归一，含带空格的现代词组）；B 路独立词边界保护（命中 `#` / `@` 独立词或 `stopExpand` 技术词时禁止拆字扩出古典杂义）；C 路 DP 最优分词 + 词林树最近公共祖先（LCA）消歧，同句其余词的 5 级词林码作上下文，共享层级越深权重越大（同 5 级 ×1.85、同 4 级 ×1.45、同 2–3 级 ×1.18、同 1 级 ×1.08）。
 * **语料 DF 软加权**：构建期仅对公开语料做正向最大匹配，统计 7 档 DF 后缀（`:1`..`:6` 与无后缀）；候选乘数 `DF_CAND_MULT = [0.62, 1.00, 1.12, 1.18, 1.00, 0.68, 0.38]`——中低频特征词抬高、全站高频泛词压低、公网未现词降权但保留入口；虚词大类 `K` / `L` 的义项权重再压至 ×0.22 / ×0.55。
 * **隐私与防漂移**：DF 只来自公开语料；最终由 Worker 注入 `bloom_might_match`，滤掉当前语料（含本地私有影子与评论）中根本不存在的变体；所有同义扩展锁定 `maxNoise = 0`。
 
@@ -712,12 +734,22 @@ controllerchange
 8. **隐私底线**：任何新增的公网产物都不得读取私有页正文或其词汇统计；同义词 DF 只来自公开语料；新增产物后，要把它加进 `assertNoPrivateLeak` 的检查范围。
 9. **回写必须闭环**：本地写文件一律「`.tmp` 原子替换 + 前端轮询确认」，不假设协议调用一定成功。
 10. **环境分支只认 `store.online_flag`**：不要在业务代码里另行判断 host 或端口。
-11. **不要移除反脱壳脚本**：内容页开头的 `top === self` 跳转保证页面始终运行在壳内。
+11. **反脱壳的范围**：`content.js`（`html/` 正文页）与 `bookmark.html` 开头的 `top === self` 跳转保证这两类页面始终运行在壳内，不要移除；`txn_parser.html` 的跳出逻辑同理。PDF / EPUB / TXT / 全景 / `md_viewer` 没有此跳转，不要想当然地依赖它。
 12. **切片版本一致性**：切片拉取要么全部成功再原子落盘，要么整轮放弃，不允许半新半旧。
 13. **协议一律走认证加密信封，参数一律不可信**：前端调用本地协议必须统一经 `shared-utils.js` 的 `sealProtocolUrl` / `invokeProtocol`（禁止拼明文 `diff4x://1{...`）；新增动作须同步在 `protocol_guard.ps1` 加业务校验与 `SelfTest` 用例（改动后执行 `-Mode SelfTest`）；任何 URL 文本都不得拼进命令串。
 14. **构建失败必须让调用方知道**：新增的构建步骤要抛异常而不是 `catch` 后继续；成功标记（如增量哈希表）只在步骤成功后写入；不要在 gen 里改写源文件。
 15. **状态与 Schema 单一事实源**：`MainDB` Schema、每标签页 `sessionStorage` 键集合、`createStore` Proxy、以及 `protocol_name` / 音频路径白名单均由 `src/js/raw/site-core.js` 唯一定义，禁止在其他模块或 `sw.js` 抄写副本。
 16. **本机私有路径不入库**：含用户名或本机盘符的路径一律写入 `_build/secrets/local.properties`（`.gitignore` 忽略且 `sws.toml` 禁访），不得写进 `config.properties`、`CLI.bat` 或任何公网 JS。
+17. **新增视图模板要补 CSP 并决定是否离线**：`src/tpl/` 下新增的视图要写 `<meta>` CSP（不含 `'unsafe-eval'`）；需要离线可用的要登记到 `coreFiles`——SW 不会运行时缓存清单外的文件。
+
+### 已知限制（截至 2026-11-24 审计；修复后请删除对应条目）
+
+- `md_viewer.html` 未登记 `coreFiles`：首次未联网时 README 弹窗打不开（`README.md` 本身已预缓存）。
+- `street_view_uploader.html` 引用的外部脚本不在 `sws.toml` 的 CSP 脚本源白名单内，经本地 `8000` / 仿真 `9000` 访问时按 CSP 规则会被浏览器拦截（未实测）；线上 GitHub Pages 不下发响应头，不受影响。
+- `protocol_guard.ps1` 只读 `config.properties` 的 `port`：在 `local.properties` 中覆盖端口会让 Origin 校验失败。
+- `webp` 的「回写 HTML 引用」拿 `exclude` 的原始正则文本去比对带 `.html` 的文件名，永远不会匹配，因此不会跳过被排除的页面。
+- `sws.toml` 的黑名单未覆盖 `_build/pack_apply/`、`_build/synonyms/` 等目录（`sws-sim.toml` 整目录封禁，不受影响）。
+- `pack_apply/presets.json` 中 Java 源码与 `lib.rs` 的预设路径与当前目录结构不符（实际为 `_build/jar/gen/src/main/java/` 与 `_build/rs/src/lib.rs`），这些预设勾选会找不到对应文件，需手动勾选。
 
 ---
 
@@ -730,12 +762,14 @@ controllerchange
 | 文件路径 | 作用与必传原因 |
 | :--- | :--- |
 | `README.md` | 让 AI 一次性掌握全局约束（Java 8、零框架原生 ESM、公私隔离、模块拓扑、SW 与缓存协议、不变量清单） |
-| `_build/rs/.../lib.rs` | 检索与渲染核心算法（噪值匹配、评分、DocFilter、Bloom、ADS 布尔求值、LCS Diff、`format_markdown`） |
+| `_build/rs/src/lib.rs` | 检索与渲染核心算法（噪值匹配、评分、DocFilter、Bloom、ADS 布尔求值、LCS Diff、`format_markdown`） |
 | `src/js/raw/worker.js` | Worker 调度（8 ms 时间片、抢占取消、代际重扫、同义词与 Bloom 交互） |
 | `src/js/raw/search-engine.js` | 主线程检索内核（IDB LRU 缓存、双命名空间失效、ADS 解析、书内桥接、高亮区间计算） |
 | `src/js/raw/search-ui.js` | 搜索前端交互（防抖、联想、结果列表、折叠锚记、`#sf-bar` 筛选与作用域切换） |
 
 ### 按调优目标加传
+
+> 下表中不带目录的 `*.java` 均位于 `_build/jar/gen/src/main/java/`。
 
 | 目标 | 加传文件 |
 | :--- | :--- |
@@ -753,7 +787,8 @@ controllerchange
 
 1. **输入包约定（上传给 AI 的 `.zip`）**
    - 包内所有文件路径均为**仓库根目录相对路径**（如 `src/js/raw/index.js`、`_build/CLI.bat`）。
-   - 仅包含源码与必要配置，不包含已压缩产物、`.map` 及 `_build/secrets/` 私有文件。
+   - 仅包含源码与必要配置。`pack_apply` 打包时硬拦截 `.git/`、`_build/secrets/`、`_build/backup/`、`node_modules/`、`_build/rs/target/`，并默认排除压缩产物（`src/js/*.js`、`src/css/*.css`、根目录 `sw.js`）、`shadow*` 切片、`html/__*.html`、`.map`、可执行文件 / `jar` / `wasm` / `zip` 以及常见图片、音视频、电子书与字体文件；成品落在 `_build/backup/ai_pack_YYYYMMDD_HHmmss.zip`。
+   - `_build/pack_apply/presets.json` 内置 7 个场景预设（基础必传集、安全加固与协议桥全套、电子书阅读器、HTML 正文 / 高亮 / Diff / 双语、SW 缓存 / 热更新 / 构建清单、近义词构建与调优、全部前端源码）。
 
 2. **输出包约定（AI 返回的补丁 `.zip`）**
    - **路径与仓库根对齐**：所有条目直接从仓库根相对路径起算（如 `src/js/raw/side.js`、`README.md`），**严禁套一层多余的顶层目录**（禁止 `patch/src/...` 或 `repo/src/...`）。
@@ -761,8 +796,13 @@ controllerchange
    - **必须为完整文件**：包内每个文件都必须是可直接覆盖落盘的完整源码，**严禁使用 `// ... 其余代码省略` 或 diff 片段代替完整内容**。
    - **只改源码不改产物**：前端仅修改 `src/js/raw/*`、`src/css/raw/*`、`src/tpl/*`、`index.html` 等源文件，**不要**生成或覆盖 `src/js/*.js` 压缩产物、根目录 `sw.js`、`core-list.js`、`core-bundle.json`、`synonyms.js`（均由本地 `CLI.bat gen` 生成）。
    - **编码与换行**：`.bat` / `.cmd` 使用 UTF-8 无 BOM + CRLF；`.ps1` 使用 UTF-8 带 BOM + CRLF；其余文件保持原编码与换行风格。
-   - **说明文档命名**：如需在包内附带说明或验证步骤，请命名为根目录 `PATCH_NOTES.md` 或 `APPLY_AND_VERIFY.md`（回填工具会自动识别为说明文件并默认跳过，不污染仓库）。
+   - **说明文档命名**：如需在包内附带说明或验证步骤，请命名为根目录 `PATCH_NOTES.md`、`APPLY_AND_VERIFY.md`、`README_PATCH.md` 或 `UPGRADE_*.md`（匹配 `presets.json` 的 `skipApplyDocRegex`，仅对根目录生效；回填工具会识别为说明文件并默认跳过，不污染仓库）。注意 `README.md` 不属于说明文件，会按普通文件覆盖。
    - **禁区与删除项**：禁止包含 `.git/` 内文件；如涉及删除旧文件、重命名文件、升级第三方库或需要手工执行 `CLI.bat gen` / 修改 `_build/secrets/local.properties`，必须在回复正文中单独列出清单（ZIP 覆盖无法执行删除操作）。
+
+3. **回填端行为（`pack_apply` 的 Apply 页）**
+   - 自动列出系统「下载」目录中最新的 `.zip`，也可浏览选择，或把 `.zip` 拖到窗口 / `pack_apply.bat`；逐条目标注 `[覆盖]` / `[新增]` / `[说明-默认跳过]` / `[敏感-需手动确认]` / `[拦截]`。
+   - 防 Zip Slip 路径穿越；硬拦截 `.git/`；`_build/secrets/` 下的条目默认不选，需二次确认。
+   - 覆盖前默认按相对层级备份到 `_build/backup/ai_apply_YYYYMMDD_HHmmss/`（含回滚清单），可用「从备份回滚」还原被覆盖文件并清理当时新增的文件；回填时自动守卫 `.bat` / `.ps1` 的编码与 CRLF。
 
 
 ### 高效提问与 Badcase 复现格式
