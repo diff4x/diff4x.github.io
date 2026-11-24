@@ -230,95 +230,30 @@ if (window.top && window.top.VirtualCursor) {
             }
 
             const htmlString = "<!DOCTYPE html>\n" + htmlClone.outerHTML;
-            const textarea = document.createElement('textarea');
-            textarea.value = htmlString;
-            textarea.style.position = 'fixed';
-            textarea.style.opacity = '0';
-            document.body.appendChild(textarea);
-            textarea.focus();
-            textarea.select();
-            textarea.setSelectionRange(0, htmlString.length);
-            let copied = false;
-            try { copied = document.execCommand('copy'); } catch (e) { }
-            document.body.removeChild(textarea);
-
-            if (!copied) {
-                alert("❌ 写入剪贴板失败，为防止源文档被覆盖已中止固化！");
-                return;
-            }
-
             const safeTitle = document.title.trim() || "Unknown";
 
-            let baselineHtml = "";
-            try {
-                const res = await fetch(location.href, { cache: 'no-store' });
-                if (res.ok) baselineHtml = await res.text();
-            } catch (_) { }
+            saveBtn.disabled = true;
+            lockScreen.style.display = "flex";
+            lockScreen.style.flexDirection = "column";
+            lockScreen.style.gap = "12px";
+            lockScreen.innerHTML = `<div id="bil-lock-text">⌛ 固化中...</div>`;
 
-            // 先生成认证加密信封，失败则中止（保护本地草稿不被销毁、不进入锁屏）
-            let protocolUrl = "";
             try {
-                if (window.top && typeof window.top.sealProtocolUrl === "function") {
-                    protocolUrl = await window.top.sealProtocolUrl(5, safeTitle);
+                if (window.top && typeof window.top.callLocalApi === "function") {
+                    await window.top.callLocalApi('PUT', '/__api/files/html', { title: safeTitle, html: htmlString });
                 } else {
                     const m = await import("/src/js/shared-utils.js");
-                    protocolUrl = await m.sealProtocolUrl(5, safeTitle);
+                    await m.callLocalApi('PUT', '/__api/files/html', { title: safeTitle, html: htmlString });
                 }
             } catch (err) {
-                alert("❌ 本地协议封包失败，已保留草稿并中止固化：" + (err && err.message ? err.message : String(err)));
+                lockScreen.style.display = "none";
+                saveBtn.disabled = false;
+                alert("❌ 固化失败（已保留草稿）：" + (err && err.message ? err.message : String(err)));
                 return;
             }
 
             try { await destroyDraft(); } catch (_) { }
-
-            lockScreen.style.display = "flex";
-            lockScreen.style.flexDirection = "column";
-            lockScreen.style.gap = "12px";
-            lockScreen.innerHTML = `<div id="bil-lock-text">⌛固化中..</div>`;
-
-            window.location.href = protocolUrl;
-
-            const normText = (s) => (s || '').replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n');
-            const expectedHtml = normText(htmlString);
-            const baseNorm = normText(baselineHtml);
-
-            let pollCount = 0;
-            let unlocked = false;
-            const unlockTimer = setTimeout(() => {
-                if (unlocked) return;
-                const btn = document.createElement('button');
-                btn.textContent = '解除锁定 / 刷新检查';
-                btn.style.cssText = 'padding:6px 14px;cursor:pointer;font-size:13px;';
-                btn.onclick = () => {
-                    unlocked = true;
-                    clearInterval(pollTimer);
-                    lockScreen.style.display = "none";
-                };
-                lockScreen.appendChild(btn);
-            }, 6000);
-
-            const pollTimer = setInterval(async () => {
-                if (unlocked) { clearInterval(pollTimer); return; }
-                pollCount++;
-                if (pollCount > 45) {
-                    clearInterval(pollTimer);
-                    const lbl = document.getElementById('bil-lock-text');
-                    if (lbl) lbl.textContent = '⚠️ 等待固化超时，请确认外部终端完成后手动刷新';
-                    return;
-                }
-                try {
-                    const r = await fetch(location.href + (location.search ? '&' : '?') + '_t=' + Date.now(), { cache: 'no-store' });
-                    if (r.ok) {
-                        const latestNorm = normText(await r.text());
-                        if ((baseNorm && latestNorm && latestNorm !== baseNorm) || (expectedHtml && latestNorm === expectedHtml)) {
-                            unlocked = true;
-                            clearTimeout(unlockTimer);
-                            clearInterval(pollTimer);
-                            location.reload();
-                        }
-                    }
-                } catch (_) { }
-            }, 400);
+            location.reload();
         });
     }
 })();

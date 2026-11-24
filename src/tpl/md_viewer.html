@@ -725,38 +725,19 @@ html,body{height:auto;overflow:visible}#panes,.pv-wrap{display:block}.pv{overflo
 
     saving = true; saveBtn.disabled = true; statusEl.textContent = '固化中...';
     try {
-      if (!(await copyText(text))) {
-        alert('写入剪贴板失败，已中止固化');
-        statusEl.textContent = '固化失败';
-        return;
+      if (window.top && typeof window.top.callLocalApi === 'function') {
+        await window.top.callLocalApi('PUT', '/__api/files/md', { path: relPath, content: text });
+      } else {
+        const m = await import('/src/js/shared-utils.js');
+        await m.callLocalApi('PUT', '/__api/files/md', { path: relPath, content: text });
       }
-      const expected = normLF(text);
-      let sealedUrl = '';
-      try {
-        if (window.top && typeof window.top.sealProtocolUrl === 'function') {
-          sealedUrl = await window.top.sealProtocolUrl(9, relPath);
-        } else {
-          const m = await import('/src/js/shared-utils.js');
-          sealedUrl = await m.sealProtocolUrl(9, relPath);
-        }
-      } catch (err) {
-        alert('❌ 本地协议封包失败：' + (err && err.message ? err.message : String(err)));
-        statusEl.textContent = '固化失败';
-        return;
-      }
-      location.href = sealedUrl;
-
-      let done = false;
-      for (let i = 0; i < 30; i++) {
-        await new Promise(r => setTimeout(r, 400));
-        try {
-          const latest = await fetchMd();
-          if (normLF(latest) === expected) { diskText = latest; done = true; break; }
-        } catch (_) { }
-      }
-      window._mdDirty = !done;
-      statusEl.textContent = done ? '✓ 已固化' : '已触发固化（未检测到变更）';
-      if (done) setTimeout(() => { if (!window._mdDirty) statusEl.textContent = ''; }, 1800);
+      diskText = text;
+      window._mdDirty = false;
+      statusEl.textContent = '✓ 已固化';
+      setTimeout(() => { if (!window._mdDirty) statusEl.textContent = ''; }, 1800);
+    } catch (err) {
+      alert('❌ 固化失败：' + (err && err.message ? err.message : String(err)));
+      statusEl.textContent = '固化失败';
     } finally {
       saving = false; saveBtn.disabled = false;
     }

@@ -116,7 +116,7 @@ export function createCommentsModule(ctx) {
         if (store.online_flag !== "1") return;
         const maxRetries = 30;
         let attempts = 0;
-        const targetUrl = new URL('/src/cmt_mapper.json', window.location.origin).href;
+        const targetUrl = new URL('/src/discussion_id_mapper.json', window.location.origin).href;
         const checkAndLoad = async () => {
             try {
                 let res = ('caches' in window) ? await caches.match(targetUrl, { ignoreSearch: true }) : null;
@@ -195,7 +195,7 @@ export function createCommentsModule(ctx) {
     async function getCommentMapperRecords() {
         if (records && records.length > 0) return records;
         try {
-            const res = await fetch('/src/cmt_mapper.json', { cache: 'no-cache' });
+            const res = await fetch('/src/discussion_id_mapper.json', { cache: 'no-cache' });
             if (res.ok) {
                 const data = await res.json();
                 return data.records || [];

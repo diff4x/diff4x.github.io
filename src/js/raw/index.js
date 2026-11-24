@@ -45,23 +45,19 @@ const BUS = window.__LITE_BUS__;
 const ctxId = window.top === window.self ? 'index' : window.childId;
 const isLocalEnv = (location.hostname === 'localhost' || location.hostname === '127.0.0.1' || location.protocol === 'file:') && location.port !== '9000';
 
-// 首屏同步从 URL #fragment 吸收本地协议密钥并立即抹掉地址栏痕迹（不进入 HTTP 请求/日志）
-(function ingestLocalProtoKey() {
+// 首屏同步从 URL #fragment 吸收本地伴生服务会话令牌并立即抹掉地址栏痕迹（不进入 HTTP 请求/日志）
+(function ingestLocalApiToken() {
     if (!isLocalEnv) return;
-    const m = /^#__diff4x_key=([0-9a-f]{64})$/i.exec(window.location.hash || '');
+    const m = /^#__swamp_token=([0-9a-f]{64})$/i.exec(window.location.hash || '');
     if (!m) return;
-    try { localStorage.setItem('__diff4x_proto_key__', m[1].toLowerCase()); } catch (_) { }
+    try { localStorage.setItem('__swamp_local_token__', m[1].toLowerCase()); } catch (_) { }
     try { history.replaceState(null, '', window.location.pathname + window.location.search); }
     catch (_) { window.location.hash = ''; }
 })();
 
-window.sealProtocolUrl = async (action, param = '') => {
+window.callLocalApi = async (method, endpoint, body = null, options = {}) => {
     const m = await import('./shared-utils.js');
-    return m.sealProtocolUrl(action, param);
-};
-window.invokeProtocol = async (action, param = '') => {
-    const m = await import('./shared-utils.js');
-    return m.invokeProtocol(action, param);
+    return m.callLocalApi(method, endpoint, body, options);
 };
 const $ = (selector) => document.querySelector(selector);
 const idleRun = (fn) => window.requestIdleCallback ? requestIdleCallback(fn) : setTimeout(fn, 50);
@@ -324,41 +320,19 @@ BUS.addEventListener('message', async (e) => {
             break;
 
         case "reload_bookmark": {
-            store.bookmarkhtml_modifing = "1";
-            const rawHash = store.bookmarkhtml_linksHash;
-            let attempts = 0;
-            try {
-                while (store.bookmarkhtml_linksHash === rawHash && attempts < 30 && store.resource_type === "bookmark") {
-                    if ('caches' in window) {
-                        try {
-                            const keys = await caches.keys();
-                            for (const key of keys) {
-                                if (key.startsWith('core-cache-')) {
-                                    const cache = await caches.open(key);
-                                    await cache.delete('/src/tpl/bookmark.html');
-                                }
-                            }
-                        } catch (err) { console.warn("清理书签缓存失败", err); }
-                    }
-                    const ifr = document.getElementById(from);
-                    if (ifr && ifr.contentWindow) ifr.contentWindow.location.reload();
-                    attempts++;
-                    await AsyncUtils.wait(1000);
-                }
-            } finally {
-                store.bookmarkhtml_modifing = "0";
-                if (store.online_flag !== "0" && 'caches' in window) {
-                    try {
-                        const keys = await caches.keys();
-                        for (const key of keys) {
-                            if (key.startsWith('core-cache-')) {
-                                const cache = await caches.open(key);
-                                await cache.add('/src/tpl/bookmark.html');
-                            }
+            if ('caches' in window) {
+                try {
+                    const keys = await caches.keys();
+                    for (const key of keys) {
+                        if (key.startsWith('core-cache-')) {
+                            const cache = await caches.open(key);
+                            await cache.delete('/src/tpl/bookmark.html');
                         }
-                    } catch (err) { console.warn("回填书签缓存失败", err); }
-                }
+                    }
+                } catch (err) { console.warn("清理书签缓存失败", err); }
             }
+            const ifr = document.getElementById(from) || iframes.content;
+            if (ifr && ifr.contentWindow) ifr.contentWindow.location.reload();
             break;
         }
 
@@ -1116,6 +1090,35 @@ async function finalizeDataLoad() {
     }
 
     consumeRefreshCelebration();
+    idleRun(prewarmBaseFont);
+}
+
+function prewarmBaseFont() {
+    if (store.online_flag === "0" || window._baseFontWarmed) return;
+    const conn = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+    if (conn && (conn.saveData || conn.effectiveType === 'slow-2g' || conn.effectiveType === '2g')) return;
+    window._baseFontWarmed = true;
+
+    (async () => {
+        try {
+            const cssUrl = new URL('/src/css/font.css', window.location.origin).href;
+            let cssRes = ('caches' in window) ? await caches.match(cssUrl, { ignoreSearch: true }) : null;
+            if (!cssRes || !cssRes.ok) {
+                cssRes = await fetch(cssUrl, { cache: 'no-cache' });
+            }
+            if (!cssRes || !cssRes.ok) return;
+            const cssText = await cssRes.text();
+            const m = /url\(\s*['"]?([^'")\s]*common\.woff2(?:\?[^'")\s]*)?)['"]?\s*\)/i.exec(cssText);
+            if (!m) return;
+            const fontUrl = new URL(m[1], cssUrl).href;
+            if ('caches' in window) {
+                const mediaCache = await caches.open('media-cache');
+                const hit = await mediaCache.match(fontUrl);
+                if (hit) return;
+            }
+            await fetch(fontUrl, { credentials: 'same-origin' });
+        } catch (_) { }
+    })();
 }
 
 function snap() {

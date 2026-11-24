@@ -40,15 +40,7 @@ window.addEventListener('DOMContentLoaded', () => {
     store.bookmark_links = links;
 
     if (store.online_flag === "0") {
-        let lockTicks = 0;
-        const checkLock = setInterval(() => {
-            lockTicks++;
-            if (store.bookmarkhtml_modifing !== "1" || lockTicks > 310) {
-                if (store.bookmarkhtml_modifing === "1") store.bookmarkhtml_modifing = "0";
-                clearInterval(checkLock);
-                setupDragAndDrop();
-            }
-        }, 100);
+        setupDragAndDrop();
     }
 
     loadFaviconsWhenIdle();
@@ -176,21 +168,25 @@ function setupDragAndDrop() {
                 return;
             }
 
-            const param = blockId + "}" + linkTitle + "}" + linkHref;
-            let sealedUrl = "";
+            if (linkTitle === linkHref && blockId !== 'del') {
+                const customTitle = prompt("输入书签标题（留空则使用链接）：", "");
+                if (customTitle === null) return;
+                if (customTitle.trim()) linkTitle = customTitle.trim();
+            }
+
             try {
-                if (window.top && typeof window.top.sealProtocolUrl === "function") {
-                    sealedUrl = await window.top.sealProtocolUrl(2, param);
+                const payload = { block: blockId, title: linkTitle, href: linkHref };
+                if (window.top && typeof window.top.callLocalApi === "function") {
+                    await window.top.callLocalApi('POST', '/__api/bookmarks', payload);
                 } else {
                     const m = await import("/src/js/shared-utils.js");
-                    sealedUrl = await m.sealProtocolUrl(2, param);
+                    await m.callLocalApi('POST', '/__api/bookmarks', payload);
                 }
             } catch (err) {
-                alert("❌ 本地协议封包失败：" + (err && err.message ? err.message : String(err)));
+                alert("❌ 书签更新失败：" + (err && err.message ? err.message : String(err)));
                 return;
             }
             emitEvent("reload_bookmark", null, "index");
-            location.href = sealedUrl;
         });
     });
 }
@@ -291,8 +287,6 @@ function initWallpaperModule() {
     if (!config || !Array.isArray(config.list) || config.list.length === 0) {
         return;
     }
-    document.body.style.background = "transparent";
-    document.documentElement.style.background = "#000";
 
     applyWallpaper(config);
 
@@ -343,8 +337,20 @@ function applyWallpaper(config) {
     }
 
     const currentUrl = config.list[config.currentIndex];
-    bgLayer.style.backgroundImage = `url("../../${currentUrl}")`;
-    bgLayer.style.backgroundSize = config.layout || 'contain';
+    const resolvedUrl = `../../${currentUrl}`;
+    const probe = new Image();
+    probe.onload = () => {
+        document.body.style.background = "transparent";
+        document.documentElement.style.background = "#000";
+        bgLayer.style.backgroundImage = `url("${resolvedUrl}")`;
+        bgLayer.style.backgroundSize = config.layout || 'contain';
+    };
+    probe.onerror = () => {
+        bgLayer.style.backgroundImage = 'none';
+        document.body.style.background = '';
+        document.documentElement.style.background = '';
+    };
+    probe.src = resolvedUrl;
 }
 
 function startWallpaperTimer(config) {

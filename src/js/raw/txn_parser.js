@@ -1011,14 +1011,13 @@ function renderTrendChart() {
 
   const dpr = window.devicePixelRatio || 1;
   const rect = canvas.getBoundingClientRect();
+  const W = rect.width || canvas.offsetWidth || parseFloat(canvas.style.width) || 600;
+  const H = rect.height || canvas.offsetHeight || parseFloat(canvas.style.height) || 200;
   ctx.setTransform(1,0,0,1,0,0);
-  canvas.width = rect.width * dpr;
-  canvas.height = rect.height * dpr;
+  canvas.width = W * dpr;
+  canvas.height = H * dpr;
   ctx.setTransform(dpr,0,0,dpr,0,0);
-  ctx.clearRect(0,0,rect.width,rect.height);
-
-  const W = rect.width;
-  const H = rect.height;
+  ctx.clearRect(0,0,W,H);
   const pad = 40;
 
   const data = collect12MonthData();
@@ -1470,16 +1469,16 @@ function refreshCurrencyTips() {
 if (store.online_flag === "0") {
   currentFilename = "txn.txt"; // 本地环境固定使用默认文件名
 
-  fetch(`../../_build/secrets/txn.txt?t=${Date.now()}`)
+  fetch(`../../_build/privy/txn.txt?t=${Date.now()}`)
     .then(res => {
       if (!res.ok) throw new Error('HTTP ' + res.status);
       return res.text();
     })
     .then(text => {
-      console.log("✅ 检测到本地环境，已自动加载 ../../_build/txn.txt");
+      console.log("✅ 检测到本地环境，已自动加载 ../../_build/privy/txn.txt");
+      out.classList.remove("hide");
       loadFX();
       parse(text);
-      out.classList.remove("hide");
       document.querySelector('a[download="sample_txn.txt"]').style.display = 'none';
     })
     .catch(err => {
@@ -1497,10 +1496,12 @@ if (store.online_flag === "0") {
   
   const jumpTxnLine = async (lineText) => {
     try {
+      const lineNum = parseInt(lineText, 10);
+      if (!Number.isInteger(lineNum) || lineNum <= 0) return;
       const m = await import('/src/js/shared-utils.js');
-      await m.invokeProtocol(7, String(lineText));
+      await m.callLocalApi('POST', '/__api/ops/txn', { line: lineNum });
     } catch (err) {
-      alert('❌ 本地协议调用失败：' + (err && err.message ? err.message : String(err)));
+      alert('❌ 跳转流水行失败：' + (err && err.message ? err.message : String(err)));
     }
   };
 

@@ -628,11 +628,11 @@ export function bomb(ctx) {
                     savedSnapStr = sessionStorage.getItem('ss_restore_strict');
                 }
                 const backupData = await getSelectedData(selections);
-                const savedProtoKey = store.online_flag === '0' ? localStorage.getItem('__diff4x_proto_key__') : null;
+                const savedLocalToken = store.online_flag === '0' ? localStorage.getItem('__swamp_local_token__') : null;
                 await doWipe();
                 await restoreData(backupData, selections);
-                if (savedProtoKey) {
-                    try { localStorage.setItem('__diff4x_proto_key__', savedProtoKey); } catch (_) { }
+                if (savedLocalToken) {
+                    try { localStorage.setItem('__swamp_local_token__', savedLocalToken); } catch (_) { }
                 }
                 if (savedSnapStr) {
                     try { sessionStorage.setItem('ss_restore_strict', savedSnapStr); } catch (_) { }
@@ -933,7 +933,7 @@ export function showGlobalBookmarkMenu(x, y, source) {
 }
 
 export function initDueTasksPingPong(ctx = {}) {
-    const JSON_URL = '/_build/secrets/upcoming_tasks.json';
+    const JSON_URL = '/_build/privy/upcoming_tasks.json';
     const CHECK_INTERVAL = 5 * 60 * 1000;
     const SNOOZE_KEY = 'task_snooze_until';
 
@@ -1026,10 +1026,18 @@ export function initDueTasksPingPong(ctx = {}) {
         if (Date.now() < snoozeTime) return;
 
         try {
-            const response = await fetch(JSON_URL + '?t=' + Date.now(), { cache: 'no-store' });
-            if (!response.ok) return;
-
-            const tasks = await response.json();
+            let tasks = null;
+            if (window.top && typeof window.top.callLocalApi === 'function') {
+                try {
+                    const res = await window.top.callLocalApi('GET', '/__api/tasks');
+                    if (res && Array.isArray(res.tasks)) tasks = res.tasks;
+                } catch (_) { }
+            }
+            if (!tasks) {
+                const response = await fetch(JSON_URL + '?t=' + Date.now(), { cache: 'no-store' });
+                if (!response.ok) return;
+                tasks = await response.json();
+            }
             const listContainer = document.getElementById('task-pingpong-list');
 
             if (Array.isArray(tasks) && tasks.length > 0) {

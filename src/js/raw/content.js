@@ -312,6 +312,12 @@ document.addEventListener('keydown', (e) => {
     style.id = 'content-init-fade';
     style.textContent = "body { opacity: 0; transition: opacity 0.3s ease; }";
     document.documentElement.appendChild(style);
+    if (!document.querySelector('link[href*="font.css"]')) {
+        const fcss = document.createElement('link');
+        fcss.rel = 'stylesheet';
+        fcss.href = '../src/css/font.css';
+        document.head.appendChild(fcss);
+    }
     if (!document.querySelector('link[href*="content.css"]')) {
         const css = document.createElement('link');
         css.rel = 'stylesheet';
@@ -433,18 +439,140 @@ async function format() {
             };
 
             document.getElementById("s_nav").insertAdjacentHTML("afterend",
-                `<span style='float: left' id='edit'>edit</span>`
+                `<span style='float: left' id='edit' title='用 VS Code 编辑并自动监听保存重载'>edit</span>`
             );
             const editEl = document.getElementById("edit");
             if (editEl) {
-                editEl.addEventListener("click", async () => {
-                    if (window.top && typeof window.top.invokeProtocol === "function") {
-                        await window.top.invokeProtocol(1, document.title);
+                const LIVE_EDIT_KEY = '__swamp_live_edit__';
+                const LIVE_SCROLL_KEY = '__swamp_live_edit_scroll__';
+                let liveAbort = null;
+                let liveWatchActive = false;
+
+                const callApi = async (method, endpoint, body = null, options = {}) => {
+                    if (window.top && typeof window.top.callLocalApi === "function") {
+                        return window.top.callLocalApi(method, endpoint, body, options);
+                    }
+                    const m = await import("/src/js/shared-utils.js");
+                    return m.callLocalApi(method, endpoint, body, options);
+                };
+
+                const setEditIndicator = (watching) => {
+                    liveWatchActive = watching;
+                    if (watching) {
+                        editEl.textContent = "edit ●";
+                        editEl.style.color = "#16a34a";
+                        editEl.title = "实时监听 VS Code 保存中（左键切回 VS Code，右键停止监听）";
                     } else {
-                        const m = await import("/src/js/shared-utils.js");
-                        await m.invokeProtocol(1, document.title);
+                        editEl.textContent = "edit";
+                        editEl.style.color = "";
+                        editEl.title = "用 VS Code 编辑并自动监听保存重载";
+                    }
+                };
+
+                const stopLiveWatch = (clearSession = true) => {
+                    if (liveAbort) {
+                        try { liveAbort.abort(); } catch (_) { }
+                        liveAbort = null;
+                    }
+                    if (clearSession) {
+                        try { sessionStorage.removeItem(LIVE_EDIT_KEY); } catch (_) { }
+                    }
+                    setEditIndicator(false);
+                };
+
+                const startLiveWatch = (initialSig) => {
+                    if (!initialSig) return;
+                    if (liveAbort) {
+                        try { liveAbort.abort(); } catch (_) { }
+                    }
+                    const ctrl = new AbortController();
+                    liveAbort = ctrl;
+                    setEditIndicator(true);
+
+                    (async () => {
+                        let curSig = initialSig;
+                        let consecutiveErrors = 0;
+                        while (!ctrl.signal.aborted) {
+                            try {
+                                const qs = `title=${encodeURIComponent(document.title)}&sig=${encodeURIComponent(curSig)}`;
+                                const res = await callApi('GET', `/__api/ops/watch-html?${qs}`, null, { signal: ctrl.signal });
+                                if (ctrl.signal.aborted) return;
+                                consecutiveErrors = 0;
+                                if (res && res.changed && res.sig) {
+                                    curSig = res.sig;
+                                    try {
+                                        sessionStorage.setItem(LIVE_EDIT_KEY, JSON.stringify({ title: document.title, sig: curSig }));
+                                        const y = window.pageYOffset || document.documentElement.scrollTop || 0;
+                                        sessionStorage.setItem(LIVE_SCROLL_KEY, JSON.stringify({ title: document.title, y }));
+                                    } catch (_) { }
+                                    store.jump_from_search = "0";
+                                    location.reload();
+                                    return;
+                                }
+                            } catch (err) {
+                                if (ctrl.signal.aborted || (err && err.name === 'AbortError')) return;
+                                if (err && (err.status === 401 || err.status === 404)) {
+                                    stopLiveWatch(true);
+                                    return;
+                                }
+                                consecutiveErrors++;
+                                if (consecutiveErrors > 10) {
+                                    stopLiveWatch(false);
+                                    return;
+                                }
+                                await new Promise(r => setTimeout(r, 2000));
+                            }
+                        }
+                    })();
+                };
+
+                // 重载后立即还原滚动位置并延续当前页监听态（切到其他文章自动清理）
+                try {
+                    const savedScroll = JSON.parse(sessionStorage.getItem(LIVE_SCROLL_KEY) || 'null');
+                    if (savedScroll && savedScroll.title === document.title && Number.isFinite(savedScroll.y)) {
+                        sessionStorage.removeItem(LIVE_SCROLL_KEY);
+                        const targetY = savedScroll.y;
+                        requestAnimationFrame(() => {
+                            window.scrollTo(0, targetY);
+                            setTimeout(() => window.scrollTo(0, targetY), 80);
+                        });
+                    }
+                    const savedLive = JSON.parse(sessionStorage.getItem(LIVE_EDIT_KEY) || 'null');
+                    if (savedLive && savedLive.title === document.title && savedLive.sig) {
+                        startLiveWatch(savedLive.sig);
+                    } else if (savedLive && savedLive.title !== document.title) {
+                        sessionStorage.removeItem(LIVE_EDIT_KEY);
+                    }
+                } catch (_) { }
+
+                editEl.addEventListener("click", async () => {
+                    try {
+                        const res = await callApi('POST', '/__api/ops/edit', { title: document.title });
+                        if (res && res.sig) {
+                            try {
+                                sessionStorage.setItem(LIVE_EDIT_KEY, JSON.stringify({ title: document.title, sig: res.sig }));
+                            } catch (_) { }
+                            startLiveWatch(res.sig);
+                        }
+                    } catch (err) {
+                        alert('❌ 打开编辑失败：' + (err && err.message ? err.message : String(err)));
                     }
                 });
+
+                editEl.addEventListener("contextmenu", (e) => {
+                    if (!liveWatchActive) return;
+                    e.preventDefault();
+                    stopLiveWatch(true);
+                });
+
+                const abortOnLeave = () => {
+                    if (liveAbort) {
+                        try { liveAbort.abort(); } catch (_) { }
+                        liveAbort = null;
+                    }
+                };
+                window.addEventListener("pagehide", abortOnLeave);
+                window.addEventListener("beforeunload", abortOnLeave);
             }
         }
     }

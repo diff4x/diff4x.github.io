@@ -1,0 +1,227 @@
+# _build/swamp.toml —— 全站唯一公共配置（入库）
+# 本机私有路径与凭据请写在 _build/privy/local.toml（.gitignore 忽略，兼容旧版 local.properties）
+
+[site]
+github_page = "diff4x.github.io"
+readme_md = "/README.md"
+update_interval_ms = 10000
+update_interval_local_ms = 2000
+
+[giscus]
+repo = "diff4x/comments"
+repo_id = "R_kgDOSlizXw"
+category_id = "DIC_kwDOSlizX84C9qT-"
+
+[server]
+port = 8000
+sim_port = 9000
+log_level = "error"
+watch_assets = true
+
+[build]
+slice_size_kb = 300
+exclude_html_regex = ["^_[^_].*"]
+prune_missing_images = false
+prune_max_lines = 30
+private_prefix_check = true
+allow_empty_gitignore = false
+
+[build.media_exclude]
+gallery = ["img", "xx"]
+video = []
+audio = []
+ebook = []
+
+# Glob 声明式预缓存规则
+[build.precache]
+include = [
+  "/",
+  "/index.html",
+  "/README.md",
+  "/src/tpl/*.html",
+  "/src/css/*.css",
+  "/src/js/*.js",
+  "/src/discussion_id_mapper.json",
+  "/src/wasm/compute_intensive_task_processor.min.js",
+  "/src/wasm/compute_intensive_task_processor_bg.wasm",
+  "/src/third/bibi/and/jo.js",
+  "/src/third/bibi/extensions/*.js",
+  "/src/third/bibi/extensions/extractor/*.js",
+  "/src/third/bibi/presets/default.js",
+  "/src/third/bibi/resources/scripts/bibi.js",
+  "/src/third/bibi/resources/scripts/polyfills/*.js",
+  "/src/third/bibi/resources/styles/bibi.css",
+  "/src/third/bibi/wardrobe/everyday/bibi.dress.css",
+  "/src/third/pdfjs/build/*.mjs",
+  "/src/third/pdfjs/web/viewer.css",
+  "/src/third/pdfjs/web/viewer.mjs",
+  "/src/third/pdfjs/web/locale/locale.json",
+  "/src/third/pdfjs/web/locale/en-US/viewer.ftl",
+  "/src/third/photo-sphere-viewer/photo-sphere-viewer.min.js",
+  "/src/third/photo-sphere-viewer/three.min.js",
+  "/src/third/prism/prism.css",
+  "/src/third/prism/prism.js",
+  "/src/third/other/encoding.min.js",
+  "/src/third/other/confetti.browser.min.js",
+  "/src/third/markdown/highlight.min.js",
+  "/src/third/markdown/marked.min.js",
+  "/src/third/markdown/purify.min.js"
+]
+exclude = [
+  "/src/tpl/bilingual.html",
+  "/src/tpl/new.html",
+  "/src/tpl/md_viewer.html",
+  "/src/js/core-list.js",
+  "/src/js/sw.js",
+  "/src/third/markdown/codemirror/**"
+]
+
+[media]
+webp_quality = 80
+img_max_width = 800
+webp_output_dir = "../gallery/img"
+
+[tray]
+heartbeat_url = "https://www.google.com"
+heartbeat_interval_sec = 10
+tasks_poll_interval_sec = 300
+due_within_days = 7
+
+[local]
+# 本机私有路径请在 _build/privy/local.toml 中覆盖
+vscode_path = "code"
+katrain_dir = ""
+img_input_dir = ""
+webp_output_dir2 = ""
+keep_takeout_zip_folder = ""
+
+# === PACK-PRESETS-BEGIN ===
+[pack]
+skip_apply_doc_regex = "^(APPLY_AND_VERIFY|UPGRADE_.*|PATCH_NOTES|README_PATCH)\\.md$"
+presets_json = '''
+[
+  {
+    "name": "基础必传集 (README + 核心检索)",
+    "paths": [
+      "README.md",
+      "_build/swamp-server/src/lib.rs",
+      "src/js/raw/worker.js",
+      "src/js/raw/search-engine.js",
+      "src/js/raw/search-ui.js"
+    ]
+  },
+  {
+    "name": "Rust 引擎全套 (swamp.exe + Wasm, v3.1)",
+    "paths": [
+      "README.md",
+      ".gitignore",
+      "_build/swamp.toml",
+      "_build/swamp-server/build.bat",
+      "_build/swamp-server/Cargo.toml",
+      "_build/swamp-server/.cargo/config.toml",
+      "_build/swamp-server/src/lib.rs",
+      "_build/swamp-server/src/main.rs",
+      "_build/swamp-server/src/gui.rs",
+      "_build/swamp-server/src/config.rs",
+      "_build/swamp-server/src/security.rs",
+      "_build/swamp-server/src/static_fs.rs",
+      "_build/swamp-server/src/api_files.rs",
+      "_build/swamp-server/src/api_ops.rs",
+      "_build/swamp-server/src/builder/mod.rs",
+      "_build/swamp-server/src/builder/minify.rs",
+      "_build/swamp-server/src/builder/html_utils.rs",
+      "_build/swamp-server/src/builder/generator.rs",
+      "_build/swamp-server/src/builder/synonyms.rs",
+      "_build/swamp-server/src/builder/synonyms_tpl.js",
+      "_build/swamp-server/src/media/mod.rs",
+      "_build/swamp-server/src/media/webp.rs",
+      "_build/swamp-server/src/media/keep2html.rs",
+      "_build/swamp-server/src/services/mod.rs",
+      "_build/swamp-server/src/services/log_bus.rs",
+      "_build/swamp-server/src/services/watcher.rs",
+      "_build/swamp-server/src/services/tasks.rs",
+      "_build/swamp-server/src/services/pack_apply.rs",
+      "src/js/raw/site-core.js",
+      "src/js/raw/shared-utils.js",
+      "src/js/raw/index.js"
+    ]
+  },
+  {
+    "name": "电子书阅读器 (PDF / EPUB / TXT)",
+    "paths": [
+      "README.md",
+      "src/tpl/pdf.html",
+      "src/tpl/epub.html",
+      "src/tpl/txt.html",
+      "src/js/raw/pdf-viewer.js",
+      "src/css/raw/pdf-viewer.css",
+      "src/third/pdfjs/web/viewer.mjs",
+      "src/third/bibi/presets/default.js",
+      "src/js/raw/book-db.js",
+      "src/js/raw/search-preview.js",
+      "src/js/raw/shared-utils.js"
+    ]
+  },
+  {
+    "name": "HTML 正文 / 高亮 / Diff / 双语",
+    "paths": [
+      "README.md",
+      "src/js/raw/content.js",
+      "src/js/raw/bilingual.js",
+      "src/tpl/bilingual.html",
+      "src/js/raw/shared-utils.js",
+      "src/js/raw/site-core.js"
+    ]
+  },
+  {
+    "name": "SW 缓存 / 热更新 / 构建清单",
+    "paths": [
+      "README.md",
+      "index.html",
+      "src/js/raw/site-core.js",
+      "src/js/raw/index.js",
+      "src/js/raw/sw.js",
+      "src/js/raw/snapshot.js",
+      "_build/swamp.toml",
+      "_build/swamp-server/src/builder/generator.rs",
+      "_build/swamp-server/src/config.rs"
+    ]
+  },
+  {
+    "name": "近义词构建与调优",
+    "paths": [
+      "README.md",
+      "_build/swamp.toml",
+      "_build/swamp-server/src/builder/synonyms.rs",
+      "_build/swamp-server/src/builder/synonyms_tpl.js",
+      "src/js/raw/worker.js"
+    ]
+  },
+  {
+    "name": "全部前端源码 (raw JS/CSS + tpl + index)",
+    "globs": [
+      "index.html",
+      "README.md",
+      ".gitignore",
+      "src/js/raw/*.js",
+      "src/css/raw/*.css",
+      "src/tpl/*.html"
+    ]
+  }
+]
+'''
+# === PACK-PRESETS-END ===
+
+# === SYNONYMS-CUSTOM-BEGIN ===
+[synonyms]
+custom_json = '''
+{
+  "dropEqCodes": [],
+  "pruneWords": {},
+  "splitFixes": {},
+  "stopExpand": [],
+  "groups": [],
+  "aliases": {}
+}
+'''
+# === SYNONYMS-CUSTOM-END ===

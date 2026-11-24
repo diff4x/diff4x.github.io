@@ -1,8 +1,8 @@
-importScripts('/src/js/core-list.js?v=1795494627905');
+importScripts('/src/js/core-list.js?v=1795561563405');
 const _scMeta = typeof FILE_MANIFEST === 'object' && FILE_MANIFEST && FILE_MANIFEST['/src/js/site-core.js'];
 importScripts('/src/js/site-core.js' + (_scMeta && _scMeta.hash ? ('?v=' + _scMeta.hash) : ''));
 
-self.SW_VERSION = '1795494627905';
+self.SW_VERSION = '1795561563405';
 self.EMERGENCY = 'repair_command_id=2';
 
 const CACHE_NAME_CORE = 'core-cache-' + BUILD_VERSION;
@@ -465,6 +465,7 @@ self.addEventListener('fetch', event => {
     if (!event.request.url.startsWith('http')) return;
     if (url.origin !== self.location.origin) return;
     if (url.pathname.endsWith('sw.js')) return;
+    if (url.pathname.startsWith('/__api/')) return;
 
     if (IS_LOCAL_MODE) {
         event.respondWith(
@@ -540,13 +541,29 @@ self.addEventListener('fetch', event => {
         url.pathname.includes('/third/pdfjs/web/images/') ||
         url.pathname.match(/\.(woff|woff2|eot|ttf|svg)$/)
     ) {
+        const isFontAsset = /\.(?:woff2?|eot|ttf)$/i.test(url.pathname);
         event.respondWith(
             caches.open(CACHE_NAME_MEDIA).then(async (cache) => {
                 const cached = await cache.match(event.request);
                 if (cached) return cached;
-                const response = await fetch(event.request);
+                const response = isFontAsset
+                    ? await fetchWithLock(event.request)
+                    : await fetch(event.request);
                 if (response && response.status === 200) {
-                    cache.put(event.request, response.clone());
+                    cache.put(event.request, response.clone()).then(() => {
+                        if (isFontAsset && url.pathname.startsWith('/src/css/font/') && url.search) {
+                            cache.keys().then(keys => {
+                                for (const k of keys) {
+                                    try {
+                                        const ku = new URL(k.url);
+                                        if (ku.pathname === url.pathname && ku.search !== url.search) {
+                                            cache.delete(k);
+                                        }
+                                    } catch (_) { }
+                                }
+                            }).catch(() => { });
+                        }
+                    });
                 }
                 return response;
             })

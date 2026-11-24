@@ -482,37 +482,17 @@ export function buildMergedGroupSnippets(groupHits, opts) {
 }
 
 // =========================================================================
-// 本地自定义协议：#fragment 密钥吸收 + Encrypt-then-MAC 一次性信封
+// 本地伴生服务同源 API 客户端：#fragment 令牌吸收 + X-Swamp-Token 请求封装
 // =========================================================================
-export const PROTO_KEY_STORAGE = '__diff4x_proto_key__';
-const _protoEncoder = new TextEncoder();
+export const LOCAL_TOKEN_STORAGE = '__swamp_local_token__';
 
-function hexToBytes(hex) {
-    if (typeof hex !== 'string' || !/^[0-9a-f]{64}$/i.test(hex)) return null;
-    const out = new Uint8Array(32);
-    for (let i = 0; i < 32; i++) out[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
-    return out;
-}
-
-function bytesToHex(bytes) {
-    let s = '';
-    for (let i = 0; i < bytes.length; i++) s += bytes[i].toString(16).padStart(2, '0');
-    return s;
-}
-
-function bytesToBase64Url(bytes) {
-    let bin = '';
-    for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
-    return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-}
-
-export function ingestProtocolKeyFromHash(isLocalEnv) {
+export function ingestLocalTokenFromHash(isLocalEnv) {
     if (!isLocalEnv) return false;
     const h = window.location.hash || '';
-    const m = /^#__diff4x_key=([0-9a-f]{64})$/i.exec(h);
+    const m = /^#__swamp_token=([0-9a-f]{64})$/i.exec(h);
     if (!m) return false;
     try {
-        localStorage.setItem(PROTO_KEY_STORAGE, m[1].toLowerCase());
+        localStorage.setItem(LOCAL_TOKEN_STORAGE, m[1].toLowerCase());
     } catch (_) { }
     try {
         history.replaceState(null, '', window.location.pathname + window.location.search);
@@ -522,74 +502,35 @@ export function ingestProtocolKeyFromHash(isLocalEnv) {
     return true;
 }
 
-async function deriveProtoSubKeys(masterBytes) {
-    const concat = (a, b) => {
-        const u = new Uint8Array(a.length + b.length);
-        u.set(a, 0);
-        u.set(b, a.length);
-        return u;
+export async function callLocalApi(method, endpoint, body = null, options = {}) {
+    const token = (localStorage.getItem(LOCAL_TOKEN_STORAGE) || '').trim();
+    if (!token) {
+        throw new Error('缺少本地会话令牌，请通过 Swamp 管理窗口点击 Open Site 重新打开本地站点');
+    }
+    const opts = {
+        method,
+        credentials: 'same-origin',
+        cache: 'no-store',
+        headers: {
+            'X-Swamp-Token': token
+        }
     };
-    const [encRaw, macRaw] = await Promise.all([
-        crypto.subtle.digest('SHA-256', concat(masterBytes, _protoEncoder.encode('diff4x-proto-enc-v1'))),
-        crypto.subtle.digest('SHA-256', concat(masterBytes, _protoEncoder.encode('diff4x-proto-mac-v1')))
-    ]);
-    const [encKey, macKey] = await Promise.all([
-        crypto.subtle.importKey('raw', encRaw, { name: 'AES-CBC' }, false, ['encrypt']),
-        crypto.subtle.importKey('raw', macRaw, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'])
-    ]);
-    return { encKey, macKey };
-}
-
-export async function sealProtocolUrl(action, param = '') {
-    if (!window.crypto || !crypto.subtle) {
-        throw new Error('当前非安全上下文，Web Crypto API 不可用');
+    if (options && options.signal) {
+        opts.signal = options.signal;
     }
-    const proto = sanitizeProtocolName(localStorage.getItem('protocol_name'));
-    if (!proto) throw new Error('非法或未配置 protocol_name');
-
-    const keyHex = (localStorage.getItem(PROTO_KEY_STORAGE) || '').trim();
-    const masterBytes = hexToBytes(keyHex);
-    if (!masterBytes) {
-        throw new Error('缺少本地协议密钥，请通过 CLI.bat [4] 重新打开本地站点');
+    if (method !== 'GET' && method !== 'HEAD') {
+        opts.headers['Content-Type'] = 'application/json';
+        opts.body = JSON.stringify(body ?? {});
     }
-
-    const { encKey, macKey } = await deriveProtoSubKeys(masterBytes);
-    const nonce = bytesToHex(crypto.getRandomValues(new Uint8Array(16)));
-    const iv = crypto.getRandomValues(new Uint8Array(16));
-    const payload = JSON.stringify({
-        v: 1,
-        act: Number(action),
-        p: String(param ?? ''),
-        ts: Math.floor(Date.now() / 1000),
-        nonce,
-        origin: window.location.origin
-    });
-
-    const ctBuf = await crypto.subtle.encrypt({ name: 'AES-CBC', iv }, encKey, _protoEncoder.encode(payload));
-    const ct = new Uint8Array(ctBuf);
-
-    const body = new Uint8Array(1 + 16 + ct.length);
-    body[0] = 1;
-    body.set(iv, 1);
-    body.set(ct, 17);
-
-    const tagBuf = await crypto.subtle.sign('HMAC', macKey, body);
-    const tag = new Uint8Array(tagBuf);
-
-    const packet = new Uint8Array(body.length + 32);
-    packet.set(body, 0);
-    packet.set(tag, body.length);
-
-    return `${proto}://env/v1.${bytesToBase64Url(packet)}`;
-}
-
-export async function invokeProtocol(action, param = '') {
-    try {
-        const url = await sealProtocolUrl(action, param);
-        window.location.href = url;
-        return true;
-    } catch (err) {
-        alert('❌ 本地协议调用失败：' + (err && err.message ? err.message : String(err)));
-        return false;
+    const res = await fetch(endpoint, opts);
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || data.ok === false) {
+        const msg = res.status === 401
+            ? '本地会话令牌已失效（服务可能已重启），请通过 Swamp 管理窗口点击 Open Site 重新打开本地站点'
+            : (data.error || `HTTP ${res.status}`);
+        const err = new Error(msg);
+        err.status = res.status;
+        throw err;
     }
+    return data;
 }

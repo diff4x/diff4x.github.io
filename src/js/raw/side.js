@@ -181,46 +181,48 @@ document.addEventListener("keydown", e => {
     if (e.key === "\\") emitEvent("quick_search", null, "index");
 });
 
-window.onload = () => {
-    if (store.online_flag === "0") {
+function revealAdminLinks() {
+    const isLocalByHost = (
+        location.hostname === "localhost" ||
+        location.hostname === "127.0.0.1" ||
+        location.protocol === "file:"
+    ) && location.port !== "9000";
+    if (store.online_flag === "0" || isLocalByHost) {
         document.querySelectorAll("a.admin").forEach(a => a.classList.remove("hidden"));
     }
+}
+
+if (document.readyState !== "loading") {
+    revealAdminLinks();
+} else {
+    document.addEventListener("DOMContentLoaded", revealAdminLinks, { once: true });
+}
+
+window.onload = () => {
+    revealAdminLinks();
 
     adj_width();
     go_top();
 
-    const callLocalProto = async (act, param = "") => {
-        if (window.top && typeof window.top.invokeProtocol === "function") {
-            return window.top.invokeProtocol(act, param);
+    const callLocalOp = async (endpoint, body = {}) => {
+        try {
+            if (window.top && typeof window.top.callLocalApi === "function") {
+                return await window.top.callLocalApi('POST', endpoint, body);
+            }
+            const m = await import("/src/js/shared-utils.js");
+            return await m.callLocalApi('POST', endpoint, body);
+        } catch (err) {
+            alert('❌ 本地操作失败：' + (err && err.message ? err.message : String(err)));
         }
-        const m = await import("/src/js/shared-utils.js");
-        return m.invokeProtocol(act, param);
     };
 
-    bindDualClick(document.getElementById("a1"), e => {
-        e.preventDefault();
-        callLocalProto(4);
-    }, e => {
-        e.preventDefault();
-        callLocalProto(6);
-    }, DUAL_CLICK_DELAY_MS);
-
-    const a2 = document.getElementById("a2");
-    if (a2) {
-        a2.removeAttribute("href");
-        a2.style.cursor = "pointer";
-        a2.addEventListener("click", e => {
-            e.preventDefault();
-            callLocalProto(3);
-        });
-    }
     const a3 = document.getElementById("a3");
     if (a3) {
         a3.removeAttribute("href");
         a3.style.cursor = "pointer";
         a3.addEventListener("click", e => {
             e.preventDefault();
-            callLocalProto(8);
+            callLocalOp('/__api/ops/katrain');
         });
     }
 };
@@ -713,8 +715,8 @@ async function menu() {
         }, 200);
     });
 
-    const a1 = document.getElementById("a1");
-    const insertOrAppend = el => (a1 ? menuEl.insertBefore(el, a1) : menuEl.appendChild(el));
+    const anchorEl = menuEl.querySelector("a.admin, a.t") || menuEl.firstElementChild;
+    const insertOrAppend = el => (anchorEl ? menuEl.insertBefore(el, anchorEl) : menuEl.appendChild(el));
 
     const whatsNew = makeMenuLink("What's new?", () => {
         emitEvent("show_changelog", null, "index");
