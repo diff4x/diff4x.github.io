@@ -138,7 +138,7 @@ const IDC_LBL_LOG: u16 = 101;
 const IDC_BTN_CLEAR_LOG: u16 = 102;
 const IDC_EDIT_LOG: u16 = 103;
 
-// Tab 0: 常规与媒体
+// Tab 0: 常规
 const IDC_GRP_OPS: u16 = 200;
 const IDC_BTN_OPEN_SITE: u16 = 201;
 const IDC_BTN_GEN: u16 = 202;
@@ -177,7 +177,7 @@ const IDC_LBL_KEEP_CAT: u16 = 245;
 const IDC_EDIT_KEEP_CAT: u16 = 246;
 const IDC_BTN_KEEP: u16 = 247;
 
-// Tab 1: 打包给 AI (Pack)
+// Tab 1: 打包协作 (Pack)
 const IDC_LBL_PACK_PRESET: u16 = 301;
 const IDC_CMB_PACK_PRESET: u16 = 302;
 const IDC_BTN_PRESET_ONLY: u16 = 303;
@@ -224,7 +224,7 @@ const IDC_LBL_DL_STATUS: u16 = 420;
 const IDC_BTN_DL_OPEN: u16 = 421;
 const IDC_BTN_DL_DEL: u16 = 422;
 
-// Tab 3: 同义词与新词 (Synonyms & OOV)
+// Tab 3: 同义词 (Synonyms)
 const IDC_BTN_SYN_SAVE: u16 = 501;
 const IDC_BTN_SYN_REBUILD: u16 = 502;
 const IDC_BTN_SYN_IMPORT: u16 = 503;
@@ -1103,10 +1103,10 @@ unsafe fn build_all_controls(g: &mut GuiData, hwnd: HWND) {
         f,
     );
     for (idx, label) in [
-        " 常规与媒体 ",
-        " 打包给 AI ",
+        " 常规 ",
+        " 打包协作 ",
         " 回填补丁 ",
-        " 同义词与新词 ",
+        " 同义词 ",
     ]
     .iter()
     .enumerate()
@@ -1162,11 +1162,11 @@ unsafe fn build_all_controls(g: &mut GuiData, hwnd: HWND) {
     );
     SendMessageW(g.hwnd_edit_log, EM_SETLIMITTEXT, 512 * 1024, 0);
 
-    // ================= TAB 0: 常规与媒体 =================
-    g.hwnd_grp_ops = create_ctrl("BUTTON", "站点与构建运维", BS_GROUPBOX, 0, IDC_GRP_OPS, hwnd, hinst, f);
-    g.hwnd_btn_gen = create_ctrl("BUTTON", "gen", WS_TABSTOP | BS_PUSHBUTTON, 0, IDC_BTN_GEN, hwnd, hinst, f);
+    // ================= TAB 0: 常规 =================
+    g.hwnd_grp_ops = create_ctrl("BUTTON", "构建", BS_GROUPBOX, 0, IDC_GRP_OPS, hwnd, hinst, f);
     g.hwnd_btn_gen_push = create_ctrl("BUTTON", "gen + push", WS_TABSTOP | BS_PUSHBUTTON, 0, IDC_BTN_GEN_PUSH, hwnd, hinst, f);
     g.hwnd_btn_push = create_ctrl("BUTTON", "push", WS_TABSTOP | BS_PUSHBUTTON, 0, IDC_BTN_PUSH, hwnd, hinst, f);
+    g.hwnd_btn_gen = create_ctrl("BUTTON", "gen", WS_TABSTOP | BS_PUSHBUTTON, 0, IDC_BTN_GEN, hwnd, hinst, f);
     g.hwnd_btn_root = create_ctrl("BUTTON", "root/", WS_TABSTOP | BS_PUSHBUTTON, 0, IDC_BTN_ROOT, hwnd, hinst, f);
     g.hwnd_btn_selfcheck = create_ctrl("BUTTON", "selfcheck", WS_TABSTOP | BS_PUSHBUTTON, 0, IDC_BTN_SELFCHECK, hwnd, hinst, f);
     g.hwnd_btn_sim = create_ctrl("BUTTON", "simulator (9000)", WS_TABSTOP | BS_PUSHBUTTON, 0, IDC_BTN_SIM, hwnd, hinst, f);
@@ -1227,13 +1227,13 @@ unsafe fn build_all_controls(g: &mut GuiData, hwnd: HWND) {
 
     g.tab0_ctrls = vec![
         g.hwnd_grp_ops,
-        g.hwnd_btn_open_site,
-        g.hwnd_btn_gen,
         g.hwnd_btn_gen_push,
         g.hwnd_btn_push,
-        g.hwnd_btn_sim,
-        g.hwnd_btn_selfcheck,
+        g.hwnd_btn_gen,
         g.hwnd_btn_root,
+        g.hwnd_btn_selfcheck,
+        g.hwnd_btn_sim,
+        g.hwnd_btn_open_site,
         g.hwnd_lbl_commit,
         g.hwnd_edit_commit,
         g.hwnd_btn_reauth,
@@ -1262,7 +1262,7 @@ unsafe fn build_all_controls(g: &mut GuiData, hwnd: HWND) {
         g.hwnd_btn_keep,
     ];
 
-    // ================= TAB 1: 打包给 AI (Pack) =================
+    // ================= TAB 1: 打包 (Pack) =================
     g.hwnd_lbl_pack_preset = create_ctrl("STATIC", "预设:", 0, 0, IDC_LBL_PACK_PRESET, hwnd, hinst, f);
     g.hwnd_cmb_pack_preset = create_ctrl("COMBOBOX", "", WS_TABSTOP | CBS_DROPDOWNLIST, 0, IDC_CMB_PACK_PRESET, hwnd, hinst, f);
     g.hwnd_btn_preset_only = create_ctrl("BUTTON", "仅选预设", WS_TABSTOP | BS_PUSHBUTTON, 0, IDC_BTN_PRESET_ONLY, hwnd, hinst, f);
@@ -1439,7 +1439,7 @@ unsafe fn build_all_controls(g: &mut GuiData, hwnd: HWND) {
         g.hwnd_lbl_backup_status,
     ];
 
-    // ================= TAB 3: 同义词与新词 (Synonyms & OOV) =================
+    // ================= TAB 3: 同义词 (Synonyms) =================
     g.hwnd_btn_syn_save = create_ctrl("BUTTON", "保存到 swamp.toml", WS_TABSTOP | BS_PUSHBUTTON, 0, IDC_BTN_SYN_SAVE, hwnd, hinst, f);
     g.hwnd_btn_syn_rebuild = create_ctrl("BUTTON", "重建 synonyms.js + gen", WS_TABSTOP | BS_PUSHBUTTON, 0, IDC_BTN_SYN_REBUILD, hwnd, hinst, f);
     g.hwnd_btn_syn_import = create_ctrl("BUTTON", "导入旧 JSON...", WS_TABSTOP | BS_PUSHBUTTON, 0, IDC_BTN_SYN_IMPORT, hwnd, hinst, f);
@@ -1602,18 +1602,31 @@ unsafe fn layout_controls(g: &GuiData, hwnd: HWND) {
     MoveWindow(g.hwnd_grp_ops, inner_x, y, inner_w, s(84), 1);
     let mut bx = inner_x + s(12);
     let by1 = y + s(22);
-    for (btn, bw) in [
-        (g.hwnd_btn_open_site, 86),
-        (g.hwnd_btn_gen, 114),
-        (g.hwnd_btn_gen_push, 94),
-        (g.hwnd_btn_push, 64),
-        (g.hwnd_btn_sim, 118),
-        (g.hwnd_btn_selfcheck, 80),
-        (g.hwnd_btn_root, 64),
-    ] {
-        let sbw = s(bw);
-        MoveWindow(btn, bx, by1, sbw, s(25), 1);
-        bx += sbw + s(6);
+    let ops_btn_width = |h: HWND| -> Option<i32> {
+        if h == g.hwnd_btn_open_site {
+            Some(86)
+        } else if h == g.hwnd_btn_gen {
+            Some(64)
+        } else if h == g.hwnd_btn_gen_push {
+            Some(94)
+        } else if h == g.hwnd_btn_push {
+            Some(64)
+        } else if h == g.hwnd_btn_sim {
+            Some(118)
+        } else if h == g.hwnd_btn_selfcheck {
+            Some(80)
+        } else if h == g.hwnd_btn_root {
+            Some(64)
+        } else {
+            None
+        }
+    };
+    for &btn in &g.tab0_ctrls {
+        if let Some(bw) = ops_btn_width(btn) {
+            let sbw = s(bw);
+            MoveWindow(btn, bx, by1, sbw, s(25), 1);
+            bx += sbw + s(6);
+        }
     }
     let by2 = y + s(53);
     MoveWindow(g.hwnd_lbl_commit, inner_x + s(12), by2 + s(3), s(94), s(20), 1);

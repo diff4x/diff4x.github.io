@@ -92,7 +92,7 @@
 | 标签页 | 常用按钮与作用 |
 | :--- | :--- |
 | **常规与媒体** | `Open Site`（带随机令牌打开本地站点）、`gen`（全量构建）、`gen + push` / `push`（填写 Commit 后自动检测暂存改动并提交推送）、`simulator (9000)`（隐身窗仿真线上环境）、`selfcheck`（运行 42 项自检）、`root/`（打开仓库目录）、`重授 Google Tasks`；下方集成 `new`（新建 HTML）、`转webp`（批量压缩截图并复制文件名）、`keep2html`（Keep 导出包转 HTML）。 |
-| **打包给 AI** | 三态目录树勾选源码，支持预设增删改（存于 `_build/swamp.toml`）、一键勾选 Git 改动、文件名过滤；勾选 `拼接 MD` 并设定单文件上限（默认 200 KB）可同步输出分卷 `.md`，方便在不支持上传 `.zip` 的 AI 界面中使用。 |
+| **打包协作** | 三态目录树勾选源码，支持预设增删改（存于 `_build/swamp.toml`）、一键勾选 Git 改动、文件名过滤；勾选 `拼接 MD` 并设定单文件上限（默认 200 KB）可同步输出分卷 `.md`，方便在不支持上传 `.zip` 的 AI 界面中使用。 |
 | **回填补丁** | 左侧浏览或拖入 AI 返回的补丁 `.zip` 预览并一键回填（覆盖前自动备份，可选编码守卫、回填后等 `swamp.exe` 安全退出再拉起 `build.bat`）；支持按快照一键回滚；右侧显示 `_build/temp/backup` 目录树，可勾选清理冗余的历史打包和备份。 |
 | **同义词与新词** | 左侧直接编辑 `_build/swamp.toml` 中的自定义同义词 JSON 并保存/重建 `synonyms.js`（重建后自动 `gen` 一次）；右侧查看构建期生成的 `oov_report.txt` 新词雷达。 |
 
@@ -245,13 +245,13 @@ index.html / sw.js / README.md / .gitignore / .nojekyll
 
 | 组件 | 版本 | 位置 | 安全与定制约束 |
 | :--- | :--- | :--- | :--- |
-| **PDF.js** | `v6.5.438` | `src/third/pdfjs/` + `pdf-viewer.{js,css}` | 严格 CSP（零 `'unsafe-inline'`），`enableScripting: false`；文本层通过 `_textHighlighter` 适配 v6 私有字段；支持批注与书内搜索桥接 |
+| **PDF.js** | `6.5.438` | `src/third/pdfjs/` + `pdf-viewer.{js,css}` | 严格 CSP（零 `'unsafe-inline'`），`enableScripting: false`；文本层通过 `_textHighlighter` 适配 v6 私有字段；支持批注与书内搜索桥接 |
 | **Bibi (EPUB)** | `1.2.0` | `src/third/bibi/` + `src/tpl/epub.html` | `allow-scripts-in-content: false`、`trustworthy-origins: []`，关闭本地/base64/blob 入口；章节 iframe 二次剥离脚本并注入 `script-src 'none'` |
-| **marked** | `v4.3.0` | `src/third/markdown/marked.min.js` | 配合 `md_viewer.html` 前置 `protectMath` 与后置 `fixBold` / `highlightCode` |
+| **marked** | `4.3.0` | `src/third/markdown/marked.min.js` | 配合 `md_viewer.html` 前置 `protectMath` 与后置 `fixBold` / `highlightCode` |
 | **DOMPurify** | `3.5.0` | `src/third/markdown/purify.min.js` | `md_viewer.html` 禁用 `script/style/iframe/object/embed/form/svg/math/template`、`srcdoc/formaction` 与未知协议 |
 | **highlight.js** | 同源精简版 | `src/third/markdown/highlight.min.js` | 仅高亮显式标注且已注册的语言 |
 | **CodeMirror 5** | 同源 | `src/third/markdown/codemirror/` | 仅本地编辑态按需加载，在 `swamp.toml` precache 中排除 |
-| **Photo Sphere Viewer + three.js** | three `r7` (`version:7`) | `src/third/photo-sphere-viewer/` | `pano.html` 禁 `eval` CSP，强校验 `?src=` 仅限同源 `/gallery/` 图片 |
+| **Photo Sphere Viewer + three.js** | `7` | `src/third/photo-sphere-viewer/` | `pano.html` 禁 `eval` CSP，强校验 `?src=` 仅限同源 `/gallery/` 图片 |
 | **Prism / encoding.js / confetti** | 同源 | `src/third/prism/`, `src/third/other/` | 代码高亮、TXT 编码兜底、更新庆祝动画 |
 
 ### 3. 模块拓扑与通信面
