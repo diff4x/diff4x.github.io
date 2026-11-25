@@ -5,16 +5,23 @@ use regex::Regex;
 use serde_json::{json, Map, Value};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs;
-use std::io::Write;
+use std::io::{BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
 use walkdir::WalkDir;
 
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+
 use crate::api_files::write_atomic;
 use crate::builder::html_utils::{extract_anchor_text, extract_body_text, extract_title};
-use crate::builder::synonyms;
+use crate::builder::{log_info, log_warn, synonyms};
 use crate::config::{normalize_web_path, strip_verbatim_prefix, ServerConfig};
+use crate::services::log_bus::LogBus;
+
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 struct FileMeta {
     hash: String,
@@ -27,22 +34,43 @@ struct MediaNode {
     media_type: String,
 }
 
+struct HtmlScanOutcome {
+    pending_rewrites: Vec<(PathBuf, String)>,
+    pruned_lines: usize,
+    image_set: HashSet<String>,
+    used_images: HashSet<String>,
+}
+
+struct StagingDirGuard(PathBuf);
+
+impl Drop for StagingDirGuard {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
 struct IgnoreRules {
     gi: Gitignore,
-    local_only_raw: HashSet<String>,
-    git_ignored_html: HashSet<String>,
+    local_only_exact: HashSet<String>,
+    local_only_any_seg: HashSet<String>,
+    git_ignored: HashSet<String>,
 }
 
 impl IgnoreRules {
     fn is_private_rel(&self, rel_slash: &str, is_dir: bool) -> bool {
-        if self.git_ignored_html.contains(rel_slash) {
+        if self.git_ignored.contains(rel_slash) {
             return true;
         }
-        if self.local_only_raw.contains(rel_slash) {
+        if self.local_only_exact.contains(rel_slash) {
             return true;
         }
-        if let Some(name) = rel_slash.rsplit('/').next() {
-            if self.local_only_raw.contains(name) {
+        for (idx, _) in rel_slash.match_indices('/') {
+            if self.local_only_exact.contains(&rel_slash[..idx]) {
+                return true;
+            }
+        }
+        for seg in rel_slash.split('/') {
+            if !seg.is_empty() && self.local_only_any_seg.contains(seg) {
                 return true;
             }
         }
@@ -62,8 +90,8 @@ fn join_rel(root: &Path, rel_slash: &str) -> PathBuf {
     p
 }
 
-pub fn run(cfg: &ServerConfig) -> Result<Option<String>, String> {
-    inject_script_to_index_html(cfg)?;
+pub fn run(cfg: &ServerConfig, logs: Option<&LogBus>) -> Result<Option<String>, String> {
+    let prepared_index_html = prepare_index_html_injection(cfg, logs)?;
     let mut rules = load_gitignore_rules(cfg)?;
 
     let mapper_src = if cfg.discussion_id_mapper.is_file() {
@@ -121,7 +149,7 @@ pub fn run(cfg: &ServerConfig) -> Result<Option<String>, String> {
         .map(|pat| Regex::new(pat).map_err(|e| format!("无效的排除正则 {}: {}", pat, e)))
         .collect::<Result<Vec<_>, _>>()?;
 
-    process_html_files_and_images(
+    let html_outcome = process_html_files_and_images(
         cfg,
         &mut rules,
         &exclude_patterns,
@@ -134,6 +162,7 @@ pub fn run(cfg: &ServerConfig) -> Result<Option<String>, String> {
         &mut shadow_data_map,
         &mut public_docs_for_df,
         &mut private_page_names,
+        logs,
     )?;
 
     let orphan_ids: Vec<Value> = records
@@ -151,37 +180,89 @@ pub fn run(cfg: &ServerConfig) -> Result<Option<String>, String> {
     cmt_root.insert("orphanIds".to_string(), Value::Array(orphan_ids));
     let cmt_json = serde_json::to_string(&Value::Object(cmt_root))
         .map_err(|e| format!("序列化 discussion_id_mapper.json 失败: {}", e))?;
-    write_atomic(&cfg.discussion_id_mapper, &cmt_json, false)?;
 
     scan_all_medias(cfg, &rules, &mut lite_tree);
 
+    let staging_parent = cfg.backup_dir.parent().unwrap_or(&cfg.build_dir);
+    let staging_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let staging_dir = staging_parent.join(format!("staging_data_{}_{}", std::process::id(), staging_ms));
+    fs::create_dir_all(&staging_dir)
+        .map_err(|e| format!("创建构建暂存目录失败 ({}): {}", staging_dir.display(), e))?;
+    let _staging_guard = StagingDirGuard(staging_dir.clone());
+
     let generated_data_files =
-        generate_lite_and_fat_data(&lite_tree, &fat_data_map, &cfg.data_dir, cfg.slice_size_bytes)?;
+        generate_lite_and_fat_data(&lite_tree, &fat_data_map, &staging_dir, cfg.slice_size_bytes)?;
     if !shadow_data_map.is_empty() {
-        generate_shadow_data(&shadow_data_map, &cfg.data_dir, cfg.slice_size_bytes)?;
+        generate_shadow_data(&shadow_data_map, &staging_dir, cfg.slice_size_bytes)?;
     }
 
-    synonyms::build_if_needed(cfg, &public_docs_for_df, &lite_tree)?;
+    synonyms::build_if_needed(cfg, &public_docs_for_df, &lite_tree, logs)?;
 
-    let new_build_version = generate_manifest(
+    let prepared_manifest = prepare_manifest(
         cfg,
         &rules,
         &exclude_patterns,
         &mut core_bundle,
         &generated_data_files,
+        &staging_dir,
+        prepared_index_html.as_deref(),
+        logs,
     )?;
-
-    if let Some(ref ver) = new_build_version {
-        update_sw_version(cfg, ver)?;
-    }
 
     assert_no_private_leak(
         cfg,
+        &staging_dir,
         &private_page_names,
         &shadow_data_map,
         &generated_data_files,
         &core_bundle,
+        logs,
     )?;
+
+    if let Some(ref updated_idx) = prepared_index_html {
+        write_atomic(&cfg.index_html, updated_idx, false)?;
+    }
+    write_atomic(&cfg.discussion_id_mapper, &cmt_json, false)?;
+    commit_staging_to_data_dir(&staging_dir, &cfg.data_dir)?;
+
+    let new_build_version = if let Some((ver, core_list_js)) = prepared_manifest {
+        let core_list_path = cfg.js_raw_dir.join("core-list.js");
+        if let Some(parent) = core_list_path.parent() {
+            fs::create_dir_all(parent).map_err(|e| format!("创建目录失败: {}", e))?;
+        }
+        write_atomic(&core_list_path, &core_list_js, false)?;
+        update_sw_version(cfg, &ver)?;
+        Some(ver)
+    } else {
+        None
+    };
+
+    if !html_outcome.pending_rewrites.is_empty() {
+        let stamp = Local::now().format("%Y%m%d_%H%M%S").to_string();
+        let backup_dir = cfg.backup_dir.join(format!("html_{}", stamp));
+        fs::create_dir_all(&backup_dir)
+            .map_err(|e| format!("创建备份目录失败: {}", e))?;
+        for (src_path, new_content) in &html_outcome.pending_rewrites {
+            let fname = src_path.file_name().unwrap();
+            fs::copy(src_path, backup_dir.join(fname))
+                .map_err(|e| format!("备份源文件失败: {}", e))?;
+            write_atomic(src_path, new_content, false)?;
+        }
+        log_warn(
+            logs,
+            format!(
+                "[WARN] 已清理 {} 行失效图片引用（{} 个文件），原文件已备份到 {}",
+                html_outcome.pruned_lines,
+                html_outcome.pending_rewrites.len(),
+                backup_dir.display()
+            ),
+        );
+    }
+
+    generate_idle_image_list(cfg, &html_outcome.image_set, &html_outcome.used_images);
 
     Ok(new_build_version)
 }
@@ -196,7 +277,10 @@ fn init_lite_tree() -> Value {
     })
 }
 
-fn inject_script_to_index_html(cfg: &ServerConfig) -> Result<(), String> {
+fn prepare_index_html_injection(
+    cfg: &ServerConfig,
+    logs: Option<&LogBus>,
+) -> Result<Option<String>, String> {
     if !cfg.index_html.is_file() {
         return Err(format!("找不到 index.html: {}", cfg.index_html.display()));
     }
@@ -206,15 +290,15 @@ fn inject_script_to_index_html(cfg: &ServerConfig) -> Result<(), String> {
     let end_tag = "<!-- PARAM-END -->";
 
     let Some(begin) = html.find(begin_tag) else {
-        println!("[Generator] 未在 index.html 中找到 PARAM-BEGIN，跳过注入。");
-        return Ok(());
+        log_warn(logs, "[Generator] 未在 index.html 中找到 PARAM-BEGIN，跳过注入。");
+        return Ok(None);
     };
     let Some(end) = html.find(end_tag) else {
-        println!("[Generator] 未在 index.html 中找到 PARAM-END，跳过注入。");
-        return Ok(());
+        log_warn(logs, "[Generator] 未在 index.html 中找到 PARAM-END，跳过注入。");
+        return Ok(None);
     };
     if end <= begin {
-        return Ok(());
+        return Ok(None);
     }
 
     let script_block = format!(
@@ -232,9 +316,10 @@ fn inject_script_to_index_html(cfg: &ServerConfig) -> Result<(), String> {
     let after = &html[end..];
     let updated = format!("{}\n{}\n{}", before, script_block, after);
     if updated != html {
-        write_atomic(&cfg.index_html, &updated, false)?;
+        Ok(Some(updated))
+    } else {
+        Ok(None)
     }
-    Ok(())
 }
 
 fn load_gitignore_rules(cfg: &ServerConfig) -> Result<IgnoreRules, String> {
@@ -260,7 +345,8 @@ fn load_gitignore_rules(cfg: &ServerConfig) -> Result<IgnoreRules, String> {
         );
     }
 
-    let mut local_only_raw = HashSet::new();
+    let mut local_only_exact = HashSet::new();
+    let mut local_only_any_seg = HashSet::new();
     let content = fs::read_to_string(&cfg.gitignore_file)
         .map_err(|e| format!("读取 .gitignore 失败: {}", e))?;
     for line in content.lines() {
@@ -268,16 +354,26 @@ fn load_gitignore_rules(cfg: &ServerConfig) -> Result<IgnoreRules, String> {
         if t.is_empty() || t.starts_with('#') || t.starts_with('!') {
             continue;
         }
+        let anchored = t.starts_with('/');
         let cleaned = t.trim_start_matches('/').trim_end_matches('/');
-        if !cleaned.is_empty() && !cleaned.contains('*') && !cleaned.contains('?') {
-            local_only_raw.insert(cleaned.to_string());
+        if !cleaned.is_empty()
+            && !cleaned.contains('*')
+            && !cleaned.contains('?')
+            && !cleaned.contains('[')
+        {
+            if anchored || cleaned.contains('/') {
+                local_only_exact.insert(cleaned.to_string());
+            } else {
+                local_only_any_seg.insert(cleaned.to_string());
+            }
         }
     }
 
     Ok(IgnoreRules {
         gi,
-        local_only_raw,
-        git_ignored_html: HashSet::new(),
+        local_only_exact,
+        local_only_any_seg,
+        git_ignored: HashSet::new(),
     })
 }
 
@@ -287,28 +383,47 @@ fn query_git_ignored(cfg: &ServerConfig, rel_paths: &[String]) -> HashSet<String
         return out;
     }
     let repo_dir = strip_verbatim_prefix(&cfg.repo_root);
-    let child_res = Command::new("git")
-        .args(["check-ignore", "--no-index", "-z", "--stdin"])
+    let mut cmd = Command::new("git");
+    cmd.args(["check-ignore", "--no-index", "-z", "--stdin"])
         .current_dir(&repo_dir)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn();
-
-    let Ok(mut child) = child_res else {
+        .stderr(Stdio::null());
+    #[cfg(windows)]
+    {
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    let Ok(mut child) = cmd.spawn() else {
         return out;
     };
 
-    if let Some(mut stdin) = child.stdin.take() {
-        for p in rel_paths {
-            let _ = stdin.write_all(p.as_bytes());
-            let _ = stdin.write_all(&[0u8]);
-        }
-    }
+    let stdin_opt = child.stdin.take();
+    let stdout_opt = child.stdout.take();
+    let mut stdout_buf = Vec::new();
 
-    if let Ok(output) = child.wait_with_output() {
-        if matches!(output.status.code(), Some(0) | Some(1)) {
-            let text = String::from_utf8_lossy(&output.stdout);
+    // 并发写 stdin 与读 stdout，彻底消除 Windows 4KB 管道缓冲区写满互等死锁
+    std::thread::scope(|s| {
+        if let Some(stdin) = stdin_opt {
+            s.spawn(move || {
+                let mut writer = BufWriter::new(stdin);
+                for p in rel_paths {
+                    if writer.write_all(p.as_bytes()).is_err()
+                        || writer.write_all(&[0u8]).is_err()
+                    {
+                        break;
+                    }
+                }
+                let _ = writer.flush();
+            });
+        }
+        if let Some(mut stdout) = stdout_opt {
+            let _ = stdout.read_to_end(&mut stdout_buf);
+        }
+    });
+
+    if let Ok(status) = child.wait() {
+        if matches!(status.code(), Some(0) | Some(1)) {
+            let text = String::from_utf8_lossy(&stdout_buf);
             for part in text.split('\0') {
                 if !part.is_empty() {
                     out.insert(part.to_string());
@@ -363,7 +478,8 @@ fn process_html_files_and_images(
     shadow_data_map: &mut BTreeMap<i64, String>,
     public_docs_for_df: &mut BTreeMap<i64, String>,
     private_page_names: &mut BTreeSet<String>,
-) -> Result<(), String> {
+    logs: Option<&LogBus>,
+) -> Result<HtmlScanOutcome, String> {
     let image_set = build_gallery_image_set(cfg);
     let mut image_lower_to_actual: HashMap<String, String> = HashMap::with_capacity(image_set.len());
     for img in &image_set {
@@ -402,23 +518,27 @@ fn process_html_files_and_images(
         .iter()
         .map(|p| format!("html/{}", p.file_name().unwrap().to_string_lossy()))
         .collect();
-    rules.git_ignored_html = query_git_ignored(cfg, &rel_paths);
+    rules.git_ignored.extend(query_git_ignored(cfg, &rel_paths));
 
     let full_img_re = Regex::new(r#"(?i)^\s*(\.\./gallery/[^\s"'<>]+\.(?:jpg|jpeg|png|gif|webp))\s*$"#).unwrap();
     let flat_img_re = Regex::new(r#"(?i)^\s*([^\s"'<>/\\]+\.(?:jpg|jpeg|png|gif|webp))\s*$"#).unwrap();
     let heading_re = Regex::new(r"^(#{1,6})\s+(.*)$").unwrap();
-    let anchor_re = Regex::new(r#"<span id="anchor">(\d+)-(.+)</span>"#).unwrap();
+    let anchor_re =
+        Regex::new(r#"(?is)<span\b[^>]*\bid\s*=\s*["']anchor["'][^>]*>\s*(\d+)-([^<]+?)\s*</span>"#)
+            .unwrap();
 
     let mut failures: Vec<String> = Vec::new();
     let mut missing_images: Vec<String> = Vec::new();
     let mut case_mismatches: Vec<String> = Vec::new();
     let mut pending_rewrites: Vec<(PathBuf, String)> = Vec::new();
+    let mut seen_titles: HashMap<String, String> = HashMap::new();
     let mut pruned_lines: usize = 0;
 
     for path in html_list {
         let full_file_name = path.file_name().unwrap().to_string_lossy().to_string();
-        let file_stem = full_file_name
-            .strip_suffix(".html")
+        let file_stem = Path::new(&full_file_name)
+            .file_stem()
+            .and_then(|s| s.to_str())
             .unwrap_or(&full_file_name)
             .to_string();
         let rel_html_path = format!("html/{}", full_file_name);
@@ -513,6 +633,13 @@ fn process_html_files_and_images(
 
         let mut current_record_id: i64 = -1;
         if !title.is_empty() {
+            if let Some(prev_file) = seen_titles.insert(title.clone(), full_file_name.clone()) {
+                failures.push(format!(
+                    "{}: 页面标题「{}」与 {} 重复，会导致索引与评论 ID 冲突",
+                    full_file_name, title, prev_file
+                ));
+                continue;
+            }
             current_titles.insert(title.clone());
             let mut found = None;
             for r in records.iter() {
@@ -582,53 +709,45 @@ fn process_html_files_and_images(
 
     if !missing_images.is_empty() {
         let preview: Vec<&str> = missing_images.iter().take(30).map(|s| s.as_str()).collect();
-        println!(
-            "[WARN] 发现 {} 处失效图片引用（{}）:\n  {}",
-            missing_images.len(),
-            if cfg.prune_missing_images {
-                "将清理"
-            } else {
-                "未改动源文件"
-            },
-            preview.join("\n  ")
+        log_warn(
+            logs,
+            format!(
+                "[WARN] 发现 {} 处失效图片引用（{}）:\n  {}",
+                missing_images.len(),
+                if cfg.prune_missing_images {
+                    "将清理"
+                } else {
+                    "未改动源文件"
+                },
+                preview.join("\n  ")
+            ),
         );
     }
     if !case_mismatches.is_empty() {
         let preview: Vec<&str> = case_mismatches.iter().take(30).map(|s| s.as_str()).collect();
-        println!(
-            "[WARN] 发现 {} 处图片引用大小写不一致（线上 GitHub Pages 会 404）:\n  {}",
-            case_mismatches.len(),
-            preview.join("\n  ")
+        log_warn(
+            logs,
+            format!(
+                "[WARN] 发现 {} 处图片引用大小写不一致（线上 GitHub Pages 会 404）:\n  {}",
+                case_mismatches.len(),
+                preview.join("\n  ")
+            ),
         );
     }
 
-    if !pending_rewrites.is_empty() {
-        if pruned_lines > cfg.prune_max_lines {
-            return Err(format!(
-                "本次将删除 {} 行失效图片引用，超过上限 prune_max_lines={}，已中止未改动源文件。",
-                pruned_lines, cfg.prune_max_lines
-            ));
-        }
-        let stamp = Local::now().format("%Y%m%d_%H%M%S").to_string();
-        let backup_dir = cfg.backup_dir.join(format!("html_{}", stamp));
-        fs::create_dir_all(&backup_dir)
-            .map_err(|e| format!("创建备份目录失败: {}", e))?;
-        for (src_path, new_content) in &pending_rewrites {
-            let fname = src_path.file_name().unwrap();
-            fs::copy(src_path, backup_dir.join(fname))
-                .map_err(|e| format!("备份源文件失败: {}", e))?;
-            write_atomic(src_path, new_content, false)?;
-        }
-        println!(
-            "[WARN] 已清理 {} 行失效图片引用（{} 个文件），原文件已备份到 {}",
-            pruned_lines,
-            pending_rewrites.len(),
-            backup_dir.display()
-        );
+    if !pending_rewrites.is_empty() && pruned_lines > cfg.prune_max_lines {
+        return Err(format!(
+            "本次将删除 {} 行失效图片引用，超过上限 prune_max_lines={}，已中止未改动源文件。",
+            pruned_lines, cfg.prune_max_lines
+        ));
     }
 
-    generate_idle_image_list(cfg, &image_set, &used_images);
-    Ok(())
+    Ok(HtmlScanOutcome {
+        pending_rewrites,
+        pruned_lines,
+        image_set,
+        used_images,
+    })
 }
 
 fn generate_idle_image_list(
@@ -708,6 +827,17 @@ fn scan_all_medias(cfg: &ServerConfig, rules: &IgnoreRules, lite_tree: &mut Valu
         &mut ebook_nodes,
     );
 
+    // 仅对尚未被 IgnoreRules 判定为私有的媒体路径执行 git check-ignore 二次复核，提速且保守取并集
+    let unchecked_media_paths: Vec<String> = gallery_nodes
+        .iter()
+        .chain(audio_nodes.iter())
+        .chain(video_nodes.iter())
+        .chain(ebook_nodes.iter())
+        .filter(|n| !n.local_only)
+        .map(|n| n.link.clone())
+        .collect();
+    let git_ignored_media = query_git_ignored(cfg, &unchecked_media_paths);
+
     for (bucket, list) in [
         ("image", gallery_nodes),
         ("audio", audio_nodes),
@@ -715,7 +845,8 @@ fn scan_all_medias(cfg: &ServerConfig, rules: &IgnoreRules, lite_tree: &mut Valu
         ("ebook", ebook_nodes),
     ] {
         for node in list {
-            let info = if node.local_only { "localOnly" } else { "" };
+            let is_local = node.local_only || git_ignored_media.contains(&node.link);
+            let info = if is_local { "localOnly" } else { "" };
             add_path_to_tree(lite_tree, bucket, &node.link, json!(-1), &node.media_type, info);
         }
     }
@@ -1045,13 +1176,69 @@ fn resolve_precache_paths(cfg: &ServerConfig) -> Result<Vec<(String, PathBuf)>, 
     Ok(resolved.into_iter().collect())
 }
 
-fn generate_manifest(
+fn parse_old_core_list(old_content: &str) -> (Option<String>, HashMap<String, (String, &'static str)>) {
+    let mut old_version = None;
+    let mut old_entries: HashMap<String, (String, &'static str)> = HashMap::new();
+
+    let ver_re = Regex::new(r"const BUILD_VERSION = '(\d+)';").unwrap();
+    if let Some(c) = ver_re.captures(old_content) {
+        old_version = Some(c[1].to_string());
+    }
+
+    const JSON_PREFIX: &str = "const __SWAMP_MANIFEST_GROUPS__ = ";
+    if let Some(pos) = old_content.find(JSON_PREFIX) {
+        let rest = &old_content[pos + JSON_PREFIX.len()..];
+        if let Some(line_end) = rest.find(";\n").or_else(|| rest.find(";\r\n")).or_else(|| rest.rfind(';')) {
+            let json_str = rest[..line_end].trim();
+            if let Ok(parsed) = serde_json::from_str::<BTreeMap<String, Vec<(String, String, u8)>>>(json_str) {
+                for (dir, items) in parsed {
+                    for (name, hash, flag) in items {
+                        let src = match flag {
+                            1 => "core-bundle.json",
+                            2 => "no_cache",
+                            _ => "standalone",
+                        };
+                        old_entries.insert(format!("{}{}", dir, name), (hash, src));
+                    }
+                }
+                return (old_version, old_entries);
+            }
+        }
+    }
+
+    let tpl_re = Regex::new(r"`([^`]+)`").unwrap();
+    if let Some(c) = tpl_re.captures(old_content) {
+        for group in c[1].split(';') {
+            if let Some((dir, files_str)) = group.split_once('|') {
+                for item in files_str.split('*') {
+                    let mut parts = item.split(':');
+                    if let (Some(n), Some(h)) = (parts.next(), parts.next()) {
+                        let src = match parts.next() {
+                            Some("1") => "core-bundle.json",
+                            Some("2") => "no_cache",
+                            _ => "standalone",
+                        };
+                        old_entries.insert(format!("{}{}", dir, n), (h.to_string(), src));
+                    }
+                }
+            }
+        }
+    }
+
+    (old_version, old_entries)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn prepare_manifest(
     cfg: &ServerConfig,
     rules: &IgnoreRules,
     exclude_patterns: &[Regex],
     core_bundle: &mut BTreeMap<String, String>,
     generated_data_files: &[String],
-) -> Result<Option<String>, String> {
+    staging_dir: &Path,
+    prepared_index_html: Option<&str>,
+    logs: Option<&LogBus>,
+) -> Result<Option<(String, String)>, String> {
     let mut sw_manifest: BTreeMap<String, FileMeta> = BTreeMap::new();
 
     let mut html_entries: Vec<PathBuf> = fs::read_dir(&cfg.html_dir)
@@ -1069,7 +1256,10 @@ fn generate_manifest(
 
     for p in html_entries {
         let fname = p.file_name().unwrap().to_string_lossy().to_string();
-        let stem = fname.strip_suffix(".html").unwrap_or(&fname);
+        let stem = Path::new(&fname)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or(&fname);
         let rel = format!("html/{}", fname);
         if !rules.is_private_rel(&rel, false) {
             let hash = calc_crc32_hex(&p)?;
@@ -1083,7 +1273,7 @@ fn generate_manifest(
     }
 
     for df in generated_data_files {
-        let p = cfg.data_dir.join(df);
+        let p = staging_dir.join(df);
         let hash = calc_crc32_hex(&p)?;
         sw_manifest.insert(
             format!("/src/js/data/{}", df),
@@ -1096,6 +1286,19 @@ fn generate_manifest(
 
     let precache_files = resolve_precache_paths(cfg)?;
     for (web_path, phys) in precache_files {
+        if (web_path == "/" || web_path == "/index.html") && prepared_index_html.is_some() {
+            let new_idx = prepared_index_html.unwrap();
+            let hash = format!("{:x}", crc32fast::hash(new_idx.as_bytes()));
+            core_bundle.insert(web_path.clone(), new_idx.to_string());
+            sw_manifest.insert(
+                web_path,
+                FileMeta {
+                    hash,
+                    source: "core-bundle.json",
+                },
+            );
+            continue;
+        }
         let hash = calc_crc32_hex(&phys)?;
         let is_bundleable = web_path == "/"
             || web_path.ends_with(".html")
@@ -1152,48 +1355,37 @@ fn generate_manifest(
 
     let bundle_json = serde_json::to_string(core_bundle)
         .map_err(|e| format!("序列化 core-bundle.json 失败: {}", e))?;
-    write_atomic(&cfg.data_dir.join("core-bundle.json"), &bundle_json, false)?;
+    write_atomic(&staging_dir.join("core-bundle.json"), &bundle_json, false)?;
 
     let core_list_path = cfg.js_raw_dir.join("core-list.js");
-    let mut old_version: Option<String> = None;
-    let mut old_hashes: HashMap<String, String> = HashMap::new();
+    let (old_version, old_entries) = if core_list_path.is_file() {
+        fs::read_to_string(&core_list_path)
+            .map(|s| parse_old_core_list(&s))
+            .unwrap_or_else(|_| (None, HashMap::new()))
+    } else {
+        (None, HashMap::new())
+    };
 
-    if core_list_path.is_file() {
-        if let Ok(old_content) = fs::read_to_string(&core_list_path) {
-            let ver_re = Regex::new(r"const BUILD_VERSION = '(\d+)';").unwrap();
-            if let Some(c) = ver_re.captures(&old_content) {
-                old_version = Some(c[1].to_string());
-            }
-            let tpl_re = Regex::new(r"`([^`]+)`").unwrap();
-            if let Some(c) = tpl_re.captures(&old_content) {
-                for group in c[1].split(';') {
-                    if let Some((dir, files_str)) = group.split_once('|') {
-                        for item in files_str.split('*') {
-                            let mut parts = item.split(':');
-                            if let (Some(n), Some(h)) = (parts.next(), parts.next()) {
-                                old_hashes.insert(format!("{}{}", dir, n), h.to_string());
-                            }
-                        }
-                    }
+    let mut has_changed = old_version.is_none() || old_entries.len() != sw_manifest.len();
+    if !has_changed {
+        for (k, meta) in &sw_manifest {
+            match old_entries.get(k) {
+                Some((old_h, old_s)) if old_h == &meta.hash && *old_s == meta.source => {}
+                _ => {
+                    has_changed = true;
+                    break;
                 }
             }
         }
     }
 
-    let mut has_changed = old_version.is_none() || old_hashes.len() != sw_manifest.len();
     if !has_changed {
-        for (k, meta) in &sw_manifest {
-            if old_hashes.get(k).map(|s| s.as_str()) != Some(meta.hash.as_str()) {
-                has_changed = true;
-                break;
-            }
-        }
-    }
-
-    if !has_changed {
-        println!(
-            "[Phase 2] 清单哈希无变化（{} 项），沿用旧 BUILD_VERSION。",
-            sw_manifest.len()
+        log_info(
+            logs,
+            format!(
+                "[Phase 2] 清单哈希与来源均无变化（{} 项），沿用旧 BUILD_VERSION。",
+                sw_manifest.len()
+            ),
         );
         return Ok(None);
     }
@@ -1204,46 +1396,64 @@ fn generate_manifest(
         .unwrap_or(0)
         .to_string();
 
-    let mut grouped: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut grouped: BTreeMap<String, Vec<(&str, &str, u8)>> = BTreeMap::new();
     for (full_path, meta) in &sw_manifest {
         let last_slash = full_path.rfind('/').unwrap_or(0);
         let dir = full_path[..=last_slash].to_string();
         let name = &full_path[last_slash + 1..];
-        let flag = match meta.source {
-            "core-bundle.json" => "1",
-            "no_cache" => "2",
-            _ => "0",
+        let flag: u8 = match meta.source {
+            "core-bundle.json" => 1,
+            "no_cache" => 2,
+            _ => 0,
         };
         grouped
             .entry(dir)
             .or_default()
-            .push(format!("{}:{}:{}", name, meta.hash, flag));
+            .push((name, meta.hash.as_str(), flag));
     }
 
-    let dir_strings: Vec<String> = grouped
-        .into_iter()
-        .map(|(d, items)| format!("{}|{}", d, items.join("*")))
-        .collect();
+    let groups_json = serde_json::to_string(&grouped)
+        .map_err(|e| format!("序列化清单分组失败: {}", e))?
+        .replace('\u{2028}', "\\u2028")
+        .replace('\u{2029}', "\\u2029");
     let data_idx_json = serde_json::to_string(generated_data_files).unwrap();
 
     let core_list_js = format!(
-        "const BUILD_VERSION = '{}';\nconst FILE_MANIFEST = {{}};\n`{}`.split(';').forEach(g => {{ if(!g)return; let [d, f] = g.split('|'); f.split('*').forEach(i => {{ let [n, h, s] = i.split(':'); let src = 'standalone'; if(s === '1') src = 'core-bundle.json'; else if(s === '2') src = 'no_cache'; FILE_MANIFEST[d+n] = {{ hash: h, source: src }}; }}); }});\nconst allFilesToCache = Object.keys(FILE_MANIFEST).filter(p => !p.includes('/src/js/data/fat_data_') && FILE_MANIFEST[p].source !== 'no_cache');\n\nif (typeof window !== 'undefined') {{ window.dataIndex = {}; }}\n",
+        "const BUILD_VERSION = '{}';\nconst FILE_MANIFEST = {{}};\nconst __SWAMP_MANIFEST_GROUPS__ = {};\nObject.entries(__SWAMP_MANIFEST_GROUPS__).forEach(([d, f]) => {{ f.forEach(([n, h, s]) => {{ let src = 'standalone'; if (s === 1) src = 'core-bundle.json'; else if (s === 2) src = 'no_cache'; FILE_MANIFEST[d + n] = {{ hash: h, source: src }}; }}); }});\nconst allFilesToCache = Object.keys(FILE_MANIFEST).filter(p => !p.includes('/src/js/data/fat_data_') && FILE_MANIFEST[p].source !== 'no_cache');\n\nif (typeof window !== 'undefined') {{ window.dataIndex = {}; }}\n",
         build_version,
-        dir_strings.join(";"),
+        groups_json,
         data_idx_json
     );
 
-    if let Some(parent) = core_list_path.parent() {
-        fs::create_dir_all(parent).map_err(|e| format!("创建目录失败: {}", e))?;
-    }
-    write_atomic(&core_list_path, &core_list_js, false)?;
-
-    println!(
-        "[Phase 2] 已生成新清单 BUILD_VERSION={} ({} 项)",
-        build_version,
-        sw_manifest.len()
+    log_info(
+        logs,
+        format!(
+            "[Phase 2] 已生成新清单 BUILD_VERSION={} ({} 项)",
+            build_version,
+            sw_manifest.len()
+        ),
     );
-    Ok(Some(build_version))
+    Ok(Some((build_version, core_list_js)))
+}
+
+fn commit_staging_to_data_dir(staging_dir: &Path, data_dir: &Path) -> Result<(), String> {
+    clear_dir_contents(data_dir)?;
+    let mut entries: Vec<PathBuf> = fs::read_dir(staging_dir)
+        .map_err(|e| format!("读取构建暂存目录失败: {}", e))?
+        .filter_map(|e| e.ok().map(|x| x.path()))
+        .filter(|p| p.is_file())
+        .collect();
+    entries.sort();
+    for src in entries {
+        let fname = src.file_name().unwrap();
+        let dst = data_dir.join(fname);
+        if fs::rename(&src, &dst).is_err() {
+            fs::copy(&src, &dst)
+                .map_err(|e| format!("提交数据产物 {} 失败: {}", fname.to_string_lossy(), e))?;
+            let _ = fs::remove_file(&src);
+        }
+    }
+    Ok(())
 }
 
 fn update_sw_version(cfg: &ServerConfig, build_version: &str) -> Result<(), String> {
@@ -1280,12 +1490,23 @@ fn update_sw_version(cfg: &ServerConfig, build_version: &str) -> Result<(), Stri
     write_atomic(&sw_path, &final_str, false)
 }
 
+fn json_inner_escaped(s: &str) -> String {
+    let quoted = serde_json::to_string(s).unwrap_or_default();
+    if quoted.len() >= 2 {
+        quoted[1..quoted.len() - 1].to_string()
+    } else {
+        s.to_string()
+    }
+}
+
 fn assert_no_private_leak(
     cfg: &ServerConfig,
+    staging_dir: &Path,
     private_page_names: &BTreeSet<String>,
     shadow_data_map: &BTreeMap<i64, String>,
     generated_data_files: &[String],
     core_bundle: &BTreeMap<String, String>,
+    logs: Option<&LogBus>,
 ) -> Result<(), String> {
     if private_page_names.is_empty() {
         return Ok(());
@@ -1300,14 +1521,28 @@ fn assert_no_private_leak(
 
     let mut blobs: Vec<(String, String)> = Vec::new();
     for f in generated_data_files {
-        let p = cfg.data_dir.join(f);
+        let p = staging_dir.join(f);
         if p.is_file() {
             let txt = fs::read_to_string(&p)
                 .map_err(|e| format!("隔离检查读取 {} 失败: {}", f, e))?;
+            if f.starts_with("fat_data_") && f.ends_with(".json") {
+                if let Ok(Value::Object(map)) = serde_json::from_str::<Value>(&txt) {
+                    for rec_id in shadow_data_map.keys() {
+                        if let Some(val) = map.get(&rec_id.to_string()) {
+                            if val.as_str() != Some("localOnly") {
+                                problems.push(format!(
+                                    "公网切片 {} 中私有页 recordId={} 的值非 localOnly 占位符",
+                                    f, rec_id
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
             blobs.push((f.clone(), txt));
         }
     }
-    let bundle_path = cfg.data_dir.join("core-bundle.json");
+    let bundle_path = staging_dir.join("core-bundle.json");
     if bundle_path.is_file() {
         let txt = fs::read_to_string(&bundle_path)
             .map_err(|e| format!("隔离检查读取 core-bundle.json 失败: {}", e))?;
@@ -1321,16 +1556,40 @@ fn assert_no_private_leak(
     }
 
     for (rec_id, text) in shadow_data_map {
-        let chars: Vec<char> = text.chars().collect();
+        let trimmed = text.trim();
+        let chars: Vec<char> = trimmed.chars().collect();
         let n = chars.len();
-        if n < 200 {
+        if n < 12 {
             continue;
         }
-        let s1: String = chars[n / 4..n / 4 + 40].iter().collect();
-        let s2: String = chars[n / 2..n / 2 + 40].iter().collect();
-        let s3: String = chars[n * 3 / 4..n * 3 / 4 + 40].iter().collect();
+        let samples: Vec<String> = if n >= 200 {
+            vec![
+                chars[n / 4..n / 4 + 40].iter().collect(),
+                chars[n / 2..n / 2 + 40].iter().collect(),
+                chars[n * 3 / 4..n * 3 / 4 + 40].iter().collect(),
+            ]
+        } else if n >= 40 {
+            vec![
+                chars[..20].iter().collect(),
+                chars[n - 20..].iter().collect(),
+            ]
+        } else {
+            vec![trimmed.to_string()]
+        };
+
+        let sample_pairs: Vec<(String, String)> = samples
+            .into_iter()
+            .map(|raw| {
+                let esc = json_inner_escaped(&raw);
+                (raw, esc)
+            })
+            .collect();
+
         for (blob_name, blob_text) in &blobs {
-            if blob_text.contains(&s1) && blob_text.contains(&s2) && blob_text.contains(&s3) {
+            let all_hit = sample_pairs
+                .iter()
+                .all(|(raw, esc)| blob_text.contains(raw) || blob_text.contains(esc));
+            if all_hit {
                 problems.push(format!(
                     "公网产物 {} 含有私有页 (recordId={}) 的正文片段",
                     blob_name, rec_id
@@ -1341,13 +1600,16 @@ fn assert_no_private_leak(
 
     if !problems.is_empty() {
         return Err(format!(
-            "公私隔离断言失败，已中止构建（请勿提交或推送）:\n  {}",
+            "公私隔离断言失败，已中止构建（未改动正式目录，请勿提交或推送）:\n  {}",
             problems.join("\n  ")
         ));
     }
-    println!(
-        "[Phase 2] 公私隔离断言通过（{} 个私有页均未泄露至公网产物）",
-        private_page_names.len()
+    log_info(
+        logs,
+        format!(
+            "[Phase 2] 公私隔离断言通过（{} 个私有页均未泄露至公网产物）",
+            private_page_names.len()
+        ),
     );
     Ok(())
 }

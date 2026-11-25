@@ -28,15 +28,55 @@ window.addEventListener('pagehide', (e) => {
 });
 
 window.addEventListener('DOMContentLoaded', () => {
+    const isLocalMode = store.online_flag === "0" || (
+        (location.hostname === "localhost" || location.hostname === "127.0.0.1" || location.protocol === "file:")
+        && location.port !== "9000"
+    );
+
+    const katrainLink = document.getElementById('katrain-link');
+    const katrainBr = document.getElementById('katrain-br');
+    if (katrainLink) {
+        if (isLocalMode) {
+            if (katrainBr) katrainBr.style.display = '';
+            katrainLink.style.display = '';
+            katrainLink.style.cursor = 'pointer';
+            katrainLink.addEventListener('click', async (e) => {
+                e.preventDefault();
+                try {
+                    if (window.top && typeof window.top.callLocalApi === 'function') {
+                        await window.top.callLocalApi('POST', '/__api/ops/katrain', {});
+                    } else {
+                        const m = await import('/src/js/shared-utils.js');
+                        await m.callLocalApi('POST', '/__api/ops/katrain', {});
+                    }
+                } catch (err) {
+                    alert('❌ 启动 KaTrain 失败：' + (err && err.message ? err.message : String(err)));
+                }
+            });
+        } else {
+            if (katrainBr) katrainBr.style.display = 'none';
+            katrainLink.style.display = 'none';
+        }
+    }
+
     store.bookmarkhtml_linksHash = getALinksHash();
 
     const links = Array.from(document.querySelectorAll('a'))
-        .filter(a => a.textContent && a.textContent.trim().length > 0)
-        .map(a => ({
-            text: a.textContent.trim(),
-            href: a.href,
-            target: a.target || '_blank'
-        }));
+        .filter(a => {
+            if (!a.textContent || a.textContent.trim().length === 0) return false;
+            if (a.id === 'katrain-link' && !isLocalMode) return false;
+            return a.style.display !== 'none';
+        })
+        .map(a => {
+            if (a.id === 'katrain-link') {
+                return { text: a.textContent.trim(), href: '#katrain', target: '_blank', action: 'katrain' };
+            }
+            return {
+                text: a.textContent.trim(),
+                href: a.href,
+                target: a.target || '_blank'
+            };
+        });
     store.bookmark_links = links;
 
     if (store.online_flag === "0") {

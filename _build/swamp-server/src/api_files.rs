@@ -7,7 +7,11 @@ use axum::{
 use serde::Deserialize;
 use serde_json::json;
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
+
+static TMP_SEQ: AtomicU64 = AtomicU64::new(1);
 
 use crate::builder::html_utils::update_bookmark;
 use crate::security::{validate_rel_md_path, validate_title, AppState};
@@ -32,7 +36,7 @@ pub struct BookmarkReq {
     pub href: String,
 }
 
-pub fn write_atomic(target: &Path, content: &str, with_bom: bool) -> Result<(), String> {
+pub fn write_bytes_atomic(target: &Path, bytes: &[u8]) -> Result<(), String> {
     let parent = target
         .parent()
         .ok_or_else(|| "目标路径缺少父目录".to_string())?;
@@ -41,21 +45,44 @@ pub fn write_atomic(target: &Path, content: &str, with_bom: bool) -> Result<(), 
         .and_then(|s| s.to_str())
         .ok_or_else(|| "非法文件名".to_string())?;
 
-    let tmp_name = format!("{}.{}.swamp.tmp", file_name, std::process::id());
+    let seq = TMP_SEQ.fetch_add(1, Ordering::Relaxed);
+    let tmp_name = format!("{}.{}.{}.swamp.tmp", file_name, std::process::id(), seq);
     let tmp_path = parent.join(tmp_name);
 
-    let mut bytes = Vec::with_capacity(content.len() + if with_bom { 3 } else { 0 });
-    if with_bom {
-        bytes.extend_from_slice(&[0xEF, 0xBB, 0xBF]);
-    }
-    bytes.extend_from_slice(content.as_bytes());
+    std::fs::write(&tmp_path, bytes).map_err(|e| format!("写入临时文件失败: {}", e))?;
 
-    std::fs::write(&tmp_path, &bytes).map_err(|e| format!("写入临时文件失败: {}", e))?;
-    if let Err(e) = std::fs::rename(&tmp_path, target) {
-        let _ = std::fs::remove_file(&tmp_path);
-        return Err(format!("原子替换目标文件失败: {}", e));
+    let mut last_err = None;
+    for delay_ms in [0u64, 25, 60, 120, 200] {
+        if delay_ms > 0 {
+            std::thread::sleep(Duration::from_millis(delay_ms));
+        }
+        match std::fs::rename(&tmp_path, target) {
+            Ok(()) => return Ok(()),
+            Err(e) => {
+                let retryable = e.kind() == std::io::ErrorKind::PermissionDenied
+                    || matches!(e.raw_os_error(), Some(5) | Some(32));
+                last_err = Some(e);
+                if !retryable {
+                    break;
+                }
+            }
+        }
     }
-    Ok(())
+    let _ = std::fs::remove_file(&tmp_path);
+    Err(format!(
+        "原子替换目标文件失败: {}",
+        last_err.map(|e| e.to_string()).unwrap_or_default()
+    ))
+}
+
+pub fn write_atomic(target: &Path, content: &str, with_bom: bool) -> Result<(), String> {
+    if !with_bom {
+        return write_bytes_atomic(target, content.as_bytes());
+    }
+    let mut bytes = Vec::with_capacity(content.len() + 3);
+    bytes.extend_from_slice(&[0xEF, 0xBB, 0xBF]);
+    bytes.extend_from_slice(content.as_bytes());
+    write_bytes_atomic(target, &bytes)
 }
 
 fn err_resp(status: StatusCode, msg: impl Into<String>) -> Response {

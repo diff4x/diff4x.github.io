@@ -13,7 +13,18 @@ use walkdir::WalkDir;
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipArchive, ZipWriter};
 
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+
+use crate::api_files::{write_atomic, write_bytes_atomic};
 use crate::config::{strip_verbatim_prefix, ServerConfig};
+use crate::security::is_short_name_segment;
+
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+const MAX_APPLY_ENTRY_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_APPLY_TOTAL_BYTES: u64 = 256 * 1024 * 1024;
 
 const DEFAULT_HIDDEN_DIRS: &[&str] = &[
     "gallery",
@@ -64,6 +75,9 @@ pub struct PackZipResult {
     pub packed_count: usize,
     pub skipped_count: usize,
     pub zip_size: u64,
+    pub md_dir: Option<String>,
+    pub md_files: Vec<String>,
+    pub md_skipped_binary: usize,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -103,8 +117,27 @@ pub struct BackupInfo {
     pub created_count: usize,
 }
 
+#[derive(Serialize, Clone, Debug)]
+pub struct BackupTreeItem {
+    pub rel: String,
+    pub size: u64,
+    pub is_dir: bool,
+}
+
+#[derive(Serialize, Clone, Debug)]
+pub struct DownloadTreeItem {
+    pub rel: String,
+    pub size: u64,
+    pub is_dir: bool,
+    pub is_zip: bool,
+    pub child_count: usize,
+}
+
 pub fn is_hard_private_rel(rel: &str) -> bool {
     let low = rel.to_ascii_lowercase();
+    if low == ".git" {
+        return true;
+    }
     for pfx in HARD_BLOCKED_PREFIXES {
         if low.starts_with(pfx) {
             return true;
@@ -136,9 +169,38 @@ fn is_default_excluded_pack_file(rel: &str) -> bool {
     re.is_match(rel)
 }
 
+fn is_windows_reserved_device_name(seg: &str) -> bool {
+    let stem = seg.split('.').next().unwrap_or(seg).to_ascii_uppercase();
+    matches!(
+        stem.as_str(),
+        "CON"
+            | "PRN"
+            | "AUX"
+            | "NUL"
+            | "COM1"
+            | "COM2"
+            | "COM3"
+            | "COM4"
+            | "COM5"
+            | "COM6"
+            | "COM7"
+            | "COM8"
+            | "COM9"
+            | "LPT1"
+            | "LPT2"
+            | "LPT3"
+            | "LPT4"
+            | "LPT5"
+            | "LPT6"
+            | "LPT7"
+            | "LPT8"
+            | "LPT9"
+    )
+}
+
 pub fn resolve_safe_target(repo_root: &Path, raw_entry: &str) -> Option<(String, PathBuf)> {
     let clean = raw_entry.replace('\\', "/").trim().to_string();
-    if clean.is_empty() || clean.starts_with('/') {
+    if clean.is_empty() || clean.starts_with('/') || clean.len() > 1024 {
         return None;
     }
     if clean.len() >= 2 && clean.as_bytes()[1] == b':' {
@@ -154,6 +216,12 @@ pub fn resolve_safe_target(repo_root: &Path, raw_entry: &str) -> Option<(String,
     let mut segs = Vec::new();
     for seg in clean.split('/') {
         if seg.is_empty() || seg == "." || seg == ".." {
+            return None;
+        }
+        if seg.ends_with('.') || seg.ends_with(' ') {
+            return None;
+        }
+        if is_short_name_segment(seg) || is_windows_reserved_device_name(seg) {
             return None;
         }
         full.push(seg);
@@ -225,11 +293,9 @@ pub fn list_pack_files(cfg: &ServerConfig, include_more_dirs: bool) -> Result<Ve
             continue;
         }
 
-        // 用 .gitignore 过滤私有文件（保留 oov_report.txt 方便调优同义词）
+        // 用 .gitignore 过滤私有文件
         if let Some(ref g) = gi {
-            if !rel.eq_ignore_ascii_case("_build/synonyms/oov_report.txt")
-                && g.matched_path_or_any_parents(Path::new(&rel), false).is_ignore()
-            {
+            if g.matched_path_or_any_parents(Path::new(&rel), false).is_ignore() {
                 continue;
             }
         }
@@ -255,11 +321,14 @@ pub fn list_pack_files(cfg: &ServerConfig, include_more_dirs: bool) -> Result<Ve
 
 pub fn list_git_modified(cfg: &ServerConfig) -> Vec<String> {
     let repo_dir = strip_verbatim_prefix(&cfg.repo_root);
-    let Ok(out) = Command::new("git")
-        .args(["-c", "core.quotepath=false", "status", "--porcelain"])
-        .current_dir(&repo_dir)
-        .output()
-    else {
+    let mut cmd = Command::new("git");
+    cmd.args(["-c", "core.quotepath=false", "status", "--porcelain"])
+        .current_dir(&repo_dir);
+    #[cfg(windows)]
+    {
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    let Ok(out) = cmd.output() else {
         return Vec::new();
     };
     let text = String::from_utf8_lossy(&out.stdout);
@@ -291,7 +360,280 @@ pub fn list_git_modified(cfg: &ServerConfig) -> Vec<String> {
     list
 }
 
+fn format_human_size(b: u64) -> String {
+    if b < 1024 {
+        format!("{} B", b)
+    } else if b < 1024 * 1024 {
+        format!("{:.1} KB", b as f64 / 1024.0)
+    } else {
+        format!("{:.2} MB", b as f64 / (1024.0 * 1024.0))
+    }
+}
+
+fn markdown_lang_for_rel(rel: &str) -> &'static str {
+    let fname = rel.rsplit('/').next().unwrap_or(rel);
+    if fname.eq_ignore_ascii_case(".gitignore") {
+        return "gitignore";
+    }
+    let ext = Path::new(fname)
+        .extension()
+        .and_then(|s| s.to_str())
+        .map(|s| s.to_ascii_lowercase())
+        .unwrap_or_default();
+    match ext.as_str() {
+        "rs" => "rust",
+        "js" | "mjs" | "cjs" => "javascript",
+        "ts" | "tsx" => "typescript",
+        "jsx" => "jsx",
+        "html" | "htm" => "html",
+        "css" => "css",
+        "json" => "json",
+        "toml" => "toml",
+        "md" | "markdown" => "markdown",
+        "bat" | "cmd" => "bat",
+        "ps1" => "powershell",
+        "sh" => "bash",
+        "py" => "python",
+        "yml" | "yaml" => "yaml",
+        "xml" | "svg" => "xml",
+        "sql" => "sql",
+        "c" | "h" => "c",
+        "cpp" | "cc" | "hpp" => "cpp",
+        "java" => "java",
+        "txt" | "properties" | "ini" | "cfg" | "ftl" | "lock" => "text",
+        _ => "",
+    }
+}
+
+pub fn safe_markdown_fence(content: &str) -> String {
+    let mut max_run = 0usize;
+    let mut cur = 0usize;
+    for b in content.bytes() {
+        if b == b'`' {
+            cur += 1;
+            if cur > max_run {
+                max_run = cur;
+            }
+        } else {
+            cur = 0;
+        }
+    }
+    "`".repeat(max_run.max(2) + 1)
+}
+
+struct MdChunkUnit {
+    index_line: String,
+    body_block: String,
+}
+
+fn format_md_file_block(
+    archive_name: &str,
+    rel: &str,
+    orig_size: u64,
+    total_lines: usize,
+    chunk_label: Option<(usize, usize, usize, usize)>,
+    text: &str,
+) -> MdChunkUnit {
+    let lang = markdown_lang_for_rel(rel);
+    let fence = safe_markdown_fence(text);
+    let needs_nl = !text.is_empty() && !text.ends_with('\n');
+
+    let (title_suffix, index_suffix, line_desc) = match chunk_label {
+        Some((ci, ct, start_ln, end_ln)) => (
+            format!(" (Chunk {}/{}, Lines {}-{})", ci, ct, start_ln, end_ln),
+            format!(", Chunk {}/{}, Lines {}-{}", ci, ct, start_ln, end_ln),
+            format!("{} (showing lines {}-{})", total_lines, start_ln, end_ln),
+        ),
+        None => (String::new(), String::new(), total_lines.to_string()),
+    };
+
+    let index_line = format!(
+        "- `{}` :: `{}` ({}, {} lines{})\n",
+        archive_name,
+        rel,
+        format_human_size(orig_size),
+        total_lines,
+        index_suffix
+    );
+
+    let mut body = String::with_capacity(text.len() + 256);
+    body.push_str("\n---\n\n## File: `");
+    body.push_str(rel);
+    body.push('`');
+    body.push_str(&title_suffix);
+    body.push_str("\n\n- **Archive:** `");
+    body.push_str(archive_name);
+    body.push_str("`\n- **Relative Path:** `");
+    body.push_str(rel);
+    body.push_str("`\n- **Size:** ");
+    body.push_str(&orig_size.to_string());
+    body.push_str(" bytes (");
+    body.push_str(&format_human_size(orig_size));
+    body.push_str(") | **Lines:** ");
+    body.push_str(&line_desc);
+    body.push_str("\n\n");
+    body.push_str(&fence);
+    body.push_str(lang);
+    body.push('\n');
+    body.push_str(text);
+    if needs_nl {
+        body.push('\n');
+    }
+    body.push_str(&fence);
+    body.push('\n');
+
+    MdChunkUnit {
+        index_line,
+        body_block: body,
+    }
+}
+
+/// 将已打包条目按单文件字节上限拼接为多份 AI 友好的 Markdown 上下文分卷（纯函数，便于自检）
+pub fn render_markdown_bundle_parts(
+    archive_name: &str,
+    entries: &[(String, Vec<u8>)],
+    max_md_bytes: usize,
+) -> (Vec<String>, usize) {
+    let limit = max_md_bytes.max(10 * 1024);
+    let generated_at = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+
+    let mut units: Vec<MdChunkUnit> = Vec::new();
+    let mut skipped_binary: Vec<(String, u64)> = Vec::new();
+    let mut text_file_count = 0usize;
+
+    let part_header_reserve: usize = 900;
+    let max_chunk_body = limit.saturating_sub(part_header_reserve + 512).max(4096);
+
+    for (rel, bytes) in entries {
+        let size = bytes.len() as u64;
+        if bytes.contains(&0) {
+            skipped_binary.push((rel.clone(), size));
+            continue;
+        }
+        let Ok(raw_str) = std::str::from_utf8(bytes) else {
+            skipped_binary.push((rel.clone(), size));
+            continue;
+        };
+        text_file_count += 1;
+        let clean = raw_str.strip_prefix('\u{FEFF}').unwrap_or(raw_str);
+        let total_lines = clean.lines().count();
+
+        let single = format_md_file_block(archive_name, rel, size, total_lines, None, clean);
+        if single.index_line.len() + single.body_block.len() + part_header_reserve <= limit {
+            units.push(single);
+            continue;
+        }
+
+        // 单文件自身超过单 MD 上限时，按行边界切分为多个完整合法代码块，严格遵守体积上限
+        let mut raw_chunks: Vec<(usize, usize, String)> = Vec::new();
+        let mut cur_buf = String::new();
+        let mut start_ln = 1usize;
+        let mut cur_ln = 0usize;
+
+        for line in clean.split_inclusive('\n') {
+            cur_ln += 1;
+            if !cur_buf.is_empty() && cur_buf.len() + line.len() > max_chunk_body {
+                raw_chunks.push((start_ln, cur_ln - 1, std::mem::take(&mut cur_buf)));
+                start_ln = cur_ln;
+            }
+            cur_buf.push_str(line);
+        }
+        if !cur_buf.is_empty() || raw_chunks.is_empty() {
+            raw_chunks.push((start_ln, cur_ln.max(start_ln), cur_buf));
+        }
+
+        let ct = raw_chunks.len();
+        for (idx, (sln, eln, chunk_text)) in raw_chunks.into_iter().enumerate() {
+            units.push(format_md_file_block(
+                archive_name,
+                rel,
+                size,
+                total_lines,
+                Some((idx + 1, ct, sln, eln)),
+                &chunk_text,
+            ));
+        }
+    }
+
+    let skipped_section = if skipped_binary.is_empty() {
+        String::new()
+    } else {
+        let mut s = format!("\n## Skipped / Binary Files ({})\n\n", skipped_binary.len());
+        for (rel, sz) in &skipped_binary {
+            s.push_str(&format!(
+                "- `{}` :: `{}` ({}, Binary / Non-UTF8)\n",
+                archive_name,
+                rel,
+                format_human_size(*sz)
+            ));
+        }
+        s
+    };
+
+    let mut grouped: Vec<Vec<MdChunkUnit>> = Vec::new();
+    let mut cur_group: Vec<MdChunkUnit> = Vec::new();
+    let mut cur_est = part_header_reserve + skipped_section.len();
+
+    for u in units {
+        let add_len = u.index_line.len() + u.body_block.len();
+        if !cur_group.is_empty() && cur_est + add_len > limit {
+            grouped.push(std::mem::take(&mut cur_group));
+            cur_est = part_header_reserve;
+        }
+        cur_est += add_len;
+        cur_group.push(u);
+    }
+    if !cur_group.is_empty() || grouped.is_empty() {
+        grouped.push(cur_group);
+    }
+
+    let total_parts = grouped.len();
+    let mut out_parts = Vec::with_capacity(total_parts);
+
+    for (idx, group) in grouped.into_iter().enumerate() {
+        let part_no = idx + 1;
+        let mut doc = String::new();
+        doc.push_str(&format!(
+            "# Codebase Context Bundle (Part {} of {})\n\n",
+            part_no, total_parts
+        ));
+        doc.push_str("> Structured source bundle for AI code audit and analysis.\n");
+        doc.push_str("> Relative paths are normalized with forward slashes (/) and scoped by archive name.\n\n");
+        doc.push_str(&format!("- **Generated:** {}\n", generated_at));
+        doc.push_str(&format!("- **Part:** {} / {}\n", part_no, total_parts));
+        doc.push_str(&format!("- **Source Archives:** `{}`\n", archive_name));
+        doc.push_str(&format!(
+            "- **Entries in This Part:** {} (Total text files: {})\n\n",
+            group.len(),
+            text_file_count
+        ));
+        doc.push_str("## File Index (This Part)\n\n");
+        for u in &group {
+            doc.push_str(&u.index_line);
+        }
+        if part_no == 1 && !skipped_section.is_empty() {
+            doc.push_str(&skipped_section);
+        }
+        for u in &group {
+            doc.push_str(&u.body_block);
+        }
+        out_parts.push(doc);
+    }
+
+    (out_parts, skipped_binary.len())
+}
+
+#[allow(dead_code)]
 pub fn create_pack_zip(cfg: &ServerConfig, rel_paths: &[String]) -> Result<PackZipResult, String> {
+    create_pack_zip_with_options(cfg, rel_paths, false, 200)
+}
+
+pub fn create_pack_zip_with_options(
+    cfg: &ServerConfig,
+    rel_paths: &[String],
+    stitch_md: bool,
+    max_md_kb: usize,
+) -> Result<PackZipResult, String> {
     if rel_paths.is_empty() {
         return Err("请至少勾选一个文件".to_string());
     }
@@ -307,6 +649,7 @@ pub fn create_pack_zip(cfg: &ServerConfig, rel_paths: &[String]) -> Result<PackZ
 
     let mut packed_count = 0usize;
     let mut skipped_count = 0usize;
+    let mut packed_entries: Vec<(String, Vec<u8>)> = Vec::new();
 
     {
         let file = File::create(&zip_path).map_err(|e| format!("创建 ZIP 失败: {}", e))?;
@@ -329,6 +672,9 @@ pub fn create_pack_zip(cfg: &ServerConfig, rel_paths: &[String]) -> Result<PackZ
             writer
                 .write_all(&bytes)
                 .map_err(|e| format!("写出 ZIP 数据失败: {}", e))?;
+            if stitch_md {
+                packed_entries.push((clean_rel, bytes));
+            }
             packed_count += 1;
         }
         writer.finish().map_err(|e| format!("关闭 ZIP 失败: {}", e))?;
@@ -339,6 +685,25 @@ pub fn create_pack_zip(cfg: &ServerConfig, rel_paths: &[String]) -> Result<PackZ
         return Err("没有可打包的有效文件".to_string());
     }
 
+    let mut md_dir_out: Option<String> = None;
+    let mut md_files: Vec<String> = Vec::new();
+    let mut md_skipped_binary = 0usize;
+
+    if stitch_md {
+        let max_bytes = max_md_kb.clamp(10, 51200) * 1024;
+        let (parts, bin_cnt) = render_markdown_bundle_parts(&file_name, &packed_entries, max_bytes);
+        md_skipped_binary = bin_cnt;
+
+        let md_dir = cfg.backup_dir.join(format!("ai_pack_{}_md", stamp));
+        fs::create_dir_all(&md_dir).map_err(|e| format!("创建 MD 拼接输出目录失败: {}", e))?;
+        for (idx, part_content) in parts.iter().enumerate() {
+            let md_name = format!("markdown_part{}.md", idx + 1);
+            write_atomic(&md_dir.join(&md_name), part_content, false)?;
+            md_files.push(md_name);
+        }
+        md_dir_out = Some(strip_verbatim_prefix(&md_dir).to_string_lossy().into_owned());
+    }
+
     let zip_size = fs::metadata(&zip_path).map(|m| m.len()).unwrap_or(0);
     Ok(PackZipResult {
         file_name,
@@ -346,6 +711,9 @@ pub fn create_pack_zip(cfg: &ServerConfig, rel_paths: &[String]) -> Result<PackZ
         packed_count,
         skipped_count,
         zip_size,
+        md_dir: md_dir_out,
+        md_files,
+        md_skipped_binary,
     })
 }
 
@@ -385,13 +753,13 @@ pub fn inspect_apply_zip(cfg: &ServerConfig, zip_bytes: &[u8]) -> Result<Vec<App
         };
 
         let low = rel.to_ascii_lowercase();
-        if low.starts_with(".git/") {
+        if low == ".git" || low.starts_with(".git/") || entry.size() > MAX_APPLY_ENTRY_BYTES {
             entries.push(ApplyEntryInfo {
                 rel,
                 size: entry.size(),
                 exists: false,
                 blocked: true,
-                is_secret: true,
+                is_secret: low == ".git" || low.starts_with(".git/"),
                 is_skip_doc: false,
                 default_checked: false,
                 status: "blocked".to_string(),
@@ -465,13 +833,7 @@ fn write_bytes_with_encoding_guard(
         raw_bytes
     };
 
-    let tmp = target_full.with_extension("aisync.tmp");
-    fs::write(&tmp, final_bytes).map_err(|e| format!("写入临时文件失败: {}", e))?;
-    if let Err(e) = fs::rename(&tmp, target_full) {
-        let _ = fs::remove_file(&tmp);
-        return Err(format!("替换目标文件失败 ({}): {}", target_full.display(), e));
-    }
-    Ok(())
+    write_bytes_atomic(target_full, final_bytes)
 }
 
 pub fn execute_apply_zip(
@@ -505,11 +867,13 @@ pub fn execute_apply_zip(
 
     let mut overwritten_list = Vec::new();
     let mut created_list = Vec::new();
+    let mut seen_lower: HashSet<String> = HashSet::new();
+    let mut total_extracted: u64 = 0;
 
-    // 按条目映射提取选中项
+    // 按条目映射提取选中项（带大小写去重与 Zip Bomb 解压上限防护）
     let mut buf = Vec::new();
     for i in 0..archive.len() {
-        let mut entry = archive
+        let entry = archive
             .by_index(i)
             .map_err(|e| format!("读取 ZIP 条目失败: {}", e))?;
         let raw_name = entry.name().to_string();
@@ -519,8 +883,32 @@ pub fn execute_apply_zip(
         let Some((rel, full)) = resolve_safe_target(&cfg.repo_root, &raw_name) else {
             continue;
         };
-        if rel.to_ascii_lowercase().starts_with(".git/") || !selected.contains(&rel) {
+        let low = rel.to_ascii_lowercase();
+        if low == ".git" || low.starts_with(".git/") || !selected.contains(&rel) {
             continue;
+        }
+        if !seen_lower.insert(low) {
+            continue;
+        }
+
+        buf.clear();
+        entry
+            .take(MAX_APPLY_ENTRY_BYTES + 1)
+            .read_to_end(&mut buf)
+            .map_err(|e| format!("解压 {} 失败: {}", rel, e))?;
+        if buf.len() as u64 > MAX_APPLY_ENTRY_BYTES {
+            return Err(format!(
+                "条目 {} 解压后超过单文件安全上限 ({} MB)，已中止回填",
+                rel,
+                MAX_APPLY_ENTRY_BYTES / (1024 * 1024)
+            ));
+        }
+        total_extracted = total_extracted.saturating_add(buf.len() as u64);
+        if total_extracted > MAX_APPLY_TOTAL_BYTES {
+            return Err(format!(
+                "本次回填累计解压体积超过安全上限 ({} MB)，已中止回填",
+                MAX_APPLY_TOTAL_BYTES / (1024 * 1024)
+            ));
         }
 
         let exists = full.is_file();
@@ -540,10 +928,6 @@ pub fn execute_apply_zip(
             created_list.push(rel.clone());
         }
 
-        buf.clear();
-        entry
-            .read_to_end(&mut buf)
-            .map_err(|e| format!("解压 {} 失败: {}", rel, e))?;
         write_bytes_with_encoding_guard(&full, &buf, fix_win_encoding)?;
     }
 
@@ -565,6 +949,253 @@ pub fn execute_apply_zip(
         created: created_list.len(),
         backup_name,
     })
+}
+
+pub fn resolve_downloads_dir() -> Option<PathBuf> {
+    if let Some(profile) = std::env::var_os("USERPROFILE") {
+        let p = PathBuf::from(profile).join("Downloads");
+        if p.is_dir() {
+            return Some(p);
+        }
+    }
+    if let Some(home) = std::env::var_os("HOME") {
+        let p = PathBuf::from(home).join("Downloads");
+        if p.is_dir() {
+            return Some(p);
+        }
+    }
+    None
+}
+
+/// 扫描用户 Downloads 目录顶层条目：.zip 置顶且按修改时间倒序排列，便于直接挑选最新补丁或勾选清理
+pub fn list_downloads_items() -> (Option<PathBuf>, Vec<DownloadTreeItem>) {
+    let Some(dl_dir) = resolve_downloads_dir() else {
+        return (None, Vec::new());
+    };
+    let Ok(rd) = fs::read_dir(&dl_dir) else {
+        return (Some(dl_dir), Vec::new());
+    };
+
+    let mut rows: Vec<(bool, std::time::SystemTime, DownloadTreeItem)> = Vec::new();
+    for ent in rd.filter_map(|e| e.ok()) {
+        let name = ent.file_name().to_string_lossy().to_string();
+        if name.is_empty() || name.eq_ignore_ascii_case("desktop.ini") {
+            continue;
+        }
+        let path = ent.path();
+        let Ok(meta) = ent.metadata() else {
+            continue;
+        };
+        let is_dir = meta.is_dir();
+        let is_zip = !is_dir
+            && path
+                .extension()
+                .and_then(|s| s.to_str())
+                .map(|s| s.eq_ignore_ascii_case("zip"))
+                .unwrap_or(false);
+        let size = if is_dir { 0 } else { meta.len() };
+        let child_count = if is_dir {
+            fs::read_dir(&path).map(|r| r.count()).unwrap_or(0)
+        } else {
+            0
+        };
+        let mtime = meta.modified().unwrap_or(std::time::UNIX_EPOCH);
+        rows.push((
+            is_zip,
+            mtime,
+            DownloadTreeItem {
+                rel: name,
+                size,
+                is_dir,
+                is_zip,
+                child_count,
+            },
+        ));
+    }
+
+    rows.sort_by(|a, b| {
+        b.0.cmp(&a.0)
+            .then_with(|| b.1.cmp(&a.1))
+            .then_with(|| a.2.rel.cmp(&b.2.rel))
+    });
+
+    let items = rows.into_iter().map(|(_, _, it)| it).collect();
+    (Some(dl_dir), items)
+}
+
+/// 安全清理 Downloads 目录中勾选的顶层文件或文件夹（拒绝路径穿越与符号链接越界）
+pub fn delete_downloads_items(rel_names: &[String]) -> Result<(usize, usize, u64), String> {
+    if rel_names.is_empty() {
+        return Err("未勾选任何待清理条目".to_string());
+    }
+    let dl_dir = resolve_downloads_dir().ok_or_else(|| "未找到用户 Downloads 目录".to_string())?;
+    let canon_dl = fs::canonicalize(&dl_dir)
+        .map_err(|e| format!("无法规范化 Downloads 目录: {}", e))?;
+
+    let mut unique: Vec<String> = rel_names
+        .iter()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    unique.sort();
+    unique.dedup();
+
+    let mut deleted_files = 0usize;
+    let mut deleted_dirs = 0usize;
+    let mut freed_bytes = 0u64;
+
+    for name in &unique {
+        if name.contains('/') || name.contains('\\') || name == "." || name == ".." {
+            continue;
+        }
+        let Some((_, full)) = resolve_safe_target(&dl_dir, name) else {
+            continue;
+        };
+        let Ok(sym_meta) = fs::symlink_metadata(&full) else {
+            continue;
+        };
+        if sym_meta.file_type().is_symlink() {
+            if fs::remove_file(&full).is_ok() {
+                deleted_files += 1;
+            } else if fs::remove_dir(&full).is_ok() {
+                deleted_dirs += 1;
+            }
+            continue;
+        }
+        let Ok(canon_target) = fs::canonicalize(&full) else {
+            continue;
+        };
+        if !canon_target.starts_with(&canon_dl) || canon_target == canon_dl {
+            continue;
+        }
+        if canon_target.is_file() {
+            let sz = fs::metadata(&canon_target).map(|m| m.len()).unwrap_or(0);
+            fs::remove_file(&canon_target)
+                .map_err(|e| format!("删除文件 {} 失败: {}", name, e))?;
+            deleted_files += 1;
+            freed_bytes = freed_bytes.saturating_add(sz);
+        } else if canon_target.is_dir() {
+            fs::remove_dir_all(&canon_target)
+                .map_err(|e| format!("删除目录 {} 失败: {}", name, e))?;
+            deleted_dirs += 1;
+        }
+    }
+
+    Ok((deleted_files, deleted_dirs, freed_bytes))
+}
+
+pub fn list_backup_tree_items(cfg: &ServerConfig) -> Vec<BackupTreeItem> {
+    let mut items = Vec::new();
+    if !cfg.backup_dir.is_dir() {
+        return items;
+    }
+
+    for entry in WalkDir::new(&cfg.backup_dir)
+        .into_iter()
+        .filter_map(|e| e.ok())
+    {
+        if entry.path() == cfg.backup_dir {
+            continue;
+        }
+        let Ok(rel_p) = entry.path().strip_prefix(&cfg.backup_dir) else {
+            continue;
+        };
+        let rel = rel_p.to_string_lossy().replace('\\', "/");
+        if rel.is_empty() {
+            continue;
+        }
+        if entry.file_type().is_file() {
+            let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
+            items.push(BackupTreeItem {
+                rel,
+                size,
+                is_dir: false,
+            });
+        } else if entry.file_type().is_dir() {
+            let is_empty = fs::read_dir(entry.path())
+                .map(|mut rd| rd.next().is_none())
+                .unwrap_or(false);
+            if is_empty {
+                items.push(BackupTreeItem {
+                    rel,
+                    size: 0,
+                    is_dir: true,
+                });
+            }
+        }
+    }
+
+    items.sort_by(|a, b| a.rel.cmp(&b.rel));
+    items
+}
+
+/// 安全清理 _build/temp/backup/ 下勾选的文件与空目录，并自动回收因此变空的父目录
+pub fn delete_backup_items(
+    cfg: &ServerConfig,
+    rel_paths: &[String],
+) -> Result<(usize, usize, u64), String> {
+    if rel_paths.is_empty() {
+        return Err("未勾选任何待清理条目".to_string());
+    }
+    if !cfg.backup_dir.is_dir() {
+        return Ok((0, 0, 0));
+    }
+    let canon_backup = fs::canonicalize(&cfg.backup_dir)
+        .map_err(|e| format!("无法规范化 backup 目录: {}", e))?;
+
+    let mut unique: Vec<String> = rel_paths
+        .iter()
+        .map(|s| s.replace('\\', "/").trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    unique.sort();
+    unique.dedup();
+
+    let mut deleted_files = 0usize;
+    let mut deleted_dirs = 0usize;
+    let mut freed_bytes = 0u64;
+
+    for rel in &unique {
+        let Some((_, full)) = resolve_safe_target(&cfg.backup_dir, rel) else {
+            continue;
+        };
+        let Ok(canon_target) = fs::canonicalize(&full) else {
+            continue;
+        };
+        if !canon_target.starts_with(&canon_backup) || canon_target == canon_backup {
+            continue;
+        }
+        if canon_target.is_file() {
+            let sz = fs::metadata(&canon_target).map(|m| m.len()).unwrap_or(0);
+            fs::remove_file(&canon_target)
+                .map_err(|e| format!("删除备份文件 {} 失败: {}", rel, e))?;
+            deleted_files += 1;
+            freed_bytes = freed_bytes.saturating_add(sz);
+        } else if canon_target.is_dir() {
+            if fs::remove_dir(&canon_target).is_ok() {
+                deleted_dirs += 1;
+            }
+        }
+    }
+
+    // 自底向上清理因删除文件而变空的子目录（绝不删除 backup 根目录本身）
+    let mut subdirs: Vec<PathBuf> = WalkDir::new(&canon_backup)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().is_dir() && e.path() != canon_backup)
+        .map(|e| e.path().to_path_buf())
+        .collect();
+    subdirs.sort_by(|a, b| b.components().count().cmp(&a.components().count()));
+    for dir in subdirs {
+        let is_empty = fs::read_dir(&dir)
+            .map(|mut rd| rd.next().is_none())
+            .unwrap_or(false);
+        if is_empty && fs::remove_dir(&dir).is_ok() {
+            deleted_dirs += 1;
+        }
+    }
+
+    Ok((deleted_files, deleted_dirs, freed_bytes))
 }
 
 pub fn list_apply_backups(cfg: &ServerConfig) -> Vec<BackupInfo> {

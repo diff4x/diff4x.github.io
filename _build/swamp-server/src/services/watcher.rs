@@ -97,6 +97,22 @@ pub fn spawn_asset_watcher(
                                     }
                                 }
                                 if watched_assets {
+                                    if crate::builder::is_gen_in_progress() {
+                                        pending.clear();
+                                        last_event_at = None;
+                                        continue;
+                                    }
+                                    let is_gen_managed_tail = p
+                                        .file_name()
+                                        .and_then(|s| s.to_str())
+                                        .map(|n| {
+                                            n.eq_ignore_ascii_case("sw.js")
+                                                || n.eq_ignore_ascii_case("core-list.js")
+                                        })
+                                        .unwrap_or(false);
+                                    if is_gen_managed_tail && crate::builder::is_gen_active_or_recent(1500) {
+                                        continue;
+                                    }
                                     pending.insert(p);
                                     last_event_at = Some(Instant::now());
                                 }
@@ -111,10 +127,16 @@ pub fn spawn_asset_watcher(
                 }
 
                 if let Some(t) = last_event_at {
-                    if t.elapsed() >= Duration::from_millis(300) && !pending.is_empty() {
+                    if crate::builder::is_gen_in_progress() {
+                        pending.clear();
+                        last_event_at = None;
+                    } else if t.elapsed() >= Duration::from_millis(300) && !pending.is_empty() {
                         let batch: Vec<PathBuf> = pending.drain().collect();
                         last_event_at = None;
                         for path in batch {
+                            if crate::builder::is_gen_in_progress() {
+                                break;
+                            }
                             match minify_single_asset(&cfg, &path) {
                                 Ok(Some(label)) => {
                                     logs.info(format!("[watcher] 热压缩完成 -> {}", label));

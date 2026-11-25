@@ -502,31 +502,84 @@ export function ingestLocalTokenFromHash(isLocalEnv) {
     return true;
 }
 
-export async function callLocalApi(method, endpoint, body = null, options = {}) {
-    const token = (localStorage.getItem(LOCAL_TOKEN_STORAGE) || '').trim();
-    if (!token) {
-        throw new Error('缺少本地会话令牌，请通过 Swamp 管理窗口点击 Open Site 重新打开本地站点');
-    }
-    const opts = {
-        method,
-        credentials: 'same-origin',
-        cache: 'no-store',
-        headers: {
-            'X-Swamp-Token': token
+let _tokenRefreshPromise = null;
+
+async function requestInteractiveTokenRefresh() {
+    if (_tokenRefreshPromise) return _tokenRefreshPromise;
+    _tokenRefreshPromise = (async () => {
+        try {
+            const res = await fetch('/__auth/refresh', {
+                method: 'POST',
+                credentials: 'same-origin',
+                cache: 'no-store',
+                headers: { 'Content-Type': 'application/json' },
+                body: '{}'
+            });
+            const data = await res.json().catch(() => ({}));
+            if (res.ok && data.ok && typeof data.token === 'string' && /^[0-9a-f]{64}$/i.test(data.token)) {
+                const tok = data.token.toLowerCase();
+                try { localStorage.setItem(LOCAL_TOKEN_STORAGE, tok); } catch (_) { }
+                return tok;
+            }
+            return '';
+        } catch (_) {
+            return '';
+        } finally {
+            _tokenRefreshPromise = null;
         }
+    })();
+    return _tokenRefreshPromise;
+}
+
+export async function callLocalApi(method, endpoint, body = null, options = {}) {
+    const upperMethod = String(method || 'GET').toUpperCase();
+    const canInteractiveRefresh = (options && options.interactive !== undefined)
+        ? !!options.interactive
+        : (upperMethod !== 'GET' && upperMethod !== 'HEAD');
+
+    let token = (localStorage.getItem(LOCAL_TOKEN_STORAGE) || '').trim();
+    if (!token && canInteractiveRefresh) {
+        token = await requestInteractiveTokenRefresh();
+    }
+    if (!token) {
+        throw new Error('缺少本地会话令牌，请通过 Swamp 管理窗口点击 Open Site 或允许桌面续签弹窗');
+    }
+
+    const doFetch = async (tok) => {
+        const opts = {
+            method: upperMethod,
+            credentials: 'same-origin',
+            cache: 'no-store',
+            headers: {
+                'X-Swamp-Token': tok
+            }
+        };
+        if (options && options.signal) {
+            opts.signal = options.signal;
+        }
+        if (upperMethod !== 'GET' && upperMethod !== 'HEAD') {
+            opts.headers['Content-Type'] = 'application/json';
+            opts.body = JSON.stringify(body ?? {});
+        }
+        const res = await fetch(endpoint, opts);
+        const data = await res.json().catch(() => ({}));
+        return { res, data };
     };
-    if (options && options.signal) {
-        opts.signal = options.signal;
+
+    let { res, data } = await doFetch(token);
+    if (res.status === 401 && canInteractiveRefresh) {
+        const latest = (localStorage.getItem(LOCAL_TOKEN_STORAGE) || '').trim();
+        const nextToken = (latest && latest !== token)
+            ? latest
+            : await requestInteractiveTokenRefresh();
+        if (nextToken) {
+            ({ res, data } = await doFetch(nextToken));
+        }
     }
-    if (method !== 'GET' && method !== 'HEAD') {
-        opts.headers['Content-Type'] = 'application/json';
-        opts.body = JSON.stringify(body ?? {});
-    }
-    const res = await fetch(endpoint, opts);
-    const data = await res.json().catch(() => ({}));
+
     if (!res.ok || data.ok === false) {
         const msg = res.status === 401
-            ? '本地会话令牌已失效（服务可能已重启），请通过 Swamp 管理窗口点击 Open Site 重新打开本地站点'
+            ? '本地会话令牌已失效（服务可能已重启），请通过 Swamp 管理窗口点击 Open Site 或允许桌面续签弹窗'
             : (data.error || `HTTP ${res.status}`);
         const err = new Error(msg);
         err.status = res.status;

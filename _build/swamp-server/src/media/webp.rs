@@ -7,7 +7,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use crate::api_files::write_atomic;
+use crate::api_files::{write_atomic, write_bytes_atomic};
 use crate::config::ServerConfig;
 
 #[derive(Deserialize, Default, Debug, Clone)]
@@ -59,7 +59,8 @@ pub fn encode_image_to_webp(
     if let Some(parent) = dst_path.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("创建输出目录失败: {}", e))?;
     }
-    fs::write(dst_path, bytes).map_err(|e| format!("写入 WebP 失败 ({}): {}", dst_path.display(), e))?;
+    write_bytes_atomic(dst_path, bytes)
+        .map_err(|e| format!("写入 WebP 失败 ({}): {}", dst_path.display(), e))?;
     Ok(bytes.len() as u64)
 }
 
@@ -123,6 +124,9 @@ pub fn run_webp_batch(cfg: &ServerConfig, opts: WebpOptions) -> Result<WebpSumma
             original_bytes += m.len();
         }
 
+        while output_dir.join(format!("{}.webp", no)).exists() {
+            no += 1;
+        }
         let webp_name = format!("{}.webp", no);
         no += 1;
         let dst_path = output_dir.join(&webp_name);
@@ -161,7 +165,11 @@ pub fn run_webp_batch(cfg: &ServerConfig, opts: WebpOptions) -> Result<WebpSumma
         let compiled_reps: Vec<(Regex, String)> = records
             .iter()
             .filter_map(|(old_name, new_name)| {
-                RegexBuilder::new(&regex::escape(old_name))
+                let pat = format!(
+                    r"(^|[^A-Za-z0-9_.\-])({})($|[^A-Za-z0-9_.\-])",
+                    regex::escape(old_name)
+                );
+                RegexBuilder::new(&pat)
                     .case_insensitive(true)
                     .build()
                     .ok()
@@ -189,7 +197,8 @@ pub fn run_webp_batch(cfg: &ServerConfig, opts: WebpOptions) -> Result<WebpSumma
                     let mut changed = false;
                     for (re, new_name) in &compiled_reps {
                         if re.is_match(&text) {
-                            text = re.replace_all(&text, new_name.as_str()).into_owned();
+                            let rep = format!("${{1}}{}${{3}}", new_name);
+                            text = re.replace_all(&text, rep.as_str()).into_owned();
                             changed = true;
                         }
                     }

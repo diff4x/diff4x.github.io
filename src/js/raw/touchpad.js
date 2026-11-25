@@ -2,12 +2,13 @@
  * touchpad.js —— 移动端"模拟鼠标/触控板"交互层。
  * 只有触屏设备(isMobile)才需要，桌面端用户完全不下载这份代码。
  * 由 index.js 在检测到触屏后动态 import 并调用 initTouchpad(ctx)，
- * ctx = { emitEvent } 用于向 #content / #side 两个 iframe 转发模拟指针事件。
+ * ctx = { emitEvent } 用于向 #content / #side / #md-viewer-frame 等同源 iframe 转发模拟指针事件。
  */
 function attachVirtualCursor(targetWindow) {
     if (!targetWindow || targetWindow.closed || targetWindow._vcAttached) return;
     targetWindow._vcAttached = true;
     let lastHoverEl = null;
+    let hoverChain = [];
     let selectStartRange = null;
     const doc = targetWindow.document;
 
@@ -21,27 +22,49 @@ function attachVirtualCursor(targetWindow) {
     };
     const getAncestors = (el) => { const c = []; while (el) { c.push(el); el = el.parentElement; } return c; };
     const maybeFocus = (el) => { if ((el.matches && el.matches('input,textarea,select,[contenteditable]')) || el.tabIndex >= 0) el.focus({ preventScroll: true }); };
+    const setIframeHoverChain = (el) => {
+        const next = [];
+        for (let n = el; n; n = n.parentElement) {
+            if (n !== doc.body && n !== doc.documentElement) next.push(n);
+        }
+        const keep = new Set(next);
+        hoverChain.forEach(n => { if (!keep.has(n)) n.classList.remove('tp-hover'); });
+        next.forEach(n => n.classList.add('tp-hover'));
+        hoverChain = next;
+    };
 
     targetWindow.handleSimPointer = function (payload) {
-        const { op, x, y, deltaX, deltaY } = payload || {};
+        const { op, x, y, deltaX, deltaY, buttons } = payload || {};
         if (op === 'leave') {
             if (lastHoverEl) {
                 const chain = getAncestors(lastHoverEl);
+                const oldLi = lastHoverEl.closest ? lastHoverEl.closest('li, .history-row, #menu-b a, div > a') : null;
+                if (oldLi) oldLi.removeAttribute('data-touchpad-hover');
                 lastHoverEl.dispatchEvent(new targetWindow.MouseEvent('mouseout', { bubbles: true, relatedTarget: null }));
                 chain.forEach(a => a.dispatchEvent(new targetWindow.MouseEvent('mouseleave', { bubbles: false })));
                 lastHoverEl = null;
             }
+            setIframeHoverChain(null);
             return;
         }
 
         if (op === 'enter') return;
         const safeX = Math.max(0, Math.min(doc.documentElement.clientWidth - 1, x));
         const safeY = Math.max(0, Math.min(doc.documentElement.clientHeight - 1, y));
-        const el = doc.elementFromPoint(safeX, safeY);
+        const el = doc.elementFromPoint(safeX, safeY) || doc.body;
         if (!el) return;
 
         const base = { bubbles: true, cancelable: true, view: targetWindow, clientX: x, clientY: y };
         const fire = (type, opts) => el.dispatchEvent(new targetWindow.MouseEvent(type, Object.assign({}, base, opts)));
+        const firePtr = (type, opts) => {
+            if (typeof targetWindow.PointerEvent === 'function') {
+                el.dispatchEvent(new targetWindow.PointerEvent(type, Object.assign(
+                    { pointerId: 1, pointerType: 'mouse', isPrimary: true },
+                    base,
+                    opts
+                )));
+            }
+        };
 
         switch (op) {
             case 'move':
@@ -52,7 +75,7 @@ function attachVirtualCursor(targetWindow) {
                     let common = null;
                     for (const node of newChain) { if (oldSet.has(node)) { common = node; break; } }
                     if (lastHoverEl) {
-                        const oldLi = lastHoverEl ? lastHoverEl.closest('li, .history-row, #menu-b a, div > a') : null;
+                        const oldLi = lastHoverEl.closest ? lastHoverEl.closest('li, .history-row, #menu-b a, div > a') : null;
                         if (oldLi) oldLi.removeAttribute('data-touchpad-hover');
                         lastHoverEl.dispatchEvent(new targetWindow.MouseEvent('mouseout', Object.assign({}, base, { relatedTarget: el })));
                         for (const node of oldChain) { if (node === common) break; node.dispatchEvent(new targetWindow.MouseEvent('mouseleave', Object.assign({}, base, { bubbles: false, relatedTarget: el }))); }
@@ -64,11 +87,17 @@ function attachVirtualCursor(targetWindow) {
                     for (const node of newChain) { if (node === common) break; toEnter.push(node); }
                     toEnter.reverse().forEach(node => node.dispatchEvent(new targetWindow.MouseEvent('mouseenter', Object.assign({}, base, { bubbles: false, relatedTarget: lastHoverEl || null }))));
                     lastHoverEl = el;
+                    setIframeHoverChain(el);
                 }
-                fire('mousemove', { button: 0 });
+                firePtr('pointermove', { button: 0, buttons: buttons || 0 });
+                fire('mousemove', { button: 0, buttons: buttons || 0 });
                 break;
             case 'click': {
-                fire('mousedown', { button: 0 }); maybeFocus(el); fire('mouseup', { button: 0 });
+                firePtr('pointerdown', { button: 0, buttons: 1 });
+                fire('mousedown', { button: 0, buttons: 1 });
+                maybeFocus(el);
+                firePtr('pointerup', { button: 0, buttons: 0 });
+                fire('mouseup', { button: 0, buttons: 0 });
                 const targetEl = (el.closest && (el.closest('summary, label') || el)) || el;
                 if (typeof targetEl.click === 'function') targetEl.click();
                 else fire('click', { button: 0 });
@@ -76,20 +105,41 @@ function attachVirtualCursor(targetWindow) {
                 break;
             }
             case 'dblclick': {
-                fire('mousedown', { button: 0 }); maybeFocus(el); fire('mouseup', { button: 0 });
+                firePtr('pointerdown', { button: 0, buttons: 1 });
+                fire('mousedown', { button: 0, buttons: 1 });
+                maybeFocus(el);
+                firePtr('pointerup', { button: 0, buttons: 0 });
+                fire('mouseup', { button: 0, buttons: 0 });
                 const targetEl = (el.closest && (el.closest('summary, label') || el)) || el;
                 if (typeof targetEl.click === 'function') targetEl.click();
                 else fire('click', { button: 0 });
-                fire('mousedown', { button: 0 }); fire('mouseup', { button: 0 });
+                firePtr('pointerdown', { button: 0, buttons: 1 });
+                fire('mousedown', { button: 0, buttons: 1 });
+                firePtr('pointerup', { button: 0, buttons: 0 });
+                fire('mouseup', { button: 0, buttons: 0 });
                 if (typeof targetEl.click === 'function') targetEl.click();
                 else fire('click', { button: 0 });
                 fire('dblclick', { button: 0 });
                 break;
             }
-            case 'auxclick': fire('mousedown', { button: 1 }); fire('mouseup', { button: 1 }); fire('auxclick', { button: 1 }); break;
-            case 'contextmenu': fire('contextmenu', { button: 2 }); break;
-            case 'drag_start': fire('mousedown', { button: 0 }); break;
-            case 'drag_end': fire('mouseup', { button: 0 }); break;
+            case 'auxclick':
+                firePtr('pointerdown', { button: 1, buttons: 4 });
+                fire('mousedown', { button: 1, buttons: 4 });
+                firePtr('pointerup', { button: 1, buttons: 0 });
+                fire('mouseup', { button: 1, buttons: 0 });
+                fire('auxclick', { button: 1 });
+                break;
+            case 'contextmenu':
+                fire('contextmenu', { button: 2 });
+                break;
+            case 'drag_start':
+                firePtr('pointerdown', { button: 0, buttons: 1 });
+                fire('mousedown', { button: 0, buttons: 1 });
+                break;
+            case 'drag_end':
+                firePtr('pointerup', { button: 0, buttons: 0 });
+                fire('mouseup', { button: 0, buttons: 0 });
+                break;
             case 'select_start': { const r = getCaret(x, y); if (r) { selectStartRange = r; const sel = targetWindow.getSelection(); sel.removeAllRanges(); sel.addRange(r); } break; }
             case 'select_move': { if (selectStartRange) { const r = getCaret(x, y); if (r) { const sel = targetWindow.getSelection(); sel.removeAllRanges(); if (sel.setBaseAndExtent) sel.setBaseAndExtent(selectStartRange.startContainer, selectStartRange.startOffset, r.startContainer, r.startOffset); } } break; }
             case 'select_end': selectStartRange = null; fire('mouseup', { button: 0 }); break;
@@ -97,12 +147,11 @@ function attachVirtualCursor(targetWindow) {
             case 'wheel': {
                 const wheelDeltaX = deltaX || 0;
                 const wheelDeltaY = deltaY || 0;
-                const safeX = Math.max(0, Math.min(doc.documentElement.clientWidth - 1, x));
-                const safeY = Math.max(0, Math.min(doc.documentElement.clientHeight - 1, y));
-                const el = doc.elementFromPoint(safeX, safeY);
-                if (!el) return;
-
-                fire('wheel', { deltaX: wheelDeltaX, deltaY: wheelDeltaY, deltaMode: 0 });
+                if (typeof targetWindow.WheelEvent === 'function') {
+                    el.dispatchEvent(new targetWindow.WheelEvent('wheel', Object.assign({}, base, { deltaX: wheelDeltaX, deltaY: wheelDeltaY, deltaMode: 0 })));
+                } else {
+                    fire('wheel', { deltaX: wheelDeltaX, deltaY: wheelDeltaY, deltaMode: 0 });
+                }
                 let scrollTarget = el;
                 let handled = false;
 
@@ -130,7 +179,15 @@ function attachVirtualCursor(targetWindow) {
                     scrollTarget.scrollBy({ left: wheelDeltaX, top: wheelDeltaY, behavior: 'auto' });
                 } else {
                     const mainScroll = doc.scrollingElement || doc.documentElement;
-                    mainScroll.scrollBy({ left: wheelDeltaX, top: wheelDeltaY, behavior: 'auto' });
+                    const mainCanScroll = (mainScroll.scrollHeight > mainScroll.clientHeight)
+                        || (mainScroll.scrollWidth > mainScroll.clientWidth);
+                    if (mainCanScroll) {
+                        mainScroll.scrollBy({ left: wheelDeltaX, top: wheelDeltaY, behavior: 'auto' });
+                    } else {
+                        // md_viewer.html 等内部滚动布局（body overflow:hidden），兜底滚动主预览区 #pv
+                        const mdPv = doc.getElementById('pv');
+                        if (mdPv) mdPv.scrollBy({ left: wheelDeltaX, top: wheelDeltaY, behavior: 'auto' });
+                    }
                 }
                 break;
             }
@@ -216,7 +273,8 @@ export function initTouchpad(ctx) {
 
     const cursor = { x: stage.clientWidth / 2, y: stage.clientHeight / 2 };
     let zoom = 1, panX = 0, panY = 0;
-    let currentTargetId = null;
+    let currentTarget = null; // null | 'index' | HTMLIFrameElement
+    let dragLockTarget = null; // null | 'index' | HTMLIFrameElement
     let isSelectMode = false;
     let isScrollFollow = true;
     let cursorFeedbackTimer = null;
@@ -280,6 +338,35 @@ export function initTouchpad(ctx) {
         cursorEl.style.top = p.y + 'px';
     }
 
+    function getSameOriginFrameWindow(frameEl) {
+        if (!frameEl || !frameEl.isConnected) return null;
+        try {
+            const win = frameEl.contentWindow;
+            if (!win || win.closed || !win.document) return null;
+            if (!win._vcAttached) attachVirtualCursor(win);
+            return win;
+        } catch (_) {
+            return null;
+        }
+    }
+
+    function mapScreenToFrameLocal(frameEl, sx, sy) {
+        const rect = frameEl.getBoundingClientRect();
+        const scaleX = frameEl.offsetWidth > 0 ? (rect.width / frameEl.offsetWidth) : zoom;
+        const scaleY = frameEl.offsetHeight > 0 ? (rect.height / frameEl.offsetHeight) : zoom;
+        return {
+            x: (sx - rect.left) / (scaleX || 1) - (frameEl.clientLeft || 0),
+            y: (sy - rect.top) / (scaleY || 1) - (frameEl.clientTop || 0)
+        };
+    }
+
+    function getActiveMdFrame() {
+        const popup = document.getElementById('md-viewer-popup');
+        if (!popup || popup.style.display === 'none') return null;
+        const frame = document.getElementById('md-viewer-frame');
+        return (frame && frame.isConnected) ? frame : null;
+    }
+
     function resolveHit(lx, ly) {
         const s = logicalToScreen(lx, ly);
         const px = Math.max(0, Math.min(window.innerWidth - 1, s.x));
@@ -287,27 +374,37 @@ export function initTouchpad(ctx) {
         const topEl = document.elementFromPoint(px, py);
         if (!topEl) return { kind: 'none' };
 
-        if (topEl === contentFrame) {
-            return { kind: 'frame', id: 'content', x: lx - contentFrame.offsetLeft, y: ly - contentFrame.offsetTop };
-        }
-        if (sideFrame && topEl === sideFrame) {
-            return { kind: 'frame', id: 'side', x: lx - sideFrame.offsetLeft, y: ly - sideFrame.offsetTop };
+        if (topEl.tagName === 'IFRAME') {
+            const win = getSameOriginFrameWindow(topEl);
+            if (win) {
+                const pt = mapScreenToFrameLocal(topEl, s.x, s.y);
+                return { kind: 'frame', frame: topEl, win, id: topEl.id || '', x: pt.x, y: pt.y };
+            }
+            if (topEl === contentFrame) {
+                return { kind: 'frame', frame: contentFrame, win: null, id: 'content', x: lx - contentFrame.offsetLeft, y: ly - contentFrame.offsetTop };
+            }
+            if (sideFrame && topEl === sideFrame) {
+                return { kind: 'frame', frame: sideFrame, win: null, id: 'side', x: lx - sideFrame.offsetLeft, y: ly - sideFrame.offsetTop };
+            }
         }
         return { kind: 'local', el: topEl, screenX: s.x, screenY: s.y };
     }
 
-    function sendToFrame(frameId, op, x, y, extra) {
+    function sendToFrame(frameOrId, op, x, y, extra) {
+        const frameEl = typeof frameOrId === 'string'
+            ? (frameOrId === 'content' ? contentFrame : (frameOrId === 'side' ? sideFrame : document.getElementById(frameOrId)))
+            : frameOrId;
+        const fallbackId = typeof frameOrId === 'string' ? frameOrId : (frameEl && frameEl.id) || '';
         const payload = Object.assign({ op, x, y }, extra);
         try {
-            if (frameId === 'content' && contentFrame.contentWindow && contentFrame.contentWindow.handleSimPointer) {
-                contentFrame.contentWindow.handleSimPointer(payload);
-            } else if (frameId === 'side' && sideFrame.contentWindow && sideFrame.contentWindow.handleSimPointer) {
-                sideFrame.contentWindow.handleSimPointer(payload);
-            } else {
-                ctx.emitEvent('SIM_POINTER', payload, frameId);
+            const win = getSameOriginFrameWindow(frameEl);
+            if (win && typeof win.handleSimPointer === 'function') {
+                win.handleSimPointer(payload);
+                return;
             }
-        } catch (e) {
-            ctx.emitEvent('SIM_POINTER', payload, frameId);
+        } catch (_) { }
+        if (fallbackId === 'content' || fallbackId === 'side') {
+            ctx.emitEvent('SIM_POINTER', payload, fallbackId);
         }
     }
 
@@ -472,18 +569,31 @@ export function initTouchpad(ctx) {
     function dispatchLocal(op, el, screenX, screenY, extra) {
         const base = { bubbles: true, cancelable: true, view: window, clientX: screenX, clientY: screenY };
         const fire = (type, opts) => el.dispatchEvent(new MouseEvent(type, Object.assign({}, base, opts)));
+        const firePtr = (type, opts) => {
+            if (typeof PointerEvent === 'function') {
+                el.dispatchEvent(new PointerEvent(type, Object.assign(
+                    { pointerId: 1, pointerType: 'mouse', isPrimary: true },
+                    base,
+                    opts
+                )));
+            }
+        };
+        const btns = (extra && extra.buttons) || 0;
         switch (op) {
             case 'move':
                 updateLocalHover(el, base);
-                fire('mousemove', { button: 0 });
+                firePtr('pointermove', { button: 0, buttons: btns });
+                fire('mousemove', { button: 0, buttons: btns });
                 break;
             case 'click': {
-                const downEv = new MouseEvent('mousedown', Object.assign({}, base, { button: 0 }));
+                firePtr('pointerdown', { button: 0, buttons: 1 });
+                const downEv = new MouseEvent('mousedown', Object.assign({}, base, { button: 0, buttons: 1 }));
                 el.dispatchEvent(downEv);
                 if (!downEv.defaultPrevented) {
                     maybeFocus(el);
                 }
-                fire('mouseup', { button: 0 });
+                firePtr('pointerup', { button: 0, buttons: 0 });
+                fire('mouseup', { button: 0, buttons: 0 });
                 activateSyntheticClick(el, base);
                 setTimeout(() => routeOp('move'), 50);
 
@@ -494,14 +604,25 @@ export function initTouchpad(ctx) {
                 break;
             }
             case 'dblclick':
-                fire('mousedown', { button: 0 }); maybeFocus(el); fire('mouseup', { button: 0 });
+                firePtr('pointerdown', { button: 0, buttons: 1 });
+                fire('mousedown', { button: 0, buttons: 1 });
+                maybeFocus(el);
+                firePtr('pointerup', { button: 0, buttons: 0 });
+                fire('mouseup', { button: 0, buttons: 0 });
                 activateSyntheticClick(el, base);
-                fire('mousedown', { button: 0 }); fire('mouseup', { button: 0 });
+                firePtr('pointerdown', { button: 0, buttons: 1 });
+                fire('mousedown', { button: 0, buttons: 1 });
+                firePtr('pointerup', { button: 0, buttons: 0 });
+                fire('mouseup', { button: 0, buttons: 0 });
                 activateSyntheticClick(el, base);
                 fire('dblclick', { button: 0 });
                 break;
             case 'auxclick':
-                fire('mousedown', { button: 1 }); fire('mouseup', { button: 1 }); fire('auxclick', { button: 1 });
+                firePtr('pointerdown', { button: 1, buttons: 4 });
+                fire('mousedown', { button: 1, buttons: 4 });
+                firePtr('pointerup', { button: 1, buttons: 0 });
+                fire('mouseup', { button: 1, buttons: 0 });
+                fire('auxclick', { button: 1 });
                 break;
             case 'contextmenu':
                 fire('contextmenu', { button: 2 });
@@ -509,7 +630,8 @@ export function initTouchpad(ctx) {
                 break;
             case 'wheel': {
                 const deltaY = (extra && extra.deltaY) || 0;
-                el.dispatchEvent(new WheelEvent('wheel', Object.assign({}, base, { deltaY, deltaMode: 0 })));
+                const deltaX = (extra && extra.deltaX) || 0;
+                el.dispatchEvent(new WheelEvent('wheel', Object.assign({}, base, { deltaX, deltaY, deltaMode: 0 })));
                 let scrollTarget = el;
                 let found = false;
                 while (scrollTarget && scrollTarget !== document.body && scrollTarget !== document.documentElement) {
@@ -528,38 +650,67 @@ export function initTouchpad(ctx) {
                     if ((deltaY < 0 && atTop) || (deltaY > 0 && atBottom)) {
                         found = false;
                     } else {
-                        scrollTarget.scrollBy({ top: deltaY, behavior: 'auto' });
+                        scrollTarget.scrollBy({ left: deltaX, top: deltaY, behavior: 'auto' });
                     }
                 }
 
                 if (!found) {
-                    sendToFrame('content', 'wheel', 0, 0, { deltaY });
+                    const mdFrame = getActiveMdFrame();
+                    if (mdFrame) {
+                        sendToFrame(mdFrame, 'wheel', 0, 0, { deltaX, deltaY });
+                    } else {
+                        sendToFrame(contentFrame, 'wheel', 0, 0, { deltaX, deltaY });
+                    }
                 }
                 break;
             }
             case 'drag_start':
-                fire('mousedown', { button: 0 });
+                firePtr('pointerdown', { button: 0, buttons: 1 });
+                fire('mousedown', { button: 0, buttons: 1 });
                 break;
             case 'drag_end':
-                fire('mouseup', { button: 0 });
+                firePtr('pointerup', { button: 0, buttons: 0 });
+                fire('mouseup', { button: 0, buttons: 0 });
                 break;
         }
     }
 
     function routeOp(op, extra) {
+        // 拖拽锁定时始终把 move / drag_end 连续送往起始目标（适配弹窗 resize 与 md_viewer 分隔条）
+        if ((op === 'move' || op === 'drag_end') && dragLockTarget) {
+            const s = logicalToScreen(cursor.x, cursor.y);
+            if (dragLockTarget === 'index') {
+                const px = Math.max(0, Math.min(window.innerWidth - 1, s.x));
+                const py = Math.max(0, Math.min(document.documentElement.clientHeight - 1, s.y));
+                const el = document.elementFromPoint(px, py) || document.body;
+                const payload = Object.assign({ buttons: op === 'move' ? 1 : 0 }, extra || {});
+                dispatchLocal(op, el, s.x, s.y, payload);
+            } else if (dragLockTarget.isConnected) {
+                const pt = mapScreenToFrameLocal(dragLockTarget, s.x, s.y);
+                const payload = Object.assign({ buttons: op === 'move' ? 1 : 0 }, extra || {});
+                sendToFrame(dragLockTarget, op, pt.x, pt.y, payload);
+            }
+            if (op === 'drag_end') dragLockTarget = null;
+            return;
+        }
+
         const hit = resolveHit(cursor.x, cursor.y);
-        const targetId = hit.kind === 'frame' ? hit.id : (hit.kind === 'local' ? 'index' : null);
+        const target = hit.kind === 'frame' ? hit.frame : (hit.kind === 'local' ? 'index' : null);
 
-        if (targetId !== currentTargetId) {
-            if (currentTargetId === 'index') clearLocalHover();
-            else if (currentTargetId) sendToFrame(currentTargetId, 'leave', 0, 0, {});
+        if (target !== currentTarget) {
+            if (currentTarget === 'index') clearLocalHover();
+            else if (currentTarget) sendToFrame(currentTarget, 'leave', 0, 0, {});
 
-            if (hit.kind === 'frame') sendToFrame(hit.id, 'enter', hit.x, hit.y, {});
-            currentTargetId = targetId;
+            if (hit.kind === 'frame') sendToFrame(hit.frame, 'enter', hit.x, hit.y, {});
+            currentTarget = target;
+        }
+
+        if (op === 'drag_start') {
+            dragLockTarget = target;
         }
 
         if (hit.kind === 'frame') {
-            sendToFrame(hit.id, op, hit.x, hit.y, extra);
+            sendToFrame(hit.frame, op, hit.x, hit.y, extra);
         } else if (hit.kind === 'local') {
             dispatchLocal(op, hit.el, hit.screenX, hit.screenY, extra || {});
         }
@@ -675,7 +826,7 @@ export function initTouchpad(ctx) {
                     let win = window;
 
                     if (hit.kind === 'frame') {
-                        let frameWin = hit.id === 'content' ? contentFrame.contentWindow : (hit.id === 'side' ? sideFrame.contentWindow : null);
+                        let frameWin = hit.win || getSameOriginFrameWindow(hit.frame);
                         if (frameWin) {
                             win = frameWin;
                             let safeX = Math.max(0, Math.min(win.document.documentElement.clientWidth - 1, hit.x));
@@ -948,10 +1099,17 @@ export function initTouchpad(ctx) {
         clearTimeout(syncTimer);
 
         if (next) {
+            if (isDragMode) {
+                isDragMode = false;
+                const dragBtn = panel.querySelector('[data-btn="drag_toggle"]');
+                if (dragBtn) dragBtn.classList.remove('tp-active');
+                routeOp('drag_end');
+            }
+            dragLockTarget = null;
             cursorEl.style.visibility = 'hidden';
-            if (currentTargetId === 'index') clearLocalHover();
-            else if (currentTargetId) sendToFrame(currentTargetId, 'leave', 0, 0, {});
-            currentTargetId = null;
+            if (currentTarget === 'index') clearLocalHover();
+            else if (currentTarget) sendToFrame(currentTarget, 'leave', 0, 0, {});
+            currentTarget = null;
         }
 
         syncTimer = setTimeout(() => {

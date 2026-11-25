@@ -12,8 +12,9 @@ mod static_fs;
 
 use axum::{
     extract::{DefaultBodyLimit, Query, State},
+    http::{header, HeaderMap, HeaderName, HeaderValue, StatusCode},
     middleware,
-    response::Html,
+    response::{Html, IntoResponse, Response},
     routing::{get, post, put},
     Json, Router,
 };
@@ -23,9 +24,10 @@ use std::io::{self, Write};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::process::Command;
-use std::sync::{mpsc as std_mpsc, Arc};
+use std::sync::{mpsc as std_mpsc, Arc, OnceLock};
+use std::time::{Duration, Instant};
 use tokio::net::TcpListener;
-use tokio::sync::Notify;
+use tokio::sync::{Mutex as AsyncMutex, Notify};
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
@@ -332,10 +334,21 @@ struct OAuthCallbackQuery {
     error: Option<String>,
 }
 
+fn oauth_html_response(body: String) -> Response {
+    let mut resp = Html(body).into_response();
+    resp.headers_mut().insert(
+        HeaderName::from_static("content-security-policy"),
+        HeaderValue::from_static(
+            "default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; object-src 'none'; base-uri 'none'; frame-ancestors 'none';",
+        ),
+    );
+    resp
+}
+
 async fn oauth_callback(
     State(state): State<Arc<AppState>>,
     Query(q): Query<OAuthCallbackQuery>,
-) -> Html<String> {
+) -> Response {
     let pending = state
         .runtime
         .oauth_pending
@@ -344,29 +357,235 @@ async fn oauth_callback(
         .and_then(|mut g| g.take());
 
     let Some(p) = pending else {
-        return Html("<h3>当前无待处理的授权会话，可关闭此标签页。</h3>".to_string());
+        return oauth_html_response("<h3>当前无待处理的授权会话，可关闭此标签页。</h3>".to_string());
     };
 
     if let Some(err) = q.error {
         let _ = p.tx.send(Err(err.clone()));
-        return Html(format!("<h3>授权未完成：{}</h3>", err));
+        let safe_err = crate::builder::html_utils::escape_html(&err);
+        return oauth_html_response(format!("<h3>授权未完成：{}</h3>", safe_err));
     }
 
     if q.state.unwrap_or_default() != p.state {
         let _ = p.tx.send(Err("OAuth state 校验不匹配".to_string()));
-        return Html("<h3>安全校验失败（state 不匹配），已中止授权。</h3>".to_string());
+        return oauth_html_response("<h3>安全校验失败（state 不匹配），已中止授权。</h3>".to_string());
     }
 
     match q.code {
         Some(code) if !code.is_empty() => {
             let _ = p.tx.send(Ok(code));
-            Html("<h2 style='font-family:sans-serif;color:#16a34a;padding:24px;'>✅ Google Tasks 授权成功！可以关闭此标签页。</h2>".to_string())
+            oauth_html_response("<h2 style='font-family:sans-serif;color:#16a34a;padding:24px;'>✅ Google Tasks 授权成功！可以关闭此标签页。</h2>".to_string())
         }
         _ => {
             let _ = p.tx.send(Err("回调缺少 code 参数".to_string()));
-            Html("<h3>授权回调缺少 code 参数。</h3>".to_string())
+            oauth_html_response("<h3>授权回调缺少 code 参数。</h3>".to_string())
         }
     }
+}
+
+struct RefreshGateState {
+    last_denied_at: Option<Instant>,
+    last_approved_at: Option<Instant>,
+}
+
+static AUTH_REFRESH_GATE: OnceLock<AsyncMutex<RefreshGateState>> = OnceLock::new();
+
+fn auth_refresh_gate() -> &'static AsyncMutex<RefreshGateState> {
+    AUTH_REFRESH_GATE.get_or_init(|| {
+        AsyncMutex::new(RefreshGateState {
+            last_denied_at: None,
+            last_approved_at: None,
+        })
+    })
+}
+
+/// 轻量会话同步页：把 #__swamp_token 写入同源 localStorage；
+/// 通过 Web Locks API 检测是否已有打开的主页标签页，有则秒关过渡页不重复开窗，无则跳转首页。
+async fn auth_handoff() -> Response {
+    const AUTH_HTML: &str = r#"<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>Swamp 本地会话同步</title>
+  <style>body{font-family:system-ui,-apple-system,"Microsoft YaHei",sans-serif;background:#f8fafc;color:#334155;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;font-size:15px}a{color:#2563eb}</style>
+</head>
+<body>
+  <div id="msg">正在同步本地会话令牌...</div>
+  <script>
+    (async function () {
+      var m = /^#__swamp_token=([0-9a-f]{64})$/i.exec(location.hash || '');
+      if (m) {
+        try { localStorage.setItem('__swamp_local_token__', m[1].toLowerCase()); } catch (_) {}
+        try { history.replaceState(null, '', '/__auth'); } catch (_) { location.hash = ''; }
+      }
+      var hasExisting = false;
+      try {
+        if (navigator.locks && typeof navigator.locks.query === 'function') {
+          var st = await navigator.locks.query();
+          if (st && Array.isArray(st.held)) {
+            hasExisting = st.held.some(function (l) { return l && l.name === 'swamp_main_tab'; });
+          }
+        }
+      } catch (_) {}
+      if (hasExisting) {
+        document.getElementById('msg').textContent = '✅ 令牌已同步至现有站点窗口，正在关闭本页...';
+        try { window.close(); } catch (_) {}
+        setTimeout(function () { try { window.close(); } catch (_) {} }, 80);
+        setTimeout(function () {
+          document.getElementById('msg').innerHTML = '✅ 本地令牌已同步至现有站点窗口，直接切回原标签页即可继续使用（<a href="/">或点此新开主页</a>）。';
+        }, 320);
+      } else {
+        location.replace('/');
+      }
+    })();
+  </script>
+</body>
+</html>"#;
+
+    let mut resp = Html(AUTH_HTML.to_string()).into_response();
+    let headers = resp.headers_mut();
+    headers.insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("no-store"),
+    );
+    headers.insert(
+        HeaderName::from_static("content-security-policy"),
+        HeaderValue::from_static(
+            "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'none'; object-src 'none'; base-uri 'self'; frame-ancestors 'none';",
+        ),
+    );
+    resp
+}
+
+/// 401 自动续签兜底端点：严格校核同源 Origin + Sec-Fetch-Site + JSON Content-Type，
+/// 单飞弹出本机 Win32 物理确认框（拒绝后 10s 冷却防轰炸），确认后下发当前会话令牌。
+async fn api_auth_refresh(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Response {
+    let origin_ok = headers
+        .get(header::ORIGIN)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.trim().to_ascii_lowercase())
+        .map(|o| state.allowed_origins.contains(&o))
+        .unwrap_or(false);
+    if !origin_ok {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({ "ok": false, "error": "禁止未授权 Origin 请求令牌续签" })),
+        )
+            .into_response();
+    }
+
+    if let Some(sfs) = headers.get("sec-fetch-site").and_then(|v| v.to_str().ok()) {
+        if !sfs.eq_ignore_ascii_case("same-origin") {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(json!({ "ok": false, "error": "拒绝非同源续签请求" })),
+            )
+                .into_response();
+        }
+    }
+
+    let is_json = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.trim().to_ascii_lowercase().starts_with("application/json"))
+        .unwrap_or(false);
+    if !is_json {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "ok": false, "error": "续签请求必须使用 application/json" })),
+        )
+            .into_response();
+    }
+
+    let mut gate = auth_refresh_gate().lock().await;
+    if let Some(approved_at) = gate.last_approved_at {
+        if approved_at.elapsed() < Duration::from_secs(3) {
+            return Json(json!({ "ok": true, "token": state.token })).into_response();
+        }
+    }
+    if let Some(denied_at) = gate.last_denied_at {
+        if denied_at.elapsed() < Duration::from_secs(10) {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(json!({ "ok": false, "error": "刚刚已拒绝授权，请 10 秒后再试或点击 Swamp 管理窗口 Open Site" })),
+            )
+                .into_response();
+        }
+    }
+
+    #[cfg(windows)]
+    {
+        let port = state.config.port;
+        let allowed = tokio::task::spawn_blocking(move || {
+            use std::ffi::OsStr;
+            use std::os::windows::ffi::OsStrExt;
+            use windows_sys::Win32::UI::WindowsAndMessaging::{MessageBoxW, IDYES, MB_YESNO};
+
+            const MB_ICONQUESTION: u32 = 0x0000_0020;
+            const MB_SETFOREGROUND: u32 = 0x0001_0000;
+            const MB_TOPMOST: u32 = 0x0004_0000;
+
+            let msg = format!(
+                "浏览器中的旧页面（http://localhost:{}）请求续签本地会话令牌。\n\n如果是您本人正在保存、编辑或操作本地功能，点击【是】将自动更新令牌并继续完成当前操作；\n否则点击【否】拒绝。",
+                port
+            );
+            let mw: Vec<u16> = OsStr::new(&msg).encode_wide().chain(Some(0)).collect();
+            let tw: Vec<u16> = OsStr::new("Swamp 本地会话续签确认")
+                .encode_wide()
+                .chain(Some(0))
+                .collect();
+            unsafe {
+                MessageBoxW(
+                    std::ptr::null_mut(),
+                    mw.as_ptr(),
+                    tw.as_ptr(),
+                    MB_YESNO | MB_ICONQUESTION | MB_TOPMOST | MB_SETFOREGROUND,
+                ) == IDYES
+            }
+        })
+        .await
+        .unwrap_or(false);
+
+        if allowed {
+            gate.last_approved_at = Some(Instant::now());
+            gate.last_denied_at = None;
+            state.logs.info("[auth] 已确认向同源旧页面续签本地会话令牌");
+            return Json(json!({ "ok": true, "token": state.token })).into_response();
+        } else {
+            gate.last_denied_at = Some(Instant::now());
+            state.logs.warn("[auth] 已拒绝浏览器的本地会话续签请求");
+            return (
+                StatusCode::FORBIDDEN,
+                Json(json!({ "ok": false, "error": "已拒绝本地会话续签请求" })),
+            )
+                .into_response();
+        }
+    }
+
+    #[cfg(not(windows))]
+    {
+        gate.last_denied_at = Some(Instant::now());
+        (
+            StatusCode::FORBIDDEN,
+            Json(json!({ "ok": false, "error": "请重新启动服务并打开带令牌的首页" })),
+        )
+            .into_response()
+    }
+}
+
+fn is_valid_token_hex(s: &str) -> bool {
+    s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+fn take_handoff_token_from_env() -> Option<String> {
+    let raw = std::env::var("SWAMP_HANDOFF_TOKEN").ok();
+    // 立即从当前进程环境块抹除，杜绝泄露给后续派生的任何子进程
+    std::env::remove_var("SWAMP_HANDOFF_TOKEN");
+    raw.map(|s| s.trim().to_ascii_lowercase())
+        .filter(|s| is_valid_token_hex(s))
 }
 
 fn build_router(mode: RunMode, state: Arc<AppState>) -> Router {
@@ -391,6 +610,8 @@ fn build_router(mode: RunMode, state: Arc<AppState>) -> Router {
                 ));
 
             Router::new()
+                .route("/__auth", get(auth_handoff))
+                .route("/__auth/refresh", post(api_auth_refresh))
                 .route("/__oauth/callback", get(oauth_callback))
                 .nest("/__api", api_router)
                 .fallback(static_fs::handle_static)
@@ -496,6 +717,11 @@ fn main() {
         SubCommand::Synonyms => {
             if let Err(e) = builder::synonyms::run_standalone(&cfg) {
                 eprintln!("[swamp synonyms] 失败: {}", e);
+                std::process::exit(1);
+            }
+            println!("[swamp synonyms] 自动执行全量构建 (gen)...");
+            if let Err(e) = builder::run_gen(&cfg) {
+                eprintln!("[swamp synonyms] 自动 gen 失败: {}", e);
                 std::process::exit(1);
             }
             return;
@@ -635,11 +861,15 @@ fn main() {
 fn run_server_mode(cfg: ServerConfig, mode: RunMode, open_browser: bool) {
     let is_sim = mode == RunMode::Sim;
 
-    let token = if is_sim {
-        String::new()
+    let (token, inherited_token) = if is_sim {
+        // sim 模式也顺手清掉可能残留的环境变量
+        std::env::remove_var("SWAMP_HANDOFF_TOKEN");
+        (String::new(), false)
+    } else if let Some(handoff_tok) = take_handoff_token_from_env() {
+        (handoff_tok, true)
     } else {
         match generate_token_hex() {
-            Ok(t) => t,
+            Ok(t) => (t, false),
             Err(e) => {
                 eprintln!("[swamp] {}", e);
                 std::process::exit(1);
@@ -653,7 +883,12 @@ fn run_server_mode(cfg: ServerConfig, mode: RunMode, open_browser: bool) {
         (0, 0)
     };
 
-    let logs = Arc::new(LogBus::new(log_msg));
+    let logs = if is_sim {
+        Arc::new(LogBus::new(log_msg))
+    } else {
+        let log_file = cfg.build_dir.join("temp").join("swamp_runtime.log");
+        Arc::new(LogBus::with_file(log_msg, log_file))
+    };
     let runtime = Arc::new(RuntimeStatus::new(vpn_msg));
     let shutdown_notify = Arc::new(Notify::new());
     let (html_change_tx, _) = tokio::sync::broadcast::channel::<String>(64);
@@ -708,6 +943,9 @@ fn run_server_mode(cfg: ServerConfig, mode: RunMode, open_browser: bool) {
                 addr,
                 strip_verbatim_prefix(&cfg_bg.repo_root).display()
             ));
+            if inherited_token {
+                logs_bg.info("[auth] 已从上一进程无感继承会话令牌，原有浏览器页面无需重新打开");
+            }
 
             if !is_sim {
                 match crate::builder::minify::sync_raw_assets_on_startup(&cfg_bg) {
@@ -783,16 +1021,35 @@ fn run_server_mode(cfg: ServerConfig, mode: RunMode, open_browser: bool) {
 
     if open_browser {
         let url = match mode {
-            RunMode::Serve => format!("http://localhost:{}/#__swamp_token={}", port, token),
+            RunMode::Serve => format!("http://localhost:{}/__auth#__swamp_token={}", port, token),
             RunMode::Sim => format!("http://localhost:{}", port),
         };
         open_url_in_browser(&url, is_sim);
     }
 
     #[cfg(windows)]
-    if !is_sim {
-        run_management_window(state, shutdown_notify);
-    }
+    let handoff_build = if !is_sim {
+        run_management_window(state, shutdown_notify)
+    } else {
+        None
+    };
 
     let _ = server_handle.join();
+
+    // 直到管理窗口销毁、后台任务归零、HTTP 服务与运行时全部彻底退出后，再接力拉起 build.bat
+    #[cfg(windows)]
+    if let Some((crate_dir, build_bat)) = handoff_build {
+        const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
+        unsafe {
+            windows_sys::Win32::UI::WindowsAndMessaging::AllowSetForegroundWindow(0xFFFF_FFFF);
+        }
+        let _ = Command::new("cmd.exe")
+            .arg("/d")
+            .arg("/c")
+            .arg(&build_bat)
+            .current_dir(&crate_dir)
+            .env("SWAMP_HANDOFF_TOKEN", &token)
+            .creation_flags(CREATE_NEW_CONSOLE)
+            .spawn();
+    }
 }

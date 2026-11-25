@@ -7,8 +7,10 @@ use std::path::Path;
 use std::sync::OnceLock;
 
 use crate::api_files::write_atomic;
+use crate::builder::{log_info, log_warn};
 use crate::builder::minify::{minify_js, sha256_hex};
 use crate::config::ServerConfig;
+use crate::services::log_bus::LogBus;
 
 pub const SYN_ALGO_VERSION: &str = "cilin-1hop-df-v5.1";
 const SYNONYMS_TPL_JS: &str = include_str!("synonyms_tpl.js");
@@ -578,9 +580,16 @@ pub fn build_if_needed(
     cfg: &ServerConfig,
     public_docs_for_df: &BTreeMap<i64, String>,
     lite_data_tree: &Value,
+    logs: Option<&LogBus>,
 ) -> Result<bool, String> {
     let Some(raw_cilin) = load_cilin_text(cfg)? else {
-        println!("[Synonyms] 未找到 {}，跳过 synonyms.js 自动生成。", cfg.cilin_file.display());
+        log_warn(
+            logs,
+            format!(
+                "[Synonyms] 未找到 {}，跳过 synonyms.js 自动生成。",
+                cfg.cilin_file.display()
+            ),
+        );
         return Ok(false);
     };
 
@@ -815,7 +824,8 @@ pub fn build_if_needed(
         }
     }
 
-    let minified_js = minify_js(&raw_js).unwrap_or(raw_js);
+    let minified_js = minify_js(&raw_js)
+        .map_err(|e| format!("synonyms.js 内置 JS 压缩失败，已中止写出: {}", e))?;
     if let Some(parent) = out_path.parent() {
         let _ = fs::create_dir_all(parent);
     }
@@ -825,16 +835,26 @@ pub fn build_if_needed(
     if let Some(p) = sha_state_file.parent() { let _ = fs::create_dir_all(p); }
     let _ = write_atomic(sha_state_file, &format!("{}|{}", raw_sha, out_sha), false);
 
-    println!(
-        "[Synonyms] 已生成 {} ({} bytes, 公开文档 {})",
-        out_path.display(),
-        minified_js.len(),
-        total_public_docs
+    log_info(
+        logs,
+        format!(
+            "[Synonyms] 已生成 {} ({} bytes, 公开文档 {})",
+            out_path.display(),
+            minified_js.len(),
+            total_public_docs
+        ),
     );
     Ok(true)
 }
 
 pub fn run_standalone(cfg: &ServerConfig) -> Result<(), String> {
+    run_standalone_with_logger(cfg, None)
+}
+
+pub fn run_standalone_with_logger(
+    cfg: &ServerConfig,
+    logs: Option<&LogBus>,
+) -> Result<(), String> {
     let mut lite_tree = Value::Object(serde_json::Map::new());
     let mut id_to_title: HashMap<i64, String> = HashMap::new();
     let mut id_to_anchor: HashMap<i64, String> = HashMap::new();
@@ -895,9 +915,9 @@ pub fn run_standalone(cfg: &ServerConfig) -> Result<(), String> {
         }
     }
 
-    let updated = build_if_needed(cfg, &public_docs, &lite_tree)?;
+    let updated = build_if_needed(cfg, &public_docs, &lite_tree, logs)?;
     if !updated {
-        println!("[Synonyms] 无变化，跳过重建。");
+        log_info(logs, "[Synonyms] 无变化，跳过重建。");
     }
     Ok(())
 }

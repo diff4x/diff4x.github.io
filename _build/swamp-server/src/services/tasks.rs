@@ -502,8 +502,14 @@ pub fn spawn_background_monitors(
             };
 
             loop {
-                let online = match client.get(&cfg_hb.heartbeat_url).send().await {
-                    Ok(r) => r.status().as_u16() == 200,
+                let online = match client.head(&cfg_hb.heartbeat_url).send().await {
+                    Ok(r) if r.status().as_u16() == 405 => {
+                        match client.get(&cfg_hb.heartbeat_url).send().await {
+                            Ok(r2) => r2.status().as_u16() < 400,
+                            Err(_) => false,
+                        }
+                    }
+                    Ok(r) => r.status().as_u16() < 400,
                     Err(_) => false,
                 };
                 status_hb.vpn_online.store(online, Ordering::Relaxed);
@@ -638,7 +644,14 @@ pub fn spawn_background_monitors(
                                             fetch_upcoming_tasks(&cfg, &client, &new_tok.access_token).await
                                         {
                                             if let Ok(mut g) = status.tasks.write() {
-                                                *g = tasks;
+                                                *g = tasks.clone();
+                                            }
+                                            if let Ok(mut g) = status.last_tasks_sync.write() {
+                                                *g = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+                                            }
+                                            if let Ok(pretty) = serde_json::to_string_pretty(&tasks) {
+                                                let _ = fs::create_dir_all(&cfg.privy_dir);
+                                                let _ = write_atomic(&json_path, &pretty, false);
                                             }
                                         }
                                     }

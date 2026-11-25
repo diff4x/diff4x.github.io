@@ -1,10 +1,16 @@
 @echo off
 chcp 65001 >nul
 setlocal
+set "_SWAMP_HANDOFF_TOKEN=%SWAMP_HANDOFF_TOKEN%"
+set "SWAMP_HANDOFF_TOKEN="
 for %%I in ("%~dp0.") do set "CRATE_DIR=%%~fI"
 for %%I in ("%CRATE_DIR%\..") do set "BUILD_DIR=%%~fI"
 for %%I in ("%BUILD_DIR%\..") do set "REPO_DIR=%%~fI"
-set "TARGET_DIR=%BUILD_DIR%\temp\target"
+if defined LOCALAPPDATA (
+    set "TARGET_DIR=%LOCALAPPDATA%\swamp-cargo-target"
+) else (
+    set "TARGET_DIR=%TEMP%\swamp-cargo-target"
+)
 set "WASM_OUT_DIR=%REPO_DIR%\src\wasm"
 cd /d "%CRATE_DIR%" >nul 2>&1
 
@@ -30,23 +36,51 @@ if errorlevel 1 goto build_exe_only
 
 :build_exe_only
 call :do_build_exe
-pause
-goto :eof
+if errorlevel 1 (
+    pause
+    exit /b 1
+)
+call :launch_swamp_exe
+call :wait_and_exit
+exit /b 0
 
 :build_wasm_only
 call :do_build_wasm
-pause
-goto :eof
+if errorlevel 1 (
+    pause
+    exit /b 1
+)
+call :wait_and_exit
+exit /b 0
 
 :build_all
 call :do_build_exe
 if errorlevel 1 (
     pause
-    goto :eof
+    exit /b 1
 )
 call :do_build_wasm
-pause
-goto :eof
+if errorlevel 1 (
+    pause
+    exit /b 1
+)
+call :launch_swamp_exe
+call :wait_and_exit
+exit /b 0
+
+:launch_swamp_exe
+echo.
+echo [RUN] 正在自动启动新版 _build\swamp.exe ...
+setlocal
+if defined _SWAMP_HANDOFF_TOKEN set "SWAMP_HANDOFF_TOKEN=%_SWAMP_HANDOFF_TOKEN%"
+start "" /D "%BUILD_DIR%" "%BUILD_DIR%\swamp.exe"
+endlocal
+exit /b 0
+
+:wait_and_exit
+echo [INFO] 构建成功，3 秒后自动退出...
+timeout /t 3 /nobreak >nul 2>&1 || ping -n 4 127.0.0.1 >nul
+exit /b 0
 
 :: -----------------------------------------------------
 :: 子过程 1：编译 _build\swamp.exe
@@ -107,7 +141,7 @@ if errorlevel 1 (
     exit /b 1
 )
 
-echo [SUCCESS] 已更新 _build\swamp.exe（target 位于 _build\temp\target）
+echo [SUCCESS] 已更新 _build\swamp.exe（target 位于 %TARGET_DIR%）
 exit /b 0
 
 :: -----------------------------------------------------

@@ -70,7 +70,6 @@ include = [
 exclude = [
   "/src/tpl/bilingual.html",
   "/src/tpl/new.html",
-  "/src/tpl/md_viewer.html",
   "/src/js/core-list.js",
   "/src/js/sw.js",
   "/src/third/markdown/codemirror/**"
@@ -99,116 +98,7 @@ keep_takeout_zip_folder = ""
 [pack]
 skip_apply_doc_regex = "^(APPLY_AND_VERIFY|UPGRADE_.*|PATCH_NOTES|README_PATCH)\\.md$"
 presets_json = '''
-[
-  {
-    "name": "基础必传集 (README + 核心检索)",
-    "paths": [
-      "README.md",
-      "_build/swamp-server/src/lib.rs",
-      "src/js/raw/worker.js",
-      "src/js/raw/search-engine.js",
-      "src/js/raw/search-ui.js"
-    ]
-  },
-  {
-    "name": "Rust 引擎全套 (swamp.exe + Wasm, v3.1)",
-    "paths": [
-      "README.md",
-      ".gitignore",
-      "_build/swamp.toml",
-      "_build/swamp-server/build.bat",
-      "_build/swamp-server/Cargo.toml",
-      "_build/swamp-server/.cargo/config.toml",
-      "_build/swamp-server/src/lib.rs",
-      "_build/swamp-server/src/main.rs",
-      "_build/swamp-server/src/gui.rs",
-      "_build/swamp-server/src/config.rs",
-      "_build/swamp-server/src/security.rs",
-      "_build/swamp-server/src/static_fs.rs",
-      "_build/swamp-server/src/api_files.rs",
-      "_build/swamp-server/src/api_ops.rs",
-      "_build/swamp-server/src/builder/mod.rs",
-      "_build/swamp-server/src/builder/minify.rs",
-      "_build/swamp-server/src/builder/html_utils.rs",
-      "_build/swamp-server/src/builder/generator.rs",
-      "_build/swamp-server/src/builder/synonyms.rs",
-      "_build/swamp-server/src/builder/synonyms_tpl.js",
-      "_build/swamp-server/src/media/mod.rs",
-      "_build/swamp-server/src/media/webp.rs",
-      "_build/swamp-server/src/media/keep2html.rs",
-      "_build/swamp-server/src/services/mod.rs",
-      "_build/swamp-server/src/services/log_bus.rs",
-      "_build/swamp-server/src/services/watcher.rs",
-      "_build/swamp-server/src/services/tasks.rs",
-      "_build/swamp-server/src/services/pack_apply.rs",
-      "src/js/raw/site-core.js",
-      "src/js/raw/shared-utils.js",
-      "src/js/raw/index.js"
-    ]
-  },
-  {
-    "name": "电子书阅读器 (PDF / EPUB / TXT)",
-    "paths": [
-      "README.md",
-      "src/tpl/pdf.html",
-      "src/tpl/epub.html",
-      "src/tpl/txt.html",
-      "src/js/raw/pdf-viewer.js",
-      "src/css/raw/pdf-viewer.css",
-      "src/third/pdfjs/web/viewer.mjs",
-      "src/third/bibi/presets/default.js",
-      "src/js/raw/book-db.js",
-      "src/js/raw/search-preview.js",
-      "src/js/raw/shared-utils.js"
-    ]
-  },
-  {
-    "name": "HTML 正文 / 高亮 / Diff / 双语",
-    "paths": [
-      "README.md",
-      "src/js/raw/content.js",
-      "src/js/raw/bilingual.js",
-      "src/tpl/bilingual.html",
-      "src/js/raw/shared-utils.js",
-      "src/js/raw/site-core.js"
-    ]
-  },
-  {
-    "name": "SW 缓存 / 热更新 / 构建清单",
-    "paths": [
-      "README.md",
-      "index.html",
-      "src/js/raw/site-core.js",
-      "src/js/raw/index.js",
-      "src/js/raw/sw.js",
-      "src/js/raw/snapshot.js",
-      "_build/swamp.toml",
-      "_build/swamp-server/src/builder/generator.rs",
-      "_build/swamp-server/src/config.rs"
-    ]
-  },
-  {
-    "name": "近义词构建与调优",
-    "paths": [
-      "README.md",
-      "_build/swamp.toml",
-      "_build/swamp-server/src/builder/synonyms.rs",
-      "_build/swamp-server/src/builder/synonyms_tpl.js",
-      "src/js/raw/worker.js"
-    ]
-  },
-  {
-    "name": "全部前端源码 (raw JS/CSS + tpl + index)",
-    "globs": [
-      "index.html",
-      "README.md",
-      ".gitignore",
-      "src/js/raw/*.js",
-      "src/css/raw/*.css",
-      "src/tpl/*.html"
-    ]
-  }
-]
+[]
 '''
 # === PACK-PRESETS-END ===
 
@@ -216,12 +106,1258 @@ presets_json = '''
 [synonyms]
 custom_json = '''
 {
-  "dropEqCodes": [],
-  "pruneWords": {},
-  "splitFixes": {},
-  "stopExpand": [],
-  "groups": [],
-  "aliases": {}
+  "aliases": {
+    "AIGC": [
+      "大模型",
+      "扩散模型",
+      "AI"
+    ],
+    "ChatGPT": [
+      "大模型",
+      "LLM",
+      "AI"
+    ],
+    "ComfyUI": [
+      "扩散模型",
+      "文生图"
+    ],
+    "GGUF": [
+      "量化",
+      "模型"
+    ],
+    "HDD": [
+      "机械硬盘",
+      "硬盘"
+    ],
+    "JS": [
+      "JavaScript"
+    ],
+    "LoRA": [
+      "微调",
+      "SFT"
+    ],
+    "MOS": [
+      "场效应管",
+      "MOS管",
+      "MOSFET"
+    ],
+    "PY": [
+      "Python"
+    ],
+    "RAG": [
+      "知识库",
+      "大模型"
+    ],
+    "SD": [
+      "扩散模型",
+      "Stable Diffusion"
+    ],
+    "SQL": [
+      "SQLite",
+      "数据库"
+    ],
+    "SSD": [
+      "固态硬盘",
+      "硬盘"
+    ],
+    "Stable Diffusion": [
+      "扩散模型",
+      "文生图"
+    ],
+    "TS": [
+      "TypeScript"
+    ],
+    "TensorRT": [
+      "CUDA",
+      "GPU"
+    ],
+    "VLM": [
+      "多模态",
+      "大模型"
+    ],
+    "公号": [
+      "公众号"
+    ],
+    "扎营地": [
+      "营地",
+      "露营"
+    ],
+    "抓绒": [
+      "冲锋衣",
+      "保暖"
+    ],
+    "推文": [
+      "Twitter"
+    ],
+    "日剧": [
+      "电视剧",
+      "剧集"
+    ],
+    "梯子": [
+      "VPN",
+      "翻墙",
+      "代理"
+    ],
+    "油管": [
+      "YouTube"
+    ],
+    "港剧": [
+      "电视剧",
+      "剧集"
+    ],
+    "科学上网": [
+      "VPN",
+      "翻墙",
+      "代理"
+    ],
+    "美剧": [
+      "电视剧",
+      "剧集"
+    ],
+    "羽绒服": [
+      "棉衣",
+      "冬装"
+    ],
+    "软壳": [
+      "冲锋衣",
+      "户外"
+    ],
+    "轻量化": [
+      "徒步",
+      "露营",
+      "装备"
+    ],
+    "重装": [
+      "徒步",
+      "露营",
+      "背包"
+    ]
+  },
+  "dropEqCodes": [
+    "Bj01A04",
+    "Ca23A15",
+    "Ca23A17",
+    "Ba01E02",
+    "Bp12B02",
+    "Af01C05",
+    "Af04A04",
+    "Bi07C02",
+    "Br06B23",
+    "Ed01D02",
+    "Ee37A01",
+    "Dk26C04",
+    "Bo04A22",
+    "Br13B05",
+    "Bh07A16",
+    "Bi18A47",
+    "Bh08A05",
+    "Bh08A38"
+  ],
+  "groups": [
+    {
+      "c5": "Dk01A",
+      "words": [
+        "大模型",
+        "大语言模型",
+        "LLM"
+      ]
+    },
+    {
+      "c5": "Dk01A",
+      "words": [
+        "人工智能",
+        "AI"
+      ]
+    },
+    {
+      "c5": "Dk01A",
+      "words": [
+        "机器学习",
+        "ML"
+      ]
+    },
+    {
+      "c5": "Dk01A",
+      "words": [
+        "深度学习",
+        "DL"
+      ]
+    },
+    {
+      "c5": "Dk01A",
+      "words": [
+        "神经网络",
+        "人工神经网络"
+      ]
+    },
+    {
+      "c5": "Dk01A",
+      "words": [
+        "提示词",
+        "Prompt"
+      ]
+    },
+    {
+      "c5": "Dk01A",
+      "words": [
+        "词元",
+        "Token"
+      ]
+    },
+    {
+      "c5": "Dk01A",
+      "words": [
+        "微调",
+        "SFT",
+        "指令微调"
+      ]
+    },
+    {
+      "c5": "Dk01A",
+      "words": [
+        "安全对齐",
+        "价值对齐"
+      ]
+    },
+    {
+      "c5": "Dk01A",
+      "words": [
+        "去审查",
+        "无审查",
+        "Uncensored",
+        "Abliterated"
+      ]
+    },
+    {
+      "c5": "Dk01A",
+      "words": [
+        "扩散模型",
+        "Diffusion"
+      ]
+    },
+    {
+      "c5": "Dk01A",
+      "words": [
+        "文生图",
+        "AI绘图",
+        "AI画图"
+      ]
+    },
+    {
+      "c5": "Dk01A",
+      "words": [
+        "自然语言处理",
+        "NLP"
+      ]
+    },
+    {
+      "c5": "Dk01A",
+      "words": [
+        "反向传播",
+        "Backpropagation"
+      ]
+    },
+    {
+      "c5": "Dk01A",
+      "words": [
+        "知识库",
+        "资料库"
+      ]
+    },
+    {
+      "c5": "Bo01A",
+      "words": [
+        "显卡",
+        "图形卡",
+        "GPU"
+      ]
+    },
+    {
+      "c5": "Bo01A",
+      "words": [
+        "显存",
+        "VRAM"
+      ]
+    },
+    {
+      "c5": "Dd06A",
+      "words": [
+        "防火墙",
+        "GFW"
+      ]
+    },
+    {
+      "c5": "Dd06A",
+      "words": [
+        "网络",
+        "互联网",
+        "因特网"
+      ]
+    },
+    {
+      "c5": "Dd06A",
+      "words": [
+        "无线网",
+        "无线网络",
+        "WiFi"
+      ]
+    },
+    {
+      "c5": "Dd06A",
+      "words": [
+        "代理",
+        "VPN",
+        "翻墙"
+      ]
+    },
+    {
+      "c5": "Dd06A",
+      "words": [
+        "局域网",
+        "内网",
+        "LAN"
+      ]
+    },
+    {
+      "c5": "Dd06A",
+      "words": [
+        "公网",
+        "外网"
+      ]
+    },
+    {
+      "c5": "Dd06A",
+      "words": [
+        "服务器",
+        "服务端"
+      ]
+    },
+    {
+      "c5": "Dd06A",
+      "words": [
+        "客户端",
+        "前端"
+      ]
+    },
+    {
+      "c5": "Dd06A",
+      "words": [
+        "浏览器",
+        "网页浏览器"
+      ]
+    },
+    {
+      "c5": "Dd06A",
+      "words": [
+        "软件",
+        "应用程序",
+        "App"
+      ]
+    },
+    {
+      "c5": "Dd06A",
+      "words": [
+        "操作系统",
+        "OS"
+      ]
+    },
+    {
+      "c5": "Bo01A",
+      "words": [
+        "电脑",
+        "计算机",
+        "微机"
+      ]
+    },
+    {
+      "c5": "Bo01A",
+      "words": [
+        "笔记本电脑",
+        "笔电",
+        "笔记本"
+      ]
+    },
+    {
+      "c5": "Bo01A",
+      "words": [
+        "平板电脑",
+        "平板"
+      ]
+    },
+    {
+      "c5": "Bo04A",
+      "words": [
+        "手机",
+        "智能手机",
+        "移动电话"
+      ]
+    },
+    {
+      "c5": "Bo01A",
+      "words": [
+        "处理器",
+        "中央处理器",
+        "CPU"
+      ]
+    },
+    {
+      "c5": "Bo01A",
+      "words": [
+        "内存",
+        "运行内存",
+        "内存储器",
+        "RAM"
+      ]
+    },
+    {
+      "c5": "Bo01A",
+      "words": [
+        "硬盘",
+        "磁盘"
+      ]
+    },
+    {
+      "c5": "Bo01A",
+      "words": [
+        "固态硬盘",
+        "SSD"
+      ]
+    },
+    {
+      "c5": "Bo01A",
+      "words": [
+        "机械硬盘",
+        "HDD"
+      ]
+    },
+    {
+      "c5": "Bo01A",
+      "words": [
+        "U盘",
+        "优盘",
+        "闪存盘"
+      ]
+    },
+    {
+      "c5": "Dd06A",
+      "words": [
+        "数据库",
+        "DB"
+      ]
+    },
+    {
+      "c5": "Dd06A",
+      "words": [
+        "代码",
+        "源码",
+        "源代码"
+      ]
+    },
+    {
+      "c5": "Dd06A",
+      "words": [
+        "开源",
+        "开放源代码"
+      ]
+    },
+    {
+      "c5": "Dd06A",
+      "words": [
+        "编程",
+        "程序设计",
+        "写代码"
+      ]
+    },
+    {
+      "c5": "Dd06A",
+      "words": [
+        "编程语言",
+        "程序语言"
+      ]
+    },
+    {
+      "c5": "Dd06A",
+      "words": [
+        "正则表达式",
+        "正则",
+        "regex"
+      ]
+    },
+    {
+      "c5": "Dd06A",
+      "words": [
+        "哈希",
+        "散列",
+        "hash"
+      ]
+    },
+    {
+      "c5": "Dd06A",
+      "words": [
+        "命令行",
+        "终端",
+        "CLI"
+      ]
+    },
+    {
+      "c5": "Dd06A",
+      "words": [
+        "虚拟机",
+        "VM"
+      ]
+    },
+    {
+      "c5": "Dd06A",
+      "words": [
+        "Wasm",
+        "WebAssembly"
+      ]
+    },
+    {
+      "c5": "Dd06A",
+      "words": [
+        "字符串",
+        "字串"
+      ]
+    },
+    {
+      "c5": "Dd06A",
+      "words": [
+        "结构体",
+        "struct"
+      ]
+    },
+    {
+      "c5": "Dd06A",
+      "words": [
+        "共用体",
+        "联合体",
+        "union"
+      ]
+    },
+    {
+      "c5": "Dd06A",
+      "words": [
+        "单元测试",
+        "单测"
+      ]
+    },
+    {
+      "c5": "Dd06A",
+      "words": [
+        "调试",
+        "debug"
+      ]
+    },
+    {
+      "c5": "Dd06A",
+      "exclusive": false,
+      "words": [
+        "报错",
+        "异常"
+      ]
+    },
+    {
+      "c5": "Dd06A",
+      "words": [
+        "压缩包",
+        "归档"
+      ]
+    },
+    {
+      "c5": "Dd06A",
+      "words": [
+        "区块链",
+        "Blockchain"
+      ]
+    },
+    {
+      "c5": "Dd06A",
+      "words": [
+        "黑客",
+        "骇客"
+      ]
+    },
+    {
+      "c5": "Dd06A",
+      "words": [
+        "网页",
+        "页面"
+      ]
+    },
+    {
+      "c5": "Dd06A",
+      "words": [
+        "网址",
+        "链接",
+        "URL"
+      ]
+    },
+    {
+      "c5": "Dd06A",
+      "words": [
+        "备份",
+        "快照"
+      ]
+    },
+    {
+      "c5": "Bo04A",
+      "words": [
+        "单片机",
+        "微控制器",
+        "MCU"
+      ]
+    },
+    {
+      "c5": "Bo04A",
+      "words": [
+        "场效应管",
+        "MOS管",
+        "MOSFET"
+      ]
+    },
+    {
+      "c5": "Bo04A",
+      "words": [
+        "三极管",
+        "晶体管"
+      ]
+    },
+    {
+      "c5": "Bo04A",
+      "words": [
+        "晶振",
+        "晶体振荡器",
+        "石英晶振"
+      ]
+    },
+    {
+      "c5": "Bo04A",
+      "words": [
+        "电容器",
+        "电容"
+      ]
+    },
+    {
+      "c5": "Bo04A",
+      "words": [
+        "电阻器",
+        "电阻"
+      ]
+    },
+    {
+      "c5": "Bo04A",
+      "words": [
+        "电路板",
+        "线路板",
+        "PCB"
+      ]
+    },
+    {
+      "c5": "Bo04A",
+      "words": [
+        "串口",
+        "UART",
+        "串行口"
+      ]
+    },
+    {
+      "c5": "Bo04A",
+      "words": [
+        "PLC",
+        "可编程逻辑控制器"
+      ]
+    },
+    {
+      "c5": "Bo01A",
+      "words": [
+        "电动机",
+        "电机",
+        "马达"
+      ]
+    },
+    {
+      "c5": "Bo01A",
+      "words": [
+        "伺服电机",
+        "伺服马达"
+      ]
+    },
+    {
+      "c5": "Bo01A",
+      "words": [
+        "步进电机",
+        "步进马达"
+      ]
+    },
+    {
+      "c5": "Bo04A",
+      "words": [
+        "语音识别",
+        "声控",
+        "语音控制"
+      ]
+    },
+    {
+      "c5": "Bo04A",
+      "words": [
+        "电烙铁",
+        "烙铁"
+      ]
+    },
+    {
+      "c5": "Bo04A",
+      "words": [
+        "传感器",
+        "感应器"
+      ]
+    },
+    {
+      "c5": "Bo04A",
+      "words": [
+        "继电器",
+        "电驿"
+      ]
+    },
+    {
+      "c5": "Bo04A",
+      "words": [
+        "变频器",
+        "调速器"
+      ]
+    },
+    {
+      "c5": "Bo04A",
+      "words": [
+        "编码器",
+        "光栅尺"
+      ]
+    },
+    {
+      "c5": "Bo04A",
+      "words": [
+        "电源",
+        "供电"
+      ]
+    },
+    {
+      "c5": "Dk29D",
+      "words": [
+        "电影",
+        "影片",
+        "影视"
+      ]
+    },
+    {
+      "c5": "Dk29D",
+      "words": [
+        "电视剧",
+        "剧集",
+        "连续剧",
+        "电视连续剧"
+      ]
+    },
+    {
+      "c5": "Dk29D",
+      "words": [
+        "视频",
+        "影像",
+        "录像"
+      ]
+    },
+    {
+      "c5": "Dk29D",
+      "words": [
+        "短视频",
+        "小视频"
+      ]
+    },
+    {
+      "c5": "Dk29D",
+      "words": [
+        "纪录片",
+        "记录片",
+        "纪实片"
+      ]
+    },
+    {
+      "c5": "Dk29D",
+      "words": [
+        "动漫",
+        "动画",
+        "动画片",
+        "卡通"
+      ]
+    },
+    {
+      "c5": "Dk28A",
+      "words": [
+        "音乐",
+        "乐曲",
+        "曲目"
+      ]
+    },
+    {
+      "c5": "Dk28B",
+      "words": [
+        "歌曲",
+        "歌谣",
+        "单曲"
+      ]
+    },
+    {
+      "c5": "Dk28B",
+      "words": [
+        "插曲",
+        "配乐",
+        "原声",
+        "BGM"
+      ]
+    },
+    {
+      "c5": "Dk28B",
+      "words": [
+        "主题曲",
+        "片头曲",
+        "片尾曲",
+        "主题歌"
+      ]
+    },
+    {
+      "c5": "Dk17A",
+      "words": [
+        "电子书",
+        "电子图书"
+      ]
+    },
+    {
+      "c5": "Dk17A",
+      "words": [
+        "书摘",
+        "摘抄",
+        "读书笔记"
+      ]
+    },
+    {
+      "c5": "Dk29D",
+      "words": [
+        "台词",
+        "对白"
+      ]
+    },
+    {
+      "c5": "Dk29D",
+      "words": [
+        "笑话",
+        "段子",
+        "幽默"
+      ]
+    },
+    {
+      "c5": "Bp12C",
+      "words": [
+        "围棋",
+        "手谈",
+        "弈棋"
+      ]
+    },
+    {
+      "c5": "Fb01A",
+      "words": [
+        "徒步",
+        "远足",
+        "健行"
+      ]
+    },
+    {
+      "c5": "Fb01A",
+      "words": [
+        "爬山",
+        "登山"
+      ]
+    },
+    {
+      "c5": "Hj01B",
+      "words": [
+        "露营",
+        "野营",
+        "扎营",
+        "宿营",
+        "露宿"
+      ]
+    },
+    {
+      "c5": "Bp29D",
+      "words": [
+        "帐篷",
+        "营帐"
+      ]
+    },
+    {
+      "c5": "Bp11A",
+      "words": [
+        "背包",
+        "登山包",
+        "双肩包"
+      ]
+    },
+    {
+      "c5": "Bp24C",
+      "words": [
+        "绳结",
+        "结绳"
+      ]
+    },
+    {
+      "c5": "Bn14A",
+      "words": [
+        "水库",
+        "蓄水池"
+      ]
+    },
+    {
+      "c5": "Bq03A",
+      "words": [
+        "冲锋衣",
+        "硬壳"
+      ]
+    },
+    {
+      "c5": "Bq05B",
+      "words": [
+        "徒步鞋",
+        "登山鞋"
+      ]
+    },
+    {
+      "c5": "Bp30A",
+      "words": [
+        "防潮垫",
+        "睡垫",
+        "蛋巢垫"
+      ]
+    },
+    {
+      "c5": "Cb27B",
+      "words": [
+        "轨迹",
+        "路书"
+      ]
+    },
+    {
+      "c5": "Dk17A",
+      "words": [
+        "截图",
+        "截屏"
+      ]
+    },
+    {
+      "c5": "Dk17A",
+      "words": [
+        "自拍",
+        "自拍照"
+      ]
+    },
+    {
+      "c5": "Dk17A",
+      "words": [
+        "照片",
+        "相片",
+        "图片"
+      ]
+    },
+    {
+      "c5": "Bo21A",
+      "words": [
+        "高铁",
+        "动车"
+      ]
+    },
+    {
+      "c5": "Bo04C",
+      "words": [
+        "充电宝",
+        "移动电源"
+      ]
+    },
+    {
+      "c5": "Bo04A",
+      "words": [
+        "耳机",
+        "耳麦"
+      ]
+    },
+    {
+      "c5": "Dd06A",
+      "words": [
+        "社交媒体",
+        "社交网络"
+      ]
+    },
+    {
+      "c5": "Ae16C",
+      "words": [
+        "博主",
+        "UP主",
+        "自媒体"
+      ]
+    },
+    {
+      "c5": "Dk17A",
+      "words": [
+        "账号",
+        "账户",
+        "帐号"
+      ]
+    },
+    {
+      "c5": "Dk17A",
+      "words": [
+        "登录",
+        "登陆"
+      ]
+    },
+    {
+      "c5": "Dk17A",
+      "words": [
+        "密码",
+        "口令"
+      ]
+    },
+    {
+      "c5": "Dj04A",
+      "words": [
+        "社保",
+        "社会保险"
+      ]
+    },
+    {
+      "c5": "Dj04A",
+      "words": [
+        "医保",
+        "医疗保险"
+      ]
+    },
+    {
+      "c5": "Dj04A",
+      "words": [
+        "通胀",
+        "通货膨胀"
+      ]
+    },
+    {
+      "c5": "Dj04A",
+      "words": [
+        "房贷",
+        "按揭"
+      ]
+    },
+    {
+      "c5": "Dj04A",
+      "words": [
+        "股市",
+        "股票市场"
+      ]
+    },
+    {
+      "c5": "Dj04A",
+      "words": [
+        "加密货币",
+        "数字货币",
+        "虚拟货币"
+      ]
+    },
+    {
+      "c5": "Hj01A",
+      "words": [
+        "网购",
+        "电商"
+      ]
+    },
+    {
+      "c5": "Dk17A",
+      "words": [
+        "二维码",
+        "QR码"
+      ]
+    }
+  ],
+  "pruneWords": {
+    "Aa01A06": [
+      "家伙",
+      "东西",
+      "小子"
+    ],
+    "Ab01B01": [
+      "石女"
+    ],
+    "Ba03A18": [
+      "佳品奶制品"
+    ],
+    "Bb06A01": [
+      "网络"
+    ],
+    "Bg03B01": [
+      "光饼"
+    ],
+    "Bg07A40": [
+      "汽笛声声"
+    ],
+    "Bh13B15": [
+      "棉桃腰果仁"
+    ],
+    "Bi10B01": [
+      "蝌蚪"
+    ],
+    "Bn07A07": [
+      "防火墙"
+    ],
+    "Bn21B03": [
+      "候车亭电话亭"
+    ],
+    "Bo01A27": [
+      "处理器",
+      "微处理器"
+    ],
+    "Bp01A02": [
+      "白炽灯",
+      "白炽电灯"
+    ],
+    "Bp17C10": [
+      "废纸",
+      "卫生巾"
+    ],
+    "Br05A08": [
+      "包子"
+    ],
+    "Ca03B01": [
+      "时空"
+    ],
+    "Cb07A02": [
+      "满天"
+    ],
+    "Da19A01": [
+      "谍报"
+    ],
+    "Db06B10": [
+      "物理"
+    ],
+    "Db09A01": [
+      "艺术"
+    ],
+    "Dn03A01": [
+      "数据",
+      "数码"
+    ],
+    "Ea09C01": [
+      "规则",
+      "条条框框"
+    ],
+    "Gb08A01": [
+      "明亮"
+    ],
+    "Hn09A01": [
+      "运动",
+      "活动"
+    ],
+    "Id14A01": [
+      "运动",
+      "活动"
+    ],
+    "Je04C01": [
+      "驱动"
+    ],
+    "Ka35B01": [
+      "什么"
+    ],
+    "Ke03A01": [
+      "什么",
+      "好家伙"
+    ]
+  },
+  "splitFixes": {
+    "佳品奶制品": [
+      "佳品",
+      "奶制品"
+    ],
+    "保险丝冰箱": [
+      "保险丝",
+      "冰箱"
+    ],
+    "候车亭电话亭": [
+      "候车亭",
+      "电话亭"
+    ],
+    "棉桃腰果仁": [
+      "棉桃",
+      "腰果仁"
+    ],
+    "汽笛声声": [
+      "汽笛声"
+    ],
+    "鸦胆子薯莨": [
+      "鸦胆子",
+      "薯莨"
+    ]
+  },
+  "stopExpand": [
+    "指针",
+    "堆栈",
+    "进程",
+    "线程",
+    "容器",
+    "变量",
+    "函数",
+    "切片",
+    "对象",
+    "框架",
+    "节点",
+    "缓存",
+    "并发",
+    "模型",
+    "引擎",
+    "通道",
+    "信号",
+    "总线",
+    "端口",
+    "接口",
+    "协议",
+    "字段",
+    "属性",
+    "实例",
+    "队列",
+    "链表",
+    "索引",
+    "触发器",
+    "寄存器",
+    "指令",
+    "驱动",
+    "内核",
+    "脚本",
+    "模块",
+    "插件",
+    "编译",
+    "汇编",
+    "句柄",
+    "回调",
+    "闭包",
+    "泛型",
+    "枚举",
+    "元组",
+    "字典",
+    "列表",
+    "集合",
+    "常量",
+    "宏定义",
+    "架构",
+    "拓扑",
+    "权重",
+    "向量",
+    "矩阵",
+    "张量",
+    "算子",
+    "量化"
+  ]
 }
 '''
 # === SYNONYMS-CUSTOM-END ===

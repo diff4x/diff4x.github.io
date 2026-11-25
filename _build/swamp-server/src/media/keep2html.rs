@@ -78,19 +78,41 @@ fn find_latest_zip(folder: &Path) -> Result<PathBuf, String> {
         .ok_or_else(|| format!("目录中没有 .zip 文件: {}", folder.display()))
 }
 
+fn zip_signature(zip_path: &Path) -> String {
+    match fs::metadata(zip_path) {
+        Ok(m) => {
+            let mtime_ms = m
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_millis())
+                .unwrap_or(0);
+            format!("{}|{}", m.len(), mtime_ms)
+        }
+        Err(_) => String::new(),
+    }
+}
+
 fn ensure_unzipped(zip_path: &Path) -> Result<PathBuf, String> {
     let stem = zip_path
         .file_stem()
         .and_then(|s| s.to_str())
         .ok_or_else(|| "非法 ZIP 文件名".to_string())?;
     let dest_dir = zip_path.parent().unwrap().join(stem);
+    let sig_file = dest_dir.join(".swamp_unzip_sig");
+    let expected_sig = zip_signature(zip_path);
 
-    let already_has_files = dest_dir.is_dir()
-        && fs::read_dir(&dest_dir)
-            .map(|mut rd| rd.next().is_some())
-            .unwrap_or(false);
-    if already_has_files {
-        return Ok(dest_dir);
+    if dest_dir.is_dir() && !expected_sig.is_empty() && sig_file.is_file() {
+        if let Ok(saved) = fs::read_to_string(&sig_file) {
+            if saved.trim() == expected_sig {
+                return Ok(dest_dir);
+            }
+        }
+    }
+
+    if dest_dir.exists() {
+        fs::remove_dir_all(&dest_dir)
+            .map_err(|e| format!("清理旧的残缺/过期解压目录失败: {}", e))?;
     }
 
     fs::create_dir_all(&dest_dir).map_err(|e| format!("创建解压目录失败: {}", e))?;
@@ -118,7 +140,24 @@ fn ensure_unzipped(zip_path: &Path) -> Result<PathBuf, String> {
         }
     }
 
+    if !expected_sig.is_empty() {
+        let _ = write_atomic(&sig_file, &expected_sig, false);
+    }
+
     Ok(dest_dir)
+}
+
+fn backup_existing_html_if_needed(cfg: &ServerConfig, out_file: &Path, stamp: &str) -> Result<(), String> {
+    if !out_file.is_file() {
+        return Ok(());
+    }
+    let bak_dir = cfg.backup_dir.join(format!("keep2html_{}", stamp));
+    fs::create_dir_all(&bak_dir).map_err(|e| format!("创建 Keep 覆盖备份目录失败: {}", e))?;
+    if let Some(fname) = out_file.file_name() {
+        fs::copy(out_file, bak_dir.join(fname))
+            .map_err(|e| format!("备份已有 HTML 失败 ({}): {}", out_file.display(), e))?;
+    }
+    Ok(())
 }
 
 fn parse_hex_prefix(file_path: &str) -> u64 {
@@ -216,8 +255,11 @@ fn compress_attachment(
 
 fn render_from_template(template: &str, title: &str, ts: &str, category: &str, body: &str) -> String {
     static PRE_RE: OnceLock<Regex> = OnceLock::new();
+    static CLOSE_PRE_RE: OnceLock<Regex> = OnceLock::new();
     let pre_re = PRE_RE.get_or_init(|| Regex::new(r"(?s)<pre>.*?</pre>").unwrap());
+    let close_pre_re = CLOSE_PRE_RE.get_or_init(|| Regex::new(r"(?i)</pre\s*>").unwrap());
 
+    let safe_body = close_pre_re.replace_all(body, "&lt;/pre&gt;");
     let step1 = template
         .replace("<title></title>", &format!("<title>{}</title>", escape_html(title)))
         .replace(
@@ -228,7 +270,7 @@ fn render_from_template(template: &str, title: &str, ts: &str, category: &str, b
     pre_re
         .replace(
             &step1,
-            regex::NoExpand(&format!("<pre>\n{}\n</pre>", body)),
+            regex::NoExpand(&format!("<pre>\n{}\n</pre>", safe_body)),
         )
         .into_owned()
 }
@@ -274,6 +316,7 @@ pub fn run_keep2html(cfg: &ServerConfig, opts: KeepOptions) -> Result<KeepSummar
     let mut generated_pages = Vec::new();
     let mut processed_images = 0usize;
     let mode = opts.mode.trim().to_ascii_lowercase();
+    let run_stamp = Local::now().format("%Y%m%d_%H%M%S").to_string();
 
     if mode == "single" {
         for jf in &json_files {
@@ -365,6 +408,7 @@ pub fn run_keep2html(cfg: &ServerConfig, opts: KeepOptions) -> Result<KeepSummar
 
             let html = render_from_template(&template, &article_title, &ts, &cat, &text_content);
             let out_file = cfg.html_dir.join(format!("{}.html", article_title));
+            backup_existing_html_if_needed(cfg, &out_file, &run_stamp)?;
             write_atomic(&out_file, &html, false)?;
             generated_pages.push(format!("{}.html", article_title));
         }
@@ -450,6 +494,7 @@ pub fn run_keep2html(cfg: &ServerConfig, opts: KeepOptions) -> Result<KeepSummar
         let ts = Local::now().format("%Y%m%d%H%M%S").to_string();
         let html = render_from_template(&template, &tag_name, &ts, &category, &merged_body);
         let out_file = cfg.html_dir.join(format!("{}.html", tag_name));
+        backup_existing_html_if_needed(cfg, &out_file, &run_stamp)?;
         write_atomic(&out_file, &html, false)?;
         generated_pages.push(format!("{}.html", tag_name));
     } else {

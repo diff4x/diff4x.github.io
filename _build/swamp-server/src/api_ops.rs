@@ -237,17 +237,105 @@ fn extract_filename_hint(args: &[String]) -> Option<String> {
         .map(|s| s.to_string())
 }
 
+#[cfg(windows)]
+fn resolve_vscode_exe_windows(vscode_path: &str) -> Option<std::path::PathBuf> {
+    use std::path::PathBuf;
+
+    let trimmed = vscode_path.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let as_path = Path::new(trimmed);
+    if trimmed.to_ascii_lowercase().ends_with(".exe") && as_path.is_file() {
+        return Some(as_path.to_path_buf());
+    }
+
+    // 若配置了 .../bin/code.cmd 或 .../bin/code，优先推导上级目录的 Code.exe 直接拉起（绕过 cmd.exe）
+    if as_path.is_file() {
+        if let Some(exe) = as_path
+            .parent()
+            .and_then(|p| p.parent())
+            .map(|p| p.join("Code.exe"))
+        {
+            if exe.is_file() {
+                return Some(exe);
+            }
+        }
+    }
+
+    if trimmed.eq_ignore_ascii_case("code") || trimmed.eq_ignore_ascii_case("code.cmd") {
+        if let Some(path_var) = std::env::var_os("PATH") {
+            for dir in std::env::split_paths(&path_var) {
+                let direct = dir.join("Code.exe");
+                if direct.is_file() {
+                    return Some(direct);
+                }
+                for shim in ["code.cmd", "code.bat"] {
+                    if dir.join(shim).is_file() {
+                        if let Some(up_exe) = dir.parent().map(|p| p.join("Code.exe")) {
+                            if up_exe.is_file() {
+                                return Some(up_exe);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let mut defaults: Vec<PathBuf> = Vec::new();
+        if let Ok(local) = std::env::var("LOCALAPPDATA") {
+            defaults.push(PathBuf::from(local).join(r"Programs\Microsoft VS Code\Code.exe"));
+        }
+        if let Ok(pf) = std::env::var("ProgramFiles") {
+            defaults.push(PathBuf::from(pf).join(r"Microsoft VS Code\Code.exe"));
+        }
+        if let Ok(pf86) = std::env::var("ProgramFiles(x86)") {
+            defaults.push(PathBuf::from(pf86).join(r"Microsoft VS Code\Code.exe"));
+        }
+        for cand in defaults {
+            if cand.is_file() {
+                return Some(cand);
+            }
+        }
+    }
+
+    None
+}
+
+#[cfg(windows)]
+fn has_cmd_meta_chars(s: &str) -> bool {
+    s.chars().any(|c| {
+        matches!(
+            c,
+            '&' | '|' | '<' | '>' | '^' | '%' | '!' | '(' | ')' | ';' | '"' | '\r' | '\n'
+        )
+    })
+}
+
 pub fn spawn_vscode(vscode_path: &str, args: &[String]) -> Result<(), String> {
     #[cfg(windows)]
     {
         win_focus::allow_foreground_any();
         let is_exe = vscode_path.to_ascii_lowercase().ends_with(".exe");
-        let mut cmd = if is_exe {
-            // Code.exe 本身是 GUI 子系统，不加 CREATE_NO_WINDOW 以保留原生前景激活权限
-            let mut c = Command::new(vscode_path);
+        let resolved_exe = if is_exe {
+            Some(std::path::PathBuf::from(vscode_path))
+        } else {
+            resolve_vscode_exe_windows(vscode_path)
+        };
+
+        let mut cmd = if let Some(ref exe_path) = resolved_exe {
+            // Code.exe 本身是 GUI 子系统，不经 cmd.exe 直接拉起，无命令注入且保留原生前景激活权限
+            let mut c = Command::new(exe_path);
             c.args(args);
             c
         } else {
+            if has_cmd_meta_chars(vscode_path) || args.iter().any(|a| has_cmd_meta_chars(a)) {
+                return Err(
+                    "检测到路径含 cmd 特殊字符，已拒绝经 cmd.exe 拉起（请在 _build/privy/local.toml 将 vscode_path 指向 Code.exe）"
+                        .to_string(),
+                );
+            }
             let mut c = Command::new("cmd");
             c.arg("/d").arg("/c").arg(vscode_path).args(args);
             c.creation_flags(CREATE_NO_WINDOW);
@@ -295,11 +383,12 @@ pub async fn post_edit(
             if let Ok(text) = std::str::from_utf8(slice) {
                 static ANCHOR_RE: OnceLock<Regex> = OnceLock::new();
                 let re = ANCHOR_RE.get_or_init(|| {
-                    Regex::new(r#"<span id="anchor">(\d{14})-(.*?)</span>"#).unwrap()
+                    Regex::new(r#"(?is)(<span\b[^>]*\bid\s*=\s*["']anchor["'][^>]*>)\s*(\d{14})-(.*?)(</span>)"#)
+                        .unwrap()
                 });
                 if re.is_match(text) {
                     let updated = re.replace(text, |caps: &Captures| {
-                        format!(r#"<span id="anchor">{}-{}</span>"#, ts, &caps[2])
+                        format!("{}{}-{}{}", &caps[1], ts, &caps[3], &caps[4])
                     });
                     if let Err(e) = write_atomic(&target, updated.as_ref(), has_bom) {
                         return err_resp(StatusCode::INTERNAL_SERVER_ERROR, e);
@@ -437,7 +526,7 @@ pub async fn post_cli(
     let res = tokio::task::spawn_blocking(move || {
         let _busy = state_clone.runtime.begin_op();
         state_clone.logs.info("[api] 开始纯 Rust 全量构建...");
-        crate::builder::run_gen(&state_clone.config)
+        crate::builder::run_gen_with_logger(&state_clone.config, Some(&state_clone.logs))
     })
     .await;
 

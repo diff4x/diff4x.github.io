@@ -31,6 +31,10 @@ body {
     background-color: #afc6de
 }
 
+a {
+    text-decoration: none;
+}
+
 a::after {
     content: "\2197";
 }
@@ -70,6 +74,7 @@ div#del.dragover {
     bottom: 5px;
     left: 5px;
     color: cadetblue;
+    background-color: #000;
 }
 
 #wallpaper-bg {

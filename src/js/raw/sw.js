@@ -1,8 +1,8 @@
-importScripts('/src/js/core-list.js?v=1795561563405');
+importScripts('/src/js/core-list.js?v=1795621009639');
 const _scMeta = typeof FILE_MANIFEST === 'object' && FILE_MANIFEST && FILE_MANIFEST['/src/js/site-core.js'];
 importScripts('/src/js/site-core.js' + (_scMeta && _scMeta.hash ? ('?v=' + _scMeta.hash) : ''));
 
-self.SW_VERSION = '1795561563405';
+self.SW_VERSION = '1795621009639';
 self.EMERGENCY = 'repair_command_id=2';
 
 const CACHE_NAME_CORE = 'core-cache-' + BUILD_VERSION;
@@ -465,7 +465,7 @@ self.addEventListener('fetch', event => {
     if (!event.request.url.startsWith('http')) return;
     if (url.origin !== self.location.origin) return;
     if (url.pathname.endsWith('sw.js')) return;
-    if (url.pathname.startsWith('/__api/')) return;
+    if (url.pathname.startsWith('/__api/') || url.pathname === '/__auth' || url.pathname.startsWith('/__auth/') || url.pathname.startsWith('/__oauth/')) return;
 
     if (IS_LOCAL_MODE) {
         event.respondWith(

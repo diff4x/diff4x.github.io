@@ -1,11 +1,15 @@
 use rayon::prelude::*;
 use sha2::{Digest, Sha256};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::api_files::write_atomic;
+use crate::builder::log_info;
 use crate::config::ServerConfig;
+use crate::services::log_bus::LogBus;
+
+pub const MINIFIER_VERSION: &str = "swamp-min-v3";
 
 pub fn sha256_hex(bytes: &[u8]) -> String {
     let digest = Sha256::digest(bytes);
@@ -140,8 +144,10 @@ impl JsMinState {
             Some(TokKind::Punct) => {
                 if self.prev_val == ")ctrl" {
                     true
+                } else if matches!(self.prev_val.as_str(), "++" | "--") {
+                    self.had_nl
                 } else {
-                    !matches!(self.prev_val.as_str(), ")" | "]" | "++" | "--")
+                    !matches!(self.prev_val.as_str(), ")" | "]")
                 }
             }
         }
@@ -185,6 +191,8 @@ impl JsMinState {
                     || (pk == TokKind::Word && kind == TokKind::Regex)
                     || (last_ch == '+' && first_ch == '+')
                     || (last_ch == '-' && first_ch == '-')
+                    || (last_ch == '!' && raw_text.starts_with("--") && self.out.ends_with("<!"))
+                    || (last_ch == '-' && first_ch == '>' && self.out.ends_with("--"))
                     || (last_ch == '/' && (first_ch == '/' || first_ch == '*'))
                     || (pk == TokKind::Num && first_ch == '.');
                 if need_sp {
@@ -525,6 +533,9 @@ pub fn minify_css(src: &str) -> String {
                 i += 1;
             }
             i = (i + 2).min(n);
+            if !out.is_empty() {
+                pending_space = true;
+            }
             continue;
         }
 
@@ -649,12 +660,28 @@ impl IncrementalLedger {
         }
     }
 
-    pub fn is_up_to_date(&self, key: &str, hash: &str, out_path: &Path) -> bool {
-        out_path.is_file() && self.old_hashes.get(key).map(|s| s.as_str()) == Some(hash)
+    pub fn is_up_to_date(&self, key: &str, raw_hash: &str, out_path: &Path) -> Option<String> {
+        let saved = self.old_hashes.get(key)?;
+        let mut parts = saved.split('|');
+        let ver = parts.next()?;
+        let saved_raw = parts.next()?;
+        let saved_out = parts.next()?;
+        if ver != MINIFIER_VERSION || saved_raw != raw_hash {
+            return None;
+        }
+        let out_bytes = fs::read(out_path).ok()?;
+        if sha256_hex(&out_bytes) == saved_out {
+            Some(saved_out.to_string())
+        } else {
+            None
+        }
     }
 
-    pub fn record(&mut self, key: String, hash: String) {
-        self.new_hashes.insert(key, hash);
+    pub fn record(&mut self, key: String, raw_hash: &str, out_hash: &str) {
+        self.new_hashes.insert(
+            key,
+            format!("{}|{}|{}", MINIFIER_VERSION, raw_hash, out_hash),
+        );
     }
 
     pub fn save(&self) -> Result<(), String> {
@@ -680,15 +707,19 @@ struct MinifyJob {
     is_css: bool,
 }
 
-fn run_jobs(jobs: Vec<MinifyJob>, ledger: &mut IncrementalLedger) -> Result<(usize, usize), String> {
-    let results: Vec<Result<(String, String, bool), String>> = jobs
+fn run_jobs(
+    jobs: Vec<MinifyJob>,
+    ledger: &mut IncrementalLedger,
+    logs: Option<&LogBus>,
+) -> Result<(usize, usize), String> {
+    let results: Vec<Result<(String, String, String, bool), String>> = jobs
         .into_par_iter()
         .map(|job| {
             let raw_bytes = fs::read(&job.src_path)
                 .map_err(|e| format!("读取 {} 失败: {}", job.src_path.display(), e))?;
-            let hash = sha256_hex(&raw_bytes);
-            if ledger.is_up_to_date(&job.key, &hash, &job.out_path) {
-                return Ok((job.key, hash, false));
+            let raw_hash = sha256_hex(&raw_bytes);
+            if let Some(out_hash) = ledger.is_up_to_date(&job.key, &raw_hash, &job.out_path) {
+                return Ok((job.key, raw_hash, out_hash, false));
             }
             let raw_text = String::from_utf8(raw_bytes)
                 .map_err(|e| format!("{} 非 UTF-8 编码: {}", job.src_path.display(), e))?;
@@ -699,31 +730,36 @@ fn run_jobs(jobs: Vec<MinifyJob>, ledger: &mut IncrementalLedger) -> Result<(usi
                 minify_js(clean)
                     .map_err(|e| format!("JS 压缩失败 ({}): {}", job.key, e))?
             };
+            let out_hash = sha256_hex(minified.as_bytes());
             if let Some(parent) = job.out_path.parent() {
                 fs::create_dir_all(parent)
                     .map_err(|e| format!("创建输出目录失败: {}", e))?;
             }
             write_atomic(&job.out_path, &minified, false)?;
-            Ok((job.key, hash, true))
+            Ok((job.key, raw_hash, out_hash, true))
         })
         .collect();
 
     let mut built = 0usize;
     let mut skipped = 0usize;
     for res in results {
-        let (key, hash, did_build) = res?;
+        let (key, raw_hash, out_hash, did_build) = res?;
         if did_build {
             built += 1;
-            println!("  [minify] built   {}", key);
+            log_info(logs, format!("  [minify] built   {}", key));
         } else {
             skipped += 1;
         }
-        ledger.record(key, hash);
+        ledger.record(key, &raw_hash, &out_hash);
     }
     Ok((built, skipped))
 }
 
-pub fn build_phase1_assets(cfg: &ServerConfig, ledger: &mut IncrementalLedger) -> Result<(), String> {
+pub fn build_phase1_assets(
+    cfg: &ServerConfig,
+    ledger: &mut IncrementalLedger,
+    logs: Option<&LogBus>,
+) -> Result<(), String> {
     let mut jobs = Vec::new();
 
     if cfg.js_raw_dir.is_dir() {
@@ -789,12 +825,47 @@ pub fn build_phase1_assets(cfg: &ServerConfig, ledger: &mut IncrementalLedger) -
         });
     }
 
-    let (built, skipped) = run_jobs(jobs, ledger)?;
-    println!("[Phase 1] 前端资源增量压缩完成: 编译 {} 个, 跳过 {} 个", built, skipped);
+    let active_keys: HashSet<String> = jobs.iter().map(|j| j.key.clone()).collect();
+    let stale_keys: Vec<String> = ledger
+        .old_hashes
+        .keys()
+        .filter(|k| {
+            !active_keys.contains(k.as_str())
+                && ((k.starts_with("js/")
+                    && !matches!(k.as_str(), "js/core-list.js" | "js/sw.js" | "js/synonyms.js"))
+                    || (k.starts_with("css/") && !k.eq_ignore_ascii_case("css/font.css")))
+        })
+        .cloned()
+        .collect();
+    for sk in stale_keys {
+        ledger.new_hashes.remove(&sk);
+        let orphan = if let Some(name) = sk.strip_prefix("js/") {
+            Some(cfg.js_out_dir.join(name))
+        } else if let Some(name) = sk.strip_prefix("css/") {
+            Some(cfg.css_out_dir.join(name))
+        } else {
+            None
+        };
+        if let Some(p) = orphan {
+            if p.is_file() && fs::remove_file(&p).is_ok() {
+                log_info(logs, format!("[Phase 1] 已清理已删源码对应的废弃产物: {}", sk));
+            }
+        }
+    }
+
+    let (built, skipped) = run_jobs(jobs, ledger, logs)?;
+    log_info(
+        logs,
+        format!("[Phase 1] 前端资源增量压缩完成: 编译 {} 个, 跳过 {} 个", built, skipped),
+    );
     Ok(())
 }
 
-pub fn build_phase3_tail(cfg: &ServerConfig, ledger: &mut IncrementalLedger) -> Result<(), String> {
+pub fn build_phase3_tail(
+    cfg: &ServerConfig,
+    ledger: &mut IncrementalLedger,
+    logs: Option<&LogBus>,
+) -> Result<(), String> {
     let mut jobs = Vec::new();
 
     let raw_core = cfg.js_raw_dir.join("core-list.js");
@@ -817,8 +888,14 @@ pub fn build_phase3_tail(cfg: &ServerConfig, ledger: &mut IncrementalLedger) -> 
         });
     }
 
-    let (built, skipped) = run_jobs(jobs, ledger)?;
-    println!("[Phase 3] 尾项压缩完成 (core-list.js / sw.js): 编译 {} 个, 跳过 {} 个", built, skipped);
+    let (built, skipped) = run_jobs(jobs, ledger, logs)?;
+    log_info(
+        logs,
+        format!(
+            "[Phase 3] 尾项压缩完成 (core-list.js / sw.js): 编译 {} 个, 跳过 {} 个",
+            built, skipped
+        ),
+    );
     Ok(())
 }
 
@@ -964,7 +1041,7 @@ pub fn sync_raw_assets_on_startup(cfg: &ServerConfig) -> Result<usize, String> {
         });
     }
 
-    let (built, _skipped) = run_jobs(jobs, &mut ledger)?;
+    let (built, _skipped) = run_jobs(jobs, &mut ledger, None)?;
     if built > 0 {
         ledger.save()?;
     }

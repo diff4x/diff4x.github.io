@@ -181,50 +181,9 @@ document.addEventListener("keydown", e => {
     if (e.key === "\\") emitEvent("quick_search", null, "index");
 });
 
-function revealAdminLinks() {
-    const isLocalByHost = (
-        location.hostname === "localhost" ||
-        location.hostname === "127.0.0.1" ||
-        location.protocol === "file:"
-    ) && location.port !== "9000";
-    if (store.online_flag === "0" || isLocalByHost) {
-        document.querySelectorAll("a.admin").forEach(a => a.classList.remove("hidden"));
-    }
-}
-
-if (document.readyState !== "loading") {
-    revealAdminLinks();
-} else {
-    document.addEventListener("DOMContentLoaded", revealAdminLinks, { once: true });
-}
-
 window.onload = () => {
-    revealAdminLinks();
-
     adj_width();
     go_top();
-
-    const callLocalOp = async (endpoint, body = {}) => {
-        try {
-            if (window.top && typeof window.top.callLocalApi === "function") {
-                return await window.top.callLocalApi('POST', endpoint, body);
-            }
-            const m = await import("/src/js/shared-utils.js");
-            return await m.callLocalApi('POST', endpoint, body);
-        } catch (err) {
-            alert('❌ 本地操作失败：' + (err && err.message ? err.message : String(err)));
-        }
-    };
-
-    const a3 = document.getElementById("a3");
-    if (a3) {
-        a3.removeAttribute("href");
-        a3.style.cursor = "pointer";
-        a3.addEventListener("click", e => {
-            e.preventDefault();
-            callLocalOp('/__api/ops/katrain');
-        });
-    }
 };
 
 function buildCatalogFromLiteData(data) {

@@ -49,10 +49,17 @@ const isLocalEnv = (location.hostname === 'localhost' || location.hostname === '
 (function ingestLocalApiToken() {
     if (!isLocalEnv) return;
     const m = /^#__swamp_token=([0-9a-f]{64})$/i.exec(window.location.hash || '');
-    if (!m) return;
-    try { localStorage.setItem('__swamp_local_token__', m[1].toLowerCase()); } catch (_) { }
-    try { history.replaceState(null, '', window.location.pathname + window.location.search); }
-    catch (_) { window.location.hash = ''; }
+    if (m) {
+        try { localStorage.setItem('__swamp_local_token__', m[1].toLowerCase()); } catch (_) { }
+        try { history.replaceState(null, '', window.location.pathname + window.location.search); }
+        catch (_) { window.location.hash = ''; }
+    }
+    // 持有同源共享 Web Lock，供 /__auth 探测已有主页标签页，避免重复开新窗（关闭或崩溃时内核自动释放）
+    try {
+        if (navigator.locks && typeof navigator.locks.request === 'function') {
+            navigator.locks.request('swamp_main_tab', { mode: 'shared' }, () => new Promise(() => { })).catch(() => { });
+        }
+    } catch (_) { }
 })();
 
 window.callLocalApi = async (method, endpoint, body = null, options = {}) => {

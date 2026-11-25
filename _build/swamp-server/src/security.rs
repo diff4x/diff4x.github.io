@@ -15,6 +15,7 @@ use crate::services::log_bus::LogBus;
 use crate::services::tasks::RuntimeStatus;
 
 pub const CSP_HEADER_VALUE: &str = "script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' https://giscus.app; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; frame-ancestors 'self';";
+pub const CSP_STREET_VIEW_VALUE: &str = "script-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com https://accounts.google.com; object-src 'none'; base-uri 'self'; frame-ancestors 'self';";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RunMode {
@@ -88,6 +89,8 @@ pub fn validate_static_request_path(raw_path: &str, mode: RunMode) -> Option<Vec
     let lower_full = decoded.to_ascii_lowercase();
     if lower_full == "/__api"
         || lower_full.starts_with("/__api/")
+        || lower_full == "/__auth"
+        || lower_full.starts_with("/__auth/")
         || lower_full == "/__oauth"
         || lower_full.starts_with("/__oauth/")
     {
@@ -170,7 +173,10 @@ pub fn validate_title(t: &str) -> bool {
     if trimmed.starts_with('.') || trimmed.ends_with('.') || trimmed.ends_with(' ') {
         return false;
     }
-    const FORBIDDEN: &[char] = &['\\', '/', ':', '*', '?', '"', '<', '>', '|', '%', '!', '^', '$', '`'];
+    const FORBIDDEN: &[char] = &[
+        '\\', '/', ':', '*', '?', '"', '<', '>', '|', '%', '!', '^', '$', '`',
+        '&', ';', '(', ')',
+    ];
     if trimmed.chars().any(|c| FORBIDDEN.contains(&c)) {
         return false;
     }
@@ -249,6 +255,10 @@ pub fn validate_bookmark_title(t: &str) -> bool {
 
 /// 全站安全响应头中间件
 pub async fn security_headers_middleware(req: Request, next: Next) -> Response {
+    let is_svu = req
+        .uri()
+        .path()
+        .eq_ignore_ascii_case("/src/tpl/street_view_uploader.html");
     let mut res = next.run(req).await;
     let headers = res.headers_mut();
     headers.insert(
@@ -260,10 +270,16 @@ pub async fn security_headers_middleware(req: Request, next: Next) -> Response {
         header::REFERRER_POLICY,
         HeaderValue::from_static("strict-origin-when-cross-origin"),
     );
-    headers.insert(
-        HeaderName::from_static("content-security-policy"),
-        HeaderValue::from_static(CSP_HEADER_VALUE),
-    );
+    if !headers.contains_key("content-security-policy") {
+        headers.insert(
+            HeaderName::from_static("content-security-policy"),
+            HeaderValue::from_static(if is_svu {
+                CSP_STREET_VIEW_VALUE
+            } else {
+                CSP_HEADER_VALUE
+            }),
+        );
+    }
     res
 }
 
@@ -338,8 +354,10 @@ pub fn run_selftest() -> Result<(), String> {
 }
 
 pub fn run_selftest_with_logger(logs: Option<&LogBus>) -> Result<(), String> {
+    let mut total = 0usize;
     let mut fails = 0usize;
     let mut check = |name: &str, ok: bool| {
+        total += 1;
         if ok {
             if let Some(bus) = logs {
                 bus.info(format!("PASS  {}", name));
@@ -369,6 +387,8 @@ pub fn run_selftest_with_logger(logs: Option<&LogBus>) -> Result<(), String> {
     check("serve-block-dotgit", validate_static_request_path("/.git/HEAD", RunMode::Serve).is_none());
     check("serve-block-traversal", validate_static_request_path("/html/..%2f_build/config.properties", RunMode::Serve).is_none());
     check("serve-block-api-fallback", validate_static_request_path("/__api/health", RunMode::Serve).is_none());
+    check("serve-block-auth-fallback", validate_static_request_path("/__auth", RunMode::Serve).is_none());
+    check("sim-block-auth-fallback", validate_static_request_path("/__auth/refresh", RunMode::Sim).is_none());
 
     check("sim-block-txn", validate_static_request_path("/_build/privy/txn.txt", RunMode::Sim).is_none());
     check("sim-block-shadow", validate_static_request_path("/src/js/data/shadowIndex.js", RunMode::Sim).is_none());
@@ -376,6 +396,9 @@ pub fn run_selftest_with_logger(logs: Option<&LogBus>) -> Result<(), String> {
 
     check("title-valid", validate_title("变量,函数"));
     check("title-reject-slash", !validate_title("../evil"));
+    check("title-reject-amp", !validate_title("a&calc"));
+    check("title-reject-semi", !validate_title("a;b"));
+    check("title-reject-paren", !validate_title("a(b)"));
     check("md-valid", validate_rel_md_path("/README.md").is_some());
     check("md-reject-traversal", validate_rel_md_path("../secret.md").is_none());
     check("md-reject-build", validate_rel_md_path("_build/notes.md").is_none());
@@ -407,14 +430,78 @@ const d = obj.return / 2;"#;
             .unwrap_or(false),
     );
 
-    let css_sample = "/* c */ div :hover { width: calc(100% - 30px); color: red; }";
+    let js_edge = "let ok = a < ! --b;\ni++\n/re/.test(s);";
+    let js_edge_min = crate::builder::minify::minify_js(js_edge);
+    check(
+        "minify-js-edge-guards",
+        js_edge_min
+            .as_ref()
+            .map(|m| !m.contains("<!--") && m.contains("/re/.test(s)"))
+            .unwrap_or(false),
+    );
+
+    let css_sample = "/* c */ div :hover { border: 1px/*c*/solid red; width: calc(100% - 30px); color: red; }";
     let css_min = crate::builder::minify::minify_css(css_sample);
     check(
         "minify-css-safe",
         css_min.contains("div :hover{")
+            && css_min.contains("border:1px solid red")
             && css_min.contains("calc(100% - 30px)")
             && !css_min.contains("/*"),
     );
+
+    let dummy_root = std::path::Path::new(".");
+    check(
+        "pack-reject-reserved-name",
+        crate::services::pack_apply::resolve_safe_target(dummy_root, "src/CON.txt").is_none(),
+    );
+    check(
+        "pack-reject-trailing-dot",
+        crate::services::pack_apply::resolve_safe_target(dummy_root, "src/a.txt.").is_none(),
+    );
+    check(
+        "pack-reject-dotgit-file",
+        crate::services::pack_apply::is_hard_private_rel(".git"),
+    );
+
+    check(
+        "pack-md-fence-escape",
+        crate::services::pack_apply::safe_markdown_fence("hello ```rust\ncode\n```") == "````",
+    );
+    let big_line = "a".repeat(200) + "\n";
+    let md_entries = vec![
+        ("a.rs".to_string(), big_line.repeat(40).into_bytes()),
+        ("b.rs".to_string(), big_line.repeat(40).into_bytes()),
+        ("bin.dat".to_string(), vec![0u8, 1, 2, 3]),
+    ];
+    let (md_parts, bin_skipped) =
+        crate::services::pack_apply::render_markdown_bundle_parts("test.zip", &md_entries, 12 * 1024);
+    check(
+        "pack-md-split-cap",
+        md_parts.len() >= 2
+            && bin_skipped == 1
+            && md_parts.iter().all(|p| p.len() <= 12 * 1024)
+            && md_parts[0].contains("Skipped / Binary Files (1)"),
+    );
+
+    let sample_log = "[10:00:01] [INFO] first\n[10:00:02] [WARN] multi\n  line2\n---------------------------------------- 2026-11-25 10:15:00 ----------------------------------------\n[10:15:01] [INFO] second\n";
+    let parsed_blocks = crate::services::log_bus::parse_log_blocks(sample_log);
+    check(
+        "log-parse-multiline-blocks",
+        parsed_blocks.len() == 4
+            && parsed_blocks[1].contains("multi\n  line2")
+            && parsed_blocks[2].starts_with(crate::services::log_bus::LOG_SEPARATOR_PREFIX),
+    );
+    let tmp_bus = LogBus::new(0);
+    tmp_bus.info("older");
+    tmp_bus.info("newer");
+    let (max_id, newest_txt) = tmp_bus.since_newest_first(0);
+    let pos_newer = newest_txt.find("newer").unwrap_or(usize::MAX);
+    let pos_older = newest_txt.find("older").unwrap_or(0);
+    check("log-newest-first-order", max_id == 2 && pos_newer < pos_older);
+    let sz_before = tmp_bus.size_bytes();
+    tmp_bus.clear();
+    check("log-size-bytes-and-clear", sz_before > 0 && tmp_bus.size_bytes() == 0);
 
     let html_sample = r#"<html><head><title>A &amp; B</title></head><body><span id="anchor">20261123000000-分类</span><pre>Hello <b>World</b></pre><script>var x=1;</script></body></html>"#;
     check(
@@ -462,9 +549,9 @@ const d = obj.return / 2;"#;
         Err(format!("SelfTest: {} 项失败", fails))
     } else {
         if let Some(bus) = logs {
-            bus.info("SelfTest: 全部 31 项通过");
+            bus.info(format!("SelfTest: 全部 {} 项通过", total));
         } else {
-            println!("SelfTest: 全部通过");
+            println!("SelfTest: 全部 {} 项通过", total);
         }
         Ok(())
     }

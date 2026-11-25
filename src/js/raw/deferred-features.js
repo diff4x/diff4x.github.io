@@ -841,8 +841,10 @@ export function showGlobalBookmarkMenu(x, y, source) {
         return;
     } else {
         links.forEach(item => {
+            const isKatrain = item.action === 'katrain' || item.href === '#katrain';
+            if (isKatrain && store.online_flag !== '0') return;
             const a = document.createElement("a");
-            a.href = item.href;
+            a.href = isKatrain ? '#katrain' : item.href;
             a.target = item.target || "_blank";
             a.textContent = item.text;
             a.style.cssText = `
@@ -851,7 +853,22 @@ export function showGlobalBookmarkMenu(x, y, source) {
             `;
             a.onmouseenter = () => a.style.background = '#555';
             a.onmouseleave = () => a.style.background = 'transparent';
-            if (/\bREADME\b/i.test(item.text || '')) {
+            if (isKatrain) {
+                a.addEventListener('click', async (ev) => {
+                    ev.preventDefault();
+                    if (window._closeGlobalMenu) window._closeGlobalMenu();
+                    try {
+                        if (typeof window.callLocalApi === 'function') {
+                            await window.callLocalApi('POST', '/__api/ops/katrain', {});
+                        } else {
+                            const m = await import('./shared-utils.js');
+                            await m.callLocalApi('POST', '/__api/ops/katrain', {});
+                        }
+                    } catch (err) {
+                        alert('❌ 启动 KaTrain 失败：' + (err && err.message ? err.message : String(err)));
+                    }
+                });
+            } else if (/\bREADME\b/i.test(item.text || '')) {
                 a.addEventListener('click', (ev) => {
                     if (ev.button !== 0 || ev.ctrlKey || ev.metaKey || ev.shiftKey || ev.altKey) return;
                     ev.preventDefault();
@@ -1313,7 +1330,7 @@ export function openMdViewer(opts = {}) {
                     popup.style.width = popup.offsetWidth + 'px';
                     popup.style.height = popup.offsetHeight + 'px';
                 }
-                h.setPointerCapture(e.pointerId);
+                try { h.setPointerCapture(e.pointerId); } catch (_) { }
                 iframe.style.pointerEvents = 'none';
 
                 const startX = e.clientX, startY = e.clientY;
@@ -1345,14 +1362,15 @@ export function openMdViewer(opts = {}) {
                     popup.style.height = Math.round(nH) + 'px';
                 };
                 const onUp = () => {
-                    h.onpointermove = null;
-                    h.onpointerup = null;
-                    h.onpointercancel = null;
+                    window.removeEventListener('pointermove', onMove);
+                    window.removeEventListener('pointerup', onUp);
+                    window.removeEventListener('pointercancel', onUp);
+                    try { h.releasePointerCapture(e.pointerId); } catch (_) { }
                     iframe.style.pointerEvents = '';
                 };
-                h.onpointermove = onMove;
-                h.onpointerup = onUp;
-                h.onpointercancel = onUp;
+                window.addEventListener('pointermove', onMove);
+                window.addEventListener('pointerup', onUp);
+                window.addEventListener('pointercancel', onUp);
             });
             popup.appendChild(h);
         });

@@ -1,777 +1,400 @@
 # [diff4x's digital swamp](https://github.com/diff4x/diff4x.github.io)
 
-> <img src="https://avatars.githubusercontent.com/u/222525381?v=4" width="100">
+> 个人数字信息库
 >
-> 本人觉得有趣的、有启发性的、阴暗的东西，以及各类总结、备忘、导航
+> <img src="https://avatars.githubusercontent.com/u/222525381?v=4" width="200">
+
+本人觉得有趣的、有启发性的、阴暗的东西，以及各类总结、备忘、导航
+
+> 静态设计：初代 by diff4x | 进化 by Gemini & Claude & ChatGPT & Grok
 
 ---
 
-# 🔰 使用说明 (浏览)
+# 访客如何高效使用
 
-## 搜索
+## 1. 界面布局
 
-- 出入口
-  - 按 `\` 将焦点定位到搜索框
-  - 按需切换 `搜全站` 或 `搜本书`（`pdf`、`txt`、`epub`）
-  - 不同类型的结果区别着色
-  - 命中评论时用 `[💬 命中数量]` 额外提示
-  - 私有条目以 `🔒` 提示
-  - `鼠标右击` 搜索历史中的某一条即删除该记录
-  - 点击 `clear` 或组件范围内 `鼠标中击` 收起搜索
+整个站点是一个单页外壳：左侧是内容区，右侧是目录树（可点顶部 `←` / `→` 调宽），搜索框固定在右侧栏左上方。
 
-- 预览
-  - 对于 HTML 条目 `hover` 显示包含搜索词的上下文片段，`鼠标右击` 控制片段滚动或停止
-  - 对于图片条目 `hover` 显示小图预览
-  - 对于音视频条目 `鼠标右击` 弹窗播放，再次 `鼠标右击` 停止播放
-  - 离开条目后预览销毁，保留音视频的播放进度
+- **侧边栏目录**：分类名旁会标注 `[近期更新数/总数]` 或 `[总数]`（72 小时内更新的条目会高亮）。
+- **已阅标记**：每条目录右侧有 `[Mark]` / `[UnMark]`，标记后条目加删除线，存在本地浏览器里。
+- **快捷操作**：
+  - 悬停图片/视频条目显示缩略图；双击条目文字复制文件名。
+  - 在侧边栏内**右键单击**呼出全局书签菜单；**右键双击**呼出浏览器原生菜单。
+- **书签页链接**：
+  - `street_view_uploader`：google 全景图上传器（新标签页中打开）。
+  - `txn_parser`：流水解析器（新标签页中打开）。
+  - `⚪ go_board`：摆谱（新标签页中打开）。
+  - `❓ README`：即你所见（左击调用 md 阅读器，中击跳转线上仓库）。
+  - `❓ guestbook`：留言板（免登录；新标签页中打开）。
+- **侧栏顶部菜单**：
+  - `What's new?`：查看站点文件更新记录与最新评论（点击条目直接定位）。
+  - `History`：最近 50 条浏览记录。
+  - `Fav`：音乐收藏夹（有收藏时出现）。
+  - `Excerpts`：摘抄本，按文章/书名归档管理。
 
-- 过滤
-  - HTML 页面时间戳和 `gallery/拍摄` 均按格式 `YYYYMMDDHHMMSS`
-    - 例如查找 2026 年 10 月创建或更新过的内容，可输入 `202610` 或更短的 `2610`
-  - `筛选` 子项统计了所有结果条目的文件格式
-    - `年月` 是针对 HTML 结果条目的进一步统计
+## 2. 高效搜索
 
-- 容错
-  - 噪值：搜索词相邻字符之间允许夹杂的无关字数上限（空白不计）
-    - 上限随搜索词长度动态缩放，算法为 $\min(\text{noise}, \text{KW\_LEN} > 25 ? 0 : \text{KW\_LEN} / 2)$
-      - 以噪 `3` 为例：
+- **呼出与收起**：任意位置按 `\` 聚焦搜索框（在 PDF / EPUB 中也可按 `Ctrl+F` 直接搜本书）；点 `clear` 或在搜索组件内**鼠标中击**收起；右键点击搜索历史条目可删除该条记录及对应缓存。
+- **搜全站 vs 搜本书**：打开 TXT / PDF / EPUB 时自动切到「搜本书」，命中按章节或页段分组；点击搜索工具条或阅读器上的按钮可随时切回「搜全站」。
+- **结果预览**：
+  - HTML 与电子书结果：鼠标悬停看命中上下文，**右键**切换自动滚动/暂停。
+  - 图片结果：鼠标悬停看大图预览。
+  - 音视频结果：**右键**直接弹窗播放或暂停，带倒计时且自动记住播放进度。
+- **筛选与按时间查**：
+  - 搜索工具条可按文件后缀过滤，HTML 结果额外支持按「年月」筛选。
+  - HTML 页面时间戳与 `gallery/拍摄` 文件名统一采用 `YYYYMMDDHHMMSS`，搜 `202610` 或 `2610` 即可定位 2026 年 10 月的条目。
+  - 命中评论的条目会标 `[💬 数量]`；带 `🔒` 的条目为作者本地私密内容，线上无法查看。
+- **容错（噪值 0 到 5）**：允许搜索词相邻字符之间夹杂无关字，单个空格不计噪，换行与句末标点不可跨越。实际生效上限随词长缩放为 $\min(\text{noise}, \text{len} > 25 ? 0 : \lfloor \text{len} / 2 \rfloor)$。以噪值 3 为例：
 
-        | 搜索词长 | 1 | 2–3 | 4–5 | 6–25 | $\ge 26$ |
-        | :--- | :---: | :---: | :---: | :---: | :---: |
-        | 无关字数上限 | 0 | 1 | 2 | 3 | 0 |
+  | 搜索词长度 | 1 | 2–3 | 4–5 | 6–25 | $\ge 26$ |
+  | :--- | :---: | :---: | :---: | :---: | :---: |
+  | 字间最多夹杂无关字数 | 0 | 1 | 2 | 3 | 0 |
 
-        - 搜索 `此人天生坏种` 可命中 `此间的贼人个个天生坏种`
-    - 换行与句末标点为硬边界不可跨越
-
-  - 近义：基于《哈工大同义词林扩展版》，结合构建期全站词频统计，运行时加权消歧
-    - 开启后搜索 `他简直是秀逗了` 可命中 `他一定是糊涂了`。
-
-- 组合
-  - 搜索词以 `@[...]` 开头时进入组合搜索模式
+- **近义词**：勾选「近义」后，会基于词林与全站词频自动扩展近义词（近义词强制精确匹配，不叠噪值）。
+- **布尔组合搜索**：以 `@[...]` 开头进入组合模式，支持 `&`（且）、`|`（或）、`!`（非）和 `()`，最多 26 个单字母形参（`a` 到 `z`），表达式不能在空文档上恒真（至少需包含一个正向词）。
   - 示例：`@[a&!(b|c)]飞机[31]大炮[]机枪[0]`
-    - 包含 `a` 且不包含 `b` 或 `c`
-      - 包含 `飞机`，且不包含 `大炮` 与 `机枪` 中的任意一个
-      - `a` 为 `飞机`（噪值 3，近义 1）
-      - `b` 为 `大炮`（噪值与近义取全局设置）
-      - `c` 为 `机枪`（噪值 0，近义取全局设置）
-    - 第一个 `[]` 是表达式区域，允许 `&`、`|`、`!`、`()` 四种逻辑运算符和互不重复的单字母形参
-    - 示例中的表达式有三个形参 `a`、`b`、`c`，依次对应其后三个实参标记符 `[]` 左侧的文本
-      - 实参标记符 `[]` 内可填写 0 到 2 位数字：
-        - 0 位 `[]`：使用全局噪值与全局近义
-        - 1 位 `[N]`（N 为 0–5）：使用指定噪值 N 与全局近义
-        - 2 位 `[NM]`（N 为 0–5，M 为 0–1）：使用指定噪值 N 与指定近义 M
+  - 含义：包含「飞机」且不包含「大炮」或「机枪」。
+  - 词后方括号格式：`[]` 用全局噪值和近义；`[N]` 指定噪值 $N \in [0, 5]$；`[NM]` 同时指定噪值 $N$ 与近义开关 $M \in \{0, 1\}$。
 
-- 附加命令
-  - `@bomb`：可选式重置数据
-  - `@rebirth`：可选式导入数据
+## 3. 阅读、标注与播放
 
-## 内容栏
+- **HTML 正文**：
+  - 左上角 `diff` 可选任意两个历史版本比对改动（最多保留 10 个历史快照）。
+  - 双击代码块可进入临时编辑，右上角一键复制；点击图片进灯箱（支持滚轮缩放与拖拽）。
+  - 线上模式左上角点击 `💬` 可用 GitHub 账号评论。
+- **拼音与摘抄**：在 HTML、PDF、EPUB、TXT、README 中，划选**单个汉字**浮现拼音，划选**两个及以上字符**弹出摘抄按钮，写入 `Excerpts`。
+- **全屏与壁纸**：图库、视频、PDF、EPUB、TXT 下**鼠标中击**切换全屏；图库中点 `As Wallpaper` 收藏壁纸，在书签页右下角 `🎨` 管理轮播；图库中以 `pano_` 开头的文件双击进入全景浏览。
+- **音视频**：音频播放器支持收藏与循环模式，左上角 `🎵` 单击显隐、双击销毁；`.mkv` 视频支持自动挂接同名 `.vtt` 字幕，按左右方括号 `[` `]` 微调字幕延迟，步长 $\pm 0.5\text{ s}$。
+- **移动端虚拟触控板**：触屏设备自动加载底部虚拟触控板，支持光标移动、缩放（`+`/`-`）、`▲`/`▼` 滚屏、`暂停跟随`、`框选`、`拖拽`、`左双击`、`中击`、`右击` 及可拖动的 `收起/展开` 按钮（同时适配正文、侧栏与 README 浮窗）。
 
-- 站点手册：点击 `bookmark` 页面中的 `README` 弹出 markdown 浏览器加载站点手册，即你所见
-- 版本比对：`html` 页面左上角选择任意两个版本按 `diff` 查看差异
-- 代码编辑：双击 `code` 代码区域，进入临时编辑模式（右上角提供一键复制）
-- 线上评论：`html` 页面左上角点按评论气泡，登录 GitHub 账号参与评论
-- 拼音与摘抄：`html`、`pdf`、`epub`、`txt`、`README` 页面中，选中单字提示拼音，选中多字提示摘抄
-- 全屏浏览：`gallery`、`video`、`pdf`、`txt` 下 `鼠标中击` 进入全屏
-- 壁纸收集：`gallery` 中 `As wallpaper` 将图片加入壁纸列表，在 Bookmark 页面右下角集中管理
+## 4. 备份与异常修复
 
-## 侧边栏
+- **备份与迁移**：搜索框输入 `@bomb` 回车可选择性保留/导出用户数据（收藏、已阅、历史、进度、摘抄等）并清库；输入 `@rebirth` 回车可导入之前导出的 `.json` 备份恢复。系统每 7 天会提醒一次备份。
+- **页面异常**：在网址后加 `?repair=1` 访问，可重置缓存与索引库（会保留摘抄、已阅标记等用户数据）。
 
-- 栏宽可调
-- 分类目录旁注其下的文件总数与近期更新总数并着色醒目
-- 条目 `mark` 用于标记已阅
-- `hover` 图片与视频条目时显示缩略图
-- 双击条目文本复制条目名（桌面端若开启了 QTranslate 等划词软件，需临时禁用）
-- 侧边栏内 `鼠标右单击` 呼出书签，`鼠标右双击` 呼出浏览器原始菜单
-- 顶部菜单：
+---
 
-  | 选项 | 说明 |
-  | :--- | :--- |
-  | `What's new?` | 站点的更新记录与最新评论；点击正文/媒体记录定位打开，点击 `README.md` 在 `md_viewer` 弹窗中打开 |
-  | `History` | 浏览历史 |
-  | `Fav` | 音乐收藏夹 |
-  | `Excerpts` | 摘抄薄 |
-  | `go_board` | 打开网页棋盘 |
-  | `street_view_uploader` | Google 全景图上传 |
-  | `txn_parser` | 解析当前流水 |
+# 作者怎么常规维护
 
-## 播放器
+本地运行与构建全部收口在单个原生程序 `_build/swamp.exe`（不依赖 Java、Node、esbuild、cwebp 等外部工具）。
 
-- 音频：允许 `fav` 标记和常规循环，左上角 `🎵` 单击显隐双击销毁
-- 视频：允许外挂字幕与延迟微调
-- 图片灯箱：支持拖拽与滚轮缩放
-- 全景图：`gallery` 中文件名以 `pano_` 为前缀的图片，双击进入沉浸式浏览
+## 1. 日常启动与桌面控制台
 
-## 移动端虚拟触控板
+直接双击 `_build/swamp.exe`，无黑窗启动本地伴生服务（默认 `http://127.0.0.1:8000`）并打开桌面管理窗：
 
-| 控件 | 功能 |
+- **任务栏图标颜色**：实时反映 VPN 心跳状态（绿灯在线 / 红灯离线）。
+- **底部实时日志**：最新日志在最上方，自动落盘到 `_build/temp/swamp_runtime.log`；下次启动会续接上次日志，中间以带时间戳的虚线分隔。
+- **安全关闭**：关闭窗口会等待正在执行的写盘/构建完成，并自动回收可能运行中的 `simulator` 子进程。
+
+管理窗分为 4 个标签页：
+
+| 标签页 | 常用按钮与作用 |
 | :--- | :--- |
-| `光标映射区` | 镜头与视角跟随 |
-| `暂停跟随` | 停止/恢复光标联动滚屏 |
-| `▲` / `▼` | 上下滚动搜索结果列表或内文目录 |
-| `+` / `-` | 缩放页面视图 |
-| `框选` | 启用后（按钮高亮）滑动选中文字，停用后弹出拼音或摘抄按钮 |
-| `拖拽` | 作用于浮动窗口（日志、摘抄、评论、README）的标题栏，启用后窗口随光标移动 |
-| `左双击` | 用于全景图沉浸浏览、侧栏条目文本复制，以及音频播放器的销毁 |
-| `中击` | 触发全屏或退出搜索状态 |
-| `右击` | 用于搜索结果中音视频条目的预览，以及侧边栏书签呼出 |
-| `收起/展开` | 控制触控板的显示与隐藏；按住可任意拖放位置 |
+| **常规与媒体** | `Open Site`（带随机令牌打开本地站点）、`gen`（全量构建）、`gen + push` / `push`（填写 Commit 后自动检测暂存改动并提交推送）、`simulator (9000)`（隐身窗仿真线上环境）、`selfcheck`（运行 42 项自检）、`root/`（打开仓库目录）、`重授 Google Tasks`；下方集成 `new`（新建 HTML）、`转webp`（批量压缩截图并复制文件名）、`keep2html`（Keep 导出包转 HTML）。 |
+| **打包给 AI** | 三态目录树勾选源码，支持预设增删改（存于 `_build/swamp.toml`）、一键勾选 Git 改动、文件名过滤；勾选 `拼接 MD` 并设定单文件上限（默认 200 KB）可同步输出分卷 `.md`，方便在不支持上传 `.zip` 的 AI 界面中使用。 |
+| **回填补丁** | 左侧浏览或拖入 AI 返回的补丁 `.zip` 预览并一键回填（覆盖前自动备份，可选编码守卫、回填后等 `swamp.exe` 安全退出再拉起 `build.bat`）；支持按快照一键回滚；右侧显示 `_build/temp/backup` 目录树，可勾选清理冗余的历史打包和备份。 |
+| **同义词与新词** | 左侧直接编辑 `_build/swamp.toml` 中的自定义同义词 JSON 并保存/重建 `synonyms.js`（重建后自动 `gen` 一次）；右侧查看构建期生成的 `oov_report.txt` 新词雷达。 |
 
-## 异常修复
+## 2. 站内本地写能力
 
-- 在站点 URL 末尾附加 `?repair=1` 强制初始化，或搜索框调用 `@bomb` 选择性重置
+通过管理窗 `Open Site` 打开本地站点后，以下改动直接原子落盘，无需手动改文件：
 
----
+- **HTML 编辑与热重载**：文章左上角点 `edit` 会直接拉起 VS Code 并更新 `#anchor` 时间戳，同时按钮变为 `edit ●` 开启监听；VS Code 每次 `Ctrl+S` 保存后页面自动刷新并回到原滚动位置（右键 `edit ●` 可停止监听）。双击右上角标题可手动重载。
+- **书签编辑**：在书签页内直接拖入外部链接，或把链接拖到其他区块 / `del` 区即可增删移。
+- **README 编辑**：书签页左击 `README` 弹出左右分栏 Markdown 编辑器，`Save` 或 `Ctrl+S` 原地保存（中击跳转线上仓库）。
+- **双语页固化**：双语编辑草稿自动暂存，点固化后剥离运行期节点写回原 HTML 并仅刷新当前页。
+- **前端源码热压缩**：本地服务启动后会自动监听 `src/js/raw/`、`src/css/raw/`、`src/css/font/`，保存后 300 ms 自动热压缩到目标位置（`gen` 运行期间自动避让）。
+- **侧栏本地入口**：额外显示 `KaTrain`；`txn_parser` 会自动读取 `_build/privy/txn.txt`，点击行号可直接用 VS Code 跳到对应行。
 
-# 🚧 维护说明 (维护)
+## 3. 内容书写与命名约定
 
-## 本地运维（单文件 `swamp.exe` + 独立桌面管理窗口）
+- **HTML 写法**：正文直接写在 `<pre>` 内即可，无需 `<br>`。
+  - `#` 加空格自动转各级标题并生成目录；行首 4 / 8 / 12 / 16 个空格缩进自动块级着色。
+  - 独立成行的图片名（默认去 `gallery/img/` 找）与 `http(s)://` 链接自动渲染为 `<img>` / `<a>`。
+  - `<p>` 内按 `|` 分列自动渲染表格；`<code 语言>` 自动触发 Prism 高亮。
+- **特殊文件名前缀**：
+  - **单下划线 `_xxx.html`**：超大文档。正文不进 `fat_data` 切片也不进 SW 缓存包，但页内可搜；标题仍参与全站检索。
+  - **双下划线 `__xxx.html`**：私密文档。必须匹配 `.gitignore`（默认开启 `private_prefix_check` 强制核验），正文只进本地 `shadow_data`，绝不进入公网产物。
+  - **`pano_xxx`**：`gallery/` 下以此开头的图片识别为全景图。
+- **Keep 转 HTML**：笔记中用 `[[IMG1]]`、`[[IMG2]]` 标记配图位置。`single` 模式需同时打 `single` 标签和分类标签；`merge` 模式按共同标签合并为一篇。覆盖同名旧 HTML 前会自动备份。
+- **同义词调优**：
+  - 只读底表位于 `_build/swamp-server/assets/cilin.txt`（`=` 等义扩词，`#`/`@` 仅留作分词保护）。
+  - 自定义规则在 `_build/swamp.toml` 的 `[synonyms]` 区块维护：`groups`（双向同义组，`exclusive` 默认为 `true` 覆盖词林旧义）、`aliases`（单向别名，不反向污染）、`stopExpand`（禁止扩词的技术词）、`dropEqCodes`（整行降级）、`pruneWords`（按行剔词）、`splitFixes`（修复粘连词）。
+  - 常用 5 位分类码（`c5`）：AI/算法 `Dk01A`、网络/编程 `Dd06A`、电脑/机械 `Bo01A`、手机/电路 `Bo04A`、影视 `Dk29D`、音乐 `Dk28A`/`Dk28B`、徒步 `Fb01A`、装备 `Bp29D`。
+  - DF 分桶权重（$N$ 为公开 HTML 总数）：
 
-直接双击 `_build/swamp.exe` 即无黑窗启动后台伴生服务并弹出中性怀旧风格的**独立 Win32 管理窗口**（不主动拉起浏览器主页，关闭管理窗口即等待写盘安全收尾后退出进程；窗口在任务栏上的图标颜色实时反映 VPN 心跳状态：绿灯在线 / 红灯离线）：
+    | 后缀 | 出现文档数条件 | 候选乘数 | 义项消歧加分 | 含义 |
+    | :--- | :--- | :---: | :---: | :--- |
+    | 无后缀 | $DF = 0$ | 0.62 | $+0.00$ | 公开正文未出现，保留入口 |
+    | `:1` | $DF = 1$ | 1.00 | $+0.25$ | 孤篇专词或媒体名 |
+    | `:2` | $2 \le DF \le 3$ | 1.12 | $+0.45$ | 低频高区分度词 |
+    | `:3` | $DF \ge 4$ 且 $DF / N \le 8\%$ | 1.18 | $+0.60$ | 主题特征词（权重最高） |
+    | `:4` | $8\% < DF / N \le 20\%$ | 1.00 | $+0.35$ | 常见实词 |
+    | `:5` | $20\% < DF / N \le 40\%$ | 0.68 | $+0.10$ | 偏泛词，轻度降权 |
+    | `:6` | $DF / N > 40\%$ | 0.38 | $+0.00$ | 全站高频泛词，强降权 |
 
-| 控件 / 子命令 | 作用与执行逻辑 |
-| :--- | :--- |
-| `Open Site` | 携带随机会话令牌在默认浏览器中打开本地站点首页 |
-| `gen`（`swamp gen`） | **纯 Rust 全量构建**：并行增量压缩 JS/CSS、扫描 HTML 与媒体生成切片、重建同义词库、更新清单与 SW 版本、执行公私隔离断言 |
-| `gen + push` / `push` | 填写 Commit 说明后一键执行全量构建并 `git add -A && git commit && git push`（或仅推送） |
-| `simulator`（`swamp sim --open`） | 在 `9000` 端口以隐身窗口运行纯静态线上仿真（禁用 `/__api`、`_build/**` 与 `shadow*`） |
-| `selfcheck`（`swamp --selftest`） | 运行内置安全守卫与构建引擎自检，结果实时打印至底部日志框 |
-| `root/` | 在资源管理器中打开仓库根目录 |
-| `new`（`swamp new --open`） | 指定标题与分类链（子分类以 `\|` 分隔）套用模板创建 HTML，可选自动用 VS Code 打开 |
-| `转webp`（`swamp webp`） | 内置 `libwebp` 静态编码批量缩放转换截图至 `gallery/img/`，自动复制文件名到剪贴板 |
-| `keep2html`（`swamp keep2html`） | 纯 Rust 解压 Google Keep Takeout ZIP 并转码图片，输出单篇或多合一 HTML |
-| `Pack` / `Apply` 标签页 | 三态目录树勾选打包给 AI（`.zip`，预设直接存 `swamp.toml` 并支持窗内增删保存），以及选择/拖入补丁 `.zip` 预览回填与备份快照一键回滚 |
-| `Synonyms & OOV` 标签页 | 直接在窗内编辑自定义同义词（存 `swamp.toml`）、导入旧 JSON、一键重建 `synonyms.js` 并实时查看新词雷达 `oov_report`（运行期直接读取 `_build/swamp-server/assets/cilin.txt`） |
+## 4. 配置文件与重新编译
 
-## 内容栏
-
-- `html` 页面左上角点按 `edit` 调用本地 `VS Code` 编辑实体文件，自动覆写时间戳
-- `html` 页面右上角双击标题重载内容栏
-- 左单击 `bookmark` 页面中的 `README` 弹出 markdown 浏览器加载站点手册（本地环境下支持左右分栏编辑，点击 `Save` 或按 `Ctrl+S` 原地固化）
-  - 中击跳转到本项目的线上 GitHub 仓库
-- 可向 `bookmark` 中拖入外部链接，或内部拖动链接进行书签的增删移，这些操作是即时固化的
-- `bookmark` 之下的版权声明 `hover` 显示当前线上仓库体积
-- 双语页面下的译文对齐操作支持一键固化，覆写原文件后仅刷新当前双语页自身（不触发全站 `gen` 重载）
-
-## 侧边栏
-
-- 顶部菜单（本地模式额外显示 `KaTrain`，其余全部收敛至 `swamp.exe` 独立管理窗口）：
-
-  | 选项 | 说明 |
-  | :--- | :--- |
-  | `KaTrain` | 启动本地 KaTrain |
-  | `txn_parser` | 解析当前流水 |
-
-## 预设规则
-
-- HTML
-  - **正文**：直接写在 `<pre>` 标签内，无需 `<br>`
-  - **标题**：行首 N 个 `#` 加空格，自动转换为 `<h{N}>` 参与目录生成
-  - **层级缩进**：行首使用 4 的倍数个空格（`4`、`8`、`12`、`16`）缩进时自动进行块级着色
-  - **链接**：相对路径或完整 `URL` 自动解析包裹为 `<img>` 或 `<a>`
-  - **表格**：写在 `<p>` 标签中，以 `|` 分列，自动渲染为 `<table><td>`
-  - **代码块着色**：使用 `<code c>` 格式，其中 `c` 表示目标渲染语言
-  - **配图**：`gallery/img` 默认作为 HTML 页面同级引用源
-
-- 文件命名
-  - **大型文档**（`_` 前缀）：文件名仅以 1 个 `_` 开头的 HTML 文件（如 `_huge_doc.html`）。正文不参与索引切片制作，但在该页面内进行的搜索结果可被持久化
-  - **私人页面**（`__` 前缀）：文件名以 2 个 `_` 开头的 HTML 文件（如 `__private.html`）。正文参与切片制作，但不参与线上发布，仅可在线下本地搜索与访问
-  - **全景图片**（`pano_` 前缀）：`gallery/` 目录中以 `pano_` 为前缀的图片，自动识别为全景图
-
-- keep2html
-  - Keep 笔记正文中的 `[[IMG序号]]` 占位标记，决定生成的 HTML 页面中相应位置引用的图片序号
-  - **单篇转换**：笔记需包含两个标签，其中一个固定为 `single`，另一个作为生成的 HTML 分类；笔记标题作为 HTML 的 `title`
-  - **多合一转换**：笔记需包含共同的标签名，此标签名作为 HTML 的 `title`，原单篇笔记的标题作为 `<h1>`，分类名在 CLI 中交互指定
-
-## 同义词维护
-
-- 文件职责
-  - `cilin.txt`：只读基础词林，放于 `_build/swamp-server/assets/cilin.txt`，运行期外置直接读取（不内联进二进制，便于维护且零额外编译脚本）
-  - 自定义同义词（`swamp.toml` `[synonyms]`）：在管理窗口 `Synonyms & OOV` 标签页直接维护现代双向词组、单向别名、技术词停扩与词林清洗规则
-  - 新词雷达（`oov_report`）：构建后自动落盘 `_build/temp/backup/oov_report.txt` 并在管理窗口右侧实时展示，定期挑出高频词补入左侧编辑区即可
-
-- `synonyms_custom.json`
-
-  ```json
-  {
-    "dropEqCodes": ["Bh08A38"],
-    "pruneWords": { "code7": ["词1", "词2"] },
-    "splitFixes": { "保险丝冰箱": ["保险丝", "冰箱"] },
-    "stopExpand": ["指针", "堆栈", "对象"],
-    "groups": [
-      { "c5": "Bo01A", "words": ["电动机", "电机", "马达"] },
-      { "c5": "Dd06A", "exclusive": false, "words": ["报错", "异常"] }
-    ],
-    "aliases": {
-      "梯子": ["VPN", "翻墙", "代理"]
-    }
-  }
-  ```
-
-- 含义如下：
-  - `groups`（双向同义词组）：组内词互相扩展。`exclusive` 默认为 `true`（独占覆盖），会自动将这些词从词林的旧义项中剥离
-  - `aliases`（单向别名）：搜索键名可召回目标词，但搜索目标词不会反向召回键名。适合俗称、黑话或上下位归类
-  - `stopExpand`（全局停扩黑名单）：列出的现代技术词禁止从词林 `=` 行扩展，防止语义漂移
-  - `dropEqCodes`（词林整行降级）：将指定的 7 位编码行由 `=` 降级为 `@`（停止扩展，但保留词表）
-  - `pruneWords`（按行精准剔词）：仅从指定编码行中删除个别噪声词
-  - `splitFixes`（修复粘连词）：修正词林中因漏空格而连写的词
-
-- `cilin.txt`
-  - 行格式标记：
-    - `=`（等义行）：参与近义词扩展。
-    - `#`（同类行）/ `@`（独立词）：不参与扩展，但保留在词表内，以保护分词边界。
-  - 常用 5 位分类码（`c5`）备查：
-
-    | 领域 | 推荐 `c5` 分类码 | 对应词林语义类 |
-    | :--- | :--- | :--- |
-    | AI / 算法 / 学科理论 | `Dk01A` | 知识 / 学科 / 理论 |
-    | 网络 / 软件 / 编程 / 系统 | `Dd06A` | 系统 / 结构 / 逻辑 |
-    | 电脑 / 电机 / 机械整机 | `Bo01A` | 机器 / 机械 |
-    | 手机 / 元器件 / 电路 | `Bo04A` | 电器 / 电子器件 |
-    | 影视 / 动漫 | `Dk29D` | 影视作品 |
-    | 音乐 / 歌曲 | `Dk28A` / `Dk28B` | 音乐 / 歌曲 |
-    | 徒步 / 登山 | `Fb01A` | 行走动作 |
-    | 露营 / 户外装备 | `Bp29D` / `Bp11A` | 器物与服饰 |
-
-- 分桶权重表（N：公开 HTML 总数）
-
-  | 标记 | 条件 | 候选词乘数 | 义项消歧贡献 | 含义说明 |
-  | :--- | :--- | :---: | :---: | :--- |
-  | 无后缀 | $DF = 0$ | 0.62 | +0.00 | 公网未出现词（降低权重，保留入口） |
-  | `:1` | $DF = 1$ | 1.00 | +0.25 | 孤篇专词或媒体标题词 |
-  | `:2` | $2 \le DF \le 3$ | 1.12 | +0.45 | 低频高区分度活词 |
-  | `:3` | $DF \ge 4$ 且 $DF / N \le 8\%$ | 1.18 | +0.60 | 黄金主题词（权重最高） |
-  | `:4` | $8\% < DF / N \le 20\%$ | 1.00 | +0.35 | 常见实词 |
-  | `:5` | $20\% < DF / N \le 40\%$ | 0.68 | +0.10 | 偏泛通用词（轻度降权） |
-  | `:6` | $DF / N > 40\%$ | 0.38 | +0.00 | 全站高频泛滥词（强降权抑噪） |
+- **公共配置**：`_build/swamp.toml`（入库）。
+- **本机私有配置**：`_build/privy/local.toml`（被 `.gitignore` 忽略），填写本机 `vscode_path`、`katrain_dir`、`img_input_dir`、`webp_output_dir2`、`keep_takeout_zip_folder` 等含本机路径的项。
+- **重编译**：运行 `_build/swamp-server/build.bat`：
+  - `[1]` 编译 `_build/swamp.exe`，跑完 42 项 `--selftest` 后自动拉起新 `swamp.exe` 并 3 秒后退出。
+  - `[2]` 用 `wasm-pack` 编译 Wasm 并用 `swamp.exe minify` 压缩胶水脚本，无错 3 秒后退出。
+  - `[3]` 全部编译并启动新 `swamp.exe`。任何一步出错都会停住窗口看报错。
 
 ---
 
-# 💻 设计说明 (开发)
+# 怎么与AI协作进行站点调优
 
-> **初代** by diff4x | **进化** by Gemini & ChatGPT & Claude & Grok
+这一章分两版：**版 A** 用大白话讲清楚前后端和构建的来龙去脉，方便作者自己随时翻看；**版 B** 写给 AI 看，交代精确的架构、边界和协作规矩。
 
 ---
 
-## 一、一页读懂
+## 版A：通俗理解（给作者自己看）
 
-**一句话**：零后端的个人知识库。内容是静态文件；本地运行期与构建期统一收敛为单个纯 Rust 伴生程序 `_build/swamp.exe`（零 JRE、零 `esbuild`、零 `cwebp`、零 `static-web-server`）；浏览器运行期（原生 ESM + Wasm + Service Worker）完成渲染、检索、比对、标注与离线；GitHub Pages 只负责搬运。
+### 1. 这个站到底是怎么跑起来的？
+
+一句话：**线上没有任何程序在跑，全靠浏览器自己干活；本地所有脏活累活全交给 `_build/swamp.exe` 一个人干。**
+
+- **平时写作和改代码（本地）**：你改的是 `html/` 里的原文、`src/js/raw/` 里的前端源码，或者 `_build/swamp-server/` 里的 Rust 源码。
+- **点一下 `gen`（构建）**：`swamp.exe` 把你写的源码全部压成小文件，把几百篇 HTML 抽成纯文本切成 300 KB 一块的数据片，算好同义词表，给每个文件算指纹记进清单，最后检查一遍私密文章有没有漏进公网文件。全部没问题才统一替换落盘。
+- **点一下 `push`（发布）**：把仓库推上 GitHub Pages，GitHub 只管当个静态网盘发文件。
+- **访客打开网页（浏览器）**：浏览器先加载一个空壳 `index.html`，里面嵌两个框——右边 `#side` 画目录树，左边 `#content` 显示文章或电子书。背后同时起两个“帮手”：
+  - **Service Worker（`sw.js`）**：管离线缓存和版本更新，像个本地仓库管理员。
+  - **Web Worker（`worker.js` + Wasm）**：在后台独立线程里吃进全部文章数据做搜索，算得快还不卡页面。
+
+### 2. 为什么文章里只写纯文本就能变漂亮？
+
+`html/*.html` 里其实只有 `<pre>` 包着的纯文本，这样你平时用 VS Code 写起来最轻快、Diff 也干净。打开文章时，`content.js` 会调用已经预热好的 Wasm（`format_markdown`），瞬间把 `#` 标题、4 倍空格缩进、图片路径、网址、`<p>` 表格和代码块渲染成网页结构，再顺手挂上目录、灯箱、拼音、摘抄和历史 Diff 按钮。
+
+### 3. 搜索为什么又能容错、又能搜近义词、还很快？
+
+- **不卡主界面**：搜索全在后台 Worker 里跑，每算 8 毫秒就歇一拍看看你是不是又打了新字；只要你还在打字，旧搜索立刻作废。
+- **先粗筛再细找**：Wasm 里先建了两张“指纹地图”（全局 Bloom 过滤器 + 每篇文章自带的字符位图）。搜一个词之前，先查地图，根本不可能出现的文章和近义词直接跳过，绝不傻扫全文。
+- **结果缓存**：搜过的词会存在浏览器数据库（`MainDB`）里，下次秒出；一旦文章更新、同义词更新或算法版本号涨了，旧缓存会自动作废重算。
+- **书内搜索**：打开 TXT / PDF / EPUB 时，阅读器会把自己“挂”到主站搜索框上，复用同一套 Wasm 匹配和近义词逻辑，结果单独存在 `BookDB` 里，平时站点更新不会清空它，只有这本书真的被删了才会清理。
+
+### 4. 离线和更新为什么不会“新旧混在一起崩掉”？
+
+最容易出事故的场景是：新版本正在后台下载，用户突然刷新，结果拿到了“旧代码 + 新清单”。站里的做法是：**线上环境下，`core-list.js` 不走网络，而是由当前正在管事的 SW 直接从内存里拼出来发给页面**。这样在用户点「发现新版本，点击更新」之前，页面拿到的代码、清单、数据永远是同一套。点更新后，主控会先把你正在看的页面、视频/音乐进度、搜索词拍个“快照”存进当前标签页，刷新完再原地恢复。
+
+### 5. 私密文章（`__` 开头）是怎么保证不泄露的？
+
+构建时 `swamp.exe` 会同时读 `.gitignore` 和调用 `git check-ignore`，把私密页分流出去：
+- **目录信息**（标题、分类、时间）会进 `lite_data.js`，所以线上目录里能看到它挂着 `🔒`；
+- **正文内容**只写进本地才有的 `shadow_data_*.json`（在 `.gitignore` 里，不会推上去），公网切片里只填 `"localOnly"` 占位，同义词词频也不统计私密页；
+- 构建结束前，还会拿每篇私密页的片段（含 JSON 转义形式）去扫一遍所有准备发布的公网文件，真发现泄露直接报错中止，连旧数据都不会被污染。
+
+### 6. 为什么本地页面能直接改文件、开 VS Code，线上却不行？
+
+前端全站只看一个开关 `store.online_flag`（本地为 `"0"`，线上和 `9000` 仿真端口为 `"1"`）。本地模式下，`swamp.exe` 只监听本机 `127.0.0.1`，启动时在内存里生成一个随机令牌，通过 `Open Site` 放到网址 `#` 后面传给浏览器再立刻抹掉。前端每次保存 Markdown、改书签、点 `edit` 或开 KaTrain，都是带这个令牌向本地服务发 JSON 请求，后端校验来源和令牌通过后才原子写盘。
+
+---
+
+## 版B：专业描述与协作规范（AI 思维导向）
+
+### 1. 编译环境与目录结构
+
+- **编译环境（Windows）**：
+  - 单 Crate 双目标（Rust 2021，`_build/swamp-server/Cargo.toml`，版本 `3.1.0`）：
+    - 原生端：`--bin swamp`，`--profile release-exe`（`opt-level = "s"`, `lto = true`, `codegen-units = 1`, `strip = true`, `panic = "unwind"`），产物复制为 `_build/swamp.exe`。
+    - Wasm 端：`--lib` (`compute_intensive_task_processor`, `cdylib`)，`wasm-pack build --target web`，`.cargo/config.toml` 开启 `target-feature=+simd128`，`release` 配置 `opt-level = "z"`, `panic = "abort"`，`wasm-opt -Oz` 优化，胶水 JS 由 `swamp.exe minify` 压缩输出至 `src/wasm/`。
+  - Cargo 目标目录统一重定向至 `_build/temp/target`。
 
 ```text
- ① 构建期（本地 Windows · _build/）
-    html/  gallery/  audio/  video/  ebook/  README.md  .gitignore
-        │  _build/swamp.exe（零外部二进制，单文件全栈伴生）
-        ├─ builder::minify ───► 纯 Rust 并行增量压缩 JS / CSS（含热监听）
-        ├─ builder::generator ► 数据切片 · core-bundle.json · core-list.js · synonyms.js
-        ├─ media::webp / keep ► 内置 libwebp 静态转码与 Keep Takeout 解析
-        └─ wasm-pack ─────────► 渲染 / 检索 / Diff 引擎（lib.rs → .wasm）
-        │  git push
-        ▼
- ② 分发期（GitHub Pages · 纯静态托管，没有任何服务端逻辑）
-        │  首访 / 版本更新
-        ▼
- ③ 运行期（浏览器 · PWA）
-    sw.js ········ 版本化缓存 · 增量安装 · 请求拦截 · 更新留痕
-    index.js ····· 主控：#side 目录树 + #content 视图 + 浮层，由 BUS 事件总线串联
-    worker.js ···· 独立线程：Wasm 全文索引 · 模糊 / 同义 / 布尔检索 · 评论融合
+_build/
+  swamp.toml                    # 唯一公共配置（站点参数、precache Glob、Pack 预设、[synonyms] 自定义规则）
+  swamp.exe                     # 唯一运行期二进制（伴生服务 + 4 标签页原生 Win32 管理窗）
+  swamp-server/                 # 单 Crate Rust 工程
+    .cargo/config.toml          # target-dir = "../temp/target" & wasm32 simd128
+    Cargo.toml / build.bat
+    assets/cilin.txt            # 外置只读基础词林
+    src/
+      main.rs                   # CLI / Serve / Sim 入口、Router、/__oauth/callback、安全退出交接 build.bat
+      lib.rs                    # Wasm 引擎（#![cfg(target_arch = "wasm32")]）：渲染/搜索/Bloom/ADS/LCS Diff
+      config.rs                 # 配置加载与 swamp.toml 区块原子写回
+      security.rs               # 静态路径守卫、参数校验、CSP/API 鉴权中间件、42 项 --selftest
+      static_fs.rs              # 静态文件托管（支持单段 Byte Range）
+      api_files.rs              # write_bytes_atomic / write_atomic 与 /__api/files/*, /__api/bookmarks
+      api_ops.rs                # /__api/ops/*（edit、watch-html 长轮询、explorer、cli、txn、katrain）
+      gui.rs                    # Win32 Per-Monitor HiDPI 4 标签页管理窗 + Arc<GuiMailbox>
+      builder/                  # mod.rs（单飞锁+日志桥）、minify.rs、html_utils.rs、generator.rs、synonyms.rs + synonyms_tpl.js
+      media/                    # webp.rs（静态 libwebp）、keep2html.rs
+      services/                 # log_bus.rs、watcher.rs、tasks.rs（VPN 心跳 + Google Tasks OAuth）、pack_apply.rs
+  privy/                        # 本机私有区（.gitignore；HTTP 默认拒绝，仅白名单放行 txn.txt 与 upcoming_tasks.json）
+    local.toml / credentials.json / tokens.json / upcoming_tasks.json / txn.txt
+  temp/                         # 临时与构建产出区（.gitignore）
+    swamp_runtime.log           # 持久化运行日志（新来居上）
+    target/                     # Cargo 编译缓存
+    backup/                     # build_hashes.txt、synonyms.sha256、oov_report.txt、ai_pack_*、ai_apply_*、keep2html_*
+html/                           # 单层 HTML 原文（分类由 #anchor 决定）
+gallery/ | audio/ | video/ | ebook/  # 物理目录树即站内分类
+src/
+  js/raw/*.js -> src/js/*.js    # 源码 -> 压缩产物（sw.js 输出至仓库根目录）
+  css/raw/*.css -> src/css/*.css; src/css/font/font.css -> src/css/font.css
+  js/data/                      # lite_data.js、fat_data_N.json、core-bundle.json；本地另有 shadow_data_N.json、shadowIndex.js
+  tpl/                          # side / bookmark / txt / pdf / epub / pano / md_viewer / bilingual / new / go_board / txn_parser / street_view_uploader
+  third/                        # 同源第三方库
+  wasm/                         # compute_intensive_task_processor.{min.js, _bg.wasm}
+  discussion_id_mapper.json     # Giscus discussion ID <-> 文章标题映射（同时作检索 recordId）
+index.html / sw.js / README.md / .gitignore / .nojekyll
 ```
 
-| 想了解… | 直接看 |
-| :--- | :--- |
-| 为什么这样设计 | 二、设计原则 |
-| 文件放哪、谁生成谁、公私如何隔离 | 三、目录结构 · 四、构建期 |
-| 页面怎么搭起来、模块如何分工、怎么通信 | 五、运行期架构 |
-| 数据长什么样 | 六、数据模型 |
-| 搜索如何又快又准 | 七、搜索子系统 · 十一、算法精粹 |
-| 离线、更新、自愈 | 八、离线、更新与自愈 · 九、存储全表 |
-| 本地与线上的区别、如何回写本地文件 | 十、双态一体与本地能力桥 |
-| 改代码前该注意什么 | 十二、不变量与踩坑清单 |
+### 2. 同源第三方库版本与安全定制
 
----
-
-## 二、设计原则
-
-| 原则 | 含义 | 落地方式 |
-| :--- | :--- | :--- |
-| **静态文件即事实源** | 不设数据库与服务端，内容、目录、索引全是仓库里的文件 | 源文件 → 构建产物；线上唯一事实源就是仓库 |
-| **重活前置，轻活后置** | 能在构建期算好的，绝不留给浏览器 | 构建期做清洗、切片、词频统计、同义词表、哈希清单、压缩；运行期的渲染、检索、Diff 交给 Wasm 与 Worker |
-| **双态一体** | 同一份代码按运行环境切换能力 | `store.online_flag`：本地可写，线上只读（见十） |
-| **公私硬隔离** | 私有**正文**永不进入任何公网产物（标题、分类、文件名、时间戳作为目录元数据会公开） | 构建期按 `.gitignore` 分流并用 `git check-ignore` 复核；规则缺失即拒绝构建；构建末尾再断言公网产物不含私有正文（见 4.2） |
-| **零框架低依赖** | 降低长期维护与迁移成本 | 原生 ESM；无 npm 运行时依赖；第三方库以同源静态文件内置于 `src/third/` |
-| **按需加载** | 首屏只拿最小核心 | 检索栈首屏并行预热；评论、更新日志、摘抄、触控板等一律 `import()` 懒加载 |
-| **版本不撕裂，故障可自愈** | 任一时刻「代码 / 清单 / 数据」三者一致；坏了能自己修 | 清单由 SW 合成、切片原子落盘、安装熔断、阶段看门狗、三级自愈（见八） |
-
----
-
-## 三、目录结构
-
-```text
-📂 _build
- ┣ 📂 temp                             # 全部临时与构建产物 (.gitignore)
- ┃  ┣ 📂 backup                        # 增量哈希账本、oov_report、AI 打包产物与回填备份快照
- ┃  ┗ 📂 target                        # Cargo 编译目标目录
- ┣ 📂 swamp-server                     # 统一 Rust 单 Crate（同时产出 swamp.exe 与 Wasm）
- ┃  ┣ 📜 build.bat                     # 一键编译 swamp.exe / Wasm（零 esbuild，内置 minify）
- ┃  ┣ 📂 assets                        # 外置只读词林 cilin.txt
- ┃  ┗ 📂 src                           # src/main.rs → swamp.exe，src/lib.rs → Wasm
- ┣ 📂 privy                            # 本机私有配置与凭据 (.gitignore，HTTP 层除白名单外硬禁访)
- ┃  ┣ 📜 local.toml                    # 本机私有路径（VS Code / KaTrain / Keep / 截图目录）
- ┃  ┣ 📜 credentials.json / tokens.json / upcoming_tasks.json
- ┃  ┗ 📜 txn.txt                       # 个人流水账本
- ┣ 📜 swamp.toml                       # 唯一公共配置（站点参数、Glob 预缓存、Pack 预设、自定义同义词）
- ┗ 📜 swamp.exe                        # 唯一运行期二进制（独立 4 标签页 HiDPI 管理窗口）
-📂 audio | ebook | gallery | video     # 媒体目录（物理目录树即站内分类）
-📂 html                                # HTML 正文（单层目录，分类由页内 #anchor 决定）
-📂 src
- ┣ 📂 css | js                         # raw/ 源码 → 同名压缩产物；source-map/；js/data/ 数据切片
- ┣ 📂 third                            # 同源第三方库 (bibi / pdfjs / prism / markdown / photo-sphere-viewer / other)
- ┣ 📂 wasm                             # Wasm 产物与胶水代码
- ┣ 📂 tpl                              # 视图模板 (side / bookmark / txt / pdf / epub / pano / md_viewer / ...)
- ┗ 📜 discussion_id_mapper.json        # Giscus 评论 ID ↔ 页面标题
-📜 index.html                          # 单页壳（含由构建期注入的 PARAM 参数块）
-📜 sw.js                               # Service Worker（由 raw/sw.js 压缩而来，须位于根目录以获得全站作用域）
-📜 README.md                           # 站点手册（被 SW 预缓存，被站内 md_viewer 展示）
-📜 .gitignore                          # 私有节点清单，同时是公私分流的判据
-📜 .nojekyll                           # 关闭 Jekyll
-```
-
----
-
-## 四、构建期
-
-### 4.1 一条命令：`swamp.exe gen`（或在管理窗口点击 `gen`）
-
-```text
-Phase 1  并行增量压缩  src/js/raw/*.js · src/css/raw/*.css · font.css  →  纯 Rust (builder::minify + rayon)
-                      以内存 SHA-256 对账 _build/temp/backup/build_hashes.txt 与产物存在性，未变则跳过
-                      跳过 core-list.js / sw.js / synonyms.js —— 它们由 Phase 2 生成
-Phase 2  数据与清单    builder::generator::run   （步骤见下表，零 Java 依赖）
-Phase 3  尾项压缩      压缩刚改写的 raw/core-list.js 与 raw/sw.js（sw.js 输出到站点根目录）
-```
-
-`builder::generator::run` 按固定顺序执行：
-
-| 步骤 | 做什么 |
-| :--- | :--- |
-| ① 注入参数 | 把 `github_page`、Giscus 仓库参数、轮询间隔、`readme_md` 写入 `index.html` 的 `PARAM-BEGIN/END` 块 |
-| ② 判定私有 | 解析 `.gitignore` 得到私有路径集合，并用 `git check-ignore` 复核后取并集（只会更保守）；`.gitignore` 缺失或没有有效规则即**拒绝构建**（fail-closed） |
-| ③ 扫描 HTML | 核对正文里的图片引用：失效引用与大小写不一致只告警，**默认不改写源文件**（需显式 `prune_missing_images=true`，且受 `prune_max_lines` 上限约束并先备份）；产出 `gallery/img/idle-list.txt`（闲置图片清单）；读取 `#anchor` 的时间戳与分类链、页面标题；剥离 `#` 标题符得到检索纯文本；按 4.2 分流；为新标题分配自增 ID 并登记孤儿评论（`discussion_id_mapper.json`） |
-| ④ 扫描媒体 | 递归扫描 gallery / audio / video / ebook，继承 `.gitignore` 的 localOnly 标记，汇入目录树 |
-| ⑤ 切片 | 生成 `lite_data.js` 与 `fat_data_N.json`（按 `sliceSize`，当前约 300 KB 一片）；私有页另出 `shadow_data_N.json` + `shadowIndex.js` |
-| ⑥ 同义词 | `builder::synonyms::build_if_needed`：只用公开语料统计词频（DF），源或产物 SHA-256 变化才重编并内置压缩生成 `synonyms.js` |
-| ⑦ 清单 | 生成 `core-bundle.json` 与 `core-list.js`：对全站静态文件算 CRC32，**仅当任一哈希变化**才生成新的 `BUILD_VERSION`（毫秒时间戳） |
-| ⑧ 同步 SW | 把新版本号写回 `raw/sw.js` 的 `importScripts(...?v=)` 与 `self.SW_VERSION`（`sw.js` 缺失或写入失败即报错） |
-| ⑨ 隔离断言 | 校验 `core-bundle.json` 不含私有页路径，且私有正文指纹（25% / 50% / 75% 处各 40 字符，三段同时出现才算）不出现在 `lite_data` / `fat_data` / `core-bundle.json` / `synonyms.js` 中 |
-
-**失败即停**：任一页面处理失败、显式 `precache` 清单中有文件不存在、隔离断言不通过，`swamp gen` 都立即返回非 0 退出码并中止后续压缩与推送；压缩失败的文件不写入 `build_hashes.txt`，下次会重编。可选开关见 `_build/swamp.toml`：`prune_missing_images` / `prune_max_lines` / `private_prefix_check` / `allow_empty_gitignore`。`_build/temp/` 与 `_build/privy/` 均在 `.gitignore` 中。
-
-### 4.2 公私分流（最关键的一次分岔）
-
-| 页面类别 | 判定 | `fat_data` | `shadow_data` | `core-bundle` / SW 缓存 | 线上表现 |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| 公开页 | 默认 | 全文纯文本 | — | 打包并缓存，参与 DF 统计 | 完整可搜 |
-| 大型文档 | 文件名以单个 `_` 开头（`exclude=^_[^_].*`） | 空串 `""`（正文不入切片，页内搜索结果走叠加层） | — | 清单标记 `no_cache`，不进 bundle | 可访问；全站检索只检题名 |
-| 私有页 | 命中 `.gitignore`（约定以 `__` 开头） | 占位 `"localOnly"` | 全文（仅本地存在） | 不进清单，不进 DF | 目录挂 🔒，无法访问 |
-| 私有媒体 | 命中 `.gitignore` | — | — | — | 目录挂 🔒 |
-
-> `fat_data_*.json` 与 `core-bundle.json` 不含私有正文，`synonyms.js` 的词频统计也只来自公开语料。**但目录需要显示 🔒，所以私有页的标题、分类链、文件名、时间戳仍会出现在 `lite_data.js` 与 `discussion_id_mapper.json` 中**——被隔离的是内容，不是「它存在」这件事。
-
-### 4.3 技术栈
-
-| 层 | 选型 |
-| :--- | :--- |
-| **构建与本地伴生** | 纯 Rust 单文件 `swamp.exe`（`axum` / `tokio` / `toml` / `globset` / `ignore` / `rayon` / `sha2` / `crc32fast` / `image` / `webp(libwebp 静态链接)` / `zip` / `arboard` / `reqwest(rustls)` / `notify` / `windows-sys` 原生管理窗）+ `wasm-pack`（`lib.rs`） |
-| **运行** | ES Modules · Web Crypto API · Service Worker · Cache Storage · IndexedDB · Web Worker · WebAssembly · `BroadcastChannel` · `MessageChannel` · `CompressionStream` · CSS Custom Highlight API · `requestIdleCallback` |
-| **同源内置的第三方** | PDF.js · Bibi（EPUB）· Prism · marked + DOMPurify + highlight.js（+ 本地编辑时按需 CodeMirror 5）· Photo Sphere Viewer + three.js · encoding.js · confetti |
-
-### 4.4 第三方脚本与核心工具版本
-
-| 组件 / 脚本 | 版本 | 位置 / 用途 | 安全与定制说明 |
+| 组件 | 版本 | 位置 | 安全与定制约束 |
 | :--- | :--- | :--- | :--- |
-| **three.min.js** | `version:7` | `src/third/photo-sphere-viewer/three.min.js`（配合 Photo Sphere Viewer） | `pano.html` 注入禁 `eval` CSP、严格校验 `?src=` 仅限同源 `/gallery/` 图片，并修复重复实例化 |
-| **bibi** | `1.2.0` | `src/third/bibi/`（EPUB 阅读器） | 保持 `allow-scripts-in-content: false`、`trustworthy-origins: []`，关闭 `accept-local-file`/`bibizine`/`blob`/`base64` 入口；`epub.html` 对章节 iframe 二次去脚本并注入 `script-src 'none'` |
-| **marked** | `v4.3.0` | `src/third/markdown/marked.min.js`（Markdown 解析） | 源码无 `eval`；由下游 `DOMPurify` 与页内 CSP 兜底 |
-| **DOMPurify** | `3.5.0` | `src/third/markdown/purify.min.js`（Markdown HTML 净化） | `md_viewer.html` 收紧 `FORBID_TAGS`（禁用 `svg`/`math`/`template`/`iframe` 等）与 `ALLOW_UNKNOWN_PROTOCOLS: false` |
-| **PDF.js** | `v6.5.438` | `src/third/pdfjs/` + `pdf-viewer.{js,css}`（PDF 阅读与批注） | 根治 CVE-2024-4367；保持零 `'unsafe-inline'` 最严 CSP、强制 `enableScripting: false`；开启涂鸦/文字/高亮/插图批注、支持 `--pdf-page-gap` 可调缝隙（默认 `0px`）与隐藏竖向滚动条 |
-| **swamp.exe（自研单文件）** | `v3.1.0` | `_build/swamp-server/` → `_build/swamp.exe` | 零外部二进制全能伴生程序：Per-Monitor HiDPI 原生 Win32 四标签页桌面管理窗口（任务栏图标反映 VPN 心跳、内置 Pack 预设管理、回填自动构建与 Synonyms/OOV 控制台）、纯 Rust 构建/压缩/热监听、内置 `libwebp` 转码与 Keep 解析 |
+| **PDF.js** | `v6.5.438` | `src/third/pdfjs/` + `pdf-viewer.{js,css}` | 严格 CSP（零 `'unsafe-inline'`），`enableScripting: false`；文本层通过 `_textHighlighter` 适配 v6 私有字段；支持批注与书内搜索桥接 |
+| **Bibi (EPUB)** | `1.2.0` | `src/third/bibi/` + `src/tpl/epub.html` | `allow-scripts-in-content: false`、`trustworthy-origins: []`，关闭本地/base64/blob 入口；章节 iframe 二次剥离脚本并注入 `script-src 'none'` |
+| **marked** | `v4.3.0` | `src/third/markdown/marked.min.js` | 配合 `md_viewer.html` 前置 `protectMath` 与后置 `fixBold` / `highlightCode` |
+| **DOMPurify** | `3.5.0` | `src/third/markdown/purify.min.js` | `md_viewer.html` 禁用 `script/style/iframe/object/embed/form/svg/math/template`、`srcdoc/formaction` 与未知协议 |
+| **highlight.js** | 同源精简版 | `src/third/markdown/highlight.min.js` | 仅高亮显式标注且已注册的语言 |
+| **CodeMirror 5** | 同源 | `src/third/markdown/codemirror/` | 仅本地编辑态按需加载，在 `swamp.toml` precache 中排除 |
+| **Photo Sphere Viewer + three.js** | three `r7` (`version:7`) | `src/third/photo-sphere-viewer/` | `pano.html` 禁 `eval` CSP，强校验 `?src=` 仅限同源 `/gallery/` 图片 |
+| **Prism / encoding.js / confetti** | 同源 | `src/third/prism/`, `src/third/other/` | 代码高亮、TXT 编码兜底、更新庆祝动画 |
 
----
+### 3. 模块拓扑与通信面
 
-## 五、运行期架构
-
-### 5.1 骨架：单页壳 + 双 iframe + 浮层
-
-```text
-index.html（壳）
- ├─ #side      iframe → side.html     目录树 · 已阅标记 · 顶部菜单 · 历史/收藏 · 悬停缩略图
- ├─ #content   iframe → 按 resource_type 装载视图（见下表）
- ├─ 浮层（挂在主控）   #search 搜索框与结果 · 中央预览 · 音乐播放器 · 评论 · 摘抄本 · 更新日志 · md_viewer · 触控板
- └─ 不可见的核心       index.js 主控 · worker.js 检索线程 · sw.js
-```
-
-`#content` 能装载的视图：
-
-| 视图 | 载体 | 要点 |
-| :--- | :--- | :--- |
-| HTML 正文 | `html/*.html` + `content.js` | 源文件是 `<pre>` 纯文本，运行期由 Wasm `format_markdown` 渲染（标题、缩进着色、图片与链接、表格）；随后挂载目录、代码工具、版本 Diff、拼音与摘抄、评论、灯箱 |
-| 书签首页 | `bookmark.html` + `bookmark.js` | 书签、壁纸、README 入口；拖拽编辑经协议回写 |
-| PDF / EPUB / TXT | `pdf.html`（PDF.js v6 + `pdf-viewer.{js,css}`）/ `epub.html`（Bibi）/ `txt.html`（自研） | 统一经 `__DOC_SEARCH_BRIDGE__` 接入主站搜索；阅读进度与书签存 localStorage；PDF 支持涂鸦/文字批注与可调页间缝隙 |
-| 图片 / 视频 | `lightbox-logic.js` 的 `renderLightboxFrame()` | 无模板文件：向 `about:blank` 的 iframe 写入纯静态 DOM + `script-src 'none'` 严格 CSP，所有事件由父模块直接绑定（零内联脚本） |
-| 全景图 | `pano.html`（Photo Sphere Viewer） | `gallery/` 中 `pano_` 前缀图片双击进入 |
-| 双语页 | HTML 页 + `bilingual.js` | 中英对照编辑、草稿暂存、一键固化 |
-| 独立工具 | `txn_parser.html` · `go_board.html` · `street_view_uploader.html` | 新标签页独立运行，主动脱离主壳 |
-
-内容页自带「反脱壳」：被直接访问（`top === self`）时会跳回站点首页，保证任何页面都运行在壳之内。
-
-### 5.2 三个通信面
-
-| 通信面 | 载体 | 用途 | 约束 |
-| :--- | :--- | :--- | :--- |
-| **状态** | `SiteCore.createStore`：`sessionStorage` + `localStorage` 双路由 Proxy（值 JSON 化） | 持久偏好/历史/收藏/阅读进度走 `localStorage`；20 个每标签页状态（`resource_type`、`*_path`、`*list`、`last_html`、`keyword`、`lightbox_stauts`、`jump_from_search*` 等）自动路由至 `sessionStorage` | 多标签页并发浏览与热更新快照互不串扰；`protocol_name` 写入强制 scheme 白名单 |
-| **事件** | `BroadcastChannel('bus')`，消息 `{type, payload, from, target, tabId}` | 主控 ↔ `#side` ↔ `#content` 的指令与通知（`RENDER_CATALOG`、`show_current`、`LOCAL_SEARCH_RESULT` …） | `target ∈ index \| side \| content \| *`；接收端丢弃非本标签页消息，仅 `SEARCH_CACHE_CLEARED` 允许跨标签页 |
-| **直连** | `window.top.*` 句柄 | `sharedWasm`（页内高亮与 Diff 复用主线程 Wasm 实例）· `__DOC_SEARCH_BRIDGE__`（阅读器注册搜索 provider）· `VirtualCursor` · `pinyinData` | 仅限同源 iframe；用于需要同步返回值或共享大对象的场景 |
-
-### 5.3 模块分层
-
-| 层 | 文件 | 职责 | 加载时机 |
-| :--- | :--- | :--- | :--- |
-| 事实源核 | `site-core.js` | 零依赖全站单一事实源（兼容 Window / iframe / SW）：统一维护 `MainDB` v3 Schema、每标签页 `sessionStorage` 路由、`createStore` Proxy、`protocol_name` 与音频路径白名单校验 | 首屏（在 SW 安装熔断名单内） |
-| 引导核 | `index.js` | 会话隔离与 BUS、首屏 `#__swamp_token` 本地令牌吸收、IDB 代理、Wasm/Worker 引导、SW 注册与自愈、切片同步、懒加载路由、全屏/灯箱收口 | 首屏 |
-| 底层原语 | `shared-utils.js` | 零依赖：`$`、窗口拖拽、媒体进度、半角/哈希、`CSS.highlights` 池、ADS 求值与区间合并、本地 API 封装（`callLocalApi`） | 首屏（在 SW 安装熔断名单内） |
-| 检索栈 | `search-engine.js` · `search-ui.js` · `search-preview.js` | 状态/缓存/命令/ADS 解析 · 输入/结果列表/过滤条 · 中央悬浮预览 | 首屏并行预热 |
-| 按需协作者 | `comments.js` · `audio-player.js` · `snapshot.js` · `lightbox-logic.js` · `excerpts.js` · `book-db.js` | 评论同步、音乐播放、现场快照、图/视频灯箱、摘抄本、电子书缓存库 | 用到才 `import()` |
-| 外围聚合 | `deferred-features.js` | 更新日志、彩带、`@bomb` / `@rebirth`、7 天备份提醒、全局书签、到期任务、拼音词库、闲时工具、`md_viewer` 浮窗 | 空闲期 / 交互触发 |
-| 设备增强 | `touchpad.js` | 移动端虚拟触控板与虚拟光标（桌面端零下载） | 仅粗指针设备 |
-| 检索线程 | `worker.js` + `synonyms.js` + Wasm | 调度、抢占、近义展开、全文索引与扫描 | 主控预热 |
-| 视图脚本 | `side.js` · `content.js` · `bookmark.js` · `bilingual.js` · `txn_parser.js` · `pdf-viewer.js` · 其余阅读器脚本 | 各自 iframe 内的交互（`audio-player.js` 全面 DOM 构造、完整路径收藏去重、`favList` 白名单校验与无杂音首播） | 随页面 |
-| 离线层 | `sw.js` + `core-list.js` | 缓存与更新 | 浏览器注册 |
-
-依赖始终保持有向无环：`shared-utils.js` 在最底层，`deferred-features.js` 在最顶层，首屏不为外围功能付费。
-
-### 5.4 启动序列
+前端模块维持严格有向无环图（DAG）：
 
 ```text
-index.html   成人确认 → 注入的 PARAM 常量 → index.js
-  ├─ 立即执行   生成 TAB_ID · 建 BUS · VirtualCursor 占位 · 并行预热 (Wasm ‖ search-engine ‖ search-ui) · 挂 __DOC_SEARCH_BRIDGE__
-  └─ onload
-       ├─ 探测 ?repair=1；2 s 后探测远端修复指令
-       ├─ 恢复侧栏比例 → 加载 #side → 注册 SW
-       ├─ searchUI.init()
-       ├─ loadScripts()                                         [90 s 看门狗]
-       │    ├─ 预热 Worker · 预读 MainDB.chunks
-       │    ├─ core-list.js →（本地）shadowIndex.js → lite_data.js → RENDER_CATALOG 渲染目录树
-       │    ├─ 有现场快照 → snapshot.restoreSnap()；否则 → bookmark.html；随后展示搜索框
-       │    └─ loadDataInBatches()：按哈希差分拉切片 → 全部成功才原子落盘 → BUILD_DATA   [45 s Wasm 看门狗]
-       │         └─ Worker 建索引 → DATA_READY → 绑定缓存命名空间 · 媒体对账 · 更新彩带与日志
-       └─ 空闲期    comments.js · deferred-features.js ·（触屏）touchpad.js
+site-core.js (Window/iframe/SW 共享事实源：MainDB v3 Schema、20 个 tab 隔离键、createStore、白名单校验)
+  └─ shared-utils.js (零外部依赖原语：DOM/拖拽/媒体进度/CSS.highlights/ADS 求值/callLocalApi)
+       ├─ search-engine.js <-> search-ui.js -> search-preview.js   [首屏并行预热]
+       ├─ index.js (主控：会话隔离、Wasm/Worker 引导、SW 注册与自愈、切片同步、懒加载路由)
+       │    ├─ 按需 import()：comments.js / audio-player.js / snapshot.js / lightbox-logic.js / excerpts.js / book-db.js / touchpad.js (仅触屏)
+       │    └─ 顶层外围聚合：deferred-features.js (What's new、@bomb/@rebirth、7 天备份、全局书签、到期任务、拼音/容量/夜间闪烁、md_viewer 浮窗)
+       ├─ 独立线程：worker.js -> synonyms.js + Wasm (lib.rs)
+       ├─ iframe 视图脚本：side.js / content.js / bookmark.js / bilingual.js / pdf-viewer.js / txn_parser.js / epub.html / txt.html
+       └─ 离线层：sw.js + core-list.js
 ```
 
----
+三个通信面：
+1. **状态面**：`SiteCore.createStore` Proxy，持久数据进 `localStorage`，20 个每标签页状态键（`resource_type`、`*_path`、`*list`、`last_html`、`keyword`、`lightbox_stauts`、`jump_from_search*` 等）自动路由至 `sessionStorage`。
+2. **事件面**：`BroadcastChannel('bus')`，消息格式 `{ type, payload, from, target, tabId }`。`target` 为 `index | side | content | *`；接收端丢弃非本 `tabId` 消息，仅 `SEARCH_CACHE_CLEARED` 例外。
+3. **直连面**：同源 `window.top` 句柄（`sharedWasm`、`__DOC_SEARCH_BRIDGE__` / `__TXT_SEARCH_BRIDGE__`、`VirtualCursor`、`pinyinData`、`callLocalApi`、`parseAdsQuery` / `buildTermSpecs` / `ensureTermSpecs`）。
 
-## 六、数据模型
+### 4. 核心时序关系
 
-| 产物 | 位置 | 形态 | 用途 |
-| :--- | :--- | :--- | :--- |
-| `lite_data.js` | `src/js/data/` | `window.LITE_DATA = { html / image / ebook / video / audio → 嵌套目录 → "_f": [[文件名, recordId, 类型, 标记], …] }`。HTML 标记为 `时间戳[-localOnly]`；媒体 recordId 恒为 `-1`，标记为 `"localOnly"` 或空 | 目录树、近期更新着色、完整性校验 |
-| `fat_data_N.json` | `src/js/data/` | `{ recordId: 纯文本 \| "localOnly" \| "" }`，约 300 KB 一片 | 全文检索语料 |
-| `shadow_data_N.json` + `shadowIndex.js` | 仅本地（`.gitignore`） | 私有页正文 | 本地融合检索 |
-| `core-bundle.json` | `src/js/data/` | `{ webPath: 文件内容 }`：公开 HTML + `coreFiles` 中的 html/css/json/md + README | SW 首装 / 大更新时一次请求取回大批小文件 |
-| `core-list.js` | `src/js/` | `BUILD_VERSION` + `FILE_MANIFEST` + `window.dataIndex`；清单按目录分组紧凑编码 `目录\|名:CRC32:来源*…`，来源 `0` 独立文件 / `1` 来自 bundle / `2` no_cache | SW 差分依据；运行期判断切片是否过期 |
-| `synonyms.js` | `src/js/` | 词林 + DF 分桶 + 现代词覆盖（v5.1） | Worker 内近义扩展 |
-| `discussion_id_mapper.json` | `src/` | `records: [{id, title}]` + `orphanIds` | 评论与页面绑定；其 `id` 同时用作检索的 recordId |
+- **浏览器启动序列**：
+  1. `index.html` 成人校验 -> 注入 `PARAM` 常量 -> `site-core.js` -> `index.js` 同步吸收 `#__swamp_token` 并 `replaceState`。
+  2. 并行预热主线程 Wasm 与 `search-engine`/`search-ui`，挂载 `__DOC_SEARCH_BRIDGE__`。
+  3. `onload`：检查 `?repair=1`（2 秒后异步绕缓存检查 `/sw.js` 远端 `repair_command_id`）-> 恢复侧栏比例 -> 加载 `#side` -> 注册 SW -> 初始化搜索 UI。
+  4. `loadScripts`（90 s 看门狗）：预热 Worker 与 `MainDB.chunks` -> 加载 `core-list.js` ->（本地）`shadowIndex.js` -> `lite_data.js` -> `RENDER_CATALOG` -> 有 `ss_restore_strict` 快照则按需加载 `snapshot.js` 恢复，否则直开 `bookmark.html` -> 显示搜索框。
+  5. `loadDataInBatches`：按清单哈希差分拉取 `fat_data_*.json` -> **全成功才原子批量落盘并清缓存** -> 推入 Worker `BUILD_DATA`（45 s 看门狗）-> `DATA_READY` 绑定缓存命名空间、媒体/书籍删除对账与 `BookDB` 清理、播放更新彩带。
+  6. 空闲期加载 `comments.js`、`deferred-features.js` 与（触屏）`touchpad.js`。
+- **本地全量构建（`builder::run_gen_with_logger`）**：
+  1. 获取全局单飞锁 `GEN_LOCK`，置 `GEN_IN_PROGRESS = true`（挂起 `watcher.rs` 热压缩，结束后保留 1.5 s 尾项冷却）。
+  2. **Phase 1**：`rayon` 并行增量压缩 `js/raw/*.js`、`css/raw/*.css`、`font/font.css`（跳过 `core-list.js`/`sw.js`/`synonyms.js`），核对 `ver|raw_sha|out_sha`，自动清理账本中已删源对应的僵尸产物。
+  3. **Phase 2（事务暂存）**：
+     - 内存准备 `index.html` 注入文本；加载 `.gitignore`（无有效规则即 fail-closed）；
+     - 扫描 `html/*.html`，调用 `git check-ignore` 复核私有页，检查 `__` 前缀与**重复 `<title>`**，校验图片引用，按公/大文档/私分流；
+     - 扫描四类媒体目录并批量调用 `git check-ignore` 复核；
+     - 在 `_build/temp/staging_data_<pid>_<ms>` 暂存目录写出 `lite_data.js`、`fat_data_*.json`、`shadow_data_*.json`、`shadowIndex.js`、`core-bundle.json`；
+     - 按需重建 `synonyms.js`（仅公开语料 DF；`minify_js` 失败直接报错）；
+     - 解析 `[build.precache]` 显式项与 Glob，生成清单（仅 `(path, hash, source)` 任一变化才递进 `BUILD_VERSION`）；
+     - 对暂存目录执行无盲区 `assert_no_private_leak`；
+     - **全部通过后统一提交**：暂存目录迁入 `src/js/data/`，依次原子写出 `index.html`、`discussion_id_mapper.json`、`idle-list.txt`、`raw/core-list.js`、`raw/sw.js`。
+  4. **Phase 3**：压缩 `raw/core-list.js` -> `src/js/core-list.js` 与 `raw/sw.js` -> `/sw.js`，最后落盘 `build_hashes.txt`。
+- **回填后重启编译交接**：`Apply` 线程写完文件 -> 发 `WM_APP_EXIT_AND_BUILD` -> UI 主线程走 `begin_safe_close`（有活跃写盘时弹确认框，拒绝则中止交接）-> 回收 `sim` 子进程、销毁窗口 -> `main.rs` 执行 `server_handle.join()` 彻底释放端口与文件句柄 -> 退出前最后一步拉起 `build.bat`。
 
-**运行期内存形态**：全文常驻 Worker 内的 Wasm；主线程只持有扁平的轻量数组 `window.data`（每 4 项一条：标题、占位、路径、类型），正文永不进入主线程。`recordId` 经由标题与 `discussion_id_mapper.json` 绑定，页面改名即视为新页面。
+### 5. 数据结构与存储设计
 
----
+**构建产物形态**：
+- `lite_data.js`：`window.LITE_DATA = { html, image, ebook, video, audio }`，递归目录树叶子为 `_f: [[fileName, recordId, itemType, info], ...]`。HTML 的 `info` 为 `YYYYMMDDHHMMSS[-localOnly]`；媒体 `recordId` 为 `-1`。
+- `fat_data_N.json` / `shadow_data_N.json`：`{ "<recordId>": "<纯文本 | localOnly | ''>" }`，按 `slice_size_kb`（默认 300 KB）切片。
+- `core-bundle.json`：`{ "<webPath>": "<UTF-8 文本>" }`，打包公开 HTML 及可内联的 precache 文本资产。
+- `core-list.js`：采用 JSON 字面量 `const __SWAMP_MANIFEST_GROUPS__ = { "<dir/>": [[name, crc32Hex, flag], ...] }`（`flag`: `0` standalone / `1` core-bundle / `2` no_cache），运行期展开为 `FILE_MANIFEST`、`allFilesToCache` 与 `window.dataIndex`。
+- 运行期主线程只存扁平轻量 4 元组 `window.data = [title, placeholder, path, type, ...]`，全文常驻 Worker 内 Wasm 内存。
 
-## 七、搜索子系统
+**客户端与本地存储全表**：
 
-### 7.1 分层
-
-```text
-search-ui.js        输入（IME 保护、防抖）· 结果列表 · #sf-bar 过滤与作用域切换
-     ▼
-search-engine.js    命令识别 · 结果缓存 · ADS 语法解析 · 近义 / 评论 / 页内叠加 · 书内桥
-     ▼  postMessage（携带 token 与命名空间 ns）
-worker.js           抢占调度（8 ms 时间片）· 数据与评论的代际重扫
-     ▼
-Wasm（lib.rs）      Bloom 预筛 · DocFilter · 单遍扫描 · 评分 · 布尔求值 · 摘要
-     ◄─ synonyms.js 近义展开（同在 Worker 内）
-```
-
-### 7.2 一次全站搜索
-
-1. 输入 → IME 组词期间暂停 → 防抖 → `++_searchToken`。
-2. 查结果缓存（内存 LRU → IDB LRU；键 = `n{噪值}|l{近义}|归一化关键词`）：精确命中直接渲染；前缀命中先给临时结果，同时继续精确扫描。
-3. 未命中则交给 Worker：`bumpToken` 抢占旧任务 → 展开近义 → `prepare_search` 编译扫描计划，并用全局 Bloom 预筛（零命中直接短路）→ 以 8 ms 为时间片分片扫描全库，每片经 `MessageChannel` 让出事件队列，token 变更即丢弃。
-4. 评论索引同样分片扫描，与正文结果融合，命中评论的条目标注 `[💬 N]`。
-5. 返回后主线程核对 `token` 与 `ns` 才渲染；命中数 ≤ 300 的结果写入缓存。
-6. 叠加层：当前页置顶；单 `_` 大文档不在切片中，由 `content.js` 页内补算（`LOCAL_SEARCH_COUNT`）；`#sf-bar` 按类型 / 年月过滤。
-7. 悬停条目 → 摘要请求 → 中央预览窗展示带高亮的上下文并自动滚动。
-
-### 7.3 五种形态
-
-| 形态 | 触发 | 与普通检索的差异 |
+| 介质 | 名称 | 内容与淘汰策略 |
 | :--- | :--- | :--- |
-| 全站普通 | 直接输入 | 缓存 + Worker 全库扫描 + 评论融合 |
-| 布尔组合 | `@[表达式]词[噪近]…` | 前端解析为带逐词参数的计划，Worker 求值，不走结果缓存 |
-| 书内 | 打开 TXT / PDF / EPUB 自动切入 | 阅读器注册 provider，按章节 / 页段 / DOM 块粒度检索，结果存入 BookDB |
-| 页内 | 从全站搜索跳入 HTML 页 | `content.js` 复用主线程 Wasm 计算页内全部命中，分层高亮并生成右侧导航 |
-| 命令 | `@bomb` / `@rebirth` | 不检索，转交 `deferred-features.js` |
-
-**书内检索协议**：阅读器就绪后调用 `top.__DOC_SEARCH_BRIDGE__.register(provider)`，引擎随即把作用域切到书内，`#sf-bar` 出现「本书 / 全站」切换钮；provider 实现 `runSearch` / `runAdsSearch`。
-
-| 阅读器 | 分片与聚合 | 高亮 |
-| :--- | :--- | :--- |
-| TXT | 按换行切成约 3.6 万字符的 DOM 块；按章节标题或每 1.8 万字分段聚合 | `CSS.highlights` 无损着色 |
-| PDF | 打开即在 `requestIdleCallback` 中静默提取文本，搜索时自动提速；按大纲章节或固定页段聚合 | 仅对已渲染页的透明文字层着色，缩放 / 滚动时增量补绘 |
-| EPUB | 抽取各章 iframe 正文（跳过注音），按 TOC 最细叶子节点聚合 | 各章 `contentWindow.CSS.highlights` 独立注册 |
-
-开启近义时，Worker 跳过 HTML 语料的 Bloom 裁剪（`cacheTag='raw'`），避免书内独有的近义词被误杀。
-
-### 7.4 评论与页内联动
-
-* **评论同步（`comments.js`）**：启动先从 `MainDB.sys_state` 读本地快照推给 Worker（`SET_COMMENTS`），之后定时及切回可见时拉取 `{data_repo}` 仓库的 `comments.json`；有新评论则更新快照、重建 `COMMENT_BLOOM`、刷新当前结果的评论叠加层，并按偏好弹出 What's new。
-* **页内高亮（`content.js`）**：复用 `sharedWasm.find_content_matches_multi` 与同一份近义展开，进入 Diff 视图时自动清除搜索并屏蔽高亮刷新，避免二者冲突。
-
-### 7.5 缓存的四重失效
-
-| 触发 | 机制 |
-| :--- | :--- |
-| 核心切片或算法变更 | `DATA_READY` 后绑定命名空间 `core` = `v{SEARCH_ALGO_VER}\|d:{数据指纹}`，不匹配即清库并广播 `SEARCH_CACHE_CLEARED` |
-| 同义词库变更 | `SYNONYMS_READY` 后绑定命名空间 `syn`，不匹配即清库并重搜 |
-| `synonyms.js` / Wasm 变更 | SW 安装时写入 `pending_search_cache_clear` 标记，`activate` 阶段同步清库 |
-| 切片增量更新 | 仅当本轮全部变更切片都拉取成功才原子落盘并清缓存，任一失败则整轮跳过 |
-
----
-
-## 八、离线、更新与自愈
-
-### 8.1 两个缓存桶
-
-| 桶 | 内容 | 生命周期 |
-| :--- | :--- | :--- |
-| `core-cache-{BUILD_VERSION}` | 壳、HTML、CSS、JS、Wasm、`synonyms.js`、README、`sw-manifest.json` | 随版本整桶更替；新 SW `activate` 时删除旧桶 |
-| `media-cache` | gallery / video / audio / ebook、字体、PDF cmaps / `standard_fonts` / `iccs` / `wasm` / `images` | Cache-First，常驻；检测到文件被删才定向清理 |
-
-### 8.2 安装：增量、分流、熔断
-
-1. 取最新旧桶中的 `sw-manifest.json` 作为 `oldManifest`，向窗口广播 `SW_UPDATE_STATUS`。
-2. 逐项对账 `FILE_MANIFEST`（排除 `fat_data_*` 与 `no_cache`）：哈希未变 → 从旧桶直接拷贝；变更 → 按来源归入「bundle 批」或「独立批」。
-3. **bundle 批**：首装或变更超过 15 项 → 一次请求 `core-bundle.json`，在本地构造响应写入新桶；不超过 15 项 → 并入独立批逐个拉取。
-4. **独立批**：并发拉取，并发度随网速取 4 / 2 / 1（4g / 3g 或文件数超过 21 / 2g），每个请求带 30 s 超时并对同 URL 合并。
-5. **失败处置**：命中 `CRITICAL_URLS`（`/`、`index.html`、`site-core.js`、`index.js`、`shared-utils.js`、`book-db.js`、检索三件套、`snapshot.js`、`side.js`、`content.js`、`lite_data.js`、`worker.js`、Wasm）→ 抛错，整次安装中止，旧版继续服务；非关键文件 → 回退旧桶副本，清单仍记旧哈希，下次联网自动补齐。
-6. 写入新桶的 `sw-manifest.json` → 进入 waiting。
-
-### 8.3 请求拦截
-
-| 请求 | 本地模式 | 线上模式（含 `9000` 仿真端口） |
-| :--- | :--- | :--- |
-| 通用 | Network-Only（`no-store`），仅断网时回退缓存 | 当前桶优先；URL 带 `?v=` 且与清单哈希不符时直连网络 |
-| `core-list.js` | 同上 | **不走网络**：用 SW 内存里的 `FILE_MANIFEST` + `BUILD_VERSION` 合成响应；缺失则读 `sw-manifest.json` 并置 `_isOfflineDataFallback` |
-| `site-core.js` / `worker.js` / `synonyms.js` / Wasm | 同上 | 严格取当前桶，未命中才联网并回填 |
-| 媒体 / 字体 / cmaps | 同上 | `media-cache` Cache-First |
-
-> 线上 `core-list.js` 由 SW 合成，是「版本不撕裂」的核心：新 SW 在 waiting 期间，刷新页面也不会拿到「旧代码 + 新清单」。
-
-### 8.4 无感热更新
-
-```text
-updatefound → installed → waiting
-  ├─ 本地：自动 SKIP_WAITING
-  └─ 线上：#side 顶部提示「发现新版本」，用户确认后（按 TAB_ID 隔离）SKIP_WAITING
-activate    删除旧桶 · 若有 pending_search_cache_clear 则清搜索缓存 · clients.claim()
-controllerchange
-  → takeSnapshot(true)   主屏类型与路径 · 音视频进度与模式 · 搜索词 → sessionStorage['ss_restore_strict'] → reload
-  → restoreSnap()        先校验 lite_data 中目标是否仍存在（已删则销毁脏状态、退回书签页）
-                         → 还原主屏 / 音视频 / 搜索框 → 播放彩带，弹出 What's new
-```
-
-### 8.5 更新的副产物
-
-* **HTML 版本快照**：页面哈希变化时，旧版源码经 `CompressionStream('deflate-raw')` 压缩，存入 `MainDB.html_snapshots`（每页至多 10 版，按时间戳与压缩字节双重去重），即页内 Diff 的数据来源。
-* **更新日志**：新增 / 更新 / 删除写入 `update_logs`，供 What's new 展示（正文/媒体记录点击在侧栏定位打开，`README.md` 记录点击直接在 `md_viewer` 浮窗打开）。
-* **搜索缓存失效标记**：见 7.5。
-* **书籍清理**：清单中消失的 `/ebook/*` 会定向清除 `media-cache` 与 BookDB 中对应条目。
-
-### 8.6 降级与自愈
-
-| 机制 | 触发 | 行为 |
-| :--- | :--- | :--- |
-| 离线降级 | 无网，或 `core-list.js` 缺失 | SW 用 `sw-manifest.json` 合成 `dataIndex`；主控跳过切片下载，直接用 `MainDB.chunks` 建索引 |
-| 阶段看门狗 | `loadScripts` 90 s / Wasm 建索引 45 s | 超时只标错并询问「继续等待 / 修复」，**不自动删库**，慢网下不会误清本地快照与日志 |
-| 自愈 ① 远端指令 | 主控 2 s 后绕缓存读取 `/sw.js` 中的 `repair_command_id` | 远端编号大于本地记录（且本地非 0）→ 自动自愈 |
-| 自愈 ② URL | 访问 `/?repair=1` | 注销全部 SW · 清空 CacheStorage · 删除 `MainDB` 与 `BookDB` · 清快照 → 回首页；**保留**摘抄、已阅标记、草稿等用户数据 |
-| 自愈 ③ 交互 | 搜索框输入 `@bomb` | 勾选要保留的数据模块：A「保留所选，清理其余」（导出 → 清库 → 回填 → 重载）/ B「导出所选，全部清理」/ C「全部清理」。清库前先关闭全部 IDB 句柄并将 iframe 置为 `about:blank` |
-
----
-
-## 九、存储全表
-
-| 介质 | 名称 | 内容 | 容量与淘汰 |
-| :--- | :--- | :--- | :--- |
-| Cache Storage | `core-cache-{ver}` | 站点壳与核心静态文件 | 整桶随版本更替 |
-| Cache Storage | `media-cache` | 媒体、字体、PDF cmaps | 常驻；媒体被删时定向清理 |
-| IndexedDB | `MainDB` v3 | `chunks`（fat 切片）· `update_logs` · `search_cache` · `sys_state`（缓存 LRU 索引、评论快照、媒体路径快照、待清标记）· `html_snapshots` | `search_cache` 至多 500 条 LRU，单次结果超 300 条不入库；`html_snapshots` 每页至多 10 版 |
-| IndexedDB | `BookDB` v1 | `book_extracts`（PDF 全文提取与大纲）· `search_cache`（书内搜索结果） | 提取至多 30 本 / 32 MB（单本 12 MB）；结果至多 600 条 / 16 MB（单书 80 条、单条 512 KB）；超 4 KB 即 deflate；仅书被删时清理，常规更新不动 |
-| IndexedDB | `ExcerptsDB` v1 | `books`：按书名 / HTML 归档的摘抄 | 单例连接 |
-| IndexedDB | `SideDB` v1 | `marks`：侧栏已阅标记 | 单例连接，断线自动重连 |
-| IndexedDB | `AlignDrafts` v1 | `draft_texts`：双语页编辑草稿 | 防抖暂存；固化前销毁 |
-| localStorage | `store` | 布局、浏览历史、搜索历史（至多 100）、收藏、滚动位置、媒体进度、壁纸、筛选 / 噪值 / 近义偏好、PDF / EPUB / TXT 进度与书签、流水账本偏好与汇率缓存 | 定时 `lsAlert()` 巡检容量 |
-| sessionStorage | `ss_restore_strict` + 20 个每标签页状态键 | 热更新 / `@bomb` / `@rebirth` 一次性现场快照，以及 `SiteCore` 隔离的每标签页当前路径、资源类型、搜索词与灯箱状态 | 随标签页生命周期销毁 |
-
----
-
-## 十、双态一体与本地能力桥
-
-### 10.1 双态
-
-判据：`store.online_flag = isLocalEnv ? "0" : "1"`，其中 `isLocalEnv` 指 `localhost` / `127.0.0.1` / `file:` 且端口不是 `9000`。
-
-| 能力 | 本地（`"0"`） | 线上（`"1"`） |
-| :--- | :--- | :--- |
-| 页面编辑（`edit` 调用 VS Code 并更新时间戳） | ✔ | ✘ |
-| 双语对照编辑与固化 | ✔ | 控制面板隐藏 |
-| Markdown 覆写（`md_viewer`） | ✔ | 只读预览 |
-| 书签拖拽增删移 | ✔ | ✘ |
-| 私有页影子检索 | ✔ 加载 `shadowIndex.js` 与影子切片 | ✘ 目录仅显示 🔒 |
-| 到期任务提醒 | ✔ 优先直读内存接口 `GET /__api/tasks`（同步兼容落盘 `upcoming_tasks.json`） | ✘ |
-| Service Worker | Network-Only，新版自动接管，探测 2 s | 强缓存，用户确认后接管，探测 10 s |
-
-双击 `_build/swamp.exe` 即以 `serve` 模式无黑窗启动本地伴生服务并弹出独立 Win32 管理窗口（内存生成 32 字节随机令牌、不落盘，不主动打开浏览器主页；同时开启 VPN 心跳监测、Google Tasks 轮询与前端源码热压缩监听；HTTP 层对 `_build/**` 实行默认拒绝 + 精确白名单，仅放行 `txn.txt` 与 `upcoming_tasks.json`，阻断隐藏文件、Windows 8.3 短名与尾点/尾空格绕过，并下发全局禁 `eval` CSP 头）。线上仿真可在管理窗口点击 `simulator` 或执行 `swamp.exe sim --open`（9000 端口不挂载 `/__api`，整目录封禁 `_build/**` 与 `shadow*`）。
-
-站点公共配置（含 Glob 预缓存、Pack 预设、自定义同义词）统一收敛至 `_build/swamp.toml`，本机私有路径与凭据写入 `_build/privy/local.toml`（`.gitignore` 忽略）。
-
-### 10.2 本地能力桥：同源 Loopback API（`swamp-server`）
-
-本地模式下由自研 Rust 伴生服务 `swamp-server.exe` 同时托管静态资源与 `/__api/*` 控制面，彻底淘汰自定义 URL 协议、注册表写入、剪贴板中转与前端轮询：**前端通过标准 `fetch` 提交 JSON → 伴生服务鉴权并执行原子落盘 / 拉起工具 → 同步返回 HTTP 200**。
-
-* **零落盘会话令牌**：`swamp.exe` 启动时仅在内存中生成 32 字节随机 Hex，点击管理窗口 `Open Site` 时打开 `http://localhost:<port>/#__swamp_token=<64位hex>`（`#fragment` 不进 HTTP 请求与日志）；`index.js` 首屏同步吸收写入 `localStorage['__swamp_local_token__']`，随即 `history.replaceState` 抹掉地址栏痕迹；`@bomb` Plan A 清理本地存储时自动保留该令牌。
-* **四重防线**：仅监听 `127.0.0.1:<port>`；`sw.js` 放行 `/__api/*` 不拦截；所有写接口强制 `POST`/`PUT` + `Content-Type: application/json` + 自定义头 `X-Swamp-Token`（触发浏览器 CORS 预检，服务端不发 ACAO），后端依次校验 `Origin` 白名单、`Sec-Fetch-Site: same-origin`、常量时间 Token 比对与业务参数白/黑名单（可执行 `swamp-server.exe --selftest` 自检）。
-
-| 接口 | 发起方 → 服务端执行 | 返回与反馈 |
-| :--- | :--- | :--- |
-| `POST /__api/ops/edit` | `content.js` 的 `edit` → 直接更新 `html/<title>.html` 的 `#anchor` 时间戳并拉起 VS Code | 同步返回 `{ok, timestamp}` |
-| `POST /__api/bookmarks` | `bookmark.js` 拖拽（纯链接页内 `prompt` 补标题）→ 纯 Rust 校验并原子更新 `bookmark.html` 与 `#end_flag`（零 Java 子进程） | 同步返回 `200` 后刷新一次书签 iframe |
-| 桌面管理窗口（`src/gui.rs`） | `Open Site`、`gen`、`gen+push`、`push`、`simulator`、`selfcheck`、`root/`、`new`、`转webp`、`keep2html`、`Pack`、`Apply` | 实时日志 + 任务栏红绿心跳图标 |
-| `PUT /__api/files/html` | `bilingual.js` 固化：剥离运行期节点 → 直接提交 HTML → UTF-8 带 BOM + `.tmp` 原子替换（不触发 `gen`） | 同步返回 `200` 后销毁草稿并仅刷新当前双语页 |
-| `POST /__api/ops/txn` | `txn_parser.js` 点击流水行 → `code -g _build/privy/txn.txt:<行>` | 同步返回 `200` |
-| `POST /__api/ops/katrain` | 侧栏 `KaTrain` → 读取 `_build/privy/local.toml` 的 `katrain_dir` 启动 KaTrain | 同步返回 `200` |
-| `PUT /__api/files/md` | `md_viewer` Save / `Ctrl+S` → 校验 `.md` 后缀且在仓库根内 → UTF-8 无 BOM + `.tmp` 原子替换 | 同步返回 `200` 即显示 `✓ 已固化` |
-
-### 10.3 全站纵深防御（CSP 与反注入）
-
-* **全站禁 `eval`**：`swamp-server` 安全响应头中间件与各 HTML 模板 `<meta>` 统一移除 `'unsafe-eval'`、精准放行 `'wasm-unsafe-eval'`；其中图片/视频灯箱达到 `script-src 'none'`，`pdf.html` 达到 `script-src 'self' 'wasm-unsafe-eval'; style-src 'self'`，`bilingual.html` 达到 `script-src 'self' 'wasm-unsafe-eval'`。
-* **多点反注入收口**：`pdf.html` 锁定 `enableScripting: false`；`epub.html` 对章节 iframe 剥离脚本并注入 `script-src 'none'`；`md_viewer.html` 收紧 `DOMPurify`；`pano.html` 强校验同源 `/gallery/`；`txt.html` 异常提示改用 `textContent`；`audio-player.js` 与 `@rebirth` 对 `favList` 执行路径白名单校验并全面 DOM 构造渲染。
-
-VPN 心跳与 Google Tasks OAuth 均已直接内聚于 `swamp.exe`（任务栏图标颜色实时反映 VPN 心跳状态，OAuth 回调复用 `/__oauth/callback`，零额外端口与 JVM 占用），前端通过 `GET /__api/tasks` 直读内存态临期任务。
-
----
-
-## 十一、算法精粹
-
-### 11.1 检索内核（`lib.rs` · `worker.js` · `search-engine.js`）
-
-| 问题 | 方案 |
-| :--- | :--- |
-| 输入有错字、夹杂字 | **宽容噪值匹配**：相邻字符间允许夹杂的无关字数上限为 `min(noise, 词长>25 ? 0 : 词长/2)`；单个空白不计噪，换行与句末标点（`\n \r 。！？；!?;`）为不可跨越的硬边界 |
-| 重叠命中谁算数 | **区间裁决**：原词、同义词、组合词区间重叠时，依次比较 `tier`（原词优先）→ `noise`（小者优先）→ `weight`（大者优先）→ 长度（长者优先） |
-| 排序既要精确优先又要防堆叠 | **次线性饱和计分**：标题基准 5000（每噪 −500，同义封顶 4500），正文基准 100（每噪 −10，同义封顶 450）；同一文档的命中按分降序，第 `i` 次乘 `k/(k+i)`；另按文档内**最小精确噪值**追加保底分：0 噪 +10000、1 噪 +3000、2 噪 +2200、3 噪 +1500、4 噪 +900、其余 +500 |
-| 全库扫描太慢 | **两级过滤 + 单遍扫描**：① 全局 bigram Bloom（语料 1 MB、评论 256 KB），在扫描前裁掉不可能命中的候选词与同义变体；② 每篇文档按字数分 4 档（≤64 / ≤512 / ≤4096 / >4096）自适应分配 unigram / bigram 位图（`DocFilter`）；③ 编译 `ScanPlan`（首字掩码 + 首字倒排表），剩 0 个候选整篇跳过，剩 1 个走快路径，多个则单遍线性扫描 |
-| 布尔组合 | **手写递归下降 + NNF**：括号深度 ≤ 8、形参 ≤ 26；德摩根律把 `!` 下推到叶子；前端与 Wasm 双端校验 `adsHoldsOnEmpty`，拦截 `@[!a]` 这类在空文档上恒真的纯否定查询；Wasm 侧 `ads_optimize()` 将 `And` 子句按（非否定优先 → 噪值升序 → 词长降序）重排以尽早短路；先联合正文与评论求值，再仅用正文二次求值，判定是否 `viaComment` |
-| 搜索不能卡界面 | **自适应时间片与抢占**：`MessageChannel` 让出队列（绕开 `setTimeout` 的 4 ms 钳位），目标 8 ms 一片，按实际耗时在 16 ~ 4096 篇之间伸缩；新请求到达立即 `bumpToken`，旧扫描在下个边界中止；扫描途中若数据或评论更新（`dataGen` / `commentGen` 递增）则自动重扫 |
-
-### 11.2 近义词（`builder::synonyms` → `synonyms.js` v5.1，运行于 Worker）
-
-* **三路查词**：A 路整词直达（所有键经 `compactKey` 归一，含带空格的现代词组）；B 路独立词边界保护（命中 `#` / `@` 独立词或 `stopExpand` 技术词时禁止拆字扩出古典杂义）；C 路 DP 最优分词 + 词林树最近公共祖先（LCA）消歧，同句其余词的 5 级词林码作上下文，共享层级越深权重越大（同 5 级 ×1.85、同 4 级 ×1.45、同 2 级 ×1.18）。
-* **语料 DF 软加权**：构建期仅对公开语料做正向最大匹配，统计 7 档 DF 后缀（`:1`..`:6` 与无后缀）；候选乘数 `DF_CAND_MULT = [0.62, 1.00, 1.12, 1.18, 1.00, 0.68, 0.38]`——中低频特征词抬高、全站高频泛词压低、公网未现词降权但保留入口；虚词大类 `K` / `L` 的义项权重再压至 ×0.22 / ×0.55。
-* **隐私与防漂移**：DF 只来自公开语料；最终由 Worker 注入 `bloom_might_match`，滤掉当前语料（含本地私有影子与评论）中根本不存在的变体；所有同义扩展锁定 `maxNoise = 0`。
-
-### 11.3 渲染与阅读
-
-| 主题 | 方案 |
-| :--- | :--- |
-| **语义 LCS Diff**（`content.js` + `lib.rs`） | 历史快照与当前 `<pre>` 都渲染为标准化 Token 序列（`html_line` / `table_row` / `code_line`），交给 Rust `similar` 的 LCS 算法求最小编辑脚本；矩阵规模超过 2500 万格即熔断，防大文档 OOM；结果着色并生成 `#diff-minimap` |
-| **无损分层高亮** | `CSS.highlights` 按 `tier（3 档）× noise（6 档）` 映射为 18 个全局 `Highlight`，各带不同优先级；只操作 `Range`、不改 DOM，因此不触发重排，也不干扰代码编辑、双语编辑与摘抄选区 |
-| **TXT 编码判定**（`txt.html`） | BOM 精确识别 → 严格 UTF-8 解码 → 样本奇偶空字节占比判无 BOM 的 UTF-16 → 对比 `gb18030` 与 `big5`（综合 CJK 频次、中文标点、简繁特征字与乱码罚分）→ `encoding.js` 兜底 |
-| **TXT 抗排版锚定与阻尼滚屏** | 用 `caretRangeFromPoint` 反查视口左上角的精确字符偏移并持久化；调字号、行高、栏宽或缩放窗口后二分定位回同一句话；垂直滚轮经 rAF 指数阻尼（`diff × 0.24`）转为横向滚动，触控板原生横滑保持 1:1 跟手 |
-
----
-
-## 十二、不变量与踩坑清单
-
-面向后续维护者与 AI Agent：改动前先对照。
-
-1. **产物不手改**：`core-list.js`、`sw.js`、`synonyms.js`、`core-bundle.json`、压缩后的 JS/CSS 均由 `swamp-server gen` 生成；构建器先改写 `raw/core-list.js` 与 `raw/sw.js`，再由内置压缩器输出产物，直接改产物会被覆盖。
-2. **新增需离线的静态文件**：需符合 `_build/swamp.toml` 的 `[build.precache]` Glob 规则（或显式加入 `include`），才会进入清单与 SW 预缓存。
-3. **熔断名单要同步**：首屏必需的新模块要加入 `sw.js` 的 `CRITICAL_URLS`（拉取失败将中止整次安装）；非关键模块失败会自动回退旧版。
-4. **主线程不持全文**：任何需要全文的逻辑走 Worker / Wasm；主线程只拿 `window.data` 的轻量视图。
-5. **改评分或匹配语义必须递增 `SEARCH_ALGO_VER`**（当前为 11），否则用户本地的旧搜索缓存会给出过期结果。
-6. **新增 BUS 消息默认不跨标签页**：必须携带并校验 `tabId`，仅 `SEARCH_CACHE_CLEARED` 例外。
-7. **清库顺序**：先关闭 `MainDB` / `BookDB` / `ExcerptsDB` / `SideDB` 的所有句柄，并把 iframe 置为 `about:blank`，再删库，否则 `onblocked` 会死锁；清库期间 `_isBombing` 会屏蔽 `controllerchange` 触发的重载。
-8. **隐私底线**：任何新增的公网产物都不得读取私有页正文或其词汇统计；同义词 DF 只来自公开语料；新增产物后，要把它加进 `assertNoPrivateLeak` 的检查范围。
-9. **回写必须原子且有明确应答**：本地写文件一律经 `/__api/*` 执行 `.tmp` 原子替换并同步返回 HTTP 状态码，前端仅在收到 `200 OK` 后才清理草稿或刷新视图。
-10. **环境分支只认 `store.online_flag`**：不要在业务代码里另行判断 host 或端口。
-11. **不要移除反脱壳脚本**：内容页开头的 `top === self` 跳转保证页面始终运行在壳内。
-12. **切片版本一致性**：切片拉取要么全部成功再原子落盘，要么整轮放弃，不允许半新半旧。
-13. **本地 API 强鉴权，输入一律不可信**：前端调用本地能力统一经 `shared-utils.js` 的 `callLocalApi`；`swamp-server` 所有 `/__api/*` 必须经过 `Origin` + `Sec-Fetch-Site` + `X-Swamp-Token` 鉴权中间件；新增接口须做路径/参数白名单校验并补充 `--selftest` 用例，且在 `sim` 模式下绝不挂载。
-14. **构建失败必须让调用方知道**：新增的构建步骤要抛异常而不是 `catch` 后继续；成功标记（如增量哈希表）只在步骤成功后写入；不要在 gen 里改写源文件。
-15. **状态与 Schema 单一事实源**：`MainDB` Schema、每标签页 `sessionStorage` 键集合、`createStore` Proxy、以及 `protocol_name` / 音频路径白名单均由 `src/js/raw/site-core.js` 唯一定义，禁止在其他模块或 `sw.js` 抄写副本。
-16. **本机私有路径不入库**：含用户名或本机盘符的路径一律写入 `_build/privy/local.toml`（`.gitignore` 忽略且 `swamp.exe` 禁访），不得写进 `swamp.toml`、`build.bat` 或任何公网 JS。
-
----
-
-## 十三、AI Agent 会话与协作
-
-借助 AI Agent 做二次开发、算法调优或 Bug 修复时，按「最小必传集 + 按场景加传」提供上下文，避免无关大文件稀释注意力。
-
-### 基础必传清单
-
-| 文件路径 | 作用与必传原因 |
-| :--- | :--- |
-| `README.md` | 让 AI 一次性掌握全局约束（Java 8、零框架原生 ESM、公私隔离、模块拓扑、SW 与缓存协议、不变量清单） |
-| `_build/swamp-server/src/lib.rs` | 检索与渲染核心算法（噪值匹配、评分、DocFilter、Bloom、ADS 布尔求值、LCS Diff、`format_markdown`） |
-| `src/js/raw/worker.js` | Worker 调度（8 ms 时间片、抢占取消、代际重扫、同义词与 Bloom 交互） |
-| `src/js/raw/search-engine.js` | 主线程检索内核（IDB LRU 缓存、双命名空间失效、ADS 解析、书内桥接、高亮区间计算） |
-| `src/js/raw/search-ui.js` | 搜索前端交互（防抖、联想、结果列表、折叠锚记、`#sf-bar` 筛选与作用域切换） |
-
-### 按调优目标加传
-
-| 目标 | 加传文件 |
-| :--- | :--- |
-| 近义词召回、消歧、新词扩充 | `_build/swamp-server/src/builder/synonyms.rs` + `_build/swamp.toml`（`[synonyms]` 区块）+ 管理窗口 OOV 报告（`cilin.txt` 体积大且只读，无需上传） |
-| HTML 页内高亮、Diff、双语固化 | `src/js/raw/content.js` + `src/js/raw/bilingual.js` + `src/js/raw/shared-utils.js` |
-| 电子书书内搜索与阅读器 | `src/tpl/txt.html` / `pdf.html` / `epub.html` + `src/js/raw/pdf-viewer.js` + `src/css/raw/pdf-viewer.css` + `src/js/raw/index.js` + `src/js/raw/search-preview.js` + `src/js/raw/book-db.js` |
-| Markdown 浮窗预览与本地固化 | `src/tpl/md_viewer.html` + `src/js/raw/deferred-features.js` + `_build/CLI.bat` |
-| 评论融合搜索与同步 | `src/js/raw/comments.js` |
-| SW 缓存、热更新快照、构建清单 | `src/js/raw/site-core.js` + `src/js/raw/index.js` + `src/js/raw/sw.js` + `src/js/raw/snapshot.js` + `_build/swamp-server/src/builder/generator.rs` + `_build/swamp.toml` |
-| 构建链、安全配置与本地服务 | `_build/swamp.toml` + `_build/swamp-server/` |
-
-### 压缩包收发与回填约定（配合管理窗口内置 Pack & Apply）
-
-本项目已将按仓库相对层级打包上传与一键解压回填（原生三态目录树、场景预设、自动备份与一键回滚）内建至 `swamp.exe` 管理窗口的 `Pack` / `Apply` 标签页，AI 交付代码改动时须严格遵守以下打包规范：
-
-1. **输入包约定（上传给 AI 的 `.zip`）**
-   - 包内所有文件路径均为**仓库根目录相对路径**（如 `src/js/raw/index.js`、`_build/CLI.bat`）。
-   - 仅包含源码与必要配置，不包含已压缩产物、`.map` 及 `_build/privy/`、`_build/temp/` 私有与临时文件。
-
-2. **输出包约定（AI 返回的补丁 `.zip`）**
-   - **路径与仓库根对齐**：所有条目直接从仓库根相对路径起算（如 `src/js/raw/side.js`、`README.md`），**严禁套一层多余的顶层目录**（禁止 `patch/src/...` 或 `repo/src/...`）。
-   - **只打增量文件**：压缩包内**仅放本次实际新增或修改的文件**，未改动的文件不要塞回包里。
-   - **必须为完整文件**：包内每个文件都必须是可直接覆盖落盘的完整源码，**严禁使用 `// ... 其余代码省略` 或 diff 片段代替完整内容**。
-   - **只改源码不改产物**：前端仅修改 `src/js/raw/*`、`src/css/raw/*`、`src/tpl/*`、`index.html` 等源文件，**不要**生成或覆盖 `src/js/*.js` 压缩产物、根目录 `sw.js`、`core-list.js`、`core-bundle.json`、`synonyms.js`（均由本地 `CLI.bat gen` 生成）。
-   - **编码与换行**：`.bat` / `.cmd` 使用 UTF-8 无 BOM + CRLF；`.ps1` 使用 UTF-8 带 BOM + CRLF；其余文件保持原编码与换行风格。
-   - **说明文档命名**：如需在包内附带说明或验证步骤，请命名为根目录 `PATCH_NOTES.md` 或 `APPLY_AND_VERIFY.md`（回填工具会自动识别为说明文件并默认跳过，不污染仓库）。
-   - **禁区与删除项**：禁止包含 `.git/` 内文件；如涉及删除旧文件、重命名文件、升级第三方库或需要手工执行 `swamp gen` / 修改 `_build/privy/local.toml`，必须在回复正文中单独列出清单（ZIP 覆盖无法执行删除操作）。
-
-
-### 高效提问与 Badcase 复现格式
-
-```text
-【查词】: `xxx` （噪值: 5 / 近义: 开启 / 范围: 全站或书内）
-【现状】: 当前排名第 1 的是《页面 A》，期望结果《页面 B》排在第 12 位（或未召回）。
-【期望】: 请结合 lib.rs 与 search-engine.js 分析匹配与评分原因，并给出最小改动方案。
-
-如果是先讨论、后打包的两步协作，首轮只需说「按仓库根目录相对层级打包的 zip，先解压分析某某问题」，等确认方案再回「按原相对层级打增量完整文件 zip」
-```
-
+| Cache Storage | `core-cache-{BUILD_VERSION}` | 站点壳、静态脚本样式、HTML、Wasm、`synonyms.js`、README、`sw-manifest.json`；新 SW `activate` 删除旧桶 |
+| Cache Storage | `media-cache` | 媒体、字体、PDF cmaps/standard_fonts/iccs/wasm/images；Cache-First，仅检测到删除时定向清理 |
+| IndexedDB | `MainDB` v3 | `chunks`（fat 切片）、`update_logs`、`search_cache`（最多 500 条 LRU，单次 $>300$ 条不入库）、`sys_state`（LRU 索引、评论快照、媒体路径快照、`pending_search_cache_clear`）、`html_snapshots`（每页最多 10 版 deflate-raw 快照） |
+| IndexedDB | `BookDB` v1 | `book_extracts`（最多 30 本 / 32 MB，单本上限 12 MB）、`search_cache`（最多 600 条 / 16 MB，单书 80 条、单条 512 KB）；超 4 KB 启用 deflate-raw；常规更新不清空，仅删书时清理 |
+| IndexedDB | `ExcerptsDB` / `SideDB` / `AlignDrafts` (v1) | 摘抄本、侧栏已阅标记、双语页编辑草稿 |
+| `localStorage` | `store` + `__swamp_local_token__` | 用户偏好、历史、收藏、滚动/媒体/电子书进度、壁纸、本地会话令牌（定时巡检 4 MB 告警） |
+| `sessionStorage` | `ss_restore_strict` + 20 个 tab 键 | 热更新一次性现场快照 + 每标签页隔离状态 |
+| 本地磁盘 | `_build/temp/` | `swamp_runtime.log`（上限 800 条）、`backup/build_hashes.txt`（`swamp-min-v3\|raw_sha\|out_sha`）、`backup/synonyms.sha256`、`backup/oov_report.txt`、打包与回填快照 |
+
+### 6. 缓存机制与搜索算法
+
+- **SW 更新与防撕裂**：
+  - 安装期比对旧桶 `sw-manifest.json`：未变项直接拷贝；`core-bundle.json` 来源变更数 $> 15$ 或首装时拉大包解包，否则并入独立批按网速（4/2/1 并发，30 s 超时，同 URL 合并）拉取。
+  - `CRITICAL_URLS` 任一拉取失败直接中止安装；非关键文件回退旧桶并保留旧哈希。
+  - 线上拦截 `core-list.js` 时由 SW 用自身 `FILE_MANIFEST` 实时合成响应，杜绝 waiting 期间“旧代码 + 新清单”撕裂；本地模式走 Network-Only 断网回退缓存，放行 `/__api/*`。
+- **搜索缓存四重失效**：
+  1. `core` 命名空间：`v{SEARCH_ALGO_VER}|d:{dataFp}` 变化清空 `search_cache` 并跨标签页广播 `SEARCH_CACHE_CLEARED`；
+  2. `syn` 命名空间：`synonyms.js` 指纹变化清空并重搜；
+  3. SW 安装检测到 `synonyms.js` / `.wasm` / Wasm 胶水变化，写 `pending_search_cache_clear`，`activate` 时清库；
+  4. 增量切片全成功原子落盘后主动清库。
+- **检索与评分内核（`lib.rs` + `worker.js` + `synonyms.js` v5.1）**：
+  - 噪值上限 $\min(\text{noise}, \text{len} > 25 ? 0 : \lfloor \text{len}/2 \rfloor)$；硬边界 `\n \r 。！？；!?;`。
+  - 重叠区间裁决优先级：`tier`（原词 > 1-hop > 双槽）> `noise` > `weight` > 长度。
+  - 计分：标题基分 5000（每噪 $-500$，同义封顶 4500），正文基分 100（每噪 $-10$，同义封顶 450）；同类命中降序后按次线性饱和系数 $k / (k + i)$ 累加（标题 $k = 1$，正文 $k = 4$）；再按文档最小原词噪值加保底分（0 噪 $+10000$，1 噪 $+3000$，2 噪 $+2200$，3 噪 $+1500$，4 噪 $+900$，其余 $+500$）。
+  - 加速：全局 bigram Bloom（语料 1 MB、评论 256 KB）-> 文档级自适应 unigram/bigram `DocFilter`（按字数分 4 档）-> `ScanPlan` 首字掩码与倒排单遍扫描。
+  - 布尔组合（ADS）：手写递归下降 -> 德摩根下推 NNF -> 双端拦截空文档恒真 -> `ads_optimize` 将 `And` 子句按（非否定 > 噪值升序 > 词长降序）排序短路；先联合正文+评论求值，再仅正文复核判定 `viaComment`。
+  - 抢占调度：`MessageChannel` 让出事件循环，8 ms 自适应时间片（16–4096 篇动态伸缩）；`token` 变更立即中止，`dataGen` / `commentGen` 变更自动重扫。
+  - 近义扩展：三路策略（A 整词直达 -> B `#`/`@` 独立词与 `stopExpand` 保护不拆 -> C DP 最优分词 + 词林 5 级编码 LCA 上下文消歧），受语料 DF 分桶乘数与 `K`/`L` 虚词降权约束；全站搜用 `bloom_might_match` 裁剪，书内搜用 `cacheTag='raw'` 跳过全站 Bloom 裁剪。
+  - 页内 Diff：双方 `<pre>` 渲染为标准化 Token 序列，调用 Rust `similar` LCS（矩阵超 $2.5 \times 10^7$ 格熔断防 OOM）。
+
+### 7. 安全防范与鲁棒性
+
+- **本地服务安全边界**：
+  - 仅绑定 `127.0.0.1:<port>`；32 字节随机 Hex 令牌仅驻留内存，通过 `#__swamp_token=` 传入并立即 `replaceState` 抹除。
+  - `/__api/*` 四重鉴权：`Origin` 白名单 + `Sec-Fetch-Site: same-origin` + `subtle` 常量时间比对 `X-Swamp-Token` + 参数白/黑名单（`sim` 模式完全不挂载）。
+  - 静态路径守卫：解码后拦截控制字符、反斜杠、`.`/`..`、隐藏文件、Windows 8.3 短名、尾点/尾空格、`:`、内部命名空间；`Serve` 模式对 `_build/**` 默认拒绝仅白名单放行 `txn.txt` 与 `upcoming_tasks.json`，`Sim` 模式整目录封禁 `_build/**` 与 `shadow*`。
+  - 防命令注入与 XSS：`validate_title` 禁止 Windows 路径非法字符及 `&;()`；Windows 优先解析 `Code.exe` 直接拉起，回退 `cmd /c` 时拦截全部 cmd 元字符；`/__oauth/callback` 对 `error` 执行 HTML 转义并强制下发 `script-src 'none'` CSP。
+  - 补丁回填安全：`pack_apply.rs` 校拦截路径穿越、8.3 短名、尾点/尾空格、Windows 保留设备名及 `.git`，限制单文件 64 MB / 总解压 256 MB，大小写不敏感路径去重，备份目录删除受 `canonicalize` + `starts_with` 约束。
+  - 全站禁 `eval`：默认 CSP 放行 `'wasm-unsafe-eval'` 禁 `'unsafe-eval'`；`street_view_uploader.html` 单独放行 Tailwind CDN 与 Google GSI；灯箱 `about:blank` 达到 `script-src 'none'`，`pdf.html` 零 `'unsafe-inline'`，`bilingual.html` 补齐 `<meta>` CSP。
+  - 公私隔离：`assert_no_private_leak` 对 `fat_data_*.json` 逐条校验私有 `recordId` 必为 `"localOnly"`，并对全长度私有正文（原文 + JSON 转义串）扫描全部公网产物。
+- **鲁棒性与自愈**：
+  - 原子写盘（`write_bytes_atomic` / `write_atomic`）：`{name}.{pid}.{seq}.swamp.tmp` 写完再 `rename`，Windows 共享冲突（错误码 5/32）自动退避重试 4 次。
+  - 无 UAF 并发模型：`gui.rs` 后台线程与 UI 通过 `Arc<GuiMailbox>` + `PostMessageW` 通信，杜绝裸指针跨线程访问。
+  - `swamp.exe --selftest` 内置 42 项回归用例，每次 `build.bat exe` 自动执行。
+  - 前端看门狗（90 s / 45 s）仅提示不自动删库；三级自愈通道（远端 `repair_command_id` -> URL `?repair=1` -> `@bomb` 交互清理）。
+
+### 8. 硬性条件（改动前必核对）
+
+1. **只改源码，不手改构建产物**：`src/js/*.js`、`src/css/*.css`、根目录 `sw.js`、`core-list.js`、`synonyms.js`、`core-bundle.json`、`lite_data.js`、`fat_data_*.json` 均由 `swamp.exe gen` 生成。
+2. **新增需离线的静态文件**：必须命中 `_build/swamp.toml` `[build.precache]` 规则；首屏关键模块同步加入 `src/js/raw/sw.js` 的 `CRITICAL_URLS`。
+3. **主线程不持全文**：全文检索与 Diff 逻辑放 Worker / Wasm，主线程只保留 `window.data` 轻量视图。
+4. **改匹配或评分语义必递增 `SEARCH_ALGO_VER`**（当前 `11`，需同步更新 `search-engine.js` 与 `book-db.js` / 阅读器默认参数）。
+5. **BUS 消息必检 `tabId`**：仅 `SEARCH_CACHE_CLEARED` 允许跨标签页。
+6. **删 IDB 前先关连接**：清库必须先关 `MainDB` / `BookDB` / `ExcerptsDB` / `SideDB` 并置 iframe 为 `about:blank`，清库期置 `window._isBombing = true`。
+7. **公私隔离底线**：任何新增公网产物严禁读取私有正文或其词频，并同步纳入 `assert_no_private_leak` 检查。
+8. **单一事实源**：`MainDB` Schema、20 个 `TAB_SCOPED_KEYS`、`createStore` 与路径/协议白名单只在 `src/js/raw/site-core.js` 定义。
+9. **环境分支只认 `store.online_flag`**，不要在业务代码里散落判断 host/port。
+10. **不移除内容页反脱壳脚本**（`top === self` 跳转回首页）。
+11. **本机私有路径不入库**：一律写入 `_build/privy/local.toml`。
+12. **新增本地 API 必须走鉴权中间件并补充 `--selftest`**，`sim` 模式绝不挂载。
+
+### 9. AI 协作约定
+
+#### 两步协作法
+1. **第一步（只分析、不盲改）**：提供上下文压缩包（或 MD 分卷）与具体现象/目标，让 AI 定位根因并给出最小改动方案，双方确认边界后再动手。
+2. **第二步（按约定交付补丁）**：确认方案后，让 AI 按下述回填规范打包增量完整文件 `.zip`（或输出完整文件代码块）。
+
+**按场景最小上传集**（与 `swamp.toml` Pack 预设对应）：
+- 核心检索：`README.md` + `_build/swamp-server/src/lib.rs` + `src/js/raw/{worker,search-engine,search-ui}.js`
+- 近义词调优：`README.md` + `_build/swamp.toml` + `_build/swamp-server/src/builder/{synonyms.rs,synonyms_tpl.js}` + `oov_report.txt`（无需传 `cilin.txt`）
+- 构建与本地服务：`README.md` + `.gitignore` + `_build/swamp.toml` + `_build/swamp-server/` 源码（不传 `Cargo.lock` 与 `target/`）
+- SW / 热更新 / 清单：`README.md` + `index.html` + `src/js/raw/{site-core,index,sw,snapshot}.js` + `_build/swamp.toml` + `generator.rs` + `config.rs`
+- 电子书阅读器：`README.md` + `src/tpl/{pdf,epub,txt}.html` + `src/js/raw/{pdf-viewer,book-db,search-preview,shared-utils}.js` + `src/css/raw/pdf-viewer.css`
+
+#### 打包与回填规范
+- **上传给 AI（Pack）**：仓库根目录相对路径，仅含源码与配置，不含压缩产物、`.map`、`_build/privy/`、`_build/temp/`。若目标 AI 不支持 `.zip`，在管理窗 Pack 页勾选「拼接 MD」并设置合适单文件 KB 上限分卷上传。
+- **AI 返回补丁（Apply）**：
+  - 所有条目直接从**仓库根目录相对路径**起算，严禁多套一层顶层目录（如 `patch/`、`repo/`）。
+  - **仅打本次实际新增或修改的增量文件**，每个文件必须是**可直接覆盖的完整源码**，禁止用省略注释或 diff 片段替代。
+  - **只改源码不改构建产物**（不塞压缩后 JS/CSS、根目录 `sw.js`、`core-list.js`、`core-bundle.json`、`synonyms.js`）。
+  - **编码与换行**：`.bat` / `.cmd` 用 UTF-8 无 BOM + CRLF；`.ps1` 用 UTF-8 带 BOM + CRLF；其余文件保持原编码与换行风格。
+  - **说明文件与禁区**：验证步骤放根目录 `PATCH_NOTES.md` 或 `APPLY_AND_VERIFY.md`（Apply 默认自动跳过）；禁止包含 `.git` 内文件；若涉及**删除/重命名文件、修改 `local.toml`、重编译 `swamp.exe`/Wasm 或执行 `gen`**，必须在回复正文显式列出。
+
+#### `README.md` 同步修正原则
+- 只要改动影响了功能入口、配置项、构建步骤、架构拓扑、存储结构、安全策略、版本号或自检数量，应在同一次补丁中同步修订 `README.md` 的对应位置，不留陈旧描述（如已淘汰的旧脚本名或旧参数）。
+- 保持克制、客观的实话文风：写清楚“是什么、在哪、怎么工作、有哪些限制”，不堆修饰词，不写营销腔，不破坏全文结构与版 A / 版 B 的定位分工；不要在 `README.md` 里追加零散的逐日更新流水账，直接把最终现状写准确。
