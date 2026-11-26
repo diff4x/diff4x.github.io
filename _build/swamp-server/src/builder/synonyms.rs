@@ -502,7 +502,7 @@ pub fn read_oov_report(cfg: &ServerConfig) -> String {
             return s;
         }
     }
-    "（尚未生成新词雷达报告，请先执行一次「gen」或点击「重建 synonyms.js」）".to_string()
+    "（尚未生成未收录词报告，请先执行一次 gen 或点击保存并重建）".to_string()
 }
 
 fn load_cilin_text(cfg: &ServerConfig) -> Result<Option<String>, String> {
@@ -565,7 +565,7 @@ fn render_oov_report(
 
     let now = Local::now().format("%Y-%m-%d %H:%M:%S");
     let mut sb = String::new();
-    sb.push_str("# 本地新词雷达报告 (oov_report.txt) — 仅本地参考，请勿提交或发布\n");
+    sb.push_str("# 未收录高频词报告 (oov_report.txt) - 仅本地参考，不入库\n");
     sb.push_str(&format!(
         "# 生成时间: {} | 公开统计文档数: {} | 筛选阈值: DF >= {}, TF >= {}\n",
         now, total_public_docs, min_df, min_tf
@@ -616,7 +616,7 @@ pub fn prepare_if_needed(
         log_warn(
             logs,
             format!(
-                "[Synonyms] 未找到 {}，跳过 synonyms.js 自动生成。",
+                "[synonyms] 未找到 {}，跳过生成 synonyms.js",
                 cfg.cilin_file.display()
             ),
         );
@@ -858,7 +858,7 @@ pub fn prepare_if_needed(
     }
 
     let minified_js = minify_js(&raw_js)
-        .map_err(|e| format!("synonyms.js 内置 JS 压缩失败，已中止写出: {}", e))?;
+        .map_err(|e| format!("synonyms.js 压缩失败，已停止写入: {}", e))?;
     let out_sha = sha256_hex(minified_js.as_bytes());
 
     Ok(Some(PreparedSynonyms {
@@ -904,7 +904,7 @@ pub fn commit_prepared(
     log_info(
         logs,
         format!(
-            "[Synonyms] 已生成 {} ({} bytes, 公开文档 {})",
+            "[synonyms] 已生成 {} ({} 字节，公开文档 {} 篇)",
             staged.out_path.display(),
             staged.minified_js.len(),
             staged.total_public_docs

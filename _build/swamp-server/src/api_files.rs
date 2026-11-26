@@ -112,7 +112,7 @@ pub async fn put_html(
         return err_resp(StatusCode::INTERNAL_SERVER_ERROR, e);
     }
 
-    state.logs.info(format!("[api] 已固化双语页: {}.html", title));
+    state.logs.info(format!("[api] 已保存双语页: {}.html", title));
     Json(json!({ "ok": true })).into_response()
 }
 
@@ -129,23 +129,53 @@ pub async fn put_md(
         return err_resp(StatusCode::BAD_REQUEST, "Markdown 内容为空，已拒绝写入");
     }
 
-    let mut target = state.config.repo_root.clone();
-    for seg in &segs {
-        target.push(seg);
+    let state_bg = state.clone();
+    let content = req.content;
+    let res = tokio::task::spawn_blocking(move || -> Result<(String, String), (StatusCode, String)> {
+        let mut target = state_bg.config.repo_root.clone();
+        for seg in &segs {
+            target.push(seg);
+        }
+
+        let parent = match target.parent().and_then(|p| std::fs::canonicalize(p).ok()) {
+            Some(p) if p.is_dir() && p.starts_with(&state_bg.config.repo_root) => p,
+            _ => return Err((StatusCode::NOT_FOUND, "目标目录不存在或越界".to_string())),
+        };
+        let final_target = parent.join(segs.last().unwrap());
+
+        if let Err(e) = write_atomic(&final_target, &content, false) {
+            return Err((StatusCode::INTERNAL_SERVER_ERROR, e));
+        }
+
+        let rel_joined = segs.join("/");
+        let latest_ver = match crate::services::md_history::record_if_changed(
+            &state_bg.config,
+            &rel_joined,
+            Some(&state_bg.logs),
+        ) {
+            Ok((ver, _)) => ver,
+            Err(e) => {
+                state_bg
+                    .logs
+                    .warn(format!("[md-hist] 记录 {} 变更失败: {}", rel_joined, e));
+                String::new()
+            }
+        };
+        Ok((rel_joined, latest_ver))
+    })
+    .await;
+
+    match res {
+        Ok(Ok((rel_joined, latest_ver))) => {
+            state.logs.info(format!("[api] 已保存文件: {}", rel_joined));
+            Json(json!({ "ok": true, "ver": latest_ver })).into_response()
+        }
+        Ok(Err((code, msg))) => err_resp(code, msg),
+        Err(e) => err_resp(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("保存任务异常中止: {}", e),
+        ),
     }
-
-    let parent = match target.parent().and_then(|p| std::fs::canonicalize(p).ok()) {
-        Some(p) if p.is_dir() && p.starts_with(&state.config.repo_root) => p,
-        _ => return err_resp(StatusCode::NOT_FOUND, "目标目录不存在或越界"),
-    };
-    let final_target = parent.join(segs.last().unwrap());
-
-    if let Err(e) = write_atomic(&final_target, &req.content, false) {
-        return err_resp(StatusCode::INTERNAL_SERVER_ERROR, e);
-    }
-
-    state.logs.info(format!("[api] 已固化 Markdown: {}", segs.join("/")));
-    Json(json!({ "ok": true })).into_response()
 }
 
 pub async fn post_bookmark(

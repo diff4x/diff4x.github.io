@@ -10,7 +10,7 @@ use tokio::fs::File;
 use tokio::io::{AsyncReadExt, AsyncSeekExt, SeekFrom};
 use tokio_util::io::ReaderStream;
 
-use crate::security::{validate_static_request_path, AppState, RunMode};
+use crate::security::{validate_decoded_static_path, validate_static_request_path, AppState, RunMode};
 
 pub async fn handle_static(
     State(state): State<Arc<AppState>>,
@@ -46,7 +46,7 @@ pub async fn handle_static(
         Ok(rel) => format!("/{}", rel.to_string_lossy().replace('\\', "/")),
         Err(_) => return StatusCode::FORBIDDEN.into_response(),
     };
-    if validate_static_request_path(&canon_rel_path, state.mode).is_none() {
+    if validate_decoded_static_path(&canon_rel_path, state.mode).is_none() {
         return StatusCode::FORBIDDEN.into_response();
     }
 

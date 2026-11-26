@@ -353,10 +353,11 @@ html,body{height:auto;overflow:visible}#panes,.pv-wrap{display:block}.pv{overflo
     });
   }
 
-  let cm = null, rawText = '', diskText = '', sessionInitText = null, raf = 0, saving = false;
+  let cm = null, rawText = '', diskText = '', raf = 0, saving = false;
   let tocSig = '', tocHeadings = [], tocLinks = [], spyRaf = 0;
   let diffActive = false, diffMode = 'render', diffOnlyChanges = false, diffBusy = false;
-  let diffSnapshots = [], diffHunks = [], diffHunkIdx = -1, diffLiveTimer = 0, diffRenderSeq = 0;
+  let diffSnapshots = [], localMdVersions = [], localLatestVer = '', localRevCache = new Map();
+  let diffHunks = [], diffHunkIdx = -1, diffLiveTimer = 0, diffRenderSeq = 0;
   let lcsDiffFn = null, lcsLoadPromise = null;
 
   const normLF = s => String(s ?? '').replace(/\r\n?/g, '\n');
@@ -807,7 +808,6 @@ html,body{height:auto;overflow:visible}#panes,.pv-wrap{display:block}.pv{overflo
     try {
       const text = await fetchMd();
       diskText = text;
-      sessionInitText = text;
       setVal(text);
       window._mdDirty = false;
       statusEl.textContent = '';
@@ -855,14 +855,19 @@ html,body{height:auto;overflow:visible}#panes,.pv-wrap{display:block}.pv{overflo
       diskText = text;
       window._mdDirty = false;
       statusEl.textContent = '✓ 已固化';
+      const prevTo = diffToSel.value;
+      const prevFrom = diffFromSel.value;
+      await loadMdSnapshots();
       refreshDiffControls();
       if (diffActive) {
-        if (diffToSel.value === 'draft') diffToSel.value = 'current';
-        if (diffFromSel.value === 'draft') diffFromSel.value = 'current';
-        if (diffToSel.value === diffFromSel.value) {
-          const alt = getAvailableDiffVersions().find(v => v.val !== diffToSel.value);
-          if (alt) diffFromSel.value = alt.val;
+        const latestVal = (isEditable && localLatestVer) ? localLatestVer : 'current';
+        let nextTo = prevTo === 'draft' ? latestVal : prevTo;
+        let nextFrom = prevFrom === 'draft' ? latestVal : prevFrom;
+        if (nextTo === nextFrom) {
+          const alt = getAvailableDiffVersions().find(v => v.val !== nextTo);
+          if (alt) nextFrom = alt.val;
         }
+        syncVersionSelects(nextTo, nextFrom);
         runDiff({ preserveScroll: true });
       }
       setTimeout(() => { if (!window._mdDirty) statusEl.textContent = ''; }, 1800);
@@ -1426,8 +1431,42 @@ html,body{height:auto;overflow:visible}#panes,.pv-wrap{display:block}.pv{overflo
     return text;
   }
 
+  async function callMdLocalApi(method, endpoint, body = null) {
+    if (window.top && typeof window.top.callLocalApi === 'function') {
+      return await window.top.callLocalApi(method, endpoint, body);
+    }
+    const m = await import('/src/js/shared-utils.js');
+    return await m.callLocalApi(method, endpoint, body);
+  }
+
+  function formatLocalVerTooltip(v) {
+    const s = String(v && v.ver || '');
+    const timeStr = /^\d{12}$/.test(s)
+      ? `20${s.slice(0, 2)}-${s.slice(2, 4)}-${s.slice(4, 6)} ${s.slice(6, 8)}:${s.slice(8, 10)}:${s.slice(10, 12)}`
+      : s;
+    const deltaStr = (v && (v.added || v.deleted)) ? ` (+${v.added} / -${v.deleted} 行)` : '';
+    return (v && v.is_latest ? '最新落盘 · ' : '') + timeStr + deltaStr;
+  }
+
   async function loadMdSnapshots() {
     diffSnapshots = [];
+    localMdVersions = [];
+    localLatestVer = '';
+    localRevCache.clear();
+
+    if (isEditable) {
+      try {
+        const res = await callMdLocalApi('GET', `/__api/ops/md-history?path=${encodeURIComponent(relPath)}`);
+        if (res && Array.isArray(res.versions)) {
+          localMdVersions = res.versions;
+          localLatestVer = res.latest_ver || (res.versions[0] && res.versions[0].ver) || '';
+        }
+      } catch (e) {
+        console.warn('[MD Diff] 本地版本历史读取失败:', e);
+      }
+      return;
+    }
+
     let idb = null;
     try {
       let decoded = mdPath;
@@ -1468,19 +1507,31 @@ html,body{height:auto;overflow:visible}#panes,.pv-wrap{display:block}.pv{overflo
 
   function getAvailableDiffVersions() {
     const versions = [];
+    if (isEditable) {
+      if (window._mdDirty) {
+        versions.push({ val: 'draft', label: '当前草稿 (未固化)', title: '编辑器中尚未保存的内容' });
+      }
+      if (localMdVersions.length > 0) {
+        for (const v of localMdVersions) {
+          versions.push({
+            val: v.ver,
+            label: v.is_latest ? `${v.ver} (最新)` : v.ver,
+            title: formatLocalVerTooltip(v)
+          });
+        }
+      } else {
+        versions.push({ val: 'current', label: '磁盘原版', title: '当前落盘的最新版本' });
+      }
+      return versions;
+    }
+
     const totalSnaps = diffSnapshots.length;
     const totalVersions = totalSnaps + 1;
-    if (isEditable && window._mdDirty) {
-      versions.push({ val: 'draft', label: '当前草稿 (未固化)', title: '编辑器中尚未保存的内容' });
-    }
     versions.push({
       val: 'current',
       label: totalSnaps > 0 ? `v${totalVersions} (最新)` : '磁盘原版',
       title: '当前落盘的最新版本'
     });
-    if (isEditable && sessionInitText !== null && normLF(sessionInitText) !== normLF(diskText)) {
-      versions.push({ val: 'session_init', label: '打开时原版 (本次会话)', title: '本次打开编辑器前的初始磁盘内容' });
-    }
     for (let i = 0; i < totalSnaps; i++) {
       const vNum = totalVersions - 1 - i;
       const tStr = formatSnapTime(diffSnapshots[i].ts);
@@ -1529,7 +1580,19 @@ html,body{height:auto;overflow:visible}#panes,.pv-wrap{display:block}.pv{overflo
   async function getVersionText(val) {
     if (val === 'draft') return normLF(getVal()).replace(/^\uFEFF/, '');
     if (val === 'current') return normLF(diskText).replace(/^\uFEFF/, '');
-    if (val === 'session_init') return normLF(sessionInitText ?? diskText).replace(/^\uFEFF/, '');
+    if (isEditable) {
+      if (localLatestVer && val === localLatestVer) {
+        return normLF(diskText).replace(/^\uFEFF/, '');
+      }
+      if (localRevCache.has(val)) return localRevCache.get(val);
+      const res = await callMdLocalApi(
+        'GET',
+        `/__api/ops/md-rev?path=${encodeURIComponent(relPath)}&ver=${encodeURIComponent(val)}`
+      );
+      const txt = normLF(res && typeof res.content === 'string' ? res.content : '').replace(/^\uFEFF/, '');
+      localRevCache.set(val, txt);
+      return txt;
+    }
     const idx = Number(val);
     if (Number.isInteger(idx) && idx >= 0 && idx < diffSnapshots.length) {
       return normLF(await decompressSnapshot(diffSnapshots[idx])).replace(/^\uFEFF/, '');

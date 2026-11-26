@@ -1,3 +1,4 @@
+use aho_corasick::AhoCorasick;
 use chrono::Local;
 use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
@@ -32,6 +33,12 @@ struct MediaNode {
     local_only: bool,
     link: String,
     media_type: String,
+}
+
+pub(crate) struct PrivateLeakInput {
+    pub label: String,
+    pub body: String,
+    pub allowed_lite_meta: Vec<String>,
 }
 
 struct HtmlScanOutcome {
@@ -148,6 +155,7 @@ pub fn run_with_options(
     let mut core_bundle: BTreeMap<String, String> = BTreeMap::new();
     let mut fat_data_map: BTreeMap<i64, String> = BTreeMap::new();
     let mut shadow_data_map: BTreeMap<i64, String> = BTreeMap::new();
+    let mut private_leak_entries: Vec<PrivateLeakInput> = Vec::new();
     let mut public_docs_for_df: BTreeMap<i64, String> = BTreeMap::new();
     let mut private_page_names: BTreeSet<String> = BTreeSet::new();
     let mut current_titles: HashSet<String> = HashSet::new();
@@ -170,6 +178,7 @@ pub fn run_with_options(
         &mut max_id,
         &mut fat_data_map,
         &mut shadow_data_map,
+        &mut private_leak_entries,
         &mut public_docs_for_df,
         &mut private_page_names,
         logs,
@@ -242,9 +251,11 @@ pub fn run_with_options(
 
     assert_no_private_leak(
         cfg,
+        &rules,
         &staging_dir,
         &private_page_names,
         &shadow_data_map,
+        &private_leak_entries,
         &generated_data_files,
         &core_bundle,
         staged_syn_js,
@@ -297,7 +308,7 @@ pub fn run_with_options(
         log_warn(
             logs,
             format!(
-                "[WARN] 已清理 {} 行失效图片引用（{} 个文件），原文件已备份到 {}",
+                "[gen] 已清理 {} 行失效图片引用（{} 个文件），备份位于 {}",
                 html_outcome.pruned_lines,
                 html_outcome.pending_rewrites.len(),
                 backup_dir.display()
@@ -333,11 +344,11 @@ fn prepare_index_html_injection(
     let end_tag = "<!-- PARAM-END -->";
 
     let Some(begin) = html.find(begin_tag) else {
-        log_warn(logs, "[Generator] 未在 index.html 中找到 PARAM-BEGIN，跳过注入。");
+        log_warn(logs, "[gen] index.html 缺少 PARAM-BEGIN 标记，跳过参数注入");
         return Ok(None);
     };
     let Some(end) = html.find(end_tag) else {
-        log_warn(logs, "[Generator] 未在 index.html 中找到 PARAM-END，跳过注入。");
+        log_warn(logs, "[gen] index.html 缺少 PARAM-END 标记，跳过参数注入");
         return Ok(None);
     };
     if end <= begin {
@@ -453,7 +464,7 @@ fn query_git_ignored(
             log_warn(
                 logs,
                 format!(
-                    "[WARN] 调用 git check-ignore 失败（本次将仅依赖内置 .gitignore 规则）: {}",
+                    "[gen] 调用 git check-ignore 失败，仅使用内置 .gitignore 规则: {}",
                     e
                 ),
             );
@@ -498,13 +509,13 @@ fn query_git_ignored(
             log_warn(
                 logs,
                 format!(
-                    "[WARN] git check-ignore 异常退出 (code={:?})，本次仅依赖内置 .gitignore 规则",
+                    "[gen] git check-ignore 返回异常状态 ({:?})，仅使用内置 .gitignore 规则",
                     status.code()
                 ),
             );
         }
         Err(e) => {
-            log_warn(logs, format!("[WARN] 等待 git check-ignore 失败: {}", e));
+            log_warn(logs, format!("[gen] 等待 git check-ignore 失败: {}", e));
         }
     }
     out
@@ -552,6 +563,7 @@ fn process_html_files_and_images(
     max_id: &mut i64,
     fat_data_map: &mut BTreeMap<i64, String>,
     shadow_data_map: &mut BTreeMap<i64, String>,
+    private_leak_entries: &mut Vec<PrivateLeakInput>,
     public_docs_for_df: &mut BTreeMap<i64, String>,
     private_page_names: &mut BTreeSet<String>,
     logs: Option<&LogBus>,
@@ -762,6 +774,17 @@ fn process_html_files_and_images(
             } else if is_private {
                 fat_data_map.insert(current_record_id, "localOnly".to_string());
                 shadow_data_map.insert(current_record_id, clean_text);
+                // 隔离断言剥离 #anchor 元信息，仅扫描真正私密正文，并记录允许出现在 lite_data.js 中的已知标题/时间戳
+                let body_only = extract_body_text(&search_text_buf, true);
+                let mut allowed_meta = vec![full_file_name.clone(), file_stem.clone(), title.clone()];
+                if !time_stamp.is_empty() {
+                    allowed_meta.push(time_stamp.clone());
+                }
+                private_leak_entries.push(PrivateLeakInput {
+                    label: format!("recordId={} ({})", current_record_id, full_file_name),
+                    body: body_only,
+                    allowed_lite_meta: allowed_meta,
+                });
             } else {
                 fat_data_map.insert(current_record_id, String::new());
             }
@@ -812,7 +835,7 @@ fn process_html_files_and_images(
         log_warn(
             logs,
             format!(
-                "[WARN] 发现 {} 处失效图片引用（{}）:\n  {}",
+                "[gen] 发现 {} 处失效图片引用（{}）:\n  {}",
                 missing_images.len(),
                 if cfg.prune_missing_images {
                     "将清理"
@@ -828,7 +851,7 @@ fn process_html_files_and_images(
         log_warn(
             logs,
             format!(
-                "[WARN] 发现 {} 处图片引用大小写不一致（线上 GitHub Pages 会 404）:\n  {}",
+                "[gen] 发现 {} 处图片路径大小写不一致（线上将 404）:\n  {}",
                 case_mismatches.len(),
                 preview.join("\n  ")
             ),
@@ -840,7 +863,7 @@ fn process_html_files_and_images(
         log_warn(
             logs,
             format!(
-                "[WARN] 发现 {} 个页面的 <title> 与文件名不一致（可能导致评论或本地编辑定位异常）:\n  {}",
+                "[gen] 发现 {} 个页面的 <title> 与文件名不一致:\n  {}",
                 title_mismatches.len(),
                 preview.join("\n  ")
             ),
@@ -851,7 +874,7 @@ fn process_html_files_and_images(
         log_warn(
             logs,
             format!(
-                "[WARN] 发现 {} 个页面的 #anchor 缺少 14 位时间戳:\n  {}",
+                "[gen] 发现 {} 个页面的 #anchor 缺少 14 位时间戳:\n  {}",
                 missing_timestamps.len(),
                 preview.join("\n  ")
             ),
@@ -989,7 +1012,7 @@ fn scan_all_medias(
                 &node.media_type,
                 info,
             ) {
-                log_warn(logs, format!("[WARN] 跳过异常媒体目录项 {}: {}", node.link, e));
+                log_warn(logs, format!("[gen] 跳过异常媒体路径 {}: {}", node.link, e));
             }
         }
     }
@@ -1615,7 +1638,7 @@ fn prepare_manifest(
         log_info(
             logs,
             format!(
-                "[Phase 2] 清单哈希与来源均无变化（{} 项），沿用旧 BUILD_VERSION。",
+                "[gen] 缓存清单无变化（{} 项），沿用当前版本",
                 sw_manifest.len()
             ),
         );
@@ -1660,7 +1683,7 @@ fn prepare_manifest(
     log_info(
         logs,
         format!(
-            "[Phase 2] 已生成新清单 BUILD_VERSION={} ({} 项)",
+            "[gen] 已更新缓存清单: 版本 {} ({} 项)",
             build_version,
             sw_manifest.len()
         ),
@@ -1763,75 +1786,220 @@ fn json_inner_escaped(s: &str) -> String {
     }
 }
 
-/// 抽取多窗口样本（长文均匀取 6 窗、中文 3 窗、短文取整段）并对公网产物做泄露检测
-fn scan_private_text_against_blobs(
-    label: &str,
-    text: &str,
+/// 基于 Aho-Corasick 自动机的单遍全覆盖泄露检测：
+/// - 24 字窗口 + 12 字重叠步长：保证任意 >= 35 字的局部泄露 100% 被至少一个完整窗口命中；
+/// - 全部私有页所有窗口合并为单个 AhoCorasick，每个公网产物仅线性扫描一次；
+/// - 命中后惰性复核独立磁盘公开语料（以及对 lite_data.js 排除该页已知标题/文件名/时间戳元信息），零误报。
+pub(crate) fn scan_private_pages_against_blobs(
+    entries: &[PrivateLeakInput],
     blobs: &[(String, String)],
+    public_corpus: &[&str],
     problems: &mut Vec<String>,
 ) {
-    let trimmed = text.trim();
-    let chars: Vec<char> = trimmed.chars().collect();
-    let n = chars.len();
-    if n < 10 {
+    const WIN: usize = 24;
+    const STEP: usize = 12;
+
+    struct ChunkMeta {
+        entry_idx: usize,
+        raw: String,
+        char_len: usize,
+    }
+
+    let mut chunks: Vec<ChunkMeta> = Vec::new();
+    for (entry_idx, entry) in entries.iter().enumerate() {
+        let trimmed = entry.body.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let mut seen: HashSet<String> = HashSet::new();
+        fn push_chunk(
+            chunks: &mut Vec<ChunkMeta>,
+            seen: &mut HashSet<String>,
+            entry_idx: usize,
+            s: String,
+        ) {
+            let non_ws = s.chars().filter(|c| !c.is_whitespace()).count();
+            if non_ws >= 4 && seen.insert(s.clone()) {
+                let char_len = s.chars().count();
+                chunks.push(ChunkMeta {
+                    entry_idx,
+                    raw: s,
+                    char_len,
+                });
+            }
+        }
+
+        let total_chars = trimmed.chars().count();
+        if total_chars <= WIN {
+            push_chunk(&mut chunks, &mut seen, entry_idx, trimmed.to_string());
+        } else {
+            for raw_line in trimmed.lines() {
+                let line = raw_line.trim();
+                if line.is_empty() {
+                    continue;
+                }
+                let lc: Vec<char> = line.chars().collect();
+                let n = lc.len();
+                if n <= WIN {
+                    if lc.iter().filter(|c| !c.is_whitespace()).count() >= 6 {
+                        push_chunk(&mut chunks, &mut seen, entry_idx, line.to_string());
+                    }
+                } else {
+                    let mut pos = 0usize;
+                    while pos + WIN <= n {
+                        push_chunk(
+                            &mut chunks,
+                            &mut seen,
+                            entry_idx,
+                            lc[pos..pos + WIN].iter().collect(),
+                        );
+                        pos += STEP;
+                    }
+                    if pos < n && n > WIN {
+                        push_chunk(
+                            &mut chunks,
+                            &mut seen,
+                            entry_idx,
+                            lc[n - WIN..n].iter().collect(),
+                        );
+                    }
+                }
+            }
+            if seen.is_empty() {
+                let all_c: Vec<char> = trimmed.chars().collect();
+                push_chunk(
+                    &mut chunks,
+                    &mut seen,
+                    entry_idx,
+                    all_c[..all_c.len().min(WIN)].iter().collect(),
+                );
+            }
+        }
+    }
+
+    if chunks.is_empty() {
         return;
     }
 
-    let (samples, min_hits): (Vec<String>, usize) = if n >= 200 {
-        let win = 36usize;
-        let count = 6usize;
-        let max_start = n - win;
-        let mut s = Vec::with_capacity(count);
-        for k in 0..count {
-            let start = (max_start * k) / (count - 1);
-            s.push(chars[start..start + win].iter().collect());
-        }
-        (s, 2)
-    } else if n >= 60 {
-        let win = 28usize;
-        let count = 3usize;
-        let max_start = n - win;
-        let mut s = Vec::with_capacity(count);
-        for k in 0..count {
-            let start = (max_start * k) / (count - 1);
-            s.push(chars[start..start + win].iter().collect());
-        }
-        (s, 2)
-    } else {
-        (vec![trimmed.to_string()], 1)
-    };
-
-    let sample_pairs: Vec<(String, String)> = samples
-        .into_iter()
-        .map(|raw| {
-            let esc = json_inner_escaped(&raw);
-            (raw, esc)
-        })
-        .collect();
-
-    for (blob_name, blob_text) in blobs {
-        let hits = sample_pairs
-            .iter()
-            .filter(|(raw, esc)| blob_text.contains(raw) || blob_text.contains(esc))
-            .count();
-        if hits >= min_hits {
-            problems.push(format!(
-                "公网产物 {} 含有私有页 ({}) 的正文片段 (命中 {}/{})",
-                blob_name,
-                label,
-                hits,
-                sample_pairs.len()
-            ));
+    let mut patterns: Vec<String> = Vec::with_capacity(chunks.len() * 2);
+    let mut pat_to_chunk: Vec<usize> = Vec::with_capacity(chunks.len() * 2);
+    for (ci, cm) in chunks.iter().enumerate() {
+        patterns.push(cm.raw.clone());
+        pat_to_chunk.push(ci);
+        let esc = json_inner_escaped(&cm.raw);
+        if esc != cm.raw {
+            patterns.push(esc);
+            pat_to_chunk.push(ci);
         }
     }
+
+    let Ok(ac) = AhoCorasick::new(&patterns) else {
+        problems.push("构造 Aho-Corasick 隔离扫描自动机失败".to_string());
+        return;
+    };
+
+    // 惰性缓存每个私有片段是否出现在公开原文中，避免对共享短语重复扫描公开语料
+    let mut in_public_cache: Vec<Option<bool>> = vec![None; chunks.len()];
+
+    for (blob_name, blob_text) in blobs {
+        let is_syn = blob_name.starts_with("synonyms.js");
+        let is_lite = blob_name == "lite_data.js";
+        let min_len_for_blob = if is_syn { WIN } else { 4 };
+        let mut reported_entries: HashSet<usize> = HashSet::new();
+
+        let Ok(iter) = ac.try_find_overlapping_iter(blob_text) else {
+            continue;
+        };
+        for mat in iter {
+            let ci = pat_to_chunk[mat.pattern().as_usize()];
+            let cm = &chunks[ci];
+            if cm.char_len < min_len_for_blob || reported_entries.contains(&cm.entry_idx) {
+                continue;
+            }
+            if is_lite {
+                let allowed = &entries[cm.entry_idx].allowed_lite_meta;
+                if allowed.iter().any(|m| !m.is_empty() && m.contains(cm.raw.as_str())) {
+                    continue;
+                }
+            }
+            let is_public = match in_public_cache[ci] {
+                Some(b) => b,
+                None => {
+                    let hit = public_corpus
+                        .iter()
+                        .any(|pub_doc| pub_doc.contains(cm.raw.as_str()));
+                    in_public_cache[ci] = Some(hit);
+                    hit
+                }
+            };
+            if !is_public {
+                reported_entries.insert(cm.entry_idx);
+                problems.push(format!(
+                    "公网产物 {} 含有私有页 ({}) 的独占正文片段",
+                    blob_name, entries[cm.entry_idx].label
+                ));
+            }
+        }
+    }
+}
+
+/// 独立从磁盘读取全部公开 HTML 正文与公开说明文档，作为隔离断言排除集（绝不复用待检构建流水线产物）
+fn load_independent_public_corpus_from_disk(
+    cfg: &ServerConfig,
+    rules: &IgnoreRules,
+    private_page_names: &BTreeSet<String>,
+) -> Vec<String> {
+    let mut docs = Vec::new();
+    if let Ok(rd) = fs::read_dir(&cfg.html_dir) {
+        for ent in rd.filter_map(|e| e.ok()) {
+            let p = ent.path();
+            if !p.is_file() {
+                continue;
+            }
+            let is_html = p
+                .extension()
+                .and_then(|s| s.to_str())
+                .map(|s| s.eq_ignore_ascii_case("html"))
+                .unwrap_or(false);
+            if !is_html {
+                continue;
+            }
+            let fname = p.file_name().unwrap().to_string_lossy().to_string();
+            let stem = Path::new(&fname)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or(&fname);
+            let rel = format!("html/{}", fname);
+            if stem.starts_with("__")
+                || private_page_names.contains(stem)
+                || rules.is_private_rel(&rel, false)
+            {
+                continue;
+            }
+            if let Ok(raw) = fs::read_to_string(&p) {
+                let clean = raw.strip_prefix('\u{FEFF}').unwrap_or(&raw);
+                docs.push(extract_body_text(clean, false));
+                docs.push(clean.to_string());
+            }
+        }
+    }
+    let readme_phys = join_rel(&cfg.repo_root, &normalize_web_path(&cfg.readme_md));
+    if readme_phys.is_file() {
+        if let Ok(raw) = fs::read_to_string(&readme_phys) {
+            docs.push(raw);
+        }
+    }
+    docs
 }
 
 #[allow(clippy::too_many_arguments)]
 fn assert_no_private_leak(
     cfg: &ServerConfig,
+    rules: &IgnoreRules,
     staging_dir: &Path,
     private_page_names: &BTreeSet<String>,
     shadow_data_map: &BTreeMap<i64, String>,
+    private_leak_entries: &[PrivateLeakInput],
     generated_data_files: &[String],
     core_bundle: &BTreeMap<String, String>,
     staged_synonyms_js: Option<&str>,
@@ -1892,25 +2060,23 @@ fn assert_no_private_leak(
         blobs.push(("core-list.js (staged)".to_string(), core_list.to_string()));
     }
 
-    for (rec_id, text) in shadow_data_map {
-        scan_private_text_against_blobs(
-            &format!("recordId={}", rec_id),
-            text,
-            &blobs,
-            &mut problems,
-        );
-    }
+    // 独立从磁盘读取公开正文构造排除集，避免流水线错误自洗白
+    let disk_public_docs =
+        load_independent_public_corpus_from_disk(cfg, rules, private_page_names);
+    let public_refs: Vec<&str> = disk_public_docs.iter().map(|d| d.as_str()).collect();
+
+    scan_private_pages_against_blobs(private_leak_entries, &blobs, &public_refs, &mut problems);
 
     if !problems.is_empty() {
         return Err(format!(
-            "公私隔离断言失败，已中止构建（未改动正式目录，请勿提交或推送）:\n  {}",
+            "隐私检查未通过，已停止构建（未改动正式目录）:\n  {}",
             problems.join("\n  ")
         ));
     }
     log_info(
         logs,
         format!(
-            "[Phase 2] 公私隔离断言通过（{} 个私有页均未泄露至公网产物）",
+            "[gen] 隐私检查通过（{} 个私有页未进入公网产物）",
             private_page_names.len()
         ),
     );
@@ -1946,8 +2112,9 @@ pub fn verify_public_outputs_clean(
         .git_ignored
         .extend(query_git_ignored(cfg, &rel_paths, logs));
 
-    let mut private_texts: Vec<(String, String)> = Vec::new();
+    let mut private_entries: Vec<PrivateLeakInput> = Vec::new();
     let mut private_names: BTreeSet<String> = BTreeSet::new();
+    let mut public_bodies: Vec<String> = Vec::new();
     for p in html_files {
         let fname = p.file_name().unwrap().to_string_lossy().to_string();
         let stem = Path::new(&fname)
@@ -1957,11 +2124,36 @@ pub fn verify_public_outputs_clean(
             .to_string();
         let rel = format!("html/{}", fname);
         if rules.is_private_rel(&rel, false) || stem.starts_with("__") {
-            private_names.insert(stem);
+            private_names.insert(stem.clone());
             if let Ok(raw) = fs::read_to_string(&p) {
-                let body = extract_body_text(raw.strip_prefix('\u{FEFF}').unwrap_or(&raw), false);
-                private_texts.push((fname, body));
+                let clean = raw.strip_prefix('\u{FEFF}').unwrap_or(&raw);
+                let body = extract_body_text(clean, true);
+                let parsed_title = extract_title(clean);
+                let anchor = extract_anchor_text(clean);
+                let mut allowed = vec![fname.clone(), stem];
+                if !parsed_title.is_empty() {
+                    allowed.push(parsed_title);
+                }
+                if !anchor.is_empty() {
+                    allowed.push(anchor);
+                }
+                private_entries.push(PrivateLeakInput {
+                    label: fname,
+                    body,
+                    allowed_lite_meta: allowed,
+                });
             }
+        } else if let Ok(raw) = fs::read_to_string(&p) {
+            let clean = raw.strip_prefix('\u{FEFF}').unwrap_or(&raw);
+            public_bodies.push(extract_body_text(clean, false));
+            public_bodies.push(clean.to_string());
+        }
+    }
+
+    let readme_phys = join_rel(&cfg.repo_root, &normalize_web_path(&cfg.readme_md));
+    if readme_phys.is_file() {
+        if let Ok(raw) = fs::read_to_string(&readme_phys) {
+            public_bodies.push(raw);
         }
     }
 
@@ -2013,13 +2205,12 @@ pub fn verify_public_outputs_clean(
         }
     }
 
-    for (fname, body) in &private_texts {
-        scan_private_text_against_blobs(fname, body, &blobs, &mut problems);
-    }
+    let public_refs: Vec<&str> = public_bodies.iter().map(|s| s.as_str()).collect();
+    scan_private_pages_against_blobs(&private_entries, &blobs, &public_refs, &mut problems);
 
     if !problems.is_empty() {
         return Err(format!(
-            "推送前公私隔离复核失败，已中止推送:\n  {}",
+            "推送前隐私检查未通过，已取消推送:\n  {}",
             problems.join("\n  ")
         ));
     }

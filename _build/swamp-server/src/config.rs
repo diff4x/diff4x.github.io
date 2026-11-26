@@ -330,11 +330,8 @@ impl ServerConfig {
         let katrain_dir =
             pick_private_only(local_toml.local.katrain_dir, "katrain_dir").unwrap_or_default();
 
-        let img_input_dir = resolve_dir(pick_local_str(
-            local_toml.local.img_input_dir,
-            main_toml.local.img_input_dir,
-            "imgInputDir",
-        ));
+        let img_input_dir =
+            resolve_dir(pick_private_only(local_toml.local.img_input_dir, "imgInputDir"));
 
         let default_webp_dir = repo_root.join("gallery").join("img");
         let webp_output_dir = if let Some(local_dir) = resolve_dir(local_toml.media.webp_output_dir) {
@@ -356,17 +353,12 @@ impl ServerConfig {
         };
 
         let webp_output_dir2 = resolve_dir(
-            pick_local_str(
-                local_toml.local.webp_output_dir2,
-                main_toml.local.webp_output_dir2,
-                "webpOutputDir2",
-            )
-            .or_else(|| pick_legacy("gallery_img_outputDir2")),
+            pick_private_only(local_toml.local.webp_output_dir2, "webpOutputDir2")
+                .or_else(|| pick_private_only(None, "gallery_img_outputDir2")),
         );
 
-        let keep_takeout_zip_folder = resolve_dir(pick_local_str(
+        let keep_takeout_zip_folder = resolve_dir(pick_private_only(
             local_toml.local.keep_takeout_zip_folder,
-            main_toml.local.keep_takeout_zip_folder,
             "keep_takeout_zip_folder",
         ));
 

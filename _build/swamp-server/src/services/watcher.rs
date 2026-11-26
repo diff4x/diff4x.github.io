@@ -12,7 +12,8 @@ use crate::services::log_bus::LogBus;
 
 /// 启动文件监听器：
 /// 1. 监控 src/js/raw、src/css/raw、src/css/font，改动后 300ms 防抖自动热压缩；
-/// 2. 监控 html/ 目录，VS Code 落盘保存后实时广播文件名，驱动浏览器自动重载当前页。
+/// 2. 监控 html/ 目录，VS Code 落盘保存后实时广播文件名，驱动浏览器自动重载当前页；
+/// 3. 监控仓库根目录 Markdown 文件（如 README.md），外部保存落盘后自动记录反向差异版本。
 pub fn spawn_asset_watcher(
     cfg: ServerConfig,
     logs: Arc<LogBus>,
@@ -51,21 +52,32 @@ pub fn spawn_asset_watcher(
                     .watch(&cfg.html_dir, RecursiveMode::NonRecursive)
                     .is_ok();
 
-            if !watched_assets && !watched_html {
+            let watched_md = cfg.repo_root.is_dir()
+                && watcher
+                    .watch(&cfg.repo_root, RecursiveMode::NonRecursive)
+                    .is_ok();
+
+            if !watched_assets && !watched_html && !watched_md {
                 return;
             }
-            if watched_assets && watched_html {
-                logs.info("[watcher] 已开启实时监听 (src/js/raw · src/css/raw 热压缩 + html/ 保存自动重载)");
-            } else if watched_html {
-                logs.info("[watcher] 已开启 html/ 保存自动重载监听");
-            } else {
-                logs.info("[watcher] 已开启前端源码实时热压缩监听 (src/js/raw · src/css/raw)");
+            let mut parts = Vec::new();
+            if watched_assets {
+                parts.push("前端资源压缩");
             }
+            if watched_html {
+                parts.push("html 自动刷新");
+            }
+            if watched_md {
+                parts.push("md 历史记录");
+            }
+            logs.info(format!("[watcher] 已启动文件监听: {}", parts.join(" + ")));
 
             let canonical_html_dir =
                 std::fs::canonicalize(&cfg.html_dir).unwrap_or_else(|_| cfg.html_dir.clone());
             let mut pending: HashSet<PathBuf> = HashSet::new();
             let mut last_event_at: Option<Instant> = None;
+            let mut pending_md: HashSet<String> = HashSet::new();
+            let mut last_md_event_at: Option<Instant> = None;
 
             loop {
                 match rx.recv_timeout(Duration::from_millis(120)) {
@@ -94,6 +106,23 @@ pub fn spawn_asset_watcher(
                                             let _ = html_change_tx.send(stem.to_lowercase());
                                         }
                                         continue;
+                                    }
+                                }
+                                let is_md_target = p
+                                    .extension()
+                                    .and_then(|e| e.to_str())
+                                    .map(|s| s.eq_ignore_ascii_case("md"))
+                                    .unwrap_or(false);
+                                if watched_md && is_md_target {
+                                    let canon_p =
+                                        std::fs::canonicalize(&p).unwrap_or_else(|_| p.clone());
+                                    if let Ok(rel_p) = canon_p.strip_prefix(&cfg.repo_root) {
+                                        let rel_s = rel_p.to_string_lossy().replace('\\', "/");
+                                        if crate::security::validate_rel_md_path(&rel_s).is_some() {
+                                            pending_md.insert(rel_s);
+                                            last_md_event_at = Some(Instant::now());
+                                            continue;
+                                        }
                                     }
                                 }
                                 if watched_assets {
@@ -134,7 +163,7 @@ pub fn spawn_asset_watcher(
                         let batch: Vec<PathBuf> = pending.drain().collect();
                         last_event_at = None;
                         for path in batch {
-                            let Some(_build_lock) = crate::builder::try_acquire_build_lock() else {
+                            let Some(_asset_lock) = crate::builder::try_acquire_asset_lock() else {
                                 break;
                             };
                             if crate::builder::is_gen_in_progress() {
@@ -142,12 +171,29 @@ pub fn spawn_asset_watcher(
                             }
                             match minify_single_asset(&cfg, &path) {
                                 Ok(Some(label)) => {
-                                    logs.info(format!("[watcher] 热压缩完成 -> {}", label));
+                                    logs.info(format!("[watcher] 已压缩 -> {}", label));
                                 }
                                 Ok(None) => {}
                                 Err(e) => {
-                                    logs.error(format!("[watcher] 热压缩失败: {}", e));
+                                    logs.error(format!("[watcher] 压缩失败: {}", e));
                                 }
+                            }
+                        }
+                    }
+                }
+
+                if let Some(t) = last_md_event_at {
+                    if t.elapsed() >= Duration::from_millis(300) && !pending_md.is_empty() {
+                        let md_batch: Vec<String> = pending_md.drain().collect();
+                        last_md_event_at = None;
+                        for rel in md_batch {
+                            if let Err(e) = crate::services::md_history::record_if_changed_with_coalesce(
+                                &cfg,
+                                &rel,
+                                crate::services::md_history::WATCHER_COALESCE_SECS,
+                                Some(&logs),
+                            ) {
+                                logs.warn(format!("[md-hist] 记录 {} 变更失败: {}", rel, e));
                             }
                         }
                     }

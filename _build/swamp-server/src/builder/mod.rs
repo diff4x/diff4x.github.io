@@ -11,6 +11,7 @@ use crate::config::ServerConfig;
 use crate::services::log_bus::LogBus;
 
 static GEN_LOCK: Mutex<()> = Mutex::new(());
+static ASSET_LOCK: Mutex<()> = Mutex::new(());
 static GEN_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
 static LAST_GEN_FINISHED_MS: AtomicU64 = AtomicU64::new(0);
 
@@ -33,9 +34,12 @@ pub fn is_gen_active_or_recent(cooldown_ms: u64) -> bool {
     last > 0 && now_epoch_ms().saturating_sub(last) < cooldown_ms
 }
 
-/// 供 File Watcher 热压缩与独立任务使用：非阻塞获取构建互斥锁，避免与 gen 竞态覆写产物
-pub fn try_acquire_build_lock() -> Option<MutexGuard<'static, ()>> {
-    match GEN_LOCK.try_lock() {
+/// 供 File Watcher 热压缩使用：仅非阻塞获取资源锁，避免与 gen 竞态，同时绝不导致手动点 gen 误报“正在运行”
+pub fn try_acquire_asset_lock() -> Option<MutexGuard<'static, ()>> {
+    if GEN_IN_PROGRESS.load(Ordering::SeqCst) {
+        return None;
+    }
+    match ASSET_LOCK.try_lock() {
         Ok(g) => Some(g),
         Err(TryLockError::Poisoned(p)) => Some(p.into_inner()),
         Err(TryLockError::WouldBlock) => None,
@@ -89,14 +93,19 @@ pub fn run_gen_with_options(
         Ok(g) => g,
         Err(TryLockError::Poisoned(p)) => p.into_inner(),
         Err(TryLockError::WouldBlock) => {
-            return Err("已有全量构建任务正在运行，请等待当前构建完成后重试".to_string());
+            return Err("构建任务正在运行，请等待完成后重试".to_string());
         }
     };
     GEN_IN_PROGRESS.store(true, Ordering::SeqCst);
     let _progress_guard = GenProgressGuard;
+    // 等待正在进行中的单文件热压缩收尾（毫秒级），随后全程持有 ASSET_LOCK 阻断并发热写
+    let _asset_lock = match ASSET_LOCK.lock() {
+        Ok(g) => g,
+        Err(p) => p.into_inner(),
+    };
 
     let t0 = Instant::now();
-    log_info(logs, "[swamp-gen] 开始纯 Rust 站点构建...");
+    log_info(logs, "[gen] 开始构建站点");
 
     let mut ledger = minify::IncrementalLedger::load(cfg);
 
@@ -108,7 +117,7 @@ pub fn run_gen_with_options(
     log_info(
         logs,
         format!(
-            "[swamp-gen] 构建全部完成，总耗时 {:.2}s",
+            "[gen] 构建完成，耗时 {:.2}s",
             t0.elapsed().as_secs_f64()
         ),
     );

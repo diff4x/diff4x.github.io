@@ -1,8 +1,8 @@
-importScripts('/src/js/core-list.js?v=1795667183766');
+importScripts('/src/js/core-list.js?v=1795699236653');
 const _scMeta = typeof FILE_MANIFEST === 'object' && FILE_MANIFEST && FILE_MANIFEST['/src/js/site-core.js'];
 importScripts('/src/js/site-core.js' + (_scMeta && _scMeta.hash ? ('?v=' + _scMeta.hash) : ''));
 
-self.SW_VERSION = '1795667183766';
+self.SW_VERSION = '1795699236653';
 self.EMERGENCY = 'repair_command_id=2';
 
 const CACHE_NAME_CORE = 'core-cache-' + BUILD_VERSION;

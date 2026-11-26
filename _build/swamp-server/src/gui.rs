@@ -117,6 +117,7 @@ const WM_APP_CLEAR_NEW_TITLE: u32 = WM_APP + 7;
 const WM_APP_EXIT_AND_BUILD: u32 = WM_APP + 8;
 const WM_APP_BACKUP_TREE: u32 = WM_APP + 9;
 const WM_APP_DOWNLOADS_TREE: u32 = WM_APP + 10;
+const WM_APP_DIFF_VIEWED: u32 = WM_APP + 11;
 
 const BM_GETCHECK: u32 = 0x00F0;
 const BM_SETCHECK: u32 = 0x00F1;
@@ -539,6 +540,7 @@ struct GuiMailbox {
     syn_data: Mutex<Option<(Option<String>, String)>>,
     sim_child: Mutex<Option<Child>>,
     pending_build_handoff: Mutex<Option<(PathBuf, PathBuf)>>,
+    diff_viewed_rels: Mutex<Vec<String>>,
 }
 
 impl GuiMailbox {
@@ -553,6 +555,7 @@ impl GuiMailbox {
             syn_data: Mutex::new(None),
             sim_child: Mutex::new(None),
             pending_build_handoff: Mutex::new(None),
+            diff_viewed_rels: Mutex::new(Vec::new()),
         }
     }
 
@@ -723,6 +726,7 @@ struct GuiData {
     apply_zip_bytes: Vec<u8>,
     apply_entries: Vec<ApplyEntryInfo>,
     apply_checked: HashSet<String>,
+    apply_diff_viewed: HashSet<String>,
     apply_nodes: HashMap<isize, TreeNodeData>,
     backups: Vec<BackupInfo>,
     backup_items: Vec<BackupTreeItem>,
@@ -980,6 +984,7 @@ pub fn run_management_window(
             apply_zip_bytes: Vec::new(),
             apply_entries: Vec::new(),
             apply_checked: HashSet::new(),
+            apply_diff_viewed: HashSet::new(),
             apply_nodes: HashMap::new(),
             backups: Vec::new(),
             backup_items: Vec::new(),
@@ -995,7 +1000,7 @@ pub fn run_management_window(
         });
 
         let title_w = to_wide(&format!(
-            "Swamp 管理控制台 [VPN: 探测中] - http://localhost:{}",
+            "Swamp 本地服务 (localhost:{}) | 网络: 检测中",
             state.config.port
         ));
 
@@ -1132,7 +1137,7 @@ unsafe fn build_all_controls(g: &mut GuiData, hwnd: HWND) {
     // Bottom Live Log (always visible)
     g.hwnd_lbl_log = create_ctrl(
         "STATIC",
-        "实时运行日志 [0 KB]:",
+        "运行日志 (0 KB)",
         WS_VISIBLE,
         0,
         IDC_LBL_LOG,
@@ -1163,17 +1168,17 @@ unsafe fn build_all_controls(g: &mut GuiData, hwnd: HWND) {
     SendMessageW(g.hwnd_edit_log, EM_SETLIMITTEXT, 512 * 1024, 0);
 
     // ================= TAB 0: 常规 =================
-    g.hwnd_grp_ops = create_ctrl("BUTTON", "构建", BS_GROUPBOX, 0, IDC_GRP_OPS, hwnd, hinst, f);
+    g.hwnd_grp_ops = create_ctrl("BUTTON", "站点构建与发布", BS_GROUPBOX, 0, IDC_GRP_OPS, hwnd, hinst, f);
     g.hwnd_btn_gen_push = create_ctrl("BUTTON", "gen + push", WS_TABSTOP | BS_PUSHBUTTON, 0, IDC_BTN_GEN_PUSH, hwnd, hinst, f);
     g.hwnd_btn_push = create_ctrl("BUTTON", "push", WS_TABSTOP | BS_PUSHBUTTON, 0, IDC_BTN_PUSH, hwnd, hinst, f);
     g.hwnd_btn_gen = create_ctrl("BUTTON", "gen", WS_TABSTOP | BS_PUSHBUTTON, 0, IDC_BTN_GEN, hwnd, hinst, f);
     g.hwnd_btn_root = create_ctrl("BUTTON", "root/", WS_TABSTOP | BS_PUSHBUTTON, 0, IDC_BTN_ROOT, hwnd, hinst, f);
     g.hwnd_btn_selfcheck = create_ctrl("BUTTON", "selfcheck", WS_TABSTOP | BS_PUSHBUTTON, 0, IDC_BTN_SELFCHECK, hwnd, hinst, f);
-    g.hwnd_btn_sim = create_ctrl("BUTTON", "simulator (9000)", WS_TABSTOP | BS_PUSHBUTTON, 0, IDC_BTN_SIM, hwnd, hinst, f);
+    g.hwnd_btn_sim = create_ctrl("BUTTON", "sim (9000)", WS_TABSTOP | BS_PUSHBUTTON, 0, IDC_BTN_SIM, hwnd, hinst, f);
     g.hwnd_btn_open_site = create_ctrl("BUTTON", "Open Site", WS_TABSTOP | BS_PUSHBUTTON, 0, IDC_BTN_OPEN_SITE, hwnd, hinst, f);
     g.hwnd_lbl_commit = create_ctrl("STATIC", "Commit:", 0, 0, IDC_LBL_COMMIT, hwnd, hinst, f);
     g.hwnd_edit_commit = create_ctrl("EDIT", "update", WS_TABSTOP | ES_AUTOHSCROLL, WS_EX_CLIENTEDGE, IDC_EDIT_COMMIT, hwnd, hinst, f);
-    g.hwnd_btn_reauth = create_ctrl("BUTTON", "Google Tasks 授权", WS_TABSTOP | BS_PUSHBUTTON, 0, IDC_BTN_REAUTH, hwnd, hinst, f);
+    g.hwnd_btn_reauth = create_ctrl("BUTTON", "重新授权 Tasks", WS_TABSTOP | BS_PUSHBUTTON, 0, IDC_BTN_REAUTH, hwnd, hinst, f);
 
     g.hwnd_grp_new = create_ctrl("BUTTON", "新建 HTML 页面", BS_GROUPBOX, 0, IDC_GRP_NEW, hwnd, hinst, f);
     g.hwnd_lbl_new_title = create_ctrl("STATIC", "标题:", 0, 0, IDC_LBL_NEW_TITLE, hwnd, hinst, f);
@@ -1182,7 +1187,7 @@ unsafe fn build_all_controls(g: &mut GuiData, hwnd: HWND) {
     g.hwnd_edit_new_cat = create_ctrl("EDIT", "", WS_TABSTOP | ES_AUTOHSCROLL, WS_EX_CLIENTEDGE, IDC_EDIT_NEW_CAT, hwnd, hinst, f);
     g.hwnd_chk_new_open = create_ctrl("BUTTON", "创建后用 VS Code 打开", WS_TABSTOP | BS_AUTOCHECKBOX, 0, IDC_CHK_NEW_OPEN, hwnd, hinst, f);
     set_checked(g.hwnd_chk_new_open, true);
-    g.hwnd_btn_new = create_ctrl("BUTTON", "创建页面", WS_TABSTOP | BS_PUSHBUTTON, 0, IDC_BTN_NEW, hwnd, hinst, f);
+    g.hwnd_btn_new = create_ctrl("BUTTON", "新建页面", WS_TABSTOP | BS_PUSHBUTTON, 0, IDC_BTN_NEW, hwnd, hinst, f);
 
     g.hwnd_grp_webp = create_ctrl("BUTTON", "批量转 WebP", BS_GROUPBOX, 0, IDC_GRP_WEBP, hwnd, hinst, f);
     g.hwnd_lbl_webp_w = create_ctrl("STATIC", "最大宽度:", 0, 0, IDC_LBL_WEBP_W, hwnd, hinst, f);
@@ -1209,12 +1214,12 @@ unsafe fn build_all_controls(g: &mut GuiData, hwnd: HWND) {
     );
     g.hwnd_chk_webp_alt = create_ctrl("BUTTON", "备用输出目录", WS_TABSTOP | BS_AUTOCHECKBOX, 0, IDC_CHK_WEBP_ALT, hwnd, hinst, f);
     g.hwnd_chk_webp_map = create_ctrl("BUTTON", "替换 HTML 引用", WS_TABSTOP | BS_AUTOCHECKBOX, 0, IDC_CHK_WEBP_MAP, hwnd, hinst, f);
-    g.hwnd_btn_webp = create_ctrl("BUTTON", "批量转 WebP", WS_TABSTOP | BS_PUSHBUTTON, 0, IDC_BTN_WEBP, hwnd, hinst, f);
+    g.hwnd_btn_webp = create_ctrl("BUTTON", "转换 WebP", WS_TABSTOP | BS_PUSHBUTTON, 0, IDC_BTN_WEBP, hwnd, hinst, f);
 
-    g.hwnd_grp_keep = create_ctrl("BUTTON", "Google Keep 笔记转 HTML", BS_GROUPBOX, 0, IDC_GRP_KEEP, hwnd, hinst, f);
+    g.hwnd_grp_keep = create_ctrl("BUTTON", "导入 Keep 笔记", BS_GROUPBOX, 0, IDC_GRP_KEEP, hwnd, hinst, f);
     g.hwnd_lbl_keep_mode = create_ctrl("STATIC", "模式:", 0, 0, IDC_LBL_KEEP_MODE, hwnd, hinst, f);
     g.hwnd_cmb_keep_mode = create_ctrl("COMBOBOX", "", WS_TABSTOP | CBS_DROPDOWNLIST, 0, IDC_CMB_KEEP_MODE, hwnd, hinst, f);
-    for m in ["单篇转换 (single)", "多合一转换 (merge)"] {
+    for m in ["单篇导出 (single)", "按标签合并 (merge)"] {
         let w = to_wide(m);
         SendMessageW(g.hwnd_cmb_keep_mode, CB_ADDSTRING, 0, w.as_ptr() as LPARAM);
     }
@@ -1223,7 +1228,7 @@ unsafe fn build_all_controls(g: &mut GuiData, hwnd: HWND) {
     g.hwnd_edit_keep_tag = create_ctrl("EDIT", "", WS_TABSTOP | ES_AUTOHSCROLL, WS_EX_CLIENTEDGE, IDC_EDIT_KEEP_TAG, hwnd, hinst, f);
     g.hwnd_lbl_keep_cat = create_ctrl("STATIC", "合并分类:", 0, 0, IDC_LBL_KEEP_CAT, hwnd, hinst, f);
     g.hwnd_edit_keep_cat = create_ctrl("EDIT", "", WS_TABSTOP | ES_AUTOHSCROLL, WS_EX_CLIENTEDGE, IDC_EDIT_KEEP_CAT, hwnd, hinst, f);
-    g.hwnd_btn_keep = create_ctrl("BUTTON", "执行 Keep2Html", WS_TABSTOP | BS_PUSHBUTTON, 0, IDC_BTN_KEEP, hwnd, hinst, f);
+    g.hwnd_btn_keep = create_ctrl("BUTTON", "导入 Keep 笔记", WS_TABSTOP | BS_PUSHBUTTON, 0, IDC_BTN_KEEP, hwnd, hinst, f);
 
     g.tab0_ctrls = vec![
         g.hwnd_grp_ops,
@@ -1267,13 +1272,13 @@ unsafe fn build_all_controls(g: &mut GuiData, hwnd: HWND) {
     g.hwnd_cmb_pack_preset = create_ctrl("COMBOBOX", "", WS_TABSTOP | CBS_DROPDOWNLIST, 0, IDC_CMB_PACK_PRESET, hwnd, hinst, f);
     g.hwnd_btn_preset_only = create_ctrl("BUTTON", "仅选预设", WS_TABSTOP | BS_PUSHBUTTON, 0, IDC_BTN_PRESET_ONLY, hwnd, hinst, f);
     g.hwnd_btn_preset_add = create_ctrl("BUTTON", "累加预设", WS_TABSTOP | BS_PUSHBUTTON, 0, IDC_BTN_PRESET_ADD, hwnd, hinst, f);
-    g.hwnd_btn_git_mod = create_ctrl("BUTTON", "勾选Git改动", WS_TABSTOP | BS_PUSHBUTTON, 0, IDC_BTN_GIT_MOD, hwnd, hinst, f);
+    g.hwnd_btn_git_mod = create_ctrl("BUTTON", "选中 Git 改动", WS_TABSTOP | BS_PUSHBUTTON, 0, IDC_BTN_GIT_MOD, hwnd, hinst, f);
     g.hwnd_chk_pack_more = create_ctrl("BUTTON", "更多目录", WS_TABSTOP | BS_AUTOCHECKBOX, 0, IDC_CHK_PACK_MORE, hwnd, hinst, f);
     g.hwnd_lbl_pack_filter = create_ctrl("STATIC", "筛选:", 0, 0, IDC_LBL_PACK_FILTER, hwnd, hinst, f);
     g.hwnd_edit_pack_filter = create_ctrl("EDIT", "", WS_TABSTOP | ES_AUTOHSCROLL, WS_EX_CLIENTEDGE, IDC_EDIT_PACK_FILTER, hwnd, hinst, f);
     g.hwnd_btn_pack_clear = create_ctrl("BUTTON", "清空已选", WS_TABSTOP | BS_PUSHBUTTON, 0, IDC_BTN_PACK_CLEAR, hwnd, hinst, f);
     g.hwnd_btn_pack_refresh = create_ctrl("BUTTON", "刷新", WS_TABSTOP | BS_PUSHBUTTON, 0, IDC_BTN_PACK_REFRESH, hwnd, hinst, f);
-    g.hwnd_btn_pack_zip = create_ctrl("BUTTON", "按原层级打包 ZIP", WS_TABSTOP | BS_PUSHBUTTON, 0, IDC_BTN_PACK_ZIP, hwnd, hinst, f);
+    g.hwnd_btn_pack_zip = create_ctrl("BUTTON", "打包 ZIP", WS_TABSTOP | BS_PUSHBUTTON, 0, IDC_BTN_PACK_ZIP, hwnd, hinst, f);
     g.hwnd_tv_pack = create_ctrl(
         "SysTreeView32",
         "",
@@ -1289,8 +1294,8 @@ unsafe fn build_all_controls(g: &mut GuiData, hwnd: HWND) {
     g.hwnd_edit_preset_name = create_ctrl("EDIT", "", WS_TABSTOP | ES_AUTOHSCROLL, WS_EX_CLIENTEDGE, IDC_EDIT_PRESET_NAME, hwnd, hinst, f);
     g.hwnd_btn_preset_save = create_ctrl("BUTTON", "保存当前为预设", WS_TABSTOP | BS_PUSHBUTTON, 0, IDC_BTN_PRESET_SAVE, hwnd, hinst, f);
     g.hwnd_btn_preset_del = create_ctrl("BUTTON", "删除预设", WS_TABSTOP | BS_PUSHBUTTON, 0, IDC_BTN_PRESET_DEL, hwnd, hinst, f);
-    g.hwnd_chk_pack_md = create_ctrl("BUTTON", "拼接 MD", WS_TABSTOP | BS_AUTOCHECKBOX, 0, IDC_CHK_PACK_MD, hwnd, hinst, f);
-    g.hwnd_lbl_pack_md_max = create_ctrl("STATIC", "单MD上限:", 0, 0, IDC_LBL_PACK_MD_MAX, hwnd, hinst, f);
+    g.hwnd_chk_pack_md = create_ctrl("BUTTON", "同时生成 MD", WS_TABSTOP | BS_AUTOCHECKBOX, 0, IDC_CHK_PACK_MD, hwnd, hinst, f);
+    g.hwnd_lbl_pack_md_max = create_ctrl("STATIC", "单文件上限:", 0, 0, IDC_LBL_PACK_MD_MAX, hwnd, hinst, f);
     g.hwnd_edit_pack_md_max = create_ctrl("EDIT", "200", WS_TABSTOP | ES_AUTOHSCROLL, WS_EX_CLIENTEDGE, IDC_EDIT_PACK_MD_MAX, hwnd, hinst, f);
     EnableWindow(g.hwnd_edit_pack_md_max, 0);
     g.hwnd_lbl_pack_md_unit = create_ctrl("STATIC", "KB", 0, 0, IDC_LBL_PACK_MD_UNIT, hwnd, hinst, f);
@@ -1324,25 +1329,25 @@ unsafe fn build_all_controls(g: &mut GuiData, hwnd: HWND) {
     g.hwnd_btn_apply_browse = create_ctrl("BUTTON", "选择补丁 ZIP...", WS_TABSTOP | BS_PUSHBUTTON, 0, IDC_BTN_APPLY_BROWSE, hwnd, hinst, f);
     g.hwnd_chk_apply_bak = create_ctrl("BUTTON", "覆盖前备份", WS_TABSTOP | BS_AUTOCHECKBOX, 0, IDC_CHK_APPLY_BAK, hwnd, hinst, f);
     set_checked(g.hwnd_chk_apply_bak, true);
-    g.hwnd_chk_apply_enc = create_ctrl("BUTTON", "守卫bat/ps1编码", WS_TABSTOP | BS_AUTOCHECKBOX, 0, IDC_CHK_APPLY_ENC, hwnd, hinst, f);
+    g.hwnd_chk_apply_enc = create_ctrl("BUTTON", "规范 bat/ps1 编码", WS_TABSTOP | BS_AUTOCHECKBOX, 0, IDC_CHK_APPLY_ENC, hwnd, hinst, f);
     set_checked(g.hwnd_chk_apply_enc, true);
-    g.hwnd_chk_apply_build = create_ctrl("BUTTON", "回填后拉起 build.bat 并退出", WS_TABSTOP | BS_AUTOCHECKBOX, 0, IDC_CHK_APPLY_BUILD, hwnd, hinst, f);
-    g.hwnd_btn_apply_exec = create_ctrl("BUTTON", "一键回填选中", WS_TABSTOP | BS_PUSHBUTTON, 0, IDC_BTN_APPLY_EXEC, hwnd, hinst, f);
+    g.hwnd_chk_apply_build = create_ctrl("BUTTON", "回填后退出并运行 build.bat", WS_TABSTOP | BS_AUTOCHECKBOX, 0, IDC_CHK_APPLY_BUILD, hwnd, hinst, f);
+    g.hwnd_btn_apply_exec = create_ctrl("BUTTON", "回填选中文件", WS_TABSTOP | BS_PUSHBUTTON, 0, IDC_BTN_APPLY_EXEC, hwnd, hinst, f);
     EnableWindow(g.hwnd_btn_apply_exec, 0);
 
     g.hwnd_lbl_rollback = create_ctrl("STATIC", "回滚快照:", 0, 0, IDC_LBL_ROLLBACK, hwnd, hinst, f);
     g.hwnd_cmb_rollback = create_ctrl("COMBOBOX", "", WS_TABSTOP | CBS_DROPDOWNLIST, 0, IDC_CMB_ROLLBACK, hwnd, hinst, f);
-    g.hwnd_btn_rollback = create_ctrl("BUTTON", "从备份回滚", WS_TABSTOP | BS_PUSHBUTTON, 0, IDC_BTN_ROLLBACK, hwnd, hinst, f);
+    g.hwnd_btn_rollback = create_ctrl("BUTTON", "回滚此快照", WS_TABSTOP | BS_PUSHBUTTON, 0, IDC_BTN_ROLLBACK, hwnd, hinst, f);
     g.hwnd_btn_bak_refresh = create_ctrl("BUTTON", "刷新全部", WS_TABSTOP | BS_PUSHBUTTON, 0, IDC_BTN_BAK_REFRESH, hwnd, hinst, f);
 
-    g.hwnd_lbl_dl_tree = create_ctrl("STATIC", "Downloads (双击.zip加载):", 0, 0, IDC_LBL_DL_TREE, hwnd, hinst, f);
+    g.hwnd_lbl_dl_tree = create_ctrl("STATIC", "下载目录 (双击 .zip 加载):", 0, 0, IDC_LBL_DL_TREE, hwnd, hinst, f);
     g.hwnd_btn_dl_open = create_ctrl("BUTTON", "打开", WS_TABSTOP | BS_PUSHBUTTON, 0, IDC_BTN_DL_OPEN, hwnd, hinst, f);
     g.hwnd_btn_dl_del = create_ctrl("BUTTON", "清理", WS_TABSTOP | BS_PUSHBUTTON, 0, IDC_BTN_DL_DEL, hwnd, hinst, f);
     EnableWindow(g.hwnd_btn_dl_del, 0);
 
-    g.hwnd_lbl_apply_tree = create_ctrl("STATIC", "补丁预览 (双击左栏或拖入 .zip):", 0, 0, IDC_LBL_APPLY_TREE, hwnd, hinst, f);
+    g.hwnd_lbl_apply_tree = create_ctrl("STATIC", "补丁内容 (双击查看差异):", 0, 0, IDC_LBL_APPLY_TREE, hwnd, hinst, f);
 
-    g.hwnd_lbl_backup_tree = create_ctrl("STATIC", "backup 目录树:", 0, 0, IDC_LBL_BACKUP_TREE, hwnd, hinst, f);
+    g.hwnd_lbl_backup_tree = create_ctrl("STATIC", "备份目录 (backup):", 0, 0, IDC_LBL_BACKUP_TREE, hwnd, hinst, f);
     g.hwnd_btn_backup_open = create_ctrl("BUTTON", "打开", WS_TABSTOP | BS_PUSHBUTTON, 0, IDC_BTN_BACKUP_OPEN, hwnd, hinst, f);
     g.hwnd_btn_backup_del = create_ctrl("BUTTON", "清理", WS_TABSTOP | BS_PUSHBUTTON, 0, IDC_BTN_BACKUP_DEL, hwnd, hinst, f);
     EnableWindow(g.hwnd_btn_backup_del, 0);
@@ -1385,7 +1390,7 @@ unsafe fn build_all_controls(g: &mut GuiData, hwnd: HWND) {
 
     g.hwnd_lbl_dl_status = create_ctrl(
         "STATIC",
-        "正在扫描 Downloads...",
+        "正在读取下载目录...",
         0,
         0,
         IDC_LBL_DL_STATUS,
@@ -1395,7 +1400,7 @@ unsafe fn build_all_controls(g: &mut GuiData, hwnd: HWND) {
     );
     g.hwnd_lbl_apply_status = create_ctrl(
         "STATIC",
-        "双击左侧 .zip 或拖入 .zip 到窗口任意位置",
+        "双击左侧 .zip 或拖入 .zip 到窗口",
         0,
         0,
         IDC_LBL_APPLY_STATUS,
@@ -1405,7 +1410,7 @@ unsafe fn build_all_controls(g: &mut GuiData, hwnd: HWND) {
     );
     g.hwnd_lbl_backup_status = create_ctrl(
         "STATIC",
-        "正在扫描 backup...",
+        "正在读取备份目录...",
         0,
         0,
         IDC_LBL_BACKUP_STATUS,
@@ -1441,10 +1446,10 @@ unsafe fn build_all_controls(g: &mut GuiData, hwnd: HWND) {
 
     // ================= TAB 3: 同义词 (Synonyms) =================
     g.hwnd_btn_syn_save = create_ctrl("BUTTON", "保存到 swamp.toml", WS_TABSTOP | BS_PUSHBUTTON, 0, IDC_BTN_SYN_SAVE, hwnd, hinst, f);
-    g.hwnd_btn_syn_rebuild = create_ctrl("BUTTON", "重建 synonyms.js + gen", WS_TABSTOP | BS_PUSHBUTTON, 0, IDC_BTN_SYN_REBUILD, hwnd, hinst, f);
-    g.hwnd_btn_syn_import = create_ctrl("BUTTON", "导入旧 JSON...", WS_TABSTOP | BS_PUSHBUTTON, 0, IDC_BTN_SYN_IMPORT, hwnd, hinst, f);
-    g.hwnd_btn_oov_refresh = create_ctrl("BUTTON", "刷新 OOV 报告", WS_TABSTOP | BS_PUSHBUTTON, 0, IDC_BTN_OOV_REFRESH, hwnd, hinst, f);
-    g.hwnd_lbl_syn_custom = create_ctrl("STATIC", "自定义同义词 (synonyms_custom，存入 swamp.toml):", 0, 0, IDC_LBL_SYN_CUSTOM, hwnd, hinst, f);
+    g.hwnd_btn_syn_rebuild = create_ctrl("BUTTON", "保存并重建构建", WS_TABSTOP | BS_PUSHBUTTON, 0, IDC_BTN_SYN_REBUILD, hwnd, hinst, f);
+    g.hwnd_btn_syn_import = create_ctrl("BUTTON", "导入 JSON...", WS_TABSTOP | BS_PUSHBUTTON, 0, IDC_BTN_SYN_IMPORT, hwnd, hinst, f);
+    g.hwnd_btn_oov_refresh = create_ctrl("BUTTON", "刷新未收录词", WS_TABSTOP | BS_PUSHBUTTON, 0, IDC_BTN_OOV_REFRESH, hwnd, hinst, f);
+    g.hwnd_lbl_syn_custom = create_ctrl("STATIC", "自定义同义词 (存入 swamp.toml):", 0, 0, IDC_LBL_SYN_CUSTOM, hwnd, hinst, f);
     g.hwnd_edit_syn_custom = create_ctrl(
         "EDIT",
         "",
@@ -1456,7 +1461,7 @@ unsafe fn build_all_controls(g: &mut GuiData, hwnd: HWND) {
         fm,
     );
     SendMessageW(g.hwnd_edit_syn_custom, EM_SETLIMITTEXT, 2 * 1024 * 1024, 0);
-    g.hwnd_lbl_oov_report = create_ctrl("STATIC", "本地新词雷达 (oov_report，构建后自动刷新):", 0, 0, IDC_LBL_OOV_REPORT, hwnd, hinst, f);
+    g.hwnd_lbl_oov_report = create_ctrl("STATIC", "未收录高频词 (oov_report.txt，构建后更新):", 0, 0, IDC_LBL_OOV_REPORT, hwnd, hinst, f);
     g.hwnd_edit_oov_report = create_ctrl(
         "EDIT",
         "",
@@ -1612,7 +1617,7 @@ unsafe fn layout_controls(g: &GuiData, hwnd: HWND) {
         } else if h == g.hwnd_btn_push {
             Some(64)
         } else if h == g.hwnd_btn_sim {
-            Some(118)
+            Some(96)
         } else if h == g.hwnd_btn_selfcheck {
             Some(80)
         } else if h == g.hwnd_btn_root {
@@ -1672,15 +1677,15 @@ unsafe fn layout_controls(g: &GuiData, hwnd: HWND) {
     MoveWindow(g.hwnd_cmb_pack_preset, inner_x + s(40), inner_y, s(260), s(200), 1);
     MoveWindow(g.hwnd_btn_preset_only, inner_x + s(306), inner_y, s(74), s(24), 1);
     MoveWindow(g.hwnd_btn_preset_add, inner_x + s(386), inner_y, s(74), s(24), 1);
-    MoveWindow(g.hwnd_btn_git_mod, inner_x + s(466), inner_y, s(92), s(24), 1);
-    MoveWindow(g.hwnd_chk_pack_more, inner_x + s(566), inner_y + s(2), s(96), s(20), 1);
+    MoveWindow(g.hwnd_btn_git_mod, inner_x + s(466), inner_y, s(98), s(24), 1);
+    MoveWindow(g.hwnd_chk_pack_more, inner_x + s(572), inner_y + s(2), s(96), s(20), 1);
 
     let p_row2 = inner_y + s(30);
     MoveWindow(g.hwnd_lbl_preset_name, inner_x, p_row2 + s(4), s(52), s(20), 1);
     let psave_w = s(112);
     let pdel_w = s(68);
-    let md_chk_w = s(78);
-    let md_lbl_w = s(68);
+    let md_chk_w = s(96);
+    let md_lbl_w = s(74);
     let md_edit_w = s(52);
     let md_unit_w = s(24);
     let md_group_w = md_chk_w + md_lbl_w + md_edit_w + md_unit_w + s(14);
@@ -1699,7 +1704,7 @@ unsafe fn layout_controls(g: &GuiData, hwnd: HWND) {
 
     let p_row3 = p_row2 + s(30);
     MoveWindow(g.hwnd_lbl_pack_filter, inner_x, p_row3 + s(4), s(38), s(20), 1);
-    let zip_btn_w = s(138);
+    let zip_btn_w = s(148);
     let clr_w = s(72);
     let ref_w = s(56);
     let flt_w = (inner_w - s(40) - clr_w - ref_w - zip_btn_w - s(24)).max(s(140));
@@ -1716,8 +1721,8 @@ unsafe fn layout_controls(g: &GuiData, hwnd: HWND) {
     // --- Tab 2 (Apply) Layout ---
     MoveWindow(g.hwnd_btn_apply_browse, inner_x, inner_y, s(118), s(25), 1);
     MoveWindow(g.hwnd_chk_apply_bak, inner_x + s(124), inner_y + s(3), s(92), s(20), 1);
-    MoveWindow(g.hwnd_chk_apply_enc, inner_x + s(220), inner_y + s(3), s(126), s(20), 1);
-    MoveWindow(g.hwnd_chk_apply_build, inner_x + s(350), inner_y + s(3), s(202), s(20), 1);
+    MoveWindow(g.hwnd_chk_apply_enc, inner_x + s(220), inner_y + s(3), s(136), s(20), 1);
+    MoveWindow(g.hwnd_chk_apply_build, inner_x + s(360), inner_y + s(3), s(202), s(20), 1);
     MoveWindow(g.hwnd_btn_apply_exec, inner_x + inner_w - s(126), inner_y, s(126), s(25), 1);
 
     let a_row2 = inner_y + s(30);
@@ -1799,7 +1804,7 @@ unsafe fn update_log_header_and_button(g: &mut GuiData) {
     if g.log_size_kb != Some(kb) {
         g.log_size_kb = Some(kb);
         let label = format!(
-            "实时运行日志 [{} KB]:",
+            "运行日志 ({} KB)",
             kb
         );
         set_window_text(g.hwnd_lbl_log, &label);
@@ -1894,15 +1899,15 @@ unsafe fn update_vpn_indicator(g: &mut GuiData, hwnd: HWND, online: bool) {
     }
     g.last_vpn_online = Some(online);
     let (big, small, label) = if online {
-        (g.icon_green_big, g.icon_green_small, "Online")
+        (g.icon_green_big, g.icon_green_small, "正常")
     } else {
-        (g.icon_red_big, g.icon_red_small, "Offline")
+        (g.icon_red_big, g.icon_red_small, "离线")
     };
     SendMessageW(hwnd, WM_SETICON, ICON_BIG as WPARAM, big as LPARAM);
     SendMessageW(hwnd, WM_SETICON, ICON_SMALL as WPARAM, small as LPARAM);
     let title = format!(
-        "Swamp 管理控制台 [VPN: {}] - http://localhost:{}",
-        label, g.state.config.port
+        "Swamp 本地服务 (localhost:{}) | 网络: {}",
+        g.state.config.port, label
     );
     set_window_text(hwnd, &title);
 }
@@ -2170,17 +2175,7 @@ unsafe fn rebuild_apply_tree(g: &mut GuiData) {
             }
         }
 
-        let fname = parts.last().copied().unwrap_or("");
-        let tag = match entry.status.as_str() {
-            "overwrite" => "[覆盖] ",
-            "new" => "[新增] ",
-            "exec_risk" => "[高危/构建] ",
-            "skip_doc" => "[说明-跳过] ",
-            "secret" => "[敏感] ",
-            "blocked" => "[禁止] ",
-            _ => "",
-        };
-        let label = format!("{}{}  ({})", tag, fname, format_bytes(entry.size));
+        let label = format_apply_entry_label(entry, g.apply_diff_viewed.contains(&entry.rel));
         let state_img = if entry.blocked {
             0
         } else if g.apply_checked.contains(&entry.rel) {
@@ -2203,24 +2198,83 @@ unsafe fn rebuild_apply_tree(g: &mut GuiData) {
     update_apply_status_label(g);
 }
 
+fn format_apply_entry_label(entry: &ApplyEntryInfo, diff_viewed: bool) -> String {
+    let fname = entry.rel.rsplit('/').next().unwrap_or(entry.rel.as_str());
+    let tag = match entry.status.as_str() {
+        "overwrite" => "[覆盖] ",
+        "new" => "[新增] ",
+        "exec_risk" => {
+            if diff_viewed {
+                "[构建配置·已查看] "
+            } else {
+                "[构建配置·未查看] "
+            }
+        }
+        "skip_doc" => "[说明文件] ",
+        "secret" => "[敏感] ",
+        "blocked" => "[禁止] ",
+        _ => "",
+    };
+    format!("{}{}  ({})", tag, fname, format_bytes(entry.size))
+}
+
+fn unviewed_dangerous_selected(g: &GuiData) -> Vec<String> {
+    g.apply_entries
+        .iter()
+        .filter(|e| {
+            !e.blocked
+                && e.is_dangerous
+                && g.apply_checked.contains(&e.rel)
+                && !g.apply_diff_viewed.contains(&e.rel)
+        })
+        .map(|e| e.rel.clone())
+        .collect()
+}
+
+unsafe fn sync_apply_build_checkbox(g: &GuiData) {
+    let unviewed = unviewed_dangerous_selected(g);
+    if !unviewed.is_empty() {
+        if is_checked(g.hwnd_chk_apply_build) {
+            set_checked(g.hwnd_chk_apply_build, false);
+        }
+        EnableWindow(g.hwnd_chk_apply_build, 0);
+    } else {
+        EnableWindow(g.hwnd_chk_apply_build, 1);
+    }
+}
+
+unsafe fn tv_set_item_text(tv: HWND, hitem: isize, text: &str) {
+    let mut w = to_wide(text);
+    let mut tvi: TVITEMW = std::mem::zeroed();
+    tvi.mask = TVIF_TEXT;
+    tvi.hItem = hitem;
+    tvi.pszText = w.as_mut_ptr();
+    SendMessageW(tv, TVM_SETITEMW, 0, &tvi as *const _ as LPARAM);
+}
+
 unsafe fn update_apply_status_label(g: &GuiData) {
     if g.apply_entries.is_empty() {
         set_window_text(
             g.hwnd_lbl_apply_status,
-            "点击「选择补丁 ZIP...」或直接将 .zip 文件拖放到窗口任意位置",
+            "点击选择补丁 ZIP，或将 .zip 文件拖入窗口",
         );
         EnableWindow(g.hwnd_btn_apply_exec, 0);
+        sync_apply_build_checkbox(g);
         return;
     }
     let mut ov = 0usize;
     let mut nw = 0usize;
     let mut danger = 0usize;
+    let mut unviewed_danger = 0usize;
     for e in &g.apply_entries {
         if e.blocked || !g.apply_checked.contains(&e.rel) {
             continue;
         }
         if e.is_dangerous {
             danger += 1;
+            if !g.apply_diff_viewed.contains(&e.rel) {
+                unviewed_danger += 1;
+            }
         }
         if e.exists {
             ov += 1;
@@ -2229,6 +2283,15 @@ unsafe fn update_apply_status_label(g: &GuiData) {
         }
     }
     let sel = ov + nw;
+    let danger_note = if danger > 0 {
+        if unviewed_danger > 0 {
+            format!("，含构建配置 {} 项（{} 项未查看差异，查看后可勾选自动编译）", danger, unviewed_danger)
+        } else {
+            format!("，含构建配置 {} 项（均已查看差异）", danger)
+        }
+    } else {
+        String::new()
+    };
     let msg = format!(
         "[{}] 共 {} 项 | 已选 {} 项（覆盖 {}，新增 {}{}）",
         g.apply_zip_name,
@@ -2236,14 +2299,11 @@ unsafe fn update_apply_status_label(g: &GuiData) {
         sel,
         ov,
         nw,
-        if danger > 0 {
-            format!("，含高危构建 {}", danger)
-        } else {
-            String::new()
-        }
+        danger_note
     );
     set_window_text(g.hwnd_lbl_apply_status, &msg);
     EnableWindow(g.hwnd_btn_apply_exec, if sel > 0 { 1 } else { 0 });
+    sync_apply_build_checkbox(g);
 }
 
 unsafe fn rebuild_backup_tree(g: &mut GuiData) {
@@ -2336,7 +2396,7 @@ unsafe fn rebuild_backup_tree(g: &mut GuiData) {
 
 unsafe fn update_backup_status_label(g: &GuiData) {
     if g.backup_items.is_empty() {
-        set_window_text(g.hwnd_lbl_backup_status, "backup 目录为空");
+        set_window_text(g.hwnd_lbl_backup_status, "备份目录为空");
         EnableWindow(g.hwnd_btn_backup_del, 0);
         return;
     }
@@ -2400,12 +2460,12 @@ unsafe fn rebuild_downloads_tree(g: &mut GuiData) {
 
 unsafe fn update_downloads_status_label(g: &GuiData) {
     if g.downloads_dir.is_none() {
-        set_window_text(g.hwnd_lbl_dl_status, "未找到 Downloads 目录");
+        set_window_text(g.hwnd_lbl_dl_status, "未找到下载目录");
         EnableWindow(g.hwnd_btn_dl_del, 0);
         return;
     }
     if g.downloads_items.is_empty() {
-        set_window_text(g.hwnd_lbl_dl_status, "Downloads 目录为空");
+        set_window_text(g.hwnd_lbl_dl_status, "下载目录为空");
         EnableWindow(g.hwnd_btn_dl_del, 0);
         return;
     }
@@ -2500,6 +2560,55 @@ fn spawn_load_zip_file(
                 mailbox.post(WM_APP_APPLY_TREE, 0, 0);
             }
             Err(e) => logs.error(format!("[apply] 解析 ZIP 失败: {}", e)),
+        }
+    });
+}
+
+fn spawn_diff_apply_entry(
+    cfg: ServerConfig,
+    logs: Arc<LogBus>,
+    mailbox: Arc<GuiMailbox>,
+    zip_bytes: Vec<u8>,
+    rel: String,
+) {
+    std::thread::spawn(move || {
+        let mark_viewed = |mb: &GuiMailbox, r: String| {
+            if let Ok(mut list) = mb.diff_viewed_rels.lock() {
+                list.push(r);
+            }
+            mb.post(WM_APP_DIFF_VIEWED, 0, 0);
+        };
+        match pack_apply::extract_zip_entry_for_diff(&cfg, &zip_bytes, &rel) {
+            Ok((temp_file, Some(existing_file))) => {
+                let clean_old = strip_verbatim_prefix(&existing_file)
+                    .to_string_lossy()
+                    .into_owned();
+                let clean_new = strip_verbatim_prefix(&temp_file)
+                    .to_string_lossy()
+                    .into_owned();
+                let args = vec!["--diff".to_string(), clean_old, clean_new];
+                match spawn_vscode(&cfg.vscode_path, &args) {
+                    Ok(()) => {
+                        logs.info(format!("[apply] 已在 VS Code 打开差异对比: {}", rel));
+                        mark_viewed(&mailbox, rel);
+                    }
+                    Err(e) => logs.error(format!("[apply] 打开 VS Code 差异对比失败: {}", e)),
+                }
+            }
+            Ok((temp_file, None)) => {
+                let clean_new = strip_verbatim_prefix(&temp_file)
+                    .to_string_lossy()
+                    .into_owned();
+                let args = vec![clean_new];
+                match spawn_vscode(&cfg.vscode_path, &args) {
+                    Ok(()) => {
+                        logs.info(format!("[apply] 已在 VS Code 打开新增文件预览: {}", rel));
+                        mark_viewed(&mailbox, rel);
+                    }
+                    Err(e) => logs.error(format!("[apply] 打开 VS Code 预览失败: {}", e)),
+                }
+            }
+            Err(e) => logs.error(format!("[apply] 准备 Diff 预览失败: {}", e)),
         }
     });
 }
@@ -2705,12 +2814,37 @@ unsafe extern "system" fn wnd_proc(
                 g.apply_zip_bytes = bytes;
                 g.apply_entries = entries;
                 g.apply_checked.clear();
+                g.apply_diff_viewed.clear();
                 for e in &g.apply_entries {
                     if e.default_checked && !e.blocked {
                         g.apply_checked.insert(e.rel.clone());
                     }
                 }
                 rebuild_apply_tree(g);
+            }
+            0
+        }
+        WM_APP_DIFF_VIEWED => {
+            let viewed: Vec<String> = g
+                .mailbox
+                .diff_viewed_rels
+                .lock()
+                .map(|mut v| std::mem::take(&mut *v))
+                .unwrap_or_default();
+            if !viewed.is_empty() {
+                for rel in viewed {
+                    g.apply_diff_viewed.insert(rel.clone());
+                    if let Some(entry) = g.apply_entries.iter().find(|e| e.rel == rel) {
+                        let new_label = format_apply_entry_label(entry, true);
+                        for (&hitem, nd) in &g.apply_nodes {
+                            if nd.is_file && nd.rel == rel {
+                                tv_set_item_text(g.hwnd_tv_apply, hitem, &new_label);
+                                break;
+                            }
+                        }
+                    }
+                }
+                update_apply_status_label(g);
             }
             0
         }
@@ -2792,7 +2926,7 @@ unsafe extern "system" fn wnd_proc(
                 } else {
                     g.state
                         .logs
-                        .warn("[apply] 仅支持拖入 .zip 补丁压缩包");
+                        .warn("[apply] 仅支持拖入 .zip 文件");
                 }
             }
             DragFinish(hdrop);
@@ -2862,6 +2996,29 @@ unsafe extern "system" fn wnd_proc(
                     }
                     return 0;
                 }
+                if kind == TreeKind::Apply && nmhdr.code == NM_DBLCLK {
+                    let mut pt: POINT = std::mem::zeroed();
+                    GetCursorPos(&mut pt);
+                    windows_sys::Win32::Graphics::Gdi::ScreenToClient(tv, &mut pt);
+                    let mut hti: TVHITTESTINFO = std::mem::zeroed();
+                    hti.pt = pt;
+                    SendMessageW(tv, TVM_HITTEST, 0, &mut hti as *mut _ as LPARAM);
+                    if hti.hItem != 0 && (hti.flags & TVHT_ONITEMSTATEICON) == 0 {
+                        if let Some(node) = g.apply_nodes.get(&hti.hItem) {
+                            if node.is_file && !node.blocked && !g.apply_zip_bytes.is_empty() {
+                                spawn_diff_apply_entry(
+                                    g.state.config.clone(),
+                                    g.state.logs.clone(),
+                                    g.mailbox.clone(),
+                                    g.apply_zip_bytes.clone(),
+                                    node.rel.clone(),
+                                );
+                                return 1;
+                            }
+                        }
+                    }
+                    return 0;
+                }
                 if nmhdr.code == TVN_KEYDOWN {
                     let tvkd = &*(lparam as *const NMTVKEYDOWN);
                     if tvkd.wVKey == 0x20 {
@@ -2869,6 +3026,21 @@ unsafe extern "system" fn wnd_proc(
                         let sel = SendMessageW(tv, TVM_GETNEXTITEM, 9, 0);
                         if sel != 0 {
                             toggle_tree_item(g, kind, sel);
+                        }
+                    } else if kind == TreeKind::Apply && tvkd.wVKey == 0x0D {
+                        let sel = SendMessageW(tv, TVM_GETNEXTITEM, 9, 0);
+                        if sel != 0 {
+                            if let Some(node) = g.apply_nodes.get(&sel) {
+                                if node.is_file && !node.blocked && !g.apply_zip_bytes.is_empty() {
+                                    spawn_diff_apply_entry(
+                                    g.state.config.clone(),
+                                    g.state.logs.clone(),
+                                    g.mailbox.clone(),
+                                    g.apply_zip_bytes.clone(),
+                                    node.rel.clone(),
+                                );
+                                }
+                            }
                         }
                     } else if kind == TreeKind::Downloads && tvkd.wVKey == 0x0D {
                         let sel = SendMessageW(tv, TVM_GETNEXTITEM, 9, 0);
@@ -2910,6 +3082,7 @@ unsafe extern "system" fn wnd_proc(
             0
         }
         WM_DESTROY => {
+            let _ = std::fs::remove_dir_all(g.state.config.build_dir.join("temp").join("diff_preview"));
             g.mailbox.clear_hwnd();
             g.mailbox.kill_sim_child();
             PostQuitMessage(0);
@@ -2932,17 +3105,17 @@ unsafe fn begin_safe_close(
     if active > 0 {
         let prompt = if has_handoff {
             format!(
-                "当前仍有 {} 个后台任务正在写入文件或构建！\n\n点击【是】将等待任务安全落盘并退出 swamp.exe 后再拉起 build.bat；\n点击【否】取消退出，暂不拉起 build.bat。",
+                "仍有 {} 个任务正在运行。\n\n选择“是”等待任务完成后退出并启动 build.bat；\n选择“否”取消退出。",
                 active
             )
         } else {
             format!(
-                "当前有 {} 个后台任务正在写入文件或构建！\n\n点击【是】将等待任务安全落盘后再退出（推荐）；\n点击【否】取消关闭继续运行。",
+                "仍有 {} 个任务正在运行。\n\n选择“是”等待任务完成后退出；\n选择“否”取消关闭。",
                 active
             )
         };
         let msg_w = to_wide(&prompt);
-        let title_w = to_wide("Swamp 安全退出确认");
+        let title_w = to_wide("退出确认");
         let ans = MessageBoxW(
             hwnd,
             msg_w.as_ptr(),
@@ -2953,7 +3126,7 @@ unsafe fn begin_safe_close(
             if has_handoff {
                 g.state
                     .logs
-                    .warn("[apply] 已取消自动退出，未拉起 build.bat");
+                    .warn("[apply] 已取消退出，未启动 build.bat");
             }
             return false;
         }
@@ -2961,10 +3134,10 @@ unsafe fn begin_safe_close(
 
     g.closing = true;
     EnableWindow(hwnd, 0);
-    set_window_text(hwnd, "Swamp 管理控制台 [正在安全收尾退出...]");
+    set_window_text(hwnd, "Swamp 本地服务 - 正在等待任务结束...");
     g.state
         .logs
-        .info("[shutdown] 正在等待后台写入完成并优雅关闭服务...");
+        .info("[shutdown] 正在等待运行中的任务结束并关闭服务");
 
     // 最多等待 15 秒让正在执行的原子写盘彻底收尾
     for _ in 0..300 {
@@ -2978,22 +3151,22 @@ unsafe fn begin_safe_close(
         g.closing = false;
         EnableWindow(hwnd, 1);
         let vpn_lbl = match g.last_vpn_online {
-            Some(true) => "Online",
-            Some(false) => "Offline",
-            None => "探测中",
+            Some(true) => "正常",
+            Some(false) => "离线",
+            None => "检测中",
         };
         set_window_text(
             hwnd,
             &format!(
-                "Swamp 管理控制台 [VPN: {}] - http://localhost:{}",
-                vpn_lbl, g.state.config.port
+                "Swamp 本地服务 (localhost:{}) | 网络: {}",
+                g.state.config.port, vpn_lbl
             ),
         );
         g.state
             .logs
-            .error("[shutdown] 等待后台任务超时，已取消自动退出与拉起 build.bat");
-        let mw = to_wide("仍有后台任务尚未结束，已取消退出且未拉起 build.bat，请待任务完成后重试。");
-        let tw = to_wide("未拉起 build.bat");
+            .error("[shutdown] 等待任务超时，已取消退出，未启动 build.bat");
+        let mw = to_wide("仍有任务未结束，已取消退出且未启动 build.bat，请稍后重试。");
+        let tw = to_wide("未启动 build.bat");
         MessageBoxW(hwnd, mw.as_ptr(), tw.as_ptr(), MB_OK | MB_ICONWARNING);
         return false;
     }
@@ -3068,10 +3241,10 @@ unsafe fn handle_command(g: &mut GuiData, hwnd: HWND, id: u16, code: u16) {
             let mailbox = g.mailbox.clone();
             std::thread::spawn(move || {
                 let _busy = st.runtime.begin_op();
-                st.logs.info("[gen] 开始纯 Rust 全量构建...");
+                st.logs.info("[gen] 开始构建站点");
                 match crate::builder::run_gen_with_logger(&st.config, Some(&st.logs)) {
                     Ok(()) => {
-                        st.logs.info("[gen] 全量构建成功！");
+                        st.logs.info("[gen] 构建完成");
                         spawn_load_synonyms_data(st.config.clone(), mailbox.clone(), false);
                         spawn_load_backup_tree(st.config.clone(), mailbox);
                     }
@@ -3083,7 +3256,7 @@ unsafe fn handle_command(g: &mut GuiData, hwnd: HWND, id: u16, code: u16) {
             let run_gen_first = id == IDC_BTN_GEN_PUSH;
             let commit_msg = get_window_text_string(g.hwnd_edit_commit).trim().to_string();
             if commit_msg.is_empty() {
-                let m = to_wide("请先在「Commit 说明」框中输入提交信息！");
+                let m = to_wide("请先输入 Commit 说明。");
                 let t = to_wide("提示");
                 MessageBoxW(hwnd, m.as_ptr(), t.as_ptr(), MB_OK | MB_ICONWARNING);
                 return;
@@ -3095,20 +3268,20 @@ unsafe fn handle_command(g: &mut GuiData, hwnd: HWND, id: u16, code: u16) {
                 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
                 let _busy = st.runtime.begin_op();
                 if run_gen_first {
-                    st.logs.info("[gen+push] 第 1 步：执行纯 Rust 全量构建...");
+                    st.logs.info("[gen+push] 步骤 1/2: 构建站点");
                     if let Err(e) = crate::builder::run_gen_with_logger(&st.config, Some(&st.logs)) {
-                        st.logs.error(format!("[gen+push] 构建失败，已中止推送: {}", e));
+                        st.logs.error(format!("[gen+push] 构建失败，已取消推送: {}", e));
                         return;
                     }
-                    st.logs.info("[gen+push] 构建通过，第 2 步：执行 Git 提交与推送...");
+                    st.logs.info("[gen+push] 步骤 2/2: 执行 Git 提交与推送");
                     spawn_load_synonyms_data(st.config.clone(), mailbox.clone(), false);
                     spawn_load_backup_tree(st.config.clone(), mailbox);
                 } else {
-                    st.logs.info("[push] 开始执行 Git 提交与推送...");
+                    st.logs.info("[push] 开始执行 Git 提交与推送");
                 }
 
                 if !run_gen_first {
-                    st.logs.info("[push] 执行推送前公私隔离复核...");
+                    st.logs.info("[push] 执行推送前隐私检查");
                     if let Err(e) =
                         crate::builder::generator::verify_public_outputs_clean(&st.config, Some(&st.logs))
                     {
@@ -3119,7 +3292,7 @@ unsafe fn handle_command(g: &mut GuiData, hwnd: HWND, id: u16, code: u16) {
 
                 let root = strip_verbatim_prefix(&st.config.repo_root);
                 if !st.config.gitignore_file.is_file() {
-                    st.logs.error("[git] 仓库根目录缺少 .gitignore，为防隐私泄露已拒绝推送！");
+                    st.logs.error("[git] 缺少 .gitignore，已取消推送");
                     return;
                 }
 
@@ -3156,14 +3329,7 @@ unsafe fn handle_command(g: &mut GuiData, hwnd: HWND, id: u16, code: u16) {
                             .split('\0')
                             .filter(|s| !s.is_empty())
                             .map(|s| s.replace('\\', "/"))
-                            .filter(|p| {
-                                let low = p.to_ascii_lowercase();
-                                pack_apply::is_hard_private_rel(p)
-                                    || low.starts_with("html/__")
-                                    || low.starts_with("src/js/data/shadow")
-                                    || low.starts_with("_build/privy/")
-                                    || low.starts_with("_build/temp/")
-                            })
+                            .filter(|p| pack_apply::is_private_push_path(p))
                             .collect();
                         if !violations.is_empty() {
                             let _ = Command::new("git")
@@ -3172,7 +3338,7 @@ unsafe fn handle_command(g: &mut GuiData, hwnd: HWND, id: u16, code: u16) {
                                 .creation_flags(CREATE_NO_WINDOW)
                                 .status();
                             st.logs.error(format!(
-                                "[git] 隐私防线拦截：暂存区包含私密/敏感文件，已撤回暂存并中止推送:\n  {}",
+                                "[git] 暂存区包含私有文件，已撤销暂存并取消推送:\n  {}",
                                 violations.join("\n  ")
                             ));
                             return;
@@ -3180,13 +3346,13 @@ unsafe fn handle_command(g: &mut GuiData, hwnd: HWND, id: u16, code: u16) {
                     }
                     Ok(o) => {
                         st.logs.error(format!(
-                            "[git] 暂存区隐私检查失败，已中止推送: {}",
+                            "[git] 暂存区隐私检查失败，已取消推送: {}",
                             String::from_utf8_lossy(&o.stderr).trim()
                         ));
                         return;
                     }
                     Err(e) => {
-                        st.logs.error(format!("[git] 启动暂存区隐私检查失败，已中止推送: {}", e));
+                        st.logs.error(format!("[git] 启动暂存区隐私检查失败，已取消推送: {}", e));
                         return;
                     }
                 }
@@ -3198,7 +3364,7 @@ unsafe fn handle_command(g: &mut GuiData, hwnd: HWND, id: u16, code: u16) {
                     .status();
                 match diff_res {
                     Ok(s) if s.code() == Some(0) => {
-                        st.logs.info("[git] 暂存区无新改动，跳过 commit，直接执行推送检查...");
+                        st.logs.info("[git] 暂存区无改动，跳过 commit，继续推送检查");
                     }
                     Ok(s) if s.code() == Some(1) => {
                         let cmt_res = Command::new("git")
@@ -3227,6 +3393,101 @@ unsafe fn handle_command(g: &mut GuiData, hwnd: HWND, id: u16, code: u16) {
                     }
                     Err(e) => {
                         st.logs.error(format!("[git] 启动 git diff 失败: {}", e));
+                        return;
+                    }
+                }
+
+                // 推送前全历史防线：扫描待推送提交（含 -m 合并提交）中的全部路径；新分支无 @{u} 时自动回退扫描 HEAD --not --remotes
+                let has_upstream = Command::new("git")
+                    .args(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"])
+                    .current_dir(&root)
+                    .creation_flags(CREATE_NO_WINDOW)
+                    .output()
+                    .map(|o| o.status.success())
+                    .unwrap_or(false);
+
+                let log_args: Vec<&str> = if has_upstream {
+                    vec![
+                        "-c",
+                        "core.quotepath=false",
+                        "log",
+                        "@{u}..HEAD",
+                        "--name-only",
+                        "--pretty=format:",
+                        "-m",
+                        "-z",
+                    ]
+                } else {
+                    let has_any_remote_ref = Command::new("git")
+                        .args(["for-each-ref", "--format=%(refname)", "refs/remotes/"])
+                        .current_dir(&root)
+                        .creation_flags(CREATE_NO_WINDOW)
+                        .output()
+                        .map(|o| o.status.success() && !String::from_utf8_lossy(&o.stdout).trim().is_empty())
+                        .unwrap_or(false);
+                    if has_any_remote_ref {
+                        st.logs.info("[git] 当前分支无上游分支，改为检查未推送提交 (HEAD --not --remotes)");
+                        vec![
+                            "-c",
+                            "core.quotepath=false",
+                            "log",
+                            "HEAD",
+                            "--not",
+                            "--remotes",
+                            "--name-only",
+                            "--pretty=format:",
+                            "-m",
+                            "-z",
+                        ]
+                    } else {
+                        st.logs.info("[git] 未检测到远端分支引用，检查当前分支全部提交历史");
+                        vec![
+                            "-c",
+                            "core.quotepath=false",
+                            "log",
+                            "HEAD",
+                            "--name-only",
+                            "--pretty=format:",
+                            "-m",
+                            "-z",
+                        ]
+                    }
+                };
+
+                let unpushed_out = Command::new("git")
+                    .args(&log_args)
+                    .current_dir(&root)
+                    .creation_flags(CREATE_NO_WINDOW)
+                    .output();
+                match unpushed_out {
+                    Ok(o) if o.status.success() => {
+                        let text = String::from_utf8_lossy(&o.stdout);
+                        let mut unpushed_violations: Vec<String> = text
+                            .split('\0')
+                            .map(|s| s.trim_matches(|c| c == '\n' || c == '\r'))
+                            .filter(|s| !s.is_empty())
+                            .map(|s| s.replace('\\', "/"))
+                            .filter(|p| pack_apply::is_private_push_path(p))
+                            .collect();
+                        unpushed_violations.sort();
+                        unpushed_violations.dedup();
+                        if !unpushed_violations.is_empty() {
+                            st.logs.error(format!(
+                                "[git] 待推送提交历史包含私有文件，已取消推送:\n  {}",
+                                unpushed_violations.join("\n  ")
+                            ));
+                            return;
+                        }
+                    }
+                    Ok(o) => {
+                        st.logs.error(format!(
+                            "[git] 检查待推送提交历史失败，已取消推送: {}",
+                            String::from_utf8_lossy(&o.stderr).trim()
+                        ));
+                        return;
+                    }
+                    Err(e) => {
+                        st.logs.error(format!("[git] 启动待推送提交检查失败，已取消推送: {}", e));
                         return;
                     }
                 }
@@ -3297,7 +3558,7 @@ unsafe fn handle_command(g: &mut GuiData, hwnd: HWND, id: u16, code: u16) {
                             *slot = Some(child);
                         }
                         st.logs.info(format!(
-                            "[sim] 已启动线上仿真环境 http://localhost:{}（隐身窗口；关闭管理窗将自动回收）",
+                            "[sim] 已启动线上仿真 http://localhost:{}（隐身窗口，关闭本窗口时自动停止）",
                             sim_port
                         ));
                     }
@@ -3308,7 +3569,7 @@ unsafe fn handle_command(g: &mut GuiData, hwnd: HWND, id: u16, code: u16) {
         IDC_BTN_SELFCHECK => {
             let st = g.state.clone();
             std::thread::spawn(move || {
-                st.logs.info("[selfcheck] 开始运行安全与构建自检...");
+                st.logs.info("[selfcheck] 开始运行自检");
                 let _ = run_selftest_with_logger(Some(&st.logs));
             });
         }
@@ -3320,7 +3581,7 @@ unsafe fn handle_command(g: &mut GuiData, hwnd: HWND, id: u16, code: u16) {
             g.state.runtime.reauth_notify.notify_one();
             g.state
                 .logs
-                .info("[tasks] 已触发 Google Tasks 重新授权，请在浏览器完成确认");
+                .info("[tasks] 已发起 Google Tasks 重新授权，请在浏览器中完成");
         }
         IDC_BTN_NEW => {
             let title = get_window_text_string(g.hwnd_edit_new_title).trim().to_string();
@@ -3334,11 +3595,11 @@ unsafe fn handle_command(g: &mut GuiData, hwnd: HWND, id: u16, code: u16) {
                     Ok(created) => {
                         let clean = strip_verbatim_prefix(&created);
                         let path_s = clean.to_string_lossy().into_owned();
-                        st.logs.info(format!("[new] 已创建新页: {}", path_s));
+                        st.logs.info(format!("[new] 已新建页面: {}", path_s));
                         mailbox.post(WM_APP_CLEAR_NEW_TITLE, 0, 0);
                         if open_ed {
                             if let Err(e) = spawn_vscode(&st.config.vscode_path, &[path_s]) {
-                                st.logs.warn(format!("[new] 拉起 VS Code 失败: {}", e));
+                                st.logs.warn(format!("[new] 打开 VS Code 失败: {}", e));
                             }
                         }
                     }
@@ -3354,7 +3615,7 @@ unsafe fn handle_command(g: &mut GuiData, hwnd: HWND, id: u16, code: u16) {
             let st = g.state.clone();
             std::thread::spawn(move || {
                 let _busy = st.runtime.begin_op();
-                st.logs.info("[webp] 开始纯 Rust 批量 WebP 转码...");
+                st.logs.info("[webp] 开始批量转换 WebP");
                 match run_webp_batch(
                     &st.config,
                     WebpOptions {
@@ -3365,7 +3626,7 @@ unsafe fn handle_command(g: &mut GuiData, hwnd: HWND, id: u16, code: u16) {
                     },
                 ) {
                     Ok(s) => st.logs.info(format!(
-                        "[webp] 完成: 成功 {}/{} | {} -> {} | 更新HTML: {} | 剪贴板: {} | {}ms",
+                        "[webp] 转换完成: 成功 {}/{} | {} -> {} | 更新 HTML: {} | 剪贴板: {} | {}ms",
                         s.success_count,
                         s.total_images,
                         format_bytes(s.original_bytes),
@@ -3374,7 +3635,7 @@ unsafe fn handle_command(g: &mut GuiData, hwnd: HWND, id: u16, code: u16) {
                         if s.clipboard_copied { "已复制" } else { "未复制" },
                         s.elapsed_ms
                     )),
-                    Err(e) => st.logs.error(format!("[webp] 转码失败: {}", e)),
+                    Err(e) => st.logs.error(format!("[webp] 转换失败: {}", e)),
                 }
             });
         }
@@ -3386,7 +3647,7 @@ unsafe fn handle_command(g: &mut GuiData, hwnd: HWND, id: u16, code: u16) {
             let st = g.state.clone();
             std::thread::spawn(move || {
                 let _busy = st.runtime.begin_op();
-                st.logs.info(format!("[keep2html] 开始转换 ({})...", mode));
+                st.logs.info(format!("[keep] 开始导入 Keep 笔记 ({})", mode));
                 match run_keep2html(
                     &st.config,
                     KeepOptions {
@@ -3396,12 +3657,12 @@ unsafe fn handle_command(g: &mut GuiData, hwnd: HWND, id: u16, code: u16) {
                     },
                 ) {
                     Ok(s) => st.logs.info(format!(
-                        "[keep2html] 完成 ({}): 生成 {} 篇，处理图片 {} 张",
+                        "[keep] 导入完成 ({}): 生成 {} 篇，图片 {} 张",
                         s.zip_file,
                         s.generated_pages.len(),
                         s.processed_images
                     )),
-                    Err(e) => st.logs.error(format!("[keep2html] 转换失败: {}", e)),
+                    Err(e) => st.logs.error(format!("[keep] 导入失败: {}", e)),
                 }
             });
         }
@@ -3462,7 +3723,7 @@ unsafe fn handle_command(g: &mut GuiData, hwnd: HWND, id: u16, code: u16) {
             if mods.is_empty() {
                 g.state
                     .logs
-                    .info("[pack] 当前 Git 工作区没有可勾选的非私密改动文件");
+                    .info("[pack] 当前 Git 工作区没有可选的改动文件");
             } else {
                 for m in mods {
                     g.pack_checked.insert(m);
@@ -3475,13 +3736,13 @@ unsafe fn handle_command(g: &mut GuiData, hwnd: HWND, id: u16, code: u16) {
             EnableWindow(g.hwnd_edit_pack_md_max, if on { 1 } else { 0 });
             set_window_text(
                 g.hwnd_btn_pack_zip,
-                if on { "打包 ZIP + 拼接 MD" } else { "按原层级打包 ZIP" },
+                if on { "打包 ZIP 并生成 MD" } else { "打包 ZIP" },
             );
         }
         IDC_BTN_PACK_ZIP => {
             let paths: Vec<String> = g.pack_checked.iter().cloned().collect();
             if paths.is_empty() {
-                let m = to_wide("请先在目录树中勾选至少一个文件！");
+                let m = to_wide("请先在目录树中勾选至少一个文件。");
                 let t = to_wide("提示");
                 MessageBoxW(hwnd, m.as_ptr(), t.as_ptr(), MB_OK | MB_ICONINFORMATION);
                 return;
@@ -3494,7 +3755,7 @@ unsafe fn handle_command(g: &mut GuiData, hwnd: HWND, id: u16, code: u16) {
                 match raw_kb.parse::<usize>() {
                     Ok(v) if (10..=51200).contains(&v) => v,
                     _ => {
-                        let m = to_wide("单 MD 体积上限请输入 10 ~ 51200 之间的整数（单位 KB，建议 150~300）！");
+                        let m = to_wide("单文件上限请输入 10 到 51200 之间的整数（单位 KB，建议 150-300）。");
                         let t = to_wide("参数无效");
                         MessageBoxW(hwnd, m.as_ptr(), t.as_ptr(), MB_OK | MB_ICONWARNING);
                         return;
@@ -3525,17 +3786,12 @@ unsafe fn handle_command(g: &mut GuiData, hwnd: HWND, id: u16, code: u16) {
                                 String::new()
                             };
                             st.logs.info(format!(
-                                "[pack] 已拼接 {} 份 Markdown（上限 {} KB{}）-> {}",
+                                "[pack] 已生成 {} 份 Markdown（上限 {} KB{}）-> {}",
                                 res.md_files.len(),
                                 max_md_kb,
                                 bin_note,
                                 md_dir
                             ));
-                            let _ = Command::new("explorer.exe").arg(md_dir).spawn();
-                        } else {
-                            let _ = Command::new("explorer.exe")
-                                .arg(format!("/select,{}", res.full_path))
-                                .spawn();
                         }
                     }
                     Err(e) => st.logs.error(format!("[pack] 打包失败: {}", e)),
@@ -3563,6 +3819,20 @@ unsafe fn handle_command(g: &mut GuiData, hwnd: HWND, id: u16, code: u16) {
                 }
             });
         }
+        IDC_CHK_APPLY_BUILD => {
+            if is_checked(g.hwnd_chk_apply_build) {
+                let unviewed = unviewed_dangerous_selected(g);
+                if !unviewed.is_empty() {
+                    set_checked(g.hwnd_chk_apply_build, false);
+                    EnableWindow(g.hwnd_chk_apply_build, 0);
+                    g.state.logs.warn(format!(
+                        "[apply] 请先双击查看以下 {} 个构建配置类文件的差异，再勾选自动编译:\n  {}",
+                        unviewed.len(),
+                        unviewed.join("\n  ")
+                    ));
+                }
+            }
+        }
         IDC_BTN_APPLY_EXEC => {
             if g.apply_zip_bytes.is_empty() || g.apply_checked.is_empty() {
                 return;
@@ -3570,7 +3840,9 @@ unsafe fn handle_command(g: &mut GuiData, hwnd: HWND, id: u16, code: u16) {
             let selected: Vec<String> = g.apply_checked.iter().cloned().collect();
             let auto_bak = is_checked(g.hwnd_chk_apply_bak);
             let fix_enc = is_checked(g.hwnd_chk_apply_enc);
-            let mut build_and_exit = is_checked(g.hwnd_chk_apply_build);
+            let unviewed_danger = unviewed_dangerous_selected(g);
+            let build_and_exit =
+                is_checked(g.hwnd_chk_apply_build) && unviewed_danger.is_empty();
 
             let dangerous_selected: Vec<String> = g
                 .apply_entries
@@ -3580,45 +3852,45 @@ unsafe fn handle_command(g: &mut GuiData, hwnd: HWND, id: u16, code: u16) {
                 .collect();
 
             if !dangerous_selected.is_empty() {
-                let disabled_note = if build_and_exit {
-                    build_and_exit = false;
-                    "\n已自动禁用「回填后拉起 build.bat」，请先人工核对改动后再手动编译。"
+                let action_note = if build_and_exit {
+                    "\n\n已勾选回填后退出并运行 build.bat。\n选择“是”写入选中文件后退出并启动 build.bat；选择“否”取消。"
                 } else {
-                    ""
+                    "\n\n选择“是”写入选中文件；选择“否”取消。"
                 };
                 let warn_msg = format!(
-                    "以下 {} 个选中文件属于高危构建/配置/隐私规则文件：\n\n  - {}{}\n\n确认您已信任此补丁来源并覆盖这些文件吗？",
+                    "已选 {} 个文件，其中以下 {} 个涉及构建脚本、配置或忽略规则：\n\n  - {}{}",
+                    selected.len(),
                     dangerous_selected.len(),
                     dangerous_selected.join("\n  - "),
-                    disabled_note
+                    action_note
                 );
                 let warn_w = to_wide(&warn_msg);
-                let warn_t = to_wide("高危构建文件二次确认");
+                let warn_t = to_wide("构建配置类文件回填确认");
                 if MessageBoxW(hwnd, warn_w.as_ptr(), warn_t.as_ptr(), MB_YESNO | MB_ICONWARNING)
                     != IDYES
                 {
                     return;
                 }
-            }
-
-            let confirm_msg = if build_and_exit {
-                format!(
-                    "确定按仓库原层级回填选中的 {} 个文件，\n并在完成后安全退出 swamp.exe 再接力拉起 _build\\swamp-server\\build.bat 吗？",
-                    selected.len()
-                )
             } else {
-                format!("确定按仓库原层级回填选中的 {} 个文件吗？", selected.len())
-            };
-            let confirm_w = to_wide(&confirm_msg);
-            let title_w = to_wide("确认回填");
-            if MessageBoxW(
-                hwnd,
-                confirm_w.as_ptr(),
-                title_w.as_ptr(),
-                MB_YESNO | MB_ICONQUESTION_OR_INFO,
-            ) != IDYES
-            {
-                return;
+                let confirm_msg = if build_and_exit {
+                    format!(
+                        "将按仓库路径写入选中的 {} 个文件，完成后退出 swamp.exe 并启动 build.bat。确认继续？",
+                        selected.len()
+                    )
+                } else {
+                    format!("将按仓库路径写入选中的 {} 个文件。确认继续？", selected.len())
+                };
+                let confirm_w = to_wide(&confirm_msg);
+                let title_w = to_wide("确认回填");
+                if MessageBoxW(
+                    hwnd,
+                    confirm_w.as_ptr(),
+                    title_w.as_ptr(),
+                    MB_YESNO | MB_ICONQUESTION_OR_INFO,
+                ) != IDYES
+                {
+                    return;
+                }
             }
 
             let st = g.state.clone();
@@ -3645,7 +3917,7 @@ unsafe fn handle_command(g: &mut GuiData, hwnd: HWND, id: u16, code: u16) {
                             let build_bat = crate_dir.join("build.bat");
                             if !build_bat.is_file() {
                                 st.logs.error(format!(
-                                    "[apply] 找不到 {}，已取消自动退出",
+                                    "[apply] 未找到 {}，已取消自动退出",
                                     build_bat.display()
                                 ));
                                 return;
@@ -3653,7 +3925,7 @@ unsafe fn handle_command(g: &mut GuiData, hwnd: HWND, id: u16, code: u16) {
                             if let Ok(mut slot) = mailbox.pending_build_handoff.lock() {
                                 *slot = Some((crate_dir, build_bat));
                             }
-                            st.logs.info("[apply] 回填完成，正在确认安全退出 swamp.exe 后再接力拉起 build.bat...");
+                            st.logs.info("[apply] 回填完成，正在关闭服务并启动 build.bat");
                             mailbox.post(WM_APP_EXIT_AND_BUILD, 0, 0);
                         } else {
                             spawn_load_backups(st.config.clone(), mailbox.clone());
@@ -3679,7 +3951,7 @@ unsafe fn handle_command(g: &mut GuiData, hwnd: HWND, id: u16, code: u16) {
                 let clean = strip_verbatim_prefix(&dl_dir);
                 let _ = Command::new("explorer.exe").arg(&clean).spawn();
             } else {
-                g.state.logs.warn("[downloads] 未找到用户 Downloads 目录");
+                g.state.logs.warn("[downloads] 未找到系统下载目录");
             }
         }
         IDC_BTN_DL_DEL => {
@@ -3704,12 +3976,12 @@ unsafe fn handle_command(g: &mut GuiData, hwnd: HWND, id: u16, code: u16) {
                 String::new()
             };
             let msg_w = to_wide(&format!(
-                "确定永久删除 Downloads 中勾选的 {} 项（文件共 {}{}）吗？\n\n删除后不会进入回收站，不可恢复！",
+                "将永久删除下载目录中选中的 {} 项（文件共 {}{}），不经过回收站且无法恢复。确认继续？",
                 selected.len(),
                 format_bytes(file_bytes),
                 extra_dir
             ));
-            let title_w = to_wide("确认清理 Downloads");
+            let title_w = to_wide("确认清理下载目录");
             if MessageBoxW(
                 hwnd,
                 msg_w.as_ptr(),
@@ -3754,11 +4026,11 @@ unsafe fn handle_command(g: &mut GuiData, hwnd: HWND, id: u16, code: u16) {
                 .map(|it| it.size)
                 .sum();
             let msg_w = to_wide(&format!(
-                "确定永久删除 backup 中勾选的 {} 项（共 {}）吗？\n\n删除后不可恢复，若删掉 ai_apply_* 将移除对应回滚快照。",
+                "将永久删除备份目录中选中的 {} 项（共 {}），无法恢复。删除 ai_apply_* 会同时移除对应回滚快照。确认继续？",
                 selected.len(),
                 format_bytes(sel_bytes)
             ));
-            let title_w = to_wide("确认清理 Backup");
+            let title_w = to_wide("确认清理备份目录");
             if MessageBoxW(
                 hwnd,
                 msg_w.as_ptr(),
@@ -3794,7 +4066,7 @@ unsafe fn handle_command(g: &mut GuiData, hwnd: HWND, id: u16, code: u16) {
             }
             let b = g.backups[idx as usize].clone();
             let msg_w = to_wide(&format!(
-                "确定回滚快照 [{}]？\n将还原 {} 个被覆盖文件，并清理 {} 个当时新增的文件。",
+                "将回滚到快照 {}：还原 {} 个已覆盖文件，并删除 {} 个新增文件。确认继续？",
                 b.name, b.overwritten_count, b.created_count
             ));
             let title_w = to_wide("确认回滚");
@@ -3827,7 +4099,7 @@ unsafe fn handle_command(g: &mut GuiData, hwnd: HWND, id: u16, code: u16) {
         IDC_BTN_PRESET_SAVE => {
             let name = get_window_text_string(g.hwnd_edit_preset_name).trim().to_string();
             if name.is_empty() {
-                let m = to_wide("请先在「预设名」框中输入预设名称！");
+                let m = to_wide("请先输入预设名称。");
                 let t = to_wide("提示");
                 MessageBoxW(hwnd, m.as_ptr(), t.as_ptr(), MB_OK | MB_ICONWARNING);
                 return;
@@ -3835,7 +4107,7 @@ unsafe fn handle_command(g: &mut GuiData, hwnd: HWND, id: u16, code: u16) {
             let mut paths: Vec<String> = g.pack_checked.iter().cloned().collect();
             paths.sort();
             if paths.is_empty() {
-                let m = to_wide("请先在目录树中勾选至少一个文件再保存为预设！");
+                let m = to_wide("请先勾选至少一个文件再保存预设。");
                 let t = to_wide("提示");
                 MessageBoxW(hwnd, m.as_ptr(), t.as_ptr(), MB_OK | MB_ICONWARNING);
                 return;
@@ -3923,10 +4195,10 @@ unsafe fn handle_command(g: &mut GuiData, hwnd: HWND, id: u16, code: u16) {
             let mailbox = g.mailbox.clone();
             std::thread::spawn(move || {
                 let _busy = st.runtime.begin_op();
-                st.logs.info("[synonyms] 开始单遍强制重建 synonyms.js + OOV 报告并执行全量构建 (gen)...");
+                st.logs.info("[synonyms] 开始重建 synonyms.js 与未收录词报告并执行构建");
                 match crate::builder::run_gen_with_options(&st.config, Some(&st.logs), true) {
                     Ok(()) => {
-                        st.logs.info("[synonyms] 同义词重建 + 全量构建全部完成！");
+                        st.logs.info("[synonyms] 重建与构建完成");
                         spawn_load_synonyms_data(st.config.clone(), mailbox.clone(), false);
                         spawn_load_backup_tree(st.config.clone(), mailbox);
                     }
@@ -3967,7 +4239,7 @@ unsafe fn handle_command(g: &mut GuiData, hwnd: HWND, id: u16, code: u16) {
         }
         IDC_BTN_OOV_REFRESH => {
             spawn_load_synonyms_data(g.state.config.clone(), g.mailbox.clone(), false);
-            g.state.logs.info("[synonyms] 已刷新 OOV 新词雷达报告");
+            g.state.logs.info("[synonyms] 已刷新未收录词报告");
         }
         _ => {}
     }

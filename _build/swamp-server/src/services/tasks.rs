@@ -197,12 +197,16 @@ fn base64url_no_pad(input: &[u8]) -> String {
     out
 }
 
+pub(crate) fn pkce_challenge_from_verifier(verifier: &str) -> String {
+    let digest = Sha256::digest(verifier.as_bytes());
+    base64url_no_pad(&digest)
+}
+
 fn generate_pkce_pair() -> Result<(String, String), String> {
     let mut raw = [0u8; 32];
     getrandom::getrandom(&mut raw).map_err(|e| format!("生成 PKCE 随机串失败: {}", e))?;
     let verifier = base64url_no_pad(&raw);
-    let digest = Sha256::digest(verifier.as_bytes());
-    let challenge = base64url_no_pad(&digest);
+    let challenge = pkce_challenge_from_verifier(&verifier);
     Ok((verifier, challenge))
 }
 
@@ -402,7 +406,7 @@ async fn run_interactive_oauth(
         enc(&state_tok)
     );
 
-    logs.info("[tasks] 正在打开浏览器进行 Google Tasks OAuth 授权 (PKCE S256)...");
+    logs.info("[tasks] 已打开浏览器进行 Google Tasks 授权");
     crate::open_url_in_browser(&auth_url, false);
 
     let code_res = tokio::time::timeout(Duration::from_secs(AUTH_WAIT_TIMEOUT_SECS), rx).await;
@@ -419,7 +423,7 @@ async fn run_interactive_oauth(
 
     let tok = exchange_code_for_token(client, creds, &code, &redirect_uri, &code_verifier).await?;
     save_stored_token(cfg, &tok).map_err(PollErr::Other)?;
-    logs.info("[tasks] Google Tasks 授权成功，凭证已持久化到 privy/tokens.json");
+    logs.info("[tasks] Google Tasks 授权完成，凭证已保存到 privy/tokens.json");
     Ok(tok)
 }
 
@@ -705,7 +709,7 @@ pub fn spawn_background_monitors(
                                 let now2 = unix_now();
                                 if last_auth_attempt == 0 || (now2 - last_auth_attempt) >= AUTH_COOLDOWN_SECS {
                                     last_auth_attempt = now2;
-                                    logs.warn(format!("[tasks] 授权失效，清除凭证准备重授: {}", msg));
+                                    logs.warn(format!("[tasks] 授权已失效，清除旧凭证并重新授权: {}", msg));
                                     if let Ok(new_tok) =
                                         run_interactive_oauth(&cfg, &status, &client, &creds, &logs).await
                                     {

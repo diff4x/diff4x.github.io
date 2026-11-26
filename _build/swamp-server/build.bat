@@ -21,14 +21,14 @@ if /i "%~1"=="all"  goto build_all
 :menu
 cls
 echo =====================================================
-echo   Swamp Unified Rust Builder (_build\swamp-server)
+echo   Swamp 构建脚本 (_build\swamp-server)
 echo =====================================================
-echo   [1] 编译 swamp.exe (原生伴生服务 + 桌面管理窗)
-echo   [2] 编译 Wasm 引擎 (compute_intensive_task_processor)
-echo   [3] 全部编译 (swamp.exe + Wasm)
+echo   [1] 编译 swamp.exe
+echo   [2] 编译 Wasm (src\wasm)
+echo   [3] 全部编译
 echo   [0] 退出
 echo =====================================================
-choice /c 1230 /n /m "choice [0~3]: "
+choice /c 1230 /n /m "请选择 [0-3]: "
 if errorlevel 4 goto :eof
 if errorlevel 3 goto build_all
 if errorlevel 2 goto build_wasm_only
@@ -70,7 +70,7 @@ exit /b 0
 
 :launch_swamp_exe
 echo.
-echo [RUN] 正在自动启动新版 _build\swamp.exe ...
+echo [exe] 正在启动 _build\swamp.exe
 setlocal
 if defined _SWAMP_HANDOFF_TOKEN set "SWAMP_HANDOFF_TOKEN=%_SWAMP_HANDOFF_TOKEN%"
 start "" /D "%BUILD_DIR%" "%BUILD_DIR%\swamp.exe"
@@ -78,7 +78,7 @@ endlocal
 exit /b 0
 
 :wait_and_exit
-echo [INFO] 构建成功，3 秒后自动退出...
+echo [done] 完成，3 秒后退出
 timeout /t 3 /nobreak >nul 2>&1 || ping -n 4 127.0.0.1 >nul
 exit /b 0
 
@@ -87,17 +87,17 @@ exit /b 0
 :: -----------------------------------------------------
 :do_build_exe
 echo.
-echo [EXE] 检查 swamp.exe 占用状态...
+echo [exe] 检查 swamp.exe 运行状态
 set "WAIT_TRY=0"
 :wait_swamp_exit
 tasklist /FI "IMAGENAME eq swamp.exe" 2>nul | find /I "swamp.exe" >nul
 if errorlevel 1 goto swamp_exited
 set /a WAIT_TRY+=1
 if %WAIT_TRY% GTR 6 (
-    echo [WARN] 检测到 swamp.exe 仍在运行，请先关闭 Swamp 管理窗口再重新编译。
+    echo [warn] swamp.exe 仍在运行，请先关闭管理窗口再编译
     exit /b 1
 )
-if %WAIT_TRY%==1 echo [EXE] 等待 swamp.exe 安全退出...
+if %WAIT_TRY%==1 echo [exe] 等待 swamp.exe 退出...
 timeout /t 1 /nobreak >nul
 goto wait_swamp_exit
 :swamp_exited
@@ -107,11 +107,11 @@ if not exist "%CRATE_DIR%\assets\cilin.txt" (
     if exist "%BUILD_DIR%\rust\swamp-server\assets\cilin.txt" (
         if not exist "%CRATE_DIR%\assets" mkdir "%CRATE_DIR%\assets"
         copy /y "%BUILD_DIR%\rust\swamp-server\assets\cilin.txt" "%CRATE_DIR%\assets\cilin.txt" >nul
-        echo [INFO] 已自动迁移 _build\rust\swamp-server\assets\cilin.txt 至 assets\cilin.txt
+        echo [info] 已复制旧路径 cilin.txt 到 assets\cilin.txt
     ) else if exist "%BUILD_DIR%\synonyms\cilin.txt" (
         if not exist "%CRATE_DIR%\assets" mkdir "%CRATE_DIR%\assets"
         copy /y "%BUILD_DIR%\synonyms\cilin.txt" "%CRATE_DIR%\assets\cilin.txt" >nul
-        echo [INFO] 已自动迁移 _build\synonyms\cilin.txt 至 assets\cilin.txt
+        echo [info] 已复制旧路径 cilin.txt 到 assets\cilin.txt
     )
 )
 
@@ -119,72 +119,118 @@ if not exist "%TARGET_DIR%" mkdir "%TARGET_DIR%"
 set "CARGO_TARGET_DIR=%TARGET_DIR%"
 set "RUSTFLAGS="
 
-echo [EXE] cargo build --profile release-exe --bin swamp ...
+echo [exe] 编译 swamp.exe (cargo build --profile release-exe --bin swamp)
 pushd "%CRATE_DIR%"
 cargo build --profile release-exe --bin swamp
 if errorlevel 1 (
     popd
-    echo [ERROR] swamp.exe 编译失败！
+    echo [error] swamp.exe 编译失败
     exit /b 1
 )
 popd
 
 "%TARGET_DIR%\release-exe\swamp.exe" --selftest
 if errorlevel 1 (
-    echo [ERROR] 新版 swamp.exe 自检未通过，已中止替换（旧版 _build\swamp.exe 保持完好）！
+    echo [error] 自检未通过，已停止替换（保留原有 _build\swamp.exe）
     exit /b 1
 )
 
-copy /y "%TARGET_DIR%\release-exe\swamp.exe" "%BUILD_DIR%\swamp.exe" >nul
+call :copy_with_retry "%TARGET_DIR%\release-exe\swamp.exe" "%BUILD_DIR%\swamp.exe"
 if errorlevel 1 (
-    echo [ERROR] 复制到 _build\swamp.exe 失败！
+    echo [error] 复制到 _build\swamp.exe 失败
     exit /b 1
 )
 
-echo [SUCCESS] 已更新 _build\swamp.exe（target 位于 %TARGET_DIR%）
+echo [ok] 已更新 _build\swamp.exe（target: %TARGET_DIR%）
 exit /b 0
 
 :: -----------------------------------------------------
-:: 子过程 2：编译 Wasm 并使用 swamp.exe 内置压缩器生成 .min.js
+:: 子过程 2：编译 Wasm（暂存至本地非同步目录避开网盘抢锁，再同步最终产物）
 :: -----------------------------------------------------
 :do_build_wasm
 echo.
 if not exist "%TARGET_DIR%" mkdir "%TARGET_DIR%"
 if not exist "%WASM_OUT_DIR%" mkdir "%WASM_OUT_DIR%"
+set "WASM_STAGE_DIR=%TARGET_DIR%\wasm-stage"
+if exist "%WASM_STAGE_DIR%" rmdir /s /q "%WASM_STAGE_DIR%" 2>nul
+mkdir "%WASM_STAGE_DIR%" >nul 2>&1
 set "CARGO_TARGET_DIR=%TARGET_DIR%"
 set "RUSTFLAGS="
 
-echo [WASM] wasm-pack build --target web ...
+echo [wasm] 编译 Wasm（临时目录: %WASM_STAGE_DIR%）
 pushd "%CRATE_DIR%"
-call wasm-pack build --target web --out-dir "%WASM_OUT_DIR%" --out-name compute_intensive_task_processor --target-dir "%TARGET_DIR%"
+call wasm-pack build --target web --out-dir "%WASM_STAGE_DIR%" --out-name compute_intensive_task_processor --target-dir "%TARGET_DIR%"
 if errorlevel 1 (
     popd
-    echo [ERROR] WASM 编译失败！
+    echo [error] Wasm 编译失败
     exit /b 1
 )
 popd
 
-set "RAW_WASM_JS=%WASM_OUT_DIR%\compute_intensive_task_processor.js"
+set "STAGE_WASM_BIN=%WASM_STAGE_DIR%\compute_intensive_task_processor_bg.wasm"
+set "OUT_WASM_BIN=%WASM_OUT_DIR%\compute_intensive_task_processor_bg.wasm"
+set "RAW_WASM_JS=%WASM_STAGE_DIR%\compute_intensive_task_processor.js"
 set "MIN_WASM_JS=%WASM_OUT_DIR%\compute_intensive_task_processor.min.js"
+
+if not exist "%STAGE_WASM_BIN%" (
+    echo [error] 临时目录中缺少 .wasm 产物
+    exit /b 1
+)
+
+call :copy_with_retry "%STAGE_WASM_BIN%" "%OUT_WASM_BIN%"
+if errorlevel 1 (
+    echo [error] 复制 .wasm 到 src\wasm 失败（文件可能被占用）
+    exit /b 1
+)
 
 if exist "%RAW_WASM_JS%" (
     if exist "%BUILD_DIR%\swamp.exe" (
         "%BUILD_DIR%\swamp.exe" minify "%RAW_WASM_JS%" "%MIN_WASM_JS%"
         if errorlevel 1 (
-            echo [WARN] 内置 JS 压缩失败，回退直接改名保留胶水脚本。
-            move /y "%RAW_WASM_JS%" "%MIN_WASM_JS%" >nul
-        ) else (
-            del /Q "%RAW_WASM_JS%" 2>nul
+            echo [warn] JS 压缩失败，改为直接复制胶水脚本
+            call :copy_with_retry "%RAW_WASM_JS%" "%MIN_WASM_JS%"
+            if errorlevel 1 (
+                echo [error] 复制胶水脚本到 src\wasm 失败
+                exit /b 1
+            )
         )
     ) else (
-        echo [WARN] 未找到 _build\swamp.exe，直接改名保留胶水脚本（建议先选 [1] 编译 swamp.exe）。
-        move /y "%RAW_WASM_JS%" "%MIN_WASM_JS%" >nul
+        echo [warn] 未找到 _build\swamp.exe，改为直接复制胶水脚本（可先选 [1] 编译）
+        call :copy_with_retry "%RAW_WASM_JS%" "%MIN_WASM_JS%"
+        if errorlevel 1 (
+            echo [error] 复制胶水脚本到 src\wasm 失败
+            exit /b 1
+        )
     )
+) else (
+    echo [error] 临时目录中缺少胶水脚本
+    exit /b 1
 )
 
-del /Q "%WASM_OUT_DIR%\*.d.ts" 2>nul
-del /Q "%WASM_OUT_DIR%\*.json" 2>nul
-del /Q "%WASM_OUT_DIR%\.gitignore" 2>nul
+rmdir /s /q "%WASM_STAGE_DIR%" 2>nul
 
-echo [SUCCESS] WASM 已输出至 src\wasm\compute_intensive_task_processor.{min.js,_bg.wasm}
+echo [ok] 已更新 src\wasm\compute_intensive_task_processor.{min.js,_bg.wasm}
 exit /b 0
+
+:: -----------------------------------------------------
+:: 辅助子过程：带重试的文件复制（缓解 Dropbox / 杀毒软件瞬时抢锁）
+:: -----------------------------------------------------
+:copy_with_retry
+setlocal
+set "SRC_FILE=%~1"
+set "DST_FILE=%~2"
+set "COPY_TRY=0"
+:copy_retry_loop
+copy /y "%SRC_FILE%" "%DST_FILE%" >nul 2>&1
+if not errorlevel 1 (
+    endlocal
+    exit /b 0
+)
+set /a COPY_TRY+=1
+if %COPY_TRY% GEQ 6 (
+    endlocal
+    exit /b 1
+)
+echo [warn] 目标文件被占用，第 %COPY_TRY% 次重试复制
+timeout /t 1 /nobreak >nul 2>&1 || ping -n 2 127.0.0.1 >nul
+goto copy_retry_loop

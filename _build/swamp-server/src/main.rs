@@ -104,31 +104,31 @@ fn attach_parent_console_if_cli() {
 
 fn print_usage() {
     println!(
-        "swamp v{} —— 单文件本地伴生服务、纯 Rust 站点构建器 & 桌面管理控制台\n\
+        "swamp v{} - 本地服务、站点构建与管理工具\n\
          \n\
          用法:\n\
-           swamp [命令] [选项]           （双击无参数启动 = 启动本地服务并打开独立管理窗口）\n\
+           swamp [命令] [选项]           无参数启动时运行本地服务并打开管理窗口\n\
          \n\
          服务模式:\n\
-           serve                         本地伴生服务 + 独立桌面管理窗口（默认，不主动打开主页）\n\
-           sim                           线上仿真服务（9000 端口，封禁 /__api、_build 与 shadow*）\n\
+           serve                         启动本地服务与管理窗口（默认）\n\
+           sim                           启动线上仿真服务（9000 端口，禁用 /__api、_build、shadow* 与 __ 私有页）\n\
          \n\
-         单次工具子命令:\n\
-           gen                           纯 Rust 全量构建（并行 JS/CSS 压缩 + 切片 + 同义词 + 清单 + 隔离断言）\n\
-           new [title] [category]        创建新 HTML 页面（--open 自动用 VS Code 打开）\n\
-           webp [maxW] [quality]         纯 Rust 内置 libwebp 批量压缩图片并复制文件名至剪贴板\n\
-           keep2html [single|merge] ...  纯 Rust 解析 Google Keep Takeout ZIP 转为 HTML 与 WebP\n\
-           synonyms                      独立重建 src/js/synonyms.js 与 oov_report.txt\n\
-           bookmark <blk> <ttl> <href>   原子增删移 src/tpl/bookmark.html 书签\n\
-           minify <in> <out>             使用内置纯 Rust 压缩器压缩单个 JS/CSS 文件\n\
-           --selftest                    运行内置安全守卫与构建器自检套件\n\
+         命令行子命令:\n\
+           gen                           构建站点（资源压缩、数据切片、同义词、缓存清单与隐私检查）\n\
+           new [title] [category]        新建 HTML 页面（加 --open 使用 VS Code 打开）\n\
+           webp [maxW] [quality]         批量转换图片为 WebP 并复制文件名到剪贴板\n\
+           keep2html [single|merge] ...  将 Google Keep 导出包转换为 HTML 与图片\n\
+           synonyms                      重建 synonyms.js、未收录词报告并执行构建\n\
+           bookmark <blk> <ttl> <href>   更新 src/tpl/bookmark.html 中的书签\n\
+           minify <in> <out>             压缩单个 JS 或 CSS 文件\n\
+           --selftest                    运行内置自检\n\
          \n\
          选项:\n\
-           -p, --port <N>                覆盖监听端口\n\
-           -d, --root <DIR>              显式指定仓库根目录\n\
+           -p, --port <N>                指定监听端口\n\
+           -d, --root <DIR>              指定仓库根目录\n\
            -g, --log-level <LVL>         日志级别 (error | info)\n\
-           --open                        自动打开浏览器 / 编辑器\n\
-           --alt-dir / --update-mapping  webp 附加开关\n\
+           --open                        自动打开浏览器或编辑器\n\
+           --alt-dir / --update-mapping  webp 输出与引用替换开关\n\
            -h, --help                    显示帮助\n\
            -V, --version                 显示版本",
         env!("CARGO_PKG_VERSION")
@@ -387,7 +387,7 @@ async fn oauth_callback(
     match q.code {
         Some(code) if !code.is_empty() => {
             let _ = p.tx.send(Ok(code));
-            oauth_html_response("<h2 style='font-family:sans-serif;color:#16a34a;padding:24px;'>✅ Google Tasks 授权成功！可以关闭此标签页。</h2>".to_string())
+            oauth_html_response("<h2 style='font-family:sans-serif;color:#16a34a;padding:24px;'>Google Tasks 授权已完成，可关闭此页面。</h2>".to_string())
         }
         _ => {
             let _ = p.tx.send(Err("回调缺少 code 参数".to_string()));
@@ -441,11 +441,11 @@ async fn auth_handoff() -> Response {
         }
       } catch (_) {}
       if (hasExisting) {
-        document.getElementById('msg').textContent = '✅ 令牌已同步至现有站点窗口，正在关闭本页...';
+        document.getElementById('msg').textContent = '会话令牌已同步，正在关闭此页面...';
         try { window.close(); } catch (_) {}
         setTimeout(function () { try { window.close(); } catch (_) {} }, 80);
         setTimeout(function () {
-          document.getElementById('msg').innerHTML = '✅ 本地令牌已同步至现有站点窗口，直接切回原标签页即可继续使用（<a href="/">或点此新开主页</a>）。';
+          document.getElementById('msg').innerHTML = '会话令牌已同步，切回原标签页即可继续使用（<a href="/">或打开主页</a>）。';
         }, 320);
       } else {
         location.replace('/');
@@ -548,11 +548,11 @@ async fn api_auth_refresh(
             const MB_TOPMOST: u32 = 0x0004_0000;
 
             let msg = format!(
-                "浏览器中的旧页面（http://localhost:{}）请求续签本地会话令牌。\n\n如果是您本人正在保存、编辑或操作本地功能，点击【是】将自动更新令牌并继续完成当前操作；\n否则点击【否】拒绝。",
+                "本地页面 (localhost:{}) 请求更新会话令牌。\n\n如为本人正在执行保存或编辑操作，请选择“是”放行；否则选择“否”。",
                 port
             );
             let mw: Vec<u16> = OsStr::new(&msg).encode_wide().chain(Some(0)).collect();
-            let tw: Vec<u16> = OsStr::new("Swamp 本地会话续签确认")
+            let tw: Vec<u16> = OsStr::new("更新会话令牌确认")
                 .encode_wide()
                 .chain(Some(0))
                 .collect();
@@ -571,11 +571,11 @@ async fn api_auth_refresh(
         if allowed {
             gate.last_approved_at = Some(Instant::now());
             gate.last_denied_at = None;
-            state.logs.info("[auth] 已确认向同源旧页面续签本地会话令牌");
+            state.logs.info("[auth] 已放行本地页面的令牌更新请求");
             return Json(json!({ "ok": true, "token": state.token })).into_response();
         } else {
             gate.last_denied_at = Some(Instant::now());
-            state.logs.warn("[auth] 已拒绝浏览器的本地会话续签请求");
+            state.logs.warn("[auth] 已拒绝本地页面的令牌更新请求");
             return (
                 StatusCode::FORBIDDEN,
                 Json(json!({ "ok": false, "error": "已拒绝本地会话续签请求" })),
@@ -622,6 +622,8 @@ fn build_router(mode: RunMode, state: Arc<AppState>) -> Router {
                 .route("/ops/cli", post(api_ops::post_cli))
                 .route("/ops/txn", post(api_ops::post_txn))
                 .route("/ops/katrain", post(api_ops::post_katrain))
+                .route("/ops/md-history", get(api_ops::get_md_history))
+                .route("/ops/md-rev", get(api_ops::get_md_rev))
                 .layer(DefaultBodyLimit::max(32 * 1024 * 1024))
                 .layer(middleware::from_fn_with_state(
                     state.clone(),
@@ -969,18 +971,23 @@ fn run_server_mode(cfg: ServerConfig, mode: RunMode, open_browser: bool) {
                 strip_verbatim_prefix(&cfg_bg.repo_root).display()
             ));
             if inherited_token {
-                logs_bg.info("[auth] 已从上一进程无感继承会话令牌，原有浏览器页面无需重新打开");
+                logs_bg.info("[auth] 已沿用上一进程的会话令牌");
             }
 
             if !is_sim {
                 match crate::builder::minify::sync_raw_assets_on_startup(&cfg_bg) {
                     Ok(n) if n > 0 => {
-                        logs_bg.info(format!("[startup] 已自动增量同步压缩 {} 个前端源码文件", n));
+                        logs_bg.info(format!("[startup] 启动时同步压缩了 {} 个前端文件", n));
                     }
                     Ok(_) => {}
                     Err(e) => {
-                        logs_bg.warn(format!("[startup] 前端源码初始同步异常: {}", e));
+                        logs_bg.warn(format!("[startup] 启动同步前端文件失败: {}", e));
                     }
+                }
+                let _ = std::fs::remove_dir_all(cfg_bg.build_dir.join("temp").join("diff_preview"));
+                let md_synced = crate::services::md_history::scan_and_sync_all_md(&cfg_bg, Some(&logs_bg));
+                if md_synced > 0 {
+                    logs_bg.info(format!("[startup] 已同步 {} 个 Markdown 文件的版本状态", md_synced));
                 }
                 spawn_asset_watcher(cfg_bg.clone(), logs_bg.clone(), state_bg.html_change_tx.clone());
                 spawn_background_monitors(cfg_bg.clone(), runtime_bg, logs_bg.clone());
@@ -1022,13 +1029,13 @@ fn run_server_mode(cfg: ServerConfig, mode: RunMode, open_browser: bool) {
                     MessageBoxW, MB_ICONERROR, MB_OK,
                 };
                 let mw: Vec<u16> = OsStr::new(&format!(
-                    "Swamp 启动失败：\n{}\n\n（可能已有另一个 swamp.exe 正在运行）",
+                    "无法启动服务：\n{}\n\n请检查端口是否被占用，或是否已运行另一个 swamp.exe。",
                     e
                 ))
                 .encode_wide()
                 .chain(Some(0))
                 .collect();
-                let tw: Vec<u16> = OsStr::new("Swamp 启动错误")
+                let tw: Vec<u16> = OsStr::new("启动失败")
                     .encode_wide()
                     .chain(Some(0))
                     .collect();

@@ -8,7 +8,10 @@ use std::fs::{self, File};
 use std::io::{Cursor, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
+
+static DIFF_PREVIEW_SEQ: AtomicU64 = AtomicU64::new(1);
 use walkdir::WalkDir;
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipArchive, ZipWriter};
@@ -162,32 +165,61 @@ pub fn is_hard_private_rel(rel: &str) -> bool {
     false
 }
 
+/// 判定路径是否属于推送前隐私防线拦截名单（暂存区与 @{u}..HEAD 未推送提交共用）
+pub fn is_private_push_path(rel: &str) -> bool {
+    let norm = rel.replace('\\', "/");
+    let low = norm.trim_start_matches('/').to_ascii_lowercase();
+    is_hard_private_rel(&low)
+        || low.starts_with("html/__")
+        || low.starts_with("src/js/data/shadow")
+        || low.starts_with("_build/privy/")
+        || low.starts_with("_build/temp/")
+}
+
 /// 判定补丁条目是否属于构建期/配置期会被执行或影响隐私防线的高危文件
 pub fn is_build_or_exec_rel(rel: &str) -> bool {
     let low = rel.replace('\\', "/").to_ascii_lowercase();
-    if low == ".gitignore"
-        || low == "_build/swamp.toml"
-        || low.starts_with(".github/")
-        || low.starts_with(".cargo/")
-        || low.starts_with("_build/swamp-server/.cargo/")
-        || low == "cargo.toml"
-        || low.ends_with("/cargo.toml")
-        || low == "cargo.lock"
-        || low.ends_with("/cargo.lock")
-        || low == "build.rs"
-        || low.ends_with("/build.rs")
-        || low == "build.bat"
-        || low.ends_with("/build.bat")
-    {
+    if low.split('/').any(|seg| seg == ".cargo") {
         return true;
     }
-    let ext = Path::new(&low)
+    let fname = low.rsplit('/').next().unwrap_or(low.as_str());
+    if matches!(
+        fname,
+        ".gitignore"
+            | ".gitattributes"
+            | ".gitmodules"
+            | "cargo.toml"
+            | "cargo.lock"
+            | "build.rs"
+            | "build.bat"
+            | "rust-toolchain"
+            | "rust-toolchain.toml"
+    ) {
+        return true;
+    }
+    if low == "_build/swamp.toml" || low.starts_with(".github/") {
+        return true;
+    }
+    let ext = Path::new(fname)
         .extension()
         .and_then(|s| s.to_str())
         .unwrap_or("");
     matches!(
         ext,
-        "bat" | "cmd" | "ps1" | "exe" | "dll" | "msi" | "vbs" | "scr"
+        "bat"
+            | "cmd"
+            | "ps1"
+            | "exe"
+            | "dll"
+            | "msi"
+            | "vbs"
+            | "vbe"
+            | "scr"
+            | "lnk"
+            | "hta"
+            | "wsf"
+            | "py"
+            | "sh"
     )
 }
 
@@ -1026,6 +1058,14 @@ pub fn execute_apply_zip(
 
     guard.flush()?;
 
+    for rel in guard.overwritten.iter().chain(guard.created.iter()) {
+        if rel.to_ascii_lowercase().ends_with(".md")
+            && crate::security::validate_rel_md_path(rel).is_some()
+        {
+            let _ = crate::services::md_history::record_if_changed(cfg, rel, None);
+        }
+    }
+
     Ok(ApplyResult {
         overwritten: guard.overwritten.len(),
         created: guard.created.len(),
@@ -1346,6 +1386,11 @@ pub fn rollback_apply_backup(cfg: &ServerConfig, backup_name: &str) -> Result<(u
                 let _ = fs::create_dir_all(p);
             }
             fs::copy(&src_bak, &full).map_err(|e| format!("还原 {} 失败: {}", clean, e))?;
+            if clean.to_ascii_lowercase().ends_with(".md")
+                && crate::security::validate_rel_md_path(&clean).is_some()
+            {
+                let _ = crate::services::md_history::record_if_changed(cfg, &clean, None);
+            }
             restored += 1;
         }
     }
@@ -1361,4 +1406,132 @@ pub fn rollback_apply_backup(cfg: &ServerConfig, backup_name: &str) -> Result<(u
     }
 
     Ok((restored, removed))
+}
+
+/// 提取补丁中的单个条目至 _build/temp/diff_preview/<pid>_<seq>/<filename> 供 VS Code --diff 预览
+pub fn extract_zip_entry_for_diff(
+    cfg: &ServerConfig,
+    zip_bytes: &[u8],
+    target_rel: &str,
+) -> Result<(PathBuf, Option<PathBuf>), String> {
+    let Some((clean_target, repo_full)) = resolve_safe_target(&cfg.repo_root, target_rel) else {
+        return Err(format!("非法补丁路径，拒绝预览: {}", target_rel));
+    };
+    if is_hard_private_rel(&clean_target) {
+        return Err(format!("安全策略禁止预览私密路径: {}", clean_target));
+    }
+
+    let mut archive =
+        ZipArchive::new(Cursor::new(zip_bytes)).map_err(|e| format!("解析 ZIP 失败: {}", e))?;
+    let mut found_bytes: Option<Vec<u8>> = None;
+
+    for i in 0..archive.len() {
+        let entry = archive
+            .by_index(i)
+            .map_err(|e| format!("读取 ZIP 条目失败: {}", e))?;
+        let raw_name = entry.name().to_string();
+        if raw_name.is_empty() || raw_name.ends_with('/') || raw_name.ends_with('\\') {
+            continue;
+        }
+        let Some((rel, _)) = resolve_safe_target(&cfg.repo_root, &raw_name) else {
+            continue;
+        };
+        if rel == clean_target {
+            let mut buf = Vec::new();
+            entry
+                .take(MAX_APPLY_ENTRY_BYTES + 1)
+                .read_to_end(&mut buf)
+                .map_err(|e| format!("解压 {} 失败: {}", rel, e))?;
+            if buf.len() as u64 > MAX_APPLY_ENTRY_BYTES {
+                return Err(format!("条目 {} 超过预览体积上限", rel));
+            }
+            found_bytes = Some(buf);
+            break;
+        }
+    }
+
+    let bytes = found_bytes.ok_or_else(|| format!("补丁包中未找到条目: {}", clean_target))?;
+    let raw_fname = Path::new(&clean_target)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("patch_entry.txt");
+    let safe_fname = safe_diff_preview_filename(raw_fname);
+    let seq = DIFF_PREVIEW_SEQ.fetch_add(1, Ordering::Relaxed);
+    let preview_base = cfg.build_dir.join("temp").join("diff_preview");
+    prune_old_diff_previews(&preview_base, 10);
+    let temp_root = preview_base.join(format!("{}_{}", std::process::id(), seq));
+    fs::create_dir_all(&temp_root).map_err(|e| format!("创建 Diff 临时目录失败: {}", e))?;
+    let temp_file = temp_root.join(safe_fname);
+    write_bytes_atomic(&temp_file, &bytes)?;
+
+    let existing = if repo_full.is_file() {
+        Some(repo_full)
+    } else {
+        None
+    };
+    Ok((temp_file, existing))
+}
+
+/// 防止 .code-workspace 被 VS Code 当作工作区打开（触发 Workspace Trust 提示）
+pub fn safe_diff_preview_filename(raw_fname: &str) -> String {
+    if raw_fname.to_ascii_lowercase().ends_with(".code-workspace") {
+        format!("{}.txt", raw_fname)
+    } else {
+        raw_fname.to_string()
+    }
+}
+
+fn prune_old_diff_previews(preview_base: &Path, keep_latest: usize) {
+    let Ok(rd) = fs::read_dir(preview_base) else {
+        return;
+    };
+    let mut dirs: Vec<(std::time::SystemTime, PathBuf)> = rd
+        .filter_map(|e| e.ok())
+        .filter_map(|e| {
+            let p = e.path();
+            if !p.is_dir() {
+                return None;
+            }
+            let mtime = e
+                .metadata()
+                .and_then(|m| m.modified())
+                .unwrap_or(std::time::UNIX_EPOCH);
+            Some((mtime, p))
+        })
+        .collect();
+    if dirs.len() < keep_latest {
+        return;
+    }
+    dirs.sort_by(|a, b| b.0.cmp(&a.0));
+    for (_, old_dir) in dirs.into_iter().skip(keep_latest.saturating_sub(1)) {
+        let _ = fs::remove_dir_all(old_dir);
+    }
+}
+
+pub(crate) fn selftest_manifest_guard_drop() -> bool {
+    let dir = std::env::temp_dir().join(format!(
+        "swamp_selftest_mf_{}_{}",
+        std::process::id(),
+        DIFF_PREVIEW_SEQ.fetch_add(1, Ordering::Relaxed)
+    ));
+    if fs::create_dir_all(&dir).is_err() {
+        return false;
+    }
+    {
+        let mut guard = ManifestGuard {
+            backup_dir: Some(dir.clone()),
+            source_zip: "test.zip".to_string(),
+            overwritten: vec!["a.txt".to_string()],
+            created: vec!["b.txt".to_string()],
+            written: false,
+        };
+        // 模拟中途出错返回：不显式调用 flush()，直接离开作用域触发 Drop
+        let _ = &mut guard;
+    }
+    let mf = dir.join("_manifest.json");
+    let ok = fs::read_to_string(&mf)
+        .map(|raw| raw.contains("\"a.txt\"") && raw.contains("\"b.txt\""))
+        .unwrap_or(false);
+    let _ = fs::remove_dir_all(&dir);
+    ok
 }

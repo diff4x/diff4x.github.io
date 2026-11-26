@@ -19,6 +19,7 @@ path = "src/main.rs"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 regex = "1"
+similar = "2"
 # 置于主依赖表以通过 wasm-pack 对 Cargo.toml 的依赖校验（native 仅编译 --bin swamp，不会链接进 swamp.exe）
 wasm-bindgen = "0.2"
 
@@ -26,7 +27,6 @@ wasm-bindgen = "0.2"
 serde-wasm-bindgen = "0.6"
 js-sys = "0.3"
 lazy_static = "1.4"
-similar = "2"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 axum = "0.7"
@@ -37,6 +37,7 @@ getrandom = "0.2"
 subtle = "2"
 percent-encoding = "2"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
+aho-corasick = "1"
 crc32fast = "1"
 sha2 = "0.10"
 globset = "0.4"

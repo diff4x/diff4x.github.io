@@ -373,8 +373,64 @@ fn is_false(b: &bool) -> bool {
 }
 
 lazy_static! {
-    static ref MEDIA_RE: Regex = Regex::new(r#"(?i)([^\s"'<>]+\.(?:jpg|png|webp|gif))|(https?://[^\s"'<>]+)"#).unwrap();
+    static ref MEDIA_RE: Regex = Regex::new(r#"(?i)([^\s"'<>]+\.(?:jpg|jpeg|png|webp|gif))|(https?://[^\s"'<>]+)"#).unwrap();
     static ref HEADER_RE: Regex = Regex::new(r"^(#{1,6})\s+(.*)$").unwrap();
+}
+
+fn escape_html_text(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        match ch {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&#39;"),
+            other => out.push(other),
+        }
+    }
+    out
+}
+
+fn render_escaped_line(line: &str) -> String {
+    let mut out = String::with_capacity(line.len() + 16);
+    let mut last = 0usize;
+    for caps in MEDIA_RE.captures_iter(line) {
+        let m = caps.get(0).unwrap();
+        if m.start() > last {
+            out.push_str(&escape_html_text(&line[last..m.start()]));
+        }
+        if let Some(img) = caps.get(1) {
+            let img_str = img.as_str();
+            let low = img_str.to_ascii_lowercase();
+            let is_http = low.starts_with("http://") || low.starts_with("https://");
+            if img_str.contains(':') && !is_http {
+                out.push_str(&escape_html_text(img_str));
+            } else {
+                let raw_src = if !is_http && !img_str.contains('/') {
+                    format!("../gallery/img/{}", img_str)
+                } else {
+                    img_str.to_string()
+                };
+                out.push_str(&format!(
+                    "<img src=\"{}\" style=\"max-height:400px;width:auto;\" title=\"{}\">",
+                    escape_html_text(&raw_src),
+                    escape_html_text(img_str)
+                ));
+            }
+        } else if let Some(url) = caps.get(2) {
+            let safe_url = escape_html_text(url.as_str());
+            out.push_str(&format!(
+                "<a href=\"{}\" target=\"_blank\" rel=\"noopener noreferrer\">{}</a>",
+                safe_url, safe_url
+            ));
+        }
+        last = m.end();
+    }
+    if last < line.len() {
+        out.push_str(&escape_html_text(&line[last..]));
+    }
+    out
 }
 
 #[wasm_bindgen]
@@ -388,39 +444,24 @@ pub fn format_markdown(text: &str) -> String {
             continue;
         }
 
-        let processed = MEDIA_RE.replace_all(line, |caps: &regex::Captures| {
-            if let Some(img) = caps.get(1) {
-                let img_str = img.as_str();
-                let src = if !img_str.starts_with("http") && !img_str.contains('/') {
-                    format!("../gallery/img/{}", img_str)
-                } else {
-                    img_str.to_string()
-                };
-                format!("<img src=\"{}\" style=\"max-height:400px;width:auto;\" title=\"{}\">", src, img_str)
-            } else if let Some(url) = caps.get(2) {
-                let url_str = url.as_str();
-                format!("<a href=\"{}\" target=\"_blank\">{}</a>", url_str, url_str)
-            } else {
-                String::new()
-            }
-        });
-
-        if let Some(caps) = HEADER_RE.captures(&processed) {
+        if let Some(caps) = HEADER_RE.captures(line) {
             let level = caps.get(1).unwrap().as_str().len();
-            let content = caps.get(2).unwrap().as_str();
+            let content = render_escaped_line(caps.get(2).unwrap().as_str());
             out_lines.push(format!("<h{}>{}</h{}>", level, content, level));
             continue;
         }
 
-        let space_len = processed.chars().take_while(|c| *c == ' ').count();
-        let content = &processed[space_len..];
+        let space_len = line.chars().take_while(|c| *c == ' ').count();
+        let raw_content = &line[space_len..];
 
-        if content.trim().is_empty() {
+        if raw_content.trim().is_empty() {
             out_lines.push(String::from("<span class='lv0 empty-line-fix'></span>"));
             continue;
         }
+
+        let content = render_escaped_line(raw_content);
         if content.starts_with("<img") {
-            out_lines.push(processed.to_string());
+            out_lines.push(format!("{}{}", &line[..space_len], content));
             continue;
         }
 

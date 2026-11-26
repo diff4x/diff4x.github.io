@@ -785,7 +785,7 @@ fn run_jobs(
         let (key, raw_hash, out_hash, did_build) = res?;
         if did_build {
             built += 1;
-            log_info(logs, format!("  [minify] built   {}", key));
+            log_info(logs, format!("[minify] 更新 {}", key));
         } else {
             skipped += 1;
         }
@@ -887,7 +887,7 @@ pub fn build_phase1_assets(
         };
         if let Some(p) = orphan {
             if p.is_file() && fs::remove_file(&p).is_ok() {
-                log_info(logs, format!("[Phase 1] 已清理已删源码对应的废弃产物: {}", sk));
+                log_info(logs, format!("[minify] 清理废弃产物: {}", sk));
             }
         }
     }
@@ -895,7 +895,7 @@ pub fn build_phase1_assets(
     let (built, skipped) = run_jobs(jobs, ledger, logs)?;
     log_info(
         logs,
-        format!("[Phase 1] 前端资源增量压缩完成: 编译 {} 个, 跳过 {} 个", built, skipped),
+        format!("[minify] 资源压缩完成: 更新 {} 个，跳过 {} 个", built, skipped),
     );
     Ok(())
 }
@@ -931,7 +931,7 @@ pub fn build_phase3_tail(
     log_info(
         logs,
         format!(
-            "[Phase 3] 尾项压缩完成 (core-list.js / sw.js): 编译 {} 个, 跳过 {} 个",
+            "[minify] 清单与 sw.js 压缩完成: 更新 {} 个，跳过 {} 个",
             built, skipped
         ),
     );

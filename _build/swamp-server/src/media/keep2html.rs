@@ -122,6 +122,8 @@ fn ensure_unzipped(zip_path: &Path) -> Result<PathBuf, String> {
     }
 
     fs::create_dir_all(&dest_dir).map_err(|e| format!("创建解压目录失败: {}", e))?;
+    // 解压前即刻写入进行中标记，若中途异常中断，下次运行可识别为本工具目录并安全清理重建
+    let _ = write_atomic(&sig_file, "IN_PROGRESS", false);
     let file = File::open(zip_path).map_err(|e| format!("打开 ZIP 失败: {}", e))?;
     let mut archive = ZipArchive::new(file).map_err(|e| format!("解析 ZIP 失败: {}", e))?;
 
@@ -297,7 +299,7 @@ fn render_from_template(template: &str, title: &str, ts: &str, category: &str, b
     static PRE_RE: OnceLock<Regex> = OnceLock::new();
     let pre_re = PRE_RE.get_or_init(|| Regex::new(r"(?s)<pre>.*?</pre>").unwrap());
 
-    // 默认转义 & / < / >，防止 Keep 笔记原文注入 HTML 或内联脚本，同时保留引号可读性
+    // 配合渲染端 lib.rs::format_markdown 共同构成双阶段转义，防止 Keep 笔记原文注入 HTML 或脚本
     let safe_body = escape_pre_body(body);
     let step1 = template
         .replace("<title></title>", &format!("<title>{}</title>", escape_html(title)))

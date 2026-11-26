@@ -124,7 +124,7 @@ pub fn has_control_chars(s: &str) -> bool {
     s.chars().any(|c| (c as u32) <= 0x1F || (c as u32) == 0x7F)
 }
 
-/// 静态资源路径守卫：拦截路径穿越、隐藏文件、Windows 8.3 短名、尾点/尾空格绕过及 _build / shadow 敏感区
+/// 静态资源路径守卫（未解码 URL 入口）：单次解码后委托 validate_decoded_static_path
 pub fn validate_static_request_path(raw_path: &str, mode: RunMode) -> Option<Vec<String>> {
     if raw_path.is_empty() || raw_path.len() > 2048 || has_control_chars(raw_path) {
         return None;
@@ -134,7 +134,12 @@ pub fn validate_static_request_path(raw_path: &str, mode: RunMode) -> Option<Vec
     }
 
     let decoded = percent_decode_str(raw_path).decode_utf8().ok()?;
-    if has_control_chars(&decoded) || decoded.contains('\\') {
+    validate_decoded_static_path(&decoded, mode)
+}
+
+/// 静态资源路径守卫（已解码文件系统相对路径入口，不做二次 URL 解码，避免误杀含字面 `%` 的文件名）
+pub fn validate_decoded_static_path(decoded: &str, mode: RunMode) -> Option<Vec<String>> {
+    if decoded.is_empty() || decoded.len() > 2048 || has_control_chars(decoded) || decoded.contains('\\') {
         return None;
     }
 
@@ -726,13 +731,142 @@ const d = obj.return / 2;"#;
         .is_err(),
     );
 
+    // 复审第 2 轮回归自检：防二次解码、嵌套 .cargo/脚本分级、推送隐私路径、RFC 7636 PKCE、ManifestGuard Drop 与全覆盖隔离断言
+    check(
+        "static-decoded-allow-literal-percent",
+        validate_decoded_static_path("/html/100%20percent%E4%BD.html", RunMode::Serve).is_some(),
+    );
+    check(
+        "pack-classify-nested-cargo-and-scripts",
+        crate::services::pack_apply::is_build_or_exec_rel("_build/.cargo/config.toml")
+            && crate::services::pack_apply::is_build_or_exec_rel("rust-toolchain.toml")
+            && crate::services::pack_apply::is_build_or_exec_rel(".gitattributes")
+            && crate::services::pack_apply::is_build_or_exec_rel(".gitmodules")
+            && crate::services::pack_apply::is_build_or_exec_rel("scripts/tool.py")
+            && crate::services::pack_apply::is_build_or_exec_rel("bad.lnk")
+            && crate::services::pack_apply::is_build_or_exec_rel("bad.hta")
+            && !crate::services::pack_apply::is_build_or_exec_rel("src/js/raw/side.js"),
+    );
+    check(
+        "push-privacy-path-guard",
+        crate::services::pack_apply::is_private_push_path("html/__diary.html")
+            && crate::services::pack_apply::is_private_push_path("src/js/data/shadow_data_1.json")
+            && crate::services::pack_apply::is_private_push_path("_build/privy/local.toml")
+            && !crate::services::pack_apply::is_private_push_path("html/normal.html"),
+    );
+    check(
+        "pkce-rfc7636-vector",
+        crate::services::tasks::pkce_challenge_from_verifier(
+            "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk",
+        ) == "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM",
+    );
+    check(
+        "pack-manifest-guard-drop-flush",
+        crate::services::pack_apply::selftest_manifest_guard_drop(),
+    );
+    let mut leak_probs = Vec::new();
+    let priv_entries = vec![crate::builder::generator::PrivateLeakInput {
+        label: "__test.html".to_string(),
+        body: "零一二三四五六七八九十甲乙丙丁戊己庚辛壬癸子丑寅卯辰巳午未申酉戌亥私密段落尾\n共有名言：实践是检验真理的唯一标准。".to_string(),
+        allowed_lite_meta: vec!["__test.html".to_string(), "20261126120000-日记".to_string()],
+    }];
+    // 仅泄露中间 35 字片段（跨越 24 字非重叠边界，靠 12 字重叠步长必中）
+    let mid_35 = "六七八九十甲乙丙丁戊己庚辛壬癸子丑寅卯辰巳午未申酉戌亥私密段落尾";
+    let blobs_leak = vec![(
+        "fat_data_1.json".to_string(),
+        format!("{{\"1\":\"{}\"}}", mid_35),
+    )];
+    let blobs_shared = vec![(
+        "fat_data_1.json".to_string(),
+        "{\"1\":\"共有名言：实践是检验真理的唯一标准。\"}".to_string(),
+    )];
+    let pub_docs = vec!["共有名言：实践是检验真理的唯一标准。"];
+    crate::builder::generator::scan_private_pages_against_blobs(
+        &priv_entries,
+        &blobs_leak,
+        &pub_docs,
+        &mut leak_probs,
+    );
+    let caught_partial = !leak_probs.is_empty();
+    leak_probs.clear();
+    crate::builder::generator::scan_private_pages_against_blobs(
+        &priv_entries,
+        &blobs_shared,
+        &pub_docs,
+        &mut leak_probs,
+    );
+    let no_false_pos = leak_probs.is_empty();
+    check("private-leak-full-coverage-zero-fp", caught_partial && no_false_pos);
+
+    // lite_data.js 纳入扫描：放行已知标题/时间戳元信息，拦截真正泄露的正文
+    let lite_meta_only = vec![(
+        "lite_data.js".to_string(),
+        "window.LITE_DATA={\"html\":{\"日记\":{\"_f\":[[\"__test.html\",1,\"html\",\"20261126120000-日记-localOnly\"]]}}}".to_string(),
+    )];
+    let lite_body_leak = vec![(
+        "lite_data.js".to_string(),
+        format!("window.LITE_DATA={{\"leak\":\"{}\"}}", mid_35),
+    )];
+    leak_probs.clear();
+    crate::builder::generator::scan_private_pages_against_blobs(
+        &priv_entries,
+        &lite_meta_only,
+        &pub_docs,
+        &mut leak_probs,
+    );
+    let lite_meta_ok = leak_probs.is_empty();
+    leak_probs.clear();
+    crate::builder::generator::scan_private_pages_against_blobs(
+        &priv_entries,
+        &lite_body_leak,
+        &pub_docs,
+        &mut leak_probs,
+    );
+    let lite_leak_caught = !leak_probs.is_empty();
+    check("private-leak-lite-data-scan", lite_meta_ok && lite_leak_caught);
+
+    check(
+        "md-hist-ver-validation",
+        crate::services::md_history::is_valid_md_ver("261126173005")
+            && !crate::services::md_history::is_valid_md_ver("20261126173005")
+            && !crate::services::md_history::is_valid_md_ver("261399999999")
+            && !crate::services::md_history::is_valid_md_ver("../2611261730"),
+    );
+    check(
+        "md-hist-monotonic-same-sec",
+        crate::services::md_history::next_monotonic_ver("261126235959", "261126235959")
+            == "261127000000",
+    );
+    check(
+        "md-hist-reverse-delta-roundtrip",
+        crate::services::md_history::selftest_reverse_delta_roundtrip(),
+    );
+    check(
+        "md-hist-evict-over-50",
+        crate::services::md_history::selftest_evict_over_50(),
+    );
+    check(
+        "md-hist-coalesce-within-window",
+        crate::services::md_history::selftest_coalesce_within_window(),
+    );
+    check(
+        "md-hist-corrupt-store-preserved",
+        crate::services::md_history::selftest_corrupt_store_preserved(),
+    );
+    check(
+        "pack-diff-preview-safe-workspace-ext",
+        crate::services::pack_apply::safe_diff_preview_filename("my.code-workspace")
+            == "my.code-workspace.txt"
+            && crate::services::pack_apply::safe_diff_preview_filename("main.rs") == "main.rs",
+    );
+
     if fails > 0 {
-        Err(format!("SelfTest: {} 项失败", fails))
+        Err(format!("自检未通过: {} 项失败", fails))
     } else {
         if let Some(bus) = logs {
-            bus.info(format!("SelfTest: 全部 {} 项通过", total));
+            bus.info(format!("[selfcheck] 通过 {}/{} 项", total, total));
         } else {
-            println!("SelfTest: 全部 {} 项通过", total);
+            println!("自检通过: {}/{} 项", total, total);
         }
         Ok(())
     }
