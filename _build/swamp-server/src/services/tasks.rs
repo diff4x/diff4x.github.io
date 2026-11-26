@@ -1,5 +1,6 @@
 use chrono::{Duration as ChronoDuration, Utc};
 use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
+use sha2::{Digest, Sha256};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::fs;
@@ -164,6 +165,47 @@ fn unix_now() -> i64 {
         .unwrap_or(0)
 }
 
+fn is_allowed_google_oauth_url(raw: &str) -> bool {
+    let Some(rest) = raw.strip_prefix("https://") else {
+        return false;
+    };
+    let host = rest.split('/').next().unwrap_or("").to_ascii_lowercase();
+    matches!(
+        host.as_str(),
+        "accounts.google.com" | "oauth2.googleapis.com" | "www.googleapis.com"
+    )
+}
+
+fn base64url_no_pad(input: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    let mut out = String::with_capacity((input.len() * 4 + 2) / 3);
+    let mut i = 0usize;
+    while i < input.len() {
+        let b0 = input[i];
+        let b1 = if i + 1 < input.len() { input[i + 1] } else { 0 };
+        let b2 = if i + 2 < input.len() { input[i + 2] } else { 0 };
+        out.push(TABLE[(b0 >> 2) as usize] as char);
+        out.push(TABLE[(((b0 & 0x03) << 4) | (b1 >> 4)) as usize] as char);
+        if i + 1 < input.len() {
+            out.push(TABLE[(((b1 & 0x0F) << 2) | (b2 >> 6)) as usize] as char);
+        }
+        if i + 2 < input.len() {
+            out.push(TABLE[(b2 & 0x3F) as usize] as char);
+        }
+        i += 3;
+    }
+    out
+}
+
+fn generate_pkce_pair() -> Result<(String, String), String> {
+    let mut raw = [0u8; 32];
+    getrandom::getrandom(&mut raw).map_err(|e| format!("生成 PKCE 随机串失败: {}", e))?;
+    let verifier = base64url_no_pad(&raw);
+    let digest = Sha256::digest(verifier.as_bytes());
+    let challenge = base64url_no_pad(&digest);
+    Ok((verifier, challenge))
+}
+
 fn load_client_secrets(cfg: &ServerConfig) -> Result<ClientSecretBlock, String> {
     let path = cfg.privy_dir.join("credentials.json");
     if !path.is_file() {
@@ -172,10 +214,16 @@ fn load_client_secrets(cfg: &ServerConfig) -> Result<ClientSecretBlock, String> 
     let raw = fs::read_to_string(&path).map_err(|e| format!("读取 credentials.json 失败: {}", e))?;
     let parsed: CredentialsFile =
         serde_json::from_str(&raw).map_err(|e| format!("解析 credentials.json 失败: {}", e))?;
-    parsed
+    let block = parsed
         .installed
         .or(parsed.web)
-        .ok_or_else(|| "credentials.json 缺少 installed/web 字段".to_string())
+        .ok_or_else(|| "credentials.json 缺少 installed/web 字段".to_string())?;
+    if !is_allowed_google_oauth_url(&block.auth_uri)
+        || !is_allowed_google_oauth_url(&block.token_uri)
+    {
+        return Err("credentials.json 中的 auth_uri 或 token_uri 不在 Google HTTPS 白名单域名内".to_string());
+    }
+    Ok(block)
 }
 
 fn token_file_path(cfg: &ServerConfig) -> PathBuf {
@@ -226,12 +274,14 @@ async fn exchange_code_for_token(
     creds: &ClientSecretBlock,
     code: &str,
     redirect_uri: &str,
+    code_verifier: &str,
 ) -> Result<StoredToken, PollErr> {
     let form_body = encode_form_pairs(&[
         ("code", code),
         ("client_id", creds.client_id.as_str()),
         ("client_secret", creds.client_secret.as_str()),
         ("redirect_uri", redirect_uri),
+        ("code_verifier", code_verifier),
         ("grant_type", "authorization_code"),
     ]);
     let resp = client
@@ -330,6 +380,7 @@ async fn run_interactive_oauth(
     logs: &Arc<LogBus>,
 ) -> Result<StoredToken, PollErr> {
     let state_tok = generate_token_hex().map_err(PollErr::Other)?;
+    let (code_verifier, code_challenge) = generate_pkce_pair().map_err(PollErr::Other)?;
     let redirect_uri = format!("http://localhost:{}/__oauth/callback", cfg.port);
 
     let (tx, rx) = oneshot::channel::<Result<String, String>>();
@@ -342,15 +393,16 @@ async fn run_interactive_oauth(
 
     let enc = |s: &str| utf8_percent_encode(s, NON_ALPHANUMERIC).to_string();
     let auth_url = format!(
-        "{}?client_id={}&redirect_uri={}&response_type=code&scope={}&access_type=offline&prompt=consent&state={}",
+        "{}?client_id={}&redirect_uri={}&response_type=code&scope={}&access_type=offline&prompt=consent&code_challenge={}&code_challenge_method=S256&state={}",
         creds.auth_uri,
         enc(&creds.client_id),
         enc(&redirect_uri),
         enc(TASKS_SCOPE),
+        enc(&code_challenge),
         enc(&state_tok)
     );
 
-    logs.info("[tasks] 正在打开浏览器进行 Google Tasks OAuth 授权...");
+    logs.info("[tasks] 正在打开浏览器进行 Google Tasks OAuth 授权 (PKCE S256)...");
     crate::open_url_in_browser(&auth_url, false);
 
     let code_res = tokio::time::timeout(Duration::from_secs(AUTH_WAIT_TIMEOUT_SECS), rx).await;
@@ -365,7 +417,7 @@ async fn run_interactive_oauth(
         Err(_) => return Err(PollErr::Network("等待浏览器授权超时 (30分钟)".to_string())),
     };
 
-    let tok = exchange_code_for_token(client, creds, &code, &redirect_uri).await?;
+    let tok = exchange_code_for_token(client, creds, &code, &redirect_uri, &code_verifier).await?;
     save_stored_token(cfg, &tok).map_err(PollErr::Other)?;
     logs.info("[tasks] Google Tasks 授权成功，凭证已持久化到 privy/tokens.json");
     Ok(tok)
@@ -567,8 +619,10 @@ pub fn spawn_background_monitors(
 
                         // 如果已过期且有 refresh_token，先自动刷新
                         let mut auth_err: Option<PollErr> = None;
+                        let mut refreshed_this_cycle = false;
                         if let Some(ref tok) = token_opt {
                             if tok.expires_at <= now && !tok.refresh_token.is_empty() {
+                                refreshed_this_cycle = true;
                                 match refresh_access_token(&client, &creds, &tok.refresh_token).await {
                                     Ok(new_tok) => {
                                         let _ = save_stored_token(&cfg, &new_tok);
@@ -590,13 +644,28 @@ pub fn spawn_background_monitors(
                             }
                         }
 
-                        let fetch_res = if let Some(err) = auth_err {
+                        let mut fetch_res = if let Some(err) = auth_err {
                             Err(err)
-                        } else if let Some(tok) = token_opt {
+                        } else if let Some(ref tok) = token_opt {
                             fetch_upcoming_tasks(&cfg, &client, &tok.access_token).await
                         } else {
                             Ok(status.get_tasks())
                         };
+
+                        // 遇到 API 401 时优先用现有 refresh_token 刷新一次并重试，不直接清空有效 refresh_token
+                        if matches!(fetch_res, Err(PollErr::Auth(_))) && !refreshed_this_cycle {
+                            if let Some(ref tok) = token_opt {
+                                if !tok.refresh_token.is_empty() {
+                                    match refresh_access_token(&client, &creds, &tok.refresh_token).await {
+                                        Ok(new_tok) => {
+                                            let _ = save_stored_token(&cfg, &new_tok);
+                                            fetch_res = fetch_upcoming_tasks(&cfg, &client, &new_tok.access_token).await;
+                                        }
+                                        Err(e) => fetch_res = Err(e),
+                                    }
+                                }
+                            }
+                        }
 
                         match fetch_res {
                             Ok(tasks) => {

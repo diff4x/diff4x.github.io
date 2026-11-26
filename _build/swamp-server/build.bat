@@ -129,15 +129,15 @@ if errorlevel 1 (
 )
 popd
 
-copy /y "%TARGET_DIR%\release-exe\swamp.exe" "%BUILD_DIR%\swamp.exe" >nul
+"%TARGET_DIR%\release-exe\swamp.exe" --selftest
 if errorlevel 1 (
-    echo [ERROR] 复制到 _build\swamp.exe 失败！
+    echo [ERROR] 新版 swamp.exe 自检未通过，已中止替换（旧版 _build\swamp.exe 保持完好）！
     exit /b 1
 )
 
-"%BUILD_DIR%\swamp.exe" --selftest
+copy /y "%TARGET_DIR%\release-exe\swamp.exe" "%BUILD_DIR%\swamp.exe" >nul
 if errorlevel 1 (
-    echo [ERROR] swamp.exe 自检未通过！
+    echo [ERROR] 复制到 _build\swamp.exe 失败！
     exit /b 1
 )
 

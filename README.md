@@ -59,8 +59,8 @@
 
 ## 3. 阅读、标注与播放
 
-- **HTML 正文**：
-  - 左上角 `diff` 可选任意两个历史版本比对改动（最多保留 10 个历史快照）。
+- **HTML 与 Markdown 正文**：
+  - HTML 左上角 `diff` 与 Markdown 浮窗顶栏 `Diff` 均可选任意两个历史版本比对改动（最多保留 10 个历史快照）；Markdown 对比适用于所有 `.md` 文件，支持渲染态（含行内字/词级高亮、目录变更圆点）与源码态双视图切换、仅看改动折叠及逐块跳转。
   - 双击代码块可进入临时编辑，右上角一键复制；点击图片进灯箱（支持滚轮缩放与拖拽）。
   - 线上模式左上角点击 `💬` 可用 GitHub 账号评论。
 - **拼音与摘抄**：在 HTML、PDF、EPUB、TXT、README 中，划选**单个汉字**浮现拼音，划选**两个及以上字符**弹出摘抄按钮，写入 `Excerpts`。
@@ -91,7 +91,7 @@
 
 | 标签页 | 常用按钮与作用 |
 | :--- | :--- |
-| **常规与媒体** | `Open Site`（带随机令牌打开本地站点）、`gen`（全量构建）、`gen + push` / `push`（填写 Commit 后自动检测暂存改动并提交推送）、`simulator (9000)`（隐身窗仿真线上环境）、`selfcheck`（运行 42 项自检）、`root/`（打开仓库目录）、`重授 Google Tasks`；下方集成 `new`（新建 HTML）、`转webp`（批量压缩截图并复制文件名）、`keep2html`（Keep 导出包转 HTML）。 |
+| **常规与媒体** | `Open Site`（带随机令牌打开本地站点）、`gen`（全量构建）、`gen + push` / `push`（填写 Commit 后先核验公私隔离与暂存区无私密文件再提交推送）、`simulator (9000)`（隐身窗仿真线上环境）、`selfcheck`（运行 60 项自检）、`root/`（打开仓库目录）、`重授 Google Tasks`；下方集成 `new`（新建 HTML）、`转webp`（批量压缩截图并复制文件名）、`keep2html`（Keep 导出包转 HTML）。 |
 | **打包协作** | 三态目录树勾选源码，支持预设增删改（存于 `_build/swamp.toml`）、一键勾选 Git 改动、文件名过滤；勾选 `拼接 MD` 并设定单文件上限（默认 200 KB）可同步输出分卷 `.md`，方便在不支持上传 `.zip` 的 AI 界面中使用。 |
 | **回填补丁** | 左侧浏览或拖入 AI 返回的补丁 `.zip` 预览并一键回填（覆盖前自动备份，可选编码守卫、回填后等 `swamp.exe` 安全退出再拉起 `build.bat`）；支持按快照一键回滚；右侧显示 `_build/temp/backup` 目录树，可勾选清理冗余的历史打包和备份。 |
 | **同义词与新词** | 左侧直接编辑 `_build/swamp.toml` 中的自定义同义词 JSON 并保存/重建 `synonyms.js`（重建后自动 `gen` 一次）；右侧查看构建期生成的 `oov_report.txt` 新词雷达。 |
@@ -102,7 +102,7 @@
 
 - **HTML 编辑与热重载**：文章左上角点 `edit` 会直接拉起 VS Code 并更新 `#anchor` 时间戳，同时按钮变为 `edit ●` 开启监听；VS Code 每次 `Ctrl+S` 保存后页面自动刷新并回到原滚动位置（右键 `edit ●` 可停止监听）。双击右上角标题可手动重载。
 - **书签编辑**：在书签页内直接拖入外部链接，或把链接拖到其他区块 / `del` 区即可增删移。
-- **README 编辑**：书签页左击 `README` 弹出左右分栏 Markdown 编辑器，`Save` 或 `Ctrl+S` 原地保存（中击跳转线上仓库）。
+- **README 编辑**：书签页左击 `README` 弹出左右分栏 Markdown 编辑器，`Save` 或 `Ctrl+S` 原地保存（中击跳转线上仓库）；存在未固化改动或历史快照时，顶栏自动出现 `Diff` 按钮，支持对当前草稿、本次打开原版及历史快照实时比对。
 - **双语页固化**：双语编辑草稿自动暂存，点固化后剥离运行期节点写回原 HTML 并仅刷新当前页。
 - **前端源码热压缩**：本地服务启动后会自动监听 `src/js/raw/`、`src/css/raw/`、`src/css/font/`，保存后 300 ms 自动热压缩到目标位置（`gen` 运行期间自动避让）。
 - **侧栏本地入口**：额外显示 `KaTrain`；`txn_parser` 会自动读取 `_build/privy/txn.txt`，点击行号可直接用 VS Code 跳到对应行。
@@ -137,9 +137,9 @@
 ## 4. 配置文件与重新编译
 
 - **公共配置**：`_build/swamp.toml`（入库）。
-- **本机私有配置**：`_build/privy/local.toml`（被 `.gitignore` 忽略），填写本机 `vscode_path`、`katrain_dir`、`img_input_dir`、`webp_output_dir2`、`keep_takeout_zip_folder` 等含本机路径的项。
+- **本机私有配置**：`_build/privy/local.toml`（被 `.gitignore` 忽略），填写本机 `vscode_path`、`katrain_dir`（出于安全边界，这两项可执行/目录配置仅认本机私有文件，不回退读取入库 `swamp.toml`）、`img_input_dir`、`webp_output_dir2`、`keep_takeout_zip_folder` 等含本机路径的项。
 - **重编译**：运行 `_build/swamp-server/build.bat`：
-  - `[1]` 编译 `_build/swamp.exe`，跑完 42 项 `--selftest` 后自动拉起新 `swamp.exe` 并 3 秒后退出。
+  - `[1]` 编译产物至 `%LOCALAPPDATA%\swamp-cargo-target`，先运行 60 项 `--selftest` 全部通过后再覆盖 `_build/swamp.exe`，随后自动拉起新 `swamp.exe` 并 3 秒后退出。
   - `[2]` 用 `wasm-pack` 编译 Wasm 并用 `swamp.exe minify` 压缩胶水脚本，无错 3 秒后退出。
   - `[3]` 全部编译并启动新 `swamp.exe`。任何一步出错都会停住窗口看报错。
 
@@ -200,21 +200,21 @@
   - 单 Crate 双目标（Rust 2021，`_build/swamp-server/Cargo.toml`，版本 `3.1.0`）：
     - 原生端：`--bin swamp`，`--profile release-exe`（`opt-level = "s"`, `lto = true`, `codegen-units = 1`, `strip = true`, `panic = "unwind"`），产物复制为 `_build/swamp.exe`。
     - Wasm 端：`--lib` (`compute_intensive_task_processor`, `cdylib`)，`wasm-pack build --target web`，`.cargo/config.toml` 开启 `target-feature=+simd128`，`release` 配置 `opt-level = "z"`, `panic = "abort"`，`wasm-opt -Oz` 优化，胶水 JS 由 `swamp.exe minify` 压缩输出至 `src/wasm/`。
-  - Cargo 目标目录统一重定向至 `_build/temp/target`。
+  - `build.bat` 统一将 Cargo 目标目录通过 `CARGO_TARGET_DIR` 重定向至 `%LOCALAPPDATA%\swamp-cargo-target`（`.cargo/config.toml` 保留 `../temp/target` 供独立命令行兜底）。
 
 ```text
 _build/
   swamp.toml                    # 唯一公共配置（站点参数、precache Glob、Pack 预设、[synonyms] 自定义规则）
   swamp.exe                     # 唯一运行期二进制（伴生服务 + 4 标签页原生 Win32 管理窗）
   swamp-server/                 # 单 Crate Rust 工程
-    .cargo/config.toml          # target-dir = "../temp/target" & wasm32 simd128
+    .cargo/config.toml          # target-dir 回退配置 & wasm32 simd128（build.bat 定向至 %LOCALAPPDATA%\swamp-cargo-target）
     Cargo.toml / build.bat
     assets/cilin.txt            # 外置只读基础词林
     src/
       main.rs                   # CLI / Serve / Sim 入口、Router、/__oauth/callback、安全退出交接 build.bat
       lib.rs                    # Wasm 引擎（#![cfg(target_arch = "wasm32")]）：渲染/搜索/Bloom/ADS/LCS Diff
       config.rs                 # 配置加载与 swamp.toml 区块原子写回
-      security.rs               # 静态路径守卫、参数校验、CSP/API 鉴权中间件、42 项 --selftest
+      security.rs               # Host 白名单、静态路径守卫、参数校验、CSP/API 鉴权中间件、60 项 --selftest
       static_fs.rs              # 静态文件托管（支持单段 Byte Range）
       api_files.rs              # write_bytes_atomic / write_atomic 与 /__api/files/*, /__api/bookmarks
       api_ops.rs                # /__api/ops/*（edit、watch-html 长轮询、explorer、cli、txn、katrain）
@@ -292,10 +292,10 @@ site-core.js (Window/iframe/SW 共享事实源：MainDB v3 Schema、20 个 tab �
      - 扫描 `html/*.html`，调用 `git check-ignore` 复核私有页，检查 `__` 前缀与**重复 `<title>`**，校验图片引用，按公/大文档/私分流；
      - 扫描四类媒体目录并批量调用 `git check-ignore` 复核；
      - 在 `_build/temp/staging_data_<pid>_<ms>` 暂存目录写出 `lite_data.js`、`fat_data_*.json`、`shadow_data_*.json`、`shadowIndex.js`、`core-bundle.json`；
-     - 按需重建 `synonyms.js`（仅公开语料 DF；`minify_js` 失败直接报错）；
-     - 解析 `[build.precache]` 显式项与 Glob，生成清单（仅 `(path, hash, source)` 任一变化才递进 `BUILD_VERSION`）；
-     - 对暂存目录执行无盲区 `assert_no_private_leak`；
-     - **全部通过后统一提交**：暂存目录迁入 `src/js/data/`，依次原子写出 `index.html`、`discussion_id_mapper.json`、`idle-list.txt`、`raw/core-list.js`、`raw/sw.js`。
+     - 在内存暂存重建 `synonyms.js` 与 `oov_report`（仅公开语料 DF；`minify_js` 失败直接报错，断言通过前不落盘）；
+     - 解析并校验 `[build.precache]` 显式项/Glob 与 `readme_md`（强制仓库内非私有），生成清单（仅 `(path, hash, source)` 任一变化才递进 `BUILD_VERSION`；未变化时仍校核 `raw/sw.js` 版本号对齐）；
+     - 对暂存切片、`core-bundle.json`、暂存 `synonyms.js` 与 `core-list.js` 执行多窗口 `assert_no_private_leak`；
+     - **全部通过后统一原子提交**：逐文件 `write_bytes_atomic` 覆盖 `src/js/data/` 后再清理废弃旧切片，并依次原子写出 `synonyms.js`、`index.html`、`discussion_id_mapper.json`、`idle-list.txt`、`raw/core-list.js`、`raw/sw.js`。
   4. **Phase 3**：压缩 `raw/core-list.js` -> `src/js/core-list.js` 与 `raw/sw.js` -> `/sw.js`，最后落盘 `build_hashes.txt`。
 - **回填后重启编译交接**：`Apply` 线程写完文件 -> 发 `WM_APP_EXIT_AND_BUILD` -> UI 主线程走 `begin_safe_close`（有活跃写盘时弹确认框，拒绝则中止交接）-> 回收 `sim` 子进程、销毁窗口 -> `main.rs` 执行 `server_handle.join()` 彻底释放端口与文件句柄 -> 退出前最后一步拉起 `build.bat`。
 
@@ -314,7 +314,7 @@ site-core.js (Window/iframe/SW 共享事实源：MainDB v3 Schema、20 个 tab �
 | :--- | :--- | :--- |
 | Cache Storage | `core-cache-{BUILD_VERSION}` | 站点壳、静态脚本样式、HTML、Wasm、`synonyms.js`、README、`sw-manifest.json`；新 SW `activate` 删除旧桶 |
 | Cache Storage | `media-cache` | 媒体、字体、PDF cmaps/standard_fonts/iccs/wasm/images；Cache-First，仅检测到删除时定向清理 |
-| IndexedDB | `MainDB` v3 | `chunks`（fat 切片）、`update_logs`、`search_cache`（最多 500 条 LRU，单次 $>300$ 条不入库）、`sys_state`（LRU 索引、评论快照、媒体路径快照、`pending_search_cache_clear`）、`html_snapshots`（每页最多 10 版 deflate-raw 快照） |
+| IndexedDB | `MainDB` v3 | `chunks`（fat 切片）、`update_logs`、`search_cache`（最多 500 条 LRU，单次 $>300$ 条不入库）、`sys_state`（LRU 索引、评论快照、媒体路径快照、`pending_search_cache_clear`）、`html_snapshots`（HTML 与 `.md` 每页最多 10 版 deflate-raw 快照） |
 | IndexedDB | `BookDB` v1 | `book_extracts`（最多 30 本 / 32 MB，单本上限 12 MB）、`search_cache`（最多 600 条 / 16 MB，单书 80 条、单条 512 KB）；超 4 KB 启用 deflate-raw；常规更新不清空，仅删书时清理 |
 | IndexedDB | `ExcerptsDB` / `SideDB` / `AlignDrafts` (v1) | 摘抄本、侧栏已阅标记、双语页编辑草稿 |
 | `localStorage` | `store` + `__swamp_local_token__` | 用户偏好、历史、收藏、滚动/媒体/电子书进度、壁纸、本地会话令牌（定时巡检 4 MB 告警） |
@@ -340,22 +340,22 @@ site-core.js (Window/iframe/SW 共享事实源：MainDB v3 Schema、20 个 tab �
   - 布尔组合（ADS）：手写递归下降 -> 德摩根下推 NNF -> 双端拦截空文档恒真 -> `ads_optimize` 将 `And` 子句按（非否定 > 噪值升序 > 词长降序）排序短路；先联合正文+评论求值，再仅正文复核判定 `viaComment`。
   - 抢占调度：`MessageChannel` 让出事件循环，8 ms 自适应时间片（16–4096 篇动态伸缩）；`token` 变更立即中止，`dataGen` / `commentGen` 变更自动重扫。
   - 近义扩展：三路策略（A 整词直达 -> B `#`/`@` 独立词与 `stopExpand` 保护不拆 -> C DP 最优分词 + 词林 5 级编码 LCA 上下文消歧），受语料 DF 分桶乘数与 `K`/`L` 虚词降权约束；全站搜用 `bloom_might_match` 裁剪，书内搜用 `cacheTag='raw'` 跳过全站 Bloom 裁剪。
-  - 页内 Diff：双方 `<pre>` 渲染为标准化 Token 序列，调用 Rust `similar` LCS（矩阵超 $2.5 \times 10^7$ 格熔断防 OOM）。
+  - 页内 Diff：HTML 双方 `<pre>` 渲染为标准化 Token 序列、Markdown（所有经 `md_viewer.html` 打开的 `.md`）支持渲染态（块/表格行/列表项/代码行）与源码逐行双视图对比（辅以成对修改的行内字/词级高亮），均复用 Rust `similar` LCS（矩阵超 $2.5 \times 10^7$ 格熔断防 OOM）。
 
 ### 7. 安全防范与鲁棒性
 
 - **本地服务安全边界**：
-  - 仅绑定 `127.0.0.1:<port>`；32 字节随机 Hex 令牌仅驻留内存，通过 `#__swamp_token=` 传入并立即 `replaceState` 抹除。
+  - 仅绑定 `127.0.0.1:<port>` 且全路由挂载 `Host` 白名单中间件（防 DNS Rebinding）；32 字节随机 Hex 令牌仅驻留内存，通过 `#__swamp_token=` 传入并立即 `replaceState` 抹除。
   - `/__api/*` 四重鉴权：`Origin` 白名单 + `Sec-Fetch-Site: same-origin` + `subtle` 常量时间比对 `X-Swamp-Token` + 参数白/黑名单（`sim` 模式完全不挂载）。
-  - 静态路径守卫：解码后拦截控制字符、反斜杠、`.`/`..`、隐藏文件、Windows 8.3 短名、尾点/尾空格、`:`、内部命名空间；`Serve` 模式对 `_build/**` 默认拒绝仅白名单放行 `txn.txt` 与 `upcoming_tasks.json`，`Sim` 模式整目录封禁 `_build/**` 与 `shadow*`。
+  - 静态路径守卫：解码后与 `canonicalize` 后双阶段校验，拦截控制字符、反斜杠、`.`/`..`、隐藏文件、Windows 8.3 短名与保留设备名（`CON`/`NUL` 等）、尾点/尾空格、`:`、内部命名空间及符号链接越界；`.svg` 下发 `sandbox` CSP；`Serve` 模式对 `_build/**` 默认拒绝仅白名单放行 `txn.txt` 与 `upcoming_tasks.json`，`Sim` 模式封禁 `_build/**`、`shadow*` 与 `html/__*.html`。
   - 防命令注入与 XSS：`validate_title` 禁止 Windows 路径非法字符及 `&;()`；Windows 优先解析 `Code.exe` 直接拉起，回退 `cmd /c` 时拦截全部 cmd 元字符；`/__oauth/callback` 对 `error` 执行 HTML 转义并强制下发 `script-src 'none'` CSP。
-  - 补丁回填安全：`pack_apply.rs` 校拦截路径穿越、8.3 短名、尾点/尾空格、Windows 保留设备名及 `.git`，限制单文件 64 MB / 总解压 256 MB，大小写不敏感路径去重，备份目录删除受 `canonicalize` + `starts_with` 约束。
+  - 补丁回填安全：`pack_apply.rs` 硬拦截路径穿越、8.3 短名、尾点/尾空格、Windows 保留设备名、`.git` 及全部 `is_hard_private_rel` 路径（含 `_build/privy/`），对构建/配置/隐私规则文件标 `[高危/构建]` 且默认不勾（勾选时强制二次确认并禁用自动拉起 `build.bat`）；限制单文件 64 MB / 总解压 256 MB（先全量校验再落盘，RAII 保证 `_manifest.json` 必写），大小写不敏感路径去重，备份目录删除受 `canonicalize` + `starts_with` 约束。
   - 全站禁 `eval`：默认 CSP 放行 `'wasm-unsafe-eval'` 禁 `'unsafe-eval'`；`street_view_uploader.html` 单独放行 Tailwind CDN 与 Google GSI；灯箱 `about:blank` 达到 `script-src 'none'`，`pdf.html` 零 `'unsafe-inline'`，`bilingual.html` 补齐 `<meta>` CSP。
-  - 公私隔离：`assert_no_private_leak` 对 `fat_data_*.json` 逐条校验私有 `recordId` 必为 `"localOnly"`，并对全长度私有正文（原文 + JSON 转义串）扫描全部公网产物。
+  - 公私隔离：`assert_no_private_leak` 对 `fat_data_*.json` 逐条校验私有 `recordId` 必为 `"localOnly"`，并对私有正文按多窗口（长文 6 窗、中文 3 窗、短文整段；含原文与 JSON 转义串）扫描全部暂存公网产物；独立 `push` 前同步复核公网产物并拦截含私密文件的暂存区。
 - **鲁棒性与自愈**：
   - 原子写盘（`write_bytes_atomic` / `write_atomic`）：`{name}.{pid}.{seq}.swamp.tmp` 写完再 `rename`，Windows 共享冲突（错误码 5/32）自动退避重试 4 次。
   - 无 UAF 并发模型：`gui.rs` 后台线程与 UI 通过 `Arc<GuiMailbox>` + `PostMessageW` 通信，杜绝裸指针跨线程访问。
-  - `swamp.exe --selftest` 内置 42 项回归用例，每次 `build.bat exe` 自动执行。
+  - `swamp.exe --selftest` 内置 60 项回归用例，每次 `build.bat exe` 在覆盖 `_build/swamp.exe` 之前自动执行。
   - 前端看门狗（90 s / 45 s）仅提示不自动删库；三级自愈通道（远端 `repair_command_id` -> URL `?repair=1` -> `@bomb` 交互清理）。
 
 ### 8. 硬性条件（改动前必核对）

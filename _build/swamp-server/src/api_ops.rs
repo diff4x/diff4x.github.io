@@ -441,6 +441,10 @@ pub async fn get_watch_html(
         }
     }
 
+    if state.shutting_down.load(std::sync::atomic::Ordering::SeqCst) {
+        return Json(json!({ "ok": true, "changed": false, "sig": baseline })).into_response();
+    }
+
     let target_stem_lower = title.to_lowercase();
     let mut rx = state.html_change_tx.subscribe();
     let deadline = tokio::time::Instant::now() + Duration::from_secs(25);
@@ -448,6 +452,9 @@ pub async fn get_watch_html(
     fallback.tick().await; // 跳过首次立即触发
 
     loop {
+        if state.shutting_down.load(std::sync::atomic::Ordering::SeqCst) {
+            return Json(json!({ "ok": true, "changed": false, "sig": baseline })).into_response();
+        }
         tokio::select! {
             _ = state.shutdown_notify.notified() => {
                 return Json(json!({ "ok": true, "changed": false, "sig": baseline })).into_response();

@@ -1,8 +1,8 @@
-importScripts('/src/js/core-list.js?v=1795623333510');
+importScripts('/src/js/core-list.js?v=1795667183766');
 const _scMeta = typeof FILE_MANIFEST === 'object' && FILE_MANIFEST && FILE_MANIFEST['/src/js/site-core.js'];
 importScripts('/src/js/site-core.js' + (_scMeta && _scMeta.hash ? ('?v=' + _scMeta.hash) : ''));
 
-self.SW_VERSION = '1795623333510';
+self.SW_VERSION = '1795667183766';
 self.EMERGENCY = 'repair_command_id=2';
 
 const CACHE_NAME_CORE = 'core-cache-' + BUILD_VERSION;
@@ -207,7 +207,7 @@ self.addEventListener('install', event => {
                 }
             }
 
-            if (oldMeta && oldMeta.hash !== meta.hash && url.startsWith('/html/')) {
+            if (oldMeta && oldMeta.hash !== meta.hash && (url.startsWith('/html/') || url.toLowerCase().endsWith('.md'))) {
                 deferredJobs.push(async () => {
                     try {
                         const lastCache = await caches.open(lastCacheName);
@@ -237,13 +237,21 @@ self.addEventListener('install', event => {
                             }
 
                             let snapTs = Date.now();
-                            const stampMatch = oldText.match(/id=['"]anchor['"][^>]*>\s*(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})/);
-                            if (stampMatch) {
-                                const parsedTs = new Date(
-                                    Number(stampMatch[1]), Number(stampMatch[2]) - 1, Number(stampMatch[3]),
-                                    Number(stampMatch[4]), Number(stampMatch[5]), Number(stampMatch[6])
-                                ).getTime();
-                                if (Number.isFinite(parsedTs) && parsedTs > 0) snapTs = parsedTs;
+                            if (url.startsWith('/html/')) {
+                                const stampMatch = oldText.match(/id=['"]anchor['"][^>]*>\s*(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})/);
+                                if (stampMatch) {
+                                    const parsedTs = new Date(
+                                        Number(stampMatch[1]), Number(stampMatch[2]) - 1, Number(stampMatch[3]),
+                                        Number(stampMatch[4]), Number(stampMatch[5]), Number(stampMatch[6])
+                                    ).getTime();
+                                    if (Number.isFinite(parsedTs) && parsedTs > 0) snapTs = parsedTs;
+                                }
+                            } else {
+                                const cacheVerMatch = /^core-cache-(\d{13,15})$/.exec(lastCacheName || '');
+                                if (cacheVerMatch) {
+                                    const parsedTs = Number(cacheVerMatch[1]);
+                                    if (Number.isFinite(parsedTs) && parsedTs > 0) snapTs = parsedTs;
+                                }
                             }
                             const dupByTs = history.some(item => item && item.ts === snapTs);
                             const lastSnap = history.length > 0 ? history[history.length - 1] : null;

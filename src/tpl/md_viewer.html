@@ -2,7 +2,7 @@
 <html lang="zh-CN" data-theme="light">
 <head>
 <meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="script-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'self';">
+<meta http-equiv="Content-Security-Policy" content="script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; object-src 'none'; base-uri 'self';">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Markdown Preview</title>
 <link rel="stylesheet" href="../css/font.css">
@@ -13,6 +13,7 @@
 --ed-kw:#00f;--ed-var:#018;--ed-str:#a31515;--ed-num:#098658;--ed-cmt:#008000;
 
 --h1:#cf222e;--h2:#0a3069;--h3:#0550ae;--h4:#8250df;--h5:#953800;
+--diff-bar-bg:#f3f6fa;--diff-add-bg:rgba(46,160,67,.13);--diff-add-bd:#1a7f37;--diff-add-hl:rgba(46,160,67,.34);--diff-del-bg:rgba(248,81,73,.13);--diff-del-bd:#cf222e;--diff-del-hl:rgba(248,81,73,.34);--diff-mod-dot:#d97706;--diff-fold-bg:#eef2f7;--diff-ring:#0969da;
 --mono:Consolas,Monaco,"Andale Mono","Ubuntu Mono",ui-monospace,SFMono-Regular,Menlo,"Liberation Mono",monospace;
 --sans:'Noto Serif SC',Georgia,"Songti SC","SimSun",serif;
 box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
@@ -20,7 +21,8 @@ box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:en
 /* 编辑器：Monaco vs-dark */
 --ed-bg:#1e1e1e;--ed-fg:#d4d4d4;--ed-ln:#858585;--ed-ln-on:#c6c6c6;--ed-line:#282828;--ed-cursor:#aeafad;--ed-sel:#3a3d41;--ed-sel-on:#264f78;--ed-hl:rgba(173,214,255,.15);--ed-bracket:#888;
 --ed-kw:#569cd6;--ed-var:#74b0df;--ed-str:#ce9178;--ed-num:#b5cea8;--ed-cmt:#608b4e;
---h1:#ff7b72;--h2:#a5d6ff;--h3:#79c0ff;--h4:#d2a8ff;--h5:#ffa657}
+--h1:#ff7b72;--h2:#a5d6ff;--h3:#79c0ff;--h4:#d2a8ff;--h5:#ffa657;
+--diff-bar-bg:#1b2028;--diff-add-bg:rgba(46,160,67,.18);--diff-add-bd:#3fb950;--diff-add-hl:rgba(46,160,67,.44);--diff-del-bg:rgba(248,81,73,.18);--diff-del-bd:#f85149;--diff-del-hl:rgba(248,81,73,.44);--diff-mod-dot:#f59e0b;--diff-fold-bg:#282f3a;--diff-ring:#58a6ff}
 html{scroll-padding-top:env(safe-area-inset-top,0px);height:100%;background:var(--bg);font-family:var(--sans)}
 body{margin:0;height:100%;display:flex;flex-direction:column;background:var(--bg);color:var(--fg);font-family:var(--sans);overflow:hidden}
 :focus-visible{outline:2px solid #4493f8;outline-offset:2px}
@@ -151,9 +153,68 @@ body:not(.readonly) #sep{width:auto;height:6px;cursor:row-resize}
 #md-pinyin-tooltip{position:fixed;display:none;pointer-events:none;z-index:2147483647;background:var(--fg);color:var(--bg);padding:3px 9px;border-radius:4px;font:600 13px/1.4 system-ui,-apple-system,sans-serif;white-space:nowrap;box-shadow:0 4px 12px rgba(0,0,0,.28)}
 #md-excerpt-btn{position:fixed;display:none;z-index:2147483647;background:#516194;color:#fff;padding:2px 8px;border-radius:6px;font:12.5px/1.4 system-ui,-apple-system,"Microsoft YaHei",sans-serif;cursor:pointer;user-select:none;box-shadow:0 4px 12px rgba(0,0,0,.35)}
 #md-excerpt-btn:hover,#md-excerpt-btn.tp-hover{filter:brightness(1.08)}
+#diff-bar{flex:none;display:flex;align-items:center;flex-wrap:wrap;gap:6px 8px;padding:6px 14px;background:var(--diff-bar-bg);border-bottom:1px solid var(--border);color:var(--fg);font:12.5px/1.35 system-ui,-apple-system,"Microsoft YaHei",sans-serif;user-select:none}
+#diff-bar[hidden]{display:none!important}
+#diff-bar select{font:inherit;color:var(--fg);background:var(--bg);border:1px solid var(--border);border-radius:4px;padding:2px 6px;max-width:210px;cursor:pointer}
+#diff-bar button{font:inherit;color:var(--fg);background:var(--bg);border:1px solid var(--border);border-radius:4px;padding:2px 8px;cursor:pointer}
+#diff-bar button:hover,#diff-bar button.tp-hover{background:var(--code-bg);border-color:var(--link)}
+#diff-bar button:disabled{opacity:.45;cursor:not-allowed}
+#diff-bar .diff-lbl{color:var(--muted);font-family:Georgia,serif;font-style:italic}
+#diff-bar .diff-sep{width:1px;height:16px;background:var(--border)}
+#diff-bar .diff-seg{display:inline-flex;border:1px solid var(--border);border-radius:4px;overflow:hidden}
+#diff-bar .diff-seg button{border:0;border-radius:0;padding:2px 9px}
+#diff-bar .diff-seg button+button{border-left:1px solid var(--border)}
+#diff-bar .diff-seg button.active{background:var(--link);color:#fff}
+#diff-bar .diff-chk{display:inline-flex;align-items:center;gap:4px;cursor:pointer;color:var(--fg)}
+#diff-bar .diff-stat{font-family:var(--mono);font-size:12px;display:inline-flex;align-items:center;gap:6px}
+#diff-bar .diff-stat .st-add{color:var(--diff-add-bd);font-weight:600}
+#diff-bar .diff-stat .st-del{color:var(--diff-del-bd);font-weight:600}
+#diff-bar .diff-stat .st-eq{color:var(--muted)}
+#diff-bar .diff-nav{display:inline-flex;align-items:center;gap:4px}
+#diff-bar #diff-pos{font-family:var(--mono);font-size:11.5px;color:var(--muted);min-width:34px;text-align:center}
+#diff-bar .diff-exit{margin-left:auto;color:var(--diff-del-bd);border-color:var(--diff-del-bd)}
+#toc-list a{display:flex;align-items:center}
+#toc-list a .toc-txt{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0}
+.toc-diff-dot{display:inline-block;width:6px;height:6px;border-radius:50%;margin-left:6px;flex-shrink:0}
+.toc-diff-dot.is-add{background:var(--diff-add-bd)}
+.toc-diff-dot.is-del{background:var(--diff-del-bd)}
+.toc-diff-dot.is-mod{background:var(--diff-mod-dot)}
+.md-diff-blk{border-radius:4px;padding:3px 10px 3px 11px;margin:0 -10px .85em -15px;border-left:4px solid transparent}
+.md-diff-add{background:var(--diff-add-bg)!important;border-left-color:var(--diff-add-bd)!important}
+.md-diff-del{background:var(--diff-del-bg)!important;border-left-color:var(--diff-del-bd)!important;opacity:.88}
+.md-diff-blk>:first-child{margin-top:.15em}.md-diff-blk>:last-child{margin-bottom:.15em}
+.md li.md-diff-add,.md li.md-diff-del{padding:2px 8px;margin-left:-8px;border-left:4px solid transparent;border-radius:3px}
+.md tr.md-diff-add,.md tr.md-diff-del{background:transparent!important}
+.md tr.md-diff-add>td,.md tr.md-diff-add>th{background:var(--diff-add-bg)!important}
+.md tr.md-diff-del>td,.md tr.md-diff-del>th{background:var(--diff-del-bg)!important;opacity:.88}
+.md tr.md-diff-add>td:first-child,.md tr.md-diff-add>th:first-child{box-shadow:inset 4px 0 0 var(--diff-add-bd)}
+.md tr.md-diff-del>td:first-child,.md tr.md-diff-del>th:first-child{box-shadow:inset 4px 0 0 var(--diff-del-bd)}
+.md pre.md-diff-pre{padding:12px 16px}
+.md-diff-cline{display:block;padding:0 8px 0 12px;margin:0 -8px 0 -16px;border-left:4px solid transparent;min-height:1.45em}
+.md-diff-wd-add{background:var(--diff-add-hl);border-radius:2px;padding:0 1px}
+.md-diff-wd-del{background:var(--diff-del-hl);border-radius:2px;padding:0 1px;text-decoration:line-through;text-decoration-color:rgba(207,34,46,.55)}
+.md-diff-hunk-active{outline:2px solid var(--diff-ring);outline-offset:2px}
+.md-diff-fold{display:block;width:100%;margin:8px 0;padding:4px 10px;border:1px dashed var(--border);border-radius:4px;background:var(--diff-fold-bg);color:var(--muted);font:12px/1.4 system-ui,-apple-system,"Microsoft YaHei",sans-serif;text-align:center;cursor:pointer}
+.md-diff-fold:hover,.md-diff-fold.tp-hover{color:var(--link);border-color:var(--link)}
+.md-diff-hidden{display:none!important}
+.md-diff-banner{padding:10px 14px;margin-bottom:14px;border:1px solid var(--border);border-radius:6px;background:var(--diff-bar-bg);color:var(--muted);font:13px/1.5 system-ui,-apple-system,"Microsoft YaHei",sans-serif}
+.md.is-source-diff{max-width:1120px}
+.md-src-diff{border:1px solid var(--border);border-radius:6px;overflow-x:auto;font:13px/1.55 var(--mono);background:var(--bg)}
+.md-src-row{display:grid;grid-template-columns:46px 46px 22px minmax(0,1fr);border-left:3px solid transparent}
+.md-src-row.is-add{background:var(--diff-add-bg);border-left-color:var(--diff-add-bd)}
+.md-src-row.is-del{background:var(--diff-del-bg);border-left-color:var(--diff-del-bd)}
+.md-src-row.md-diff-hunk-active{outline:2px solid var(--diff-ring);outline-offset:-2px}
+.md-src-ln{padding:0 6px;color:var(--muted);text-align:right;border-right:1px solid var(--border);user-select:none;font-variant-numeric:tabular-nums;opacity:.75}
+.md-src-sign{text-align:center;user-select:none;font-weight:700}
+.md-src-row.is-add .md-src-sign{color:var(--diff-add-bd)}
+.md-src-row.is-del .md-src-sign{color:var(--diff-del-bd)}
+.md-src-code{white-space:pre-wrap;word-break:break-word;padding:0 8px}
+.md-src-fold{display:block;width:100%;border:0;border-top:1px dashed var(--border);border-bottom:1px dashed var(--border);padding:4px 10px;background:var(--diff-fold-bg);color:var(--muted);font:12px/1.4 system-ui,-apple-system,"Microsoft YaHei",sans-serif;text-align:center;cursor:pointer}
+.md-src-fold:hover,.md-src-fold.tp-hover{color:var(--link)}
 @media print{
-:root{padding:0}.bar,.ed,#sep,#toc-sep,#ctx,#toc,#md-pinyin-tooltip,#md-excerpt-btn{display:none!important}
+:root{padding:0}.bar,#diff-bar,.ed,#sep,#toc-sep,#ctx,#toc,#md-pinyin-tooltip,#md-excerpt-btn{display:none!important}
 html,body{height:auto;overflow:visible}#panes,.pv-wrap{display:block}.pv{overflow:visible}
+.md-diff-add,.md-diff-del,.md-diff-wd-add,.md-diff-wd-del,.md-src-row{print-color-adjust:exact;-webkit-print-color-adjust:exact}
 }
 </style>
 </head>
@@ -162,6 +223,7 @@ html,body{height:auto;overflow:visible}#panes,.pv-wrap{display:block}.pv{overflo
   <h1 id="title">README.md</h1>
   <button id="save" class="primary edit-only" title="一键固化覆盖原文件 (Ctrl+S)">Save</button>
   <button id="reload" class="edit-only" title="重新从原文件加载">Reload</button>
+  <button id="diff-toggle" hidden title="对比不同版本改动">Diff</button>
   <button id="copy">Copy</button>
   <button id="pdf">Export PDF</button>
   <span id="status" class="status"></span>
@@ -170,6 +232,26 @@ html,body{height:auto;overflow:visible}#panes,.pv-wrap{display:block}.pv{overflo
     <label><input type="checkbox" id="dark"> Dark mode</label>
   </div>
 </header>
+<div id="diff-bar" hidden>
+  <select id="diff-to" aria-label="目标版本"></select>
+  <span class="diff-lbl">based on</span>
+  <select id="diff-from" aria-label="基准版本"></select>
+  <button id="diff-swap" type="button" title="交换对比方向">⇌</button>
+  <span class="diff-sep"></span>
+  <div class="diff-seg" role="group" aria-label="对比视图">
+    <button id="diff-mode-render" type="button" class="active" title="渲染态块级与字级对比">渲染</button>
+    <button id="diff-mode-source" type="button" title="Markdown 源码逐行对比">源码</button>
+  </div>
+  <label class="diff-chk" title="折叠未变动的上下文"><input type="checkbox" id="diff-only"> 仅看改动</label>
+  <span class="diff-sep"></span>
+  <span id="diff-stat" class="diff-stat"></span>
+  <div class="diff-nav">
+    <button id="diff-prev" type="button" title="上一处改动 (Shift+F7 / [)">▲</button>
+    <span id="diff-pos">0/0</span>
+    <button id="diff-next" type="button" title="下一处改动 (F7 / ])">▼</button>
+  </div>
+  <button id="diff-exit" type="button" class="diff-exit">退出 Diff</button>
+</div>
 <main id="panes">
   <section class="ed"><textarea id="ed" spellcheck="false" aria-label="Markdown editor"></textarea></section>
   <div id="sep" class="sep" role="separator" aria-orientation="vertical" aria-label="Resize editor and preview" title="拖拽调整尺寸，双击恢复默认比例"></div>
@@ -198,6 +280,11 @@ html,body{height:auto;overflow:visible}#panes,.pv-wrap{display:block}.pv{overflo
   const sync = $('#sync'), dark = $('#dark'), panes = $('#panes'), sep = $('#sep');
   const statusEl = $('#status'), saveBtn = $('#save');
   const tocEl = $('#toc'), tocList = $('#toc-list'), tocSep = $('#toc-sep'), edPane = $('.ed');
+  const diffToggleBtn = $('#diff-toggle'), diffBar = $('#diff-bar');
+  const diffToSel = $('#diff-to'), diffFromSel = $('#diff-from'), diffSwapBtn = $('#diff-swap');
+  const diffModeRenderBtn = $('#diff-mode-render'), diffModeSourceBtn = $('#diff-mode-source');
+  const diffOnlyCb = $('#diff-only'), diffStatEl = $('#diff-stat');
+  const diffPrevBtn = $('#diff-prev'), diffNextBtn = $('#diff-next'), diffPosEl = $('#diff-pos'), diffExitBtn = $('#diff-exit');
 
   const readStore = k => {
     try { const v = localStorage.getItem(k); return v === null ? undefined : JSON.parse(v); }
@@ -266,8 +353,11 @@ html,body{height:auto;overflow:visible}#panes,.pv-wrap{display:block}.pv{overflo
     });
   }
 
-  let cm = null, rawText = '', diskText = '', raf = 0, saving = false;
+  let cm = null, rawText = '', diskText = '', sessionInitText = null, raf = 0, saving = false;
   let tocSig = '', tocHeadings = [], tocLinks = [], spyRaf = 0;
+  let diffActive = false, diffMode = 'render', diffOnlyChanges = false, diffBusy = false;
+  let diffSnapshots = [], diffHunks = [], diffHunkIdx = -1, diffLiveTimer = 0, diffRenderSeq = 0;
+  let lcsDiffFn = null, lcsLoadPromise = null;
 
   const normLF = s => String(s ?? '').replace(/\r\n?/g, '\n');
   const getVal = () => cm ? cm.getValue() : (isEditable ? ed.value : rawText);
@@ -599,7 +689,10 @@ html,body{height:auto;overflow:visible}#panes,.pv-wrap{display:block}.pv{overflo
       const noSpan = document.createElement('span');
       noSpan.className = 'toc-no';
       noSpan.textContent = numStr;
-      a.append(noSpan, document.createTextNode(titleText));
+      const txtSpan = document.createElement('span');
+      txtSpan.className = 'toc-txt';
+      txtSpan.textContent = titleText;
+      a.append(noSpan, txtSpan);
       frag.appendChild(a);
       tocLinks.push(a);
     });
@@ -638,30 +731,49 @@ html,body{height:auto;overflow:visible}#panes,.pv-wrap{display:block}.pv{overflo
     if (!a) return;
     e.preventDefault();
     const target = document.getElementById(a.dataset.targetId);
-    if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    if (!target) return;
+    if (target.classList.contains('md-diff-hidden') && target.dataset.foldId) {
+      expandFoldGroup(target.dataset.foldId);
+    }
+    target.scrollIntoView({ behavior: 'smooth', block: 'start' });
   });
 
-  function render() {
-    raf = 0;
-    const text = normLF(getVal()).replace(/^\uFEFF/, '');
+  function renderMarkdownInto(container, raw) {
+    const text = normLF(raw).replace(/^\uFEFF/, '');
     if (ok) {
       const { text: src, store } = protectMath(text);
-      out.innerHTML = DOMPurify.sanitize(restoreMath(marked.parse(src), store), {
+      container.innerHTML = DOMPurify.sanitize(restoreMath(marked.parse(src), store), {
         FORBID_TAGS: ['script', 'style', 'iframe', 'object', 'embed', 'form', 'svg', 'math', 'template'],
         FORBID_ATTR: ['srcdoc', 'formaction'],
         ALLOW_UNKNOWN_PROTOCOLS: false
       });
-      fixBold(out);
-      highlightCode(out);
-    } else out.textContent = text;
+      fixBold(container);
+      highlightCode(container);
+    } else container.textContent = text;
+  }
+  function render() {
+    raf = 0;
+    if (diffActive) return;
+    out.classList.remove('is-source-diff');
+    renderMarkdownInto(out, getVal());
     buildToc();
   }
   function onEdit() {
     rawText = getVal();
-    if (!raf) raf = requestAnimationFrame(render);
     const dirty = normLF(rawText) !== normLF(diskText);
     window._mdDirty = dirty;
     statusEl.textContent = dirty ? '● 未固化' : '';
+    refreshDiffControls();
+    if (diffActive) {
+      if (diffToSel.value === 'draft' || diffFromSel.value === 'draft') {
+        clearTimeout(diffLiveTimer);
+        diffLiveTimer = setTimeout(() => {
+          if (diffActive) runDiff({ preserveScroll: true });
+        }, 380);
+      }
+      return;
+    }
+    if (!raf) raf = requestAnimationFrame(render);
   }
 
   function scrollToHash(hash) {
@@ -695,11 +807,20 @@ html,body{height:auto;overflow:visible}#panes,.pv-wrap{display:block}.pv{overflo
     try {
       const text = await fetchMd();
       diskText = text;
+      sessionInitText = text;
       setVal(text);
       window._mdDirty = false;
       statusEl.textContent = '';
-      if (hash) requestAnimationFrame(() => scrollToHash(hash));
-      else pv.scrollTop = 0;
+      await loadMdSnapshots();
+      refreshDiffControls();
+      if (diffActive) {
+        if (getAvailableDiffVersions().length < 2) exitDiff();
+        else await runDiff({ preserveScroll: false });
+      } else if (hash) {
+        requestAnimationFrame(() => scrollToHash(hash));
+      } else {
+        pv.scrollTop = 0;
+      }
     } catch (e) {
       setVal(`# 加载失败\n\n无法读取 \`${mdPath}\`：${e.message}`);
       statusEl.textContent = '加载失败';
@@ -734,6 +855,16 @@ html,body{height:auto;overflow:visible}#panes,.pv-wrap{display:block}.pv{overflo
       diskText = text;
       window._mdDirty = false;
       statusEl.textContent = '✓ 已固化';
+      refreshDiffControls();
+      if (diffActive) {
+        if (diffToSel.value === 'draft') diffToSel.value = 'current';
+        if (diffFromSel.value === 'draft') diffFromSel.value = 'current';
+        if (diffToSel.value === diffFromSel.value) {
+          const alt = getAvailableDiffVersions().find(v => v.val !== diffToSel.value);
+          if (alt) diffFromSel.value = alt.val;
+        }
+        runDiff({ preserveScroll: true });
+      }
       setTimeout(() => { if (!window._mdDirty) statusEl.textContent = ''; }, 1800);
     } catch (err) {
       alert('❌ 固化失败：' + (err && err.message ? err.message : String(err)));
@@ -754,7 +885,26 @@ html,body{height:auto;overflow:visible}#panes,.pv-wrap{display:block}.pv{overflo
   $('#pdf').onclick = () => { try { window.print(); } catch (_) { } };
 
   window.addEventListener('keydown', e => {
-    if (isEditable && (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') { e.preventDefault(); saveDoc(); }
+    if (isEditable && (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') { e.preventDefault(); saveDoc(); return; }
+    if (!diffActive) return;
+    if (e.key === 'Escape') {
+      const ctxEl = $('#ctx');
+      if (ctxEl && !ctxEl.hidden) return;
+      exitDiff();
+      return;
+    }
+    const ae = document.activeElement;
+    const inInput = ae && (ae.tagName === 'TEXTAREA' || ae.tagName === 'INPUT' || ae.tagName === 'SELECT' || (ae.closest && ae.closest('.CodeMirror')));
+    if (e.key === 'F7') {
+      e.preventDefault();
+      stepDiffHunk(e.shiftKey ? -1 : 1);
+    } else if (!inInput && e.key === ']') {
+      e.preventDefault();
+      stepDiffHunk(1);
+    } else if (!inInput && e.key === '[') {
+      e.preventDefault();
+      stepDiffHunk(-1);
+    }
   });
   window.addEventListener('message', e => {
     if (e.origin === location.origin && e.data?.type === 'SCROLL_HASH') scrollToHash(e.data.hash);
@@ -764,7 +914,7 @@ html,body{height:auto;overflow:visible}#panes,.pv-wrap{display:block}.pv{overflo
   let lock = '', tm = 0;
   const bindSync = sc => {
     const link = (a, b, id) => a.addEventListener('scroll', () => {
-      if (!isEditable || !sync.checked || (lock && lock !== id)) return;
+      if (!isEditable || !sync.checked || diffActive || (lock && lock !== id)) return;
       lock = id; clearTimeout(tm); tm = setTimeout(() => { lock = ''; }, 100);
       b.scrollTop = (a.scrollTop / Math.max(1, a.scrollHeight - a.clientHeight)) * (b.scrollHeight - b.clientHeight);
     });
@@ -1203,6 +1353,1254 @@ html,body{height:auto;overflow:visible}#panes,.pv-wrap{display:block}.pv{overflo
       }, 10);
     }, true);
   }
+
+  // ═══ MD-DIFF ENGINE BEGIN ════════════════════════════════════════
+  function formatSnapTime(ts) {
+    if (!ts) return '未知时间';
+    const d = new Date(ts);
+    const pad = n => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  }
+
+  async function ensureLcsDiff() {
+    if (lcsDiffFn) return lcsDiffFn;
+    if (lcsLoadPromise) return lcsLoadPromise;
+    lcsLoadPromise = (async () => {
+      try {
+        const topSw = window.top && window.top.sharedWasm;
+        if (topSw) {
+          if (topSw.ready && typeof topSw.compute_lcs_diff === 'function') {
+            lcsDiffFn = topSw.compute_lcs_diff;
+            return lcsDiffFn;
+          }
+          if (!topSw.failed) {
+            const okTop = await new Promise(resolve => {
+              let tries = 0;
+              const iv = setInterval(() => {
+                if (topSw.ready && typeof topSw.compute_lcs_diff === 'function') { clearInterval(iv); resolve(true); }
+                else if (topSw.failed || ++tries > 200) { clearInterval(iv); resolve(false); }
+              }, 30);
+            });
+            if (okTop) {
+              lcsDiffFn = topSw.compute_lcs_diff;
+              return lcsDiffFn;
+            }
+          }
+        }
+      } catch (_) { }
+      const mod = await import('../wasm/compute_intensive_task_processor.min.js');
+      await mod.default();
+      lcsDiffFn = mod.compute_lcs_diff;
+      return lcsDiffFn;
+    })().catch(err => {
+      lcsLoadPromise = null;
+      throw err;
+    });
+    return lcsLoadPromise;
+  }
+
+  async function openMainDbReadonly() {
+    try {
+      if (window.top && window.top.SiteCore && typeof window.top.SiteCore.openMainDB === 'function') {
+        return await window.top.SiteCore.openMainDB();
+      }
+    } catch (_) { }
+    return await new Promise((resolve, reject) => {
+      const req = indexedDB.open('MainDB');
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+  }
+
+  async function decompressSnapshot(item) {
+    if (!item) return '';
+    if (typeof item._plain === 'string') return item._plain;
+    let text = '';
+    if (item.compressed && item.text instanceof Uint8Array) {
+      const stream = new Blob([item.text]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
+      text = await new Response(stream).text();
+    } else {
+      text = String(item.text ?? '');
+    }
+    item._plain = text;
+    return text;
+  }
+
+  async function loadMdSnapshots() {
+    diffSnapshots = [];
+    let idb = null;
+    try {
+      let decoded = mdPath;
+      try { decoded = decodeURI(mdPath); } catch (_) { }
+      const encoded = encodeURI(decoded);
+      const stripped = decoded.replace(/^\/+/, '');
+      const tryKeys = Array.from(new Set([decoded, mdPath, encoded, stripped, '/' + stripped]));
+
+      idb = await openMainDbReadonly();
+      if (idb && idb.objectStoreNames.contains('html_snapshots')) {
+        const tx = idb.transaction('html_snapshots', 'readonly');
+        const st = tx.objectStore('html_snapshots');
+        let rec = null;
+        for (const k of tryKeys) {
+          const hit = await new Promise(resolve => {
+            const r = st.get(k);
+            r.onsuccess = () => resolve(r.result || null);
+            r.onerror = () => resolve(null);
+          });
+          if (hit) { rec = hit; break; }
+        }
+        if (rec) {
+          let list = [];
+          if (Array.isArray(rec.history)) {
+            list = rec.history.filter(it => it && (typeof it.text === 'string' || it.text instanceof Uint8Array));
+          } else if (typeof rec.text === 'string' || rec.text instanceof Uint8Array) {
+            list = [{ text: rec.text, ts: rec.ts || 0, compressed: rec.compressed }];
+          }
+          diffSnapshots = list.slice().sort((a, b) => (b.ts || 0) - (a.ts || 0));
+        }
+      }
+    } catch (e) {
+      console.warn('[MD Diff] 历史快照读取失败:', e);
+    } finally {
+      if (idb) { try { idb.close(); } catch (_) { } }
+    }
+  }
+
+  function getAvailableDiffVersions() {
+    const versions = [];
+    const totalSnaps = diffSnapshots.length;
+    const totalVersions = totalSnaps + 1;
+    if (isEditable && window._mdDirty) {
+      versions.push({ val: 'draft', label: '当前草稿 (未固化)', title: '编辑器中尚未保存的内容' });
+    }
+    versions.push({
+      val: 'current',
+      label: totalSnaps > 0 ? `v${totalVersions} (最新)` : '磁盘原版',
+      title: '当前落盘的最新版本'
+    });
+    if (isEditable && sessionInitText !== null && normLF(sessionInitText) !== normLF(diskText)) {
+      versions.push({ val: 'session_init', label: '打开时原版 (本次会话)', title: '本次打开编辑器前的初始磁盘内容' });
+    }
+    for (let i = 0; i < totalSnaps; i++) {
+      const vNum = totalVersions - 1 - i;
+      const tStr = formatSnapTime(diffSnapshots[i].ts);
+      versions.push({ val: String(i), label: `v${vNum} · ${tStr}`, title: tStr });
+    }
+    return versions;
+  }
+
+  function syncVersionSelects(preferredTo, preferredFrom) {
+    const versions = getAvailableDiffVersions();
+    const prevTo = preferredTo ?? diffToSel.value;
+    const prevFrom = preferredFrom ?? diffFromSel.value;
+
+    const fill = (sel) => {
+      sel.textContent = '';
+      for (const v of versions) {
+        const opt = document.createElement('option');
+        opt.value = v.val;
+        opt.textContent = v.label;
+        opt.title = v.title;
+        sel.appendChild(opt);
+      }
+    };
+    fill(diffToSel);
+    fill(diffFromSel);
+
+    const hasVal = (v) => versions.some(item => item.val === v);
+    if (hasVal(prevTo)) diffToSel.value = prevTo;
+    else if (versions[0]) diffToSel.value = versions[0].val;
+
+    if (hasVal(prevFrom) && prevFrom !== diffToSel.value) diffFromSel.value = prevFrom;
+    else {
+      const alt = versions.find(v => v.val !== diffToSel.value);
+      if (alt) diffFromSel.value = alt.val;
+    }
+    return versions;
+  }
+
+  function refreshDiffControls() {
+    const versions = getAvailableDiffVersions();
+    const available = versions.length >= 2;
+    diffToggleBtn.hidden = !available && !diffActive;
+    if (diffActive) syncVersionSelects();
+  }
+
+  async function getVersionText(val) {
+    if (val === 'draft') return normLF(getVal()).replace(/^\uFEFF/, '');
+    if (val === 'current') return normLF(diskText).replace(/^\uFEFF/, '');
+    if (val === 'session_init') return normLF(sessionInitText ?? diskText).replace(/^\uFEFF/, '');
+    const idx = Number(val);
+    if (Number.isInteger(idx) && idx >= 0 && idx < diffSnapshots.length) {
+      return normLF(await decompressSnapshot(diffSnapshots[idx])).replace(/^\uFEFF/, '');
+    }
+    return '';
+  }
+
+  // ── 文本相似度与行内字/词级 DOM Diff ──────────────────────────────
+  function splitInlineTokens(str) {
+    if (!str) return [];
+    const re = /[A-Za-z0-9_]+|\s+|[\s\S]/gu;
+    const toks = [];
+    let m;
+    while ((m = re.exec(str))) {
+      toks.push({ str: m[0], start: m.index, end: m.index + m[0].length });
+    }
+    return toks;
+  }
+
+  function quickCharSimilarity(a, b) {
+    const sa = String(a || '').replace(/\s+/g, '');
+    const sb = String(b || '').replace(/\s+/g, '');
+    if (!sa && !sb) return 1;
+    if (!sa || !sb) return 0;
+    const ca = Array.from(sa), cb = Array.from(sb);
+    const freq = new Map();
+    for (const ch of ca) freq.set(ch, (freq.get(ch) || 0) + 1);
+    let common = 0;
+    for (const ch of cb) {
+      const c = freq.get(ch) || 0;
+      if (c > 0) { common++; freq.set(ch, c - 1); }
+    }
+    return (2 * common) / (ca.length + cb.length);
+  }
+
+  function collectDomInlineTokens(el) {
+    const toks = [];
+    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+    const re = /[A-Za-z0-9_]+|\s+|[\s\S]/gu;
+    let node;
+    while ((node = walker.nextNode())) {
+      const val = node.nodeValue;
+      if (!val) continue;
+      re.lastIndex = 0;
+      let m;
+      while ((m = re.exec(val))) {
+        toks.push({ str: m[0], node, start: m.index, end: m.index + m[0].length });
+      }
+    }
+    return toks;
+  }
+
+  function wrapDomNodeRanges(markMap, clsName) {
+    for (const [node, ranges] of markMap.entries()) {
+      if (!node.parentNode || !ranges.length) continue;
+      ranges.sort((a, b) => a[0] - b[0]);
+      const merged = [];
+      for (const r of ranges) {
+        const last = merged[merged.length - 1];
+        if (last && r[0] <= last[1]) last[1] = Math.max(last[1], r[1]);
+        else merged.push([r[0], r[1]]);
+      }
+      const val = node.nodeValue;
+      const frag = document.createDocumentFragment();
+      let pos = 0;
+      for (const [s, e] of merged) {
+        if (s > pos) frag.appendChild(document.createTextNode(val.slice(pos, s)));
+        const sp = document.createElement('span');
+        sp.className = clsName;
+        sp.textContent = val.slice(s, e);
+        frag.appendChild(sp);
+        pos = e;
+      }
+      if (pos < val.length) frag.appendChild(document.createTextNode(val.slice(pos)));
+      node.parentNode.replaceChild(frag, node);
+    }
+  }
+
+  function applyInlineDomDiff(oldEl, newEl, lcs) {
+    const oldToks = collectDomInlineTokens(oldEl);
+    const newToks = collectDomInlineTokens(newEl);
+    if (!oldToks.length || !newToks.length) return;
+    if (oldToks.length * newToks.length > 220000) return;
+
+    const ops = lcs(oldToks.map(t => t.str), newToks.map(t => t.str));
+    let eqChars = 0, oldChars = 0, newChars = 0;
+    for (const t of oldToks) oldChars += t.str.length;
+    for (const t of newToks) newChars += t.str.length;
+    for (const op of ops) {
+      if (op.type === 'equal') eqChars += oldToks[op.oldIdx].str.length;
+    }
+    if (eqChars / Math.max(oldChars, newChars, 1) < 0.22) return;
+
+    const oldMarks = new Map(), newMarks = new Map();
+    const pushMark = (map, tok) => {
+      let arr = map.get(tok.node);
+      if (!arr) { arr = []; map.set(tok.node, arr); }
+      arr.push([tok.start, tok.end]);
+    };
+    for (const op of ops) {
+      if (op.type === 'delete') pushMark(oldMarks, oldToks[op.oldIdx]);
+      else if (op.type === 'insert') pushMark(newMarks, newToks[op.newIdx]);
+    }
+    wrapDomNodeRanges(oldMarks, 'md-diff-wd-del');
+    wrapDomNodeRanges(newMarks, 'md-diff-wd-add');
+  }
+
+  function renderInlineTextPair(oldStr, newStr, lcs) {
+    const oldToks = splitInlineTokens(oldStr);
+    const newToks = splitInlineTokens(newStr);
+    if (!oldToks.length || !newToks.length || oldToks.length * newToks.length > 160000) return null;
+    const ops = lcs(oldToks.map(t => t.str), newToks.map(t => t.str));
+    let eqChars = 0;
+    for (const op of ops) {
+      if (op.type === 'equal') eqChars += oldToks[op.oldIdx].str.length;
+    }
+    if (eqChars / Math.max(oldStr.length, newStr.length, 1) < 0.22) return null;
+
+    const buildFrag = (toks, targetType, cls) => {
+      const frag = document.createDocumentFragment();
+      let plainBuf = '', markBuf = '';
+      const flushPlain = () => { if (plainBuf) { frag.appendChild(document.createTextNode(plainBuf)); plainBuf = ''; } };
+      const flushMark = () => {
+        if (markBuf) {
+          const sp = document.createElement('span');
+          sp.className = cls;
+          sp.textContent = markBuf;
+          frag.appendChild(sp);
+          markBuf = '';
+        }
+      };
+      for (const op of ops) {
+        if (op.type === 'equal') {
+          flushMark();
+          plainBuf += toks[targetType === 'delete' ? op.oldIdx : op.newIdx].str;
+        } else if (op.type === targetType) {
+          flushPlain();
+          markBuf += toks[targetType === 'delete' ? op.oldIdx : op.newIdx].str;
+        }
+      }
+      flushMark();
+      flushPlain();
+      return frag;
+    };
+    return {
+      oldFrag: buildFrag(oldToks, 'delete', 'md-diff-wd-del'),
+      newFrag: buildFrag(newToks, 'insert', 'md-diff-wd-add')
+    };
+  }
+
+  // ── 顺序保持最优配对（把 replace hunk 内同类型块/行/列表项精准配对） ──
+  function pairReplaceRun(delItems, insItems, scoreFn) {
+    const m = delItems.length, n = insItems.length;
+    if (m === 0 || n === 0) {
+      const out = [];
+      for (const d of delItems) out.push({ kind: 'del', oldItem: d });
+      for (const i of insItems) out.push({ kind: 'ins', newItem: i });
+      return out;
+    }
+    if (m * n > 1600) {
+      const out = [];
+      const k = Math.min(m, n);
+      for (let idx = 0; idx < k; idx++) {
+        if (scoreFn(delItems[idx], insItems[idx]) > 0) {
+          out.push({ kind: 'pair', oldItem: delItems[idx], newItem: insItems[idx] });
+        } else {
+          out.push({ kind: 'del', oldItem: delItems[idx] });
+          out.push({ kind: 'ins', newItem: insItems[idx] });
+        }
+      }
+      for (let idx = k; idx < m; idx++) out.push({ kind: 'del', oldItem: delItems[idx] });
+      for (let idx = k; idx < n; idx++) out.push({ kind: 'ins', newItem: insItems[idx] });
+      return out;
+    }
+
+    const dp = Array.from({ length: m + 1 }, () => new Float64Array(n + 1));
+    const choice = Array.from({ length: m + 1 }, () => new Uint8Array(n + 1));
+    for (let i = 1; i <= m; i++) {
+      for (let j = 1; j <= n; j++) {
+        let best = dp[i - 1][j];
+        let act = 1;
+        if (dp[i][j - 1] > best) { best = dp[i][j - 1]; act = 2; }
+        const sc = scoreFn(delItems[i - 1], insItems[j - 1]);
+        if (sc > 0 && dp[i - 1][j - 1] + sc > best) {
+          best = dp[i - 1][j - 1] + sc;
+          act = 3;
+        }
+        dp[i][j] = best;
+        choice[i][j] = act;
+      }
+    }
+
+    const out = [];
+    let i = m, j = n;
+    while (i > 0 || j > 0) {
+      if (i > 0 && j > 0 && choice[i][j] === 3) {
+        out.push({ kind: 'pair', oldItem: delItems[i - 1], newItem: insItems[j - 1] });
+        i--; j--;
+      } else if (j > 0 && (i === 0 || choice[i][j] === 2)) {
+        out.push({ kind: 'ins', newItem: insItems[j - 1] });
+        j--;
+      } else {
+        out.push({ kind: 'del', oldItem: delItems[i - 1] });
+        i--;
+      }
+    }
+    out.reverse();
+    return out;
+  }
+
+  // ── 代码块 highlight.js 跨行 <span> 标签配平 ──────────────────────
+  function splitBalancedHtmlLines(html) {
+    const lines = [];
+    let cur = '';
+    const openSpans = [];
+    const tagRe = /<span\b[^>]*>|<\/span>|\n|[^<\n]+|</g;
+    let m;
+    while ((m = tagRe.exec(html))) {
+      const tok = m[0];
+      if (tok === '\n') {
+        cur += '</span>'.repeat(openSpans.length);
+        lines.push(cur);
+        cur = openSpans.join('');
+      } else if (tok.startsWith('<span')) {
+        openSpans.push(tok);
+        cur += tok;
+      } else if (tok === '</span>') {
+        if (openSpans.length > 0) openSpans.pop();
+        cur += tok;
+      } else {
+        cur += tok;
+      }
+    }
+    cur += '</span>'.repeat(openSpans.length);
+    lines.push(cur);
+    if (lines.length > 1 && lines[lines.length - 1] === '') lines.pop();
+    return lines;
+  }
+
+  function extractTableRows(tableEl) {
+    const rows = [];
+    const trs = tableEl.querySelectorAll('tr');
+    trs.forEach(tr => {
+      const inHead = !!(tr.parentElement && tr.parentElement.tagName === 'THEAD');
+      rows.push({
+        inHead,
+        el: tr,
+        key: (inHead ? 'H:' : 'B:') + tr.outerHTML,
+        plain: tr.textContent.trim(),
+        colCount: tr.children.length
+      });
+    });
+    return rows;
+  }
+
+  function flattenListItems(listEl, depth = 0, out = []) {
+    const listTag = listEl.tagName.toLowerCase();
+    for (const child of Array.from(listEl.children)) {
+      if (child.tagName !== 'LI') continue;
+      const ownWrap = document.createElement('div');
+      const nestedLists = [];
+      for (const n of Array.from(child.childNodes)) {
+        if (n.nodeType === Node.ELEMENT_NODE && (n.tagName === 'UL' || n.tagName === 'OL')) {
+          nestedLists.push(n);
+        } else {
+          ownWrap.appendChild(n.cloneNode(true));
+        }
+      }
+      const ownHtml = ownWrap.innerHTML.trim();
+      const plain = ownWrap.textContent.trim();
+      out.push({
+        depth,
+        listTag,
+        ownHtml,
+        plain,
+        key: `${depth}:${listTag}:${ownHtml}`
+      });
+      for (const nl of nestedLists) flattenListItems(nl, depth + 1, out);
+    }
+    return out;
+  }
+
+  function extractTopUnits(host) {
+    const units = [];
+    for (const node of Array.from(host.children)) {
+      const tag = node.tagName.toLowerCase();
+      if (tag === 'table') {
+        const rows = extractTableRows(node);
+        units.push({
+          groupType: 'table',
+          tag,
+          el: node,
+          rows,
+          plain: node.textContent.trim(),
+          key: 'table:' + node.outerHTML
+        });
+      } else if (tag === 'ul' || tag === 'ol') {
+        const items = flattenListItems(node);
+        units.push({
+          groupType: 'list',
+          tag,
+          el: node,
+          items,
+          plain: node.textContent.trim(),
+          key: tag + ':' + node.outerHTML
+        });
+      } else if (tag === 'pre') {
+        const codeEl = node.querySelector('code');
+        const rawHtml = codeEl ? codeEl.innerHTML : node.innerHTML;
+        const lines = splitBalancedHtmlLines(rawHtml).map(lh => {
+          const tmp = document.createElement('span');
+          tmp.innerHTML = lh;
+          return { html: lh, plain: tmp.textContent, key: tmp.textContent };
+        });
+        units.push({
+          groupType: 'code',
+          tag,
+          el: node,
+          codeClass: codeEl ? codeEl.className : '',
+          lines,
+          plain: node.textContent,
+          key: 'pre:' + (codeEl ? codeEl.className : '') + ':' + node.textContent
+        });
+      } else if (/^h[1-6]$/.test(tag)) {
+        units.push({
+          groupType: 'heading',
+          tag,
+          el: node,
+          plain: node.textContent.trim(),
+          key: tag + ':' + node.outerHTML
+        });
+      } else {
+        units.push({
+          groupType: tag === 'blockquote' ? 'blockquote' : 'block',
+          tag,
+          el: node,
+          plain: node.textContent.trim(),
+          key: tag + ':' + node.outerHTML
+        });
+      }
+    }
+    return units;
+  }
+
+  function groupDiffOps(ops) {
+    const groups = [];
+    let i = 0;
+    while (i < ops.length) {
+      if (ops[i].type === 'equal') {
+        groups.push({ kind: 'equal', oldIdx: ops[i].oldIdx, newIdx: ops[i].newIdx });
+        i++;
+      } else {
+        const dels = [], ins = [];
+        while (i < ops.length && ops[i].type !== 'equal') {
+          if (ops[i].type === 'delete') dels.push(ops[i].oldIdx);
+          else ins.push(ops[i].newIdx);
+          i++;
+        }
+        groups.push({ kind: 'change', dels, ins });
+      }
+    }
+    return groups;
+  }
+
+  function buildDiffTable(oldUnit, newUnit, lcs, stats) {
+    const oldRows = oldUnit.rows, newRows = newUnit.rows;
+    const ops = lcs(oldRows.map(r => r.key), newRows.map(r => r.key));
+    const table = document.createElement('table');
+    const thead = document.createElement('thead');
+    const tbody = document.createElement('tbody');
+
+    const emitRow = (tr, inHead) => {
+      if (inHead) thead.appendChild(tr);
+      else tbody.appendChild(tr);
+    };
+
+    for (const grp of groupDiffOps(ops)) {
+      if (grp.kind === 'equal') {
+        const r = newRows[grp.newIdx];
+        emitRow(r.el.cloneNode(true), r.inHead);
+        continue;
+      }
+      const paired = pairReplaceRun(
+        grp.dels.map(i => oldRows[i]),
+        grp.ins.map(i => newRows[i]),
+        (d, ins) => {
+          if (d.inHead !== ins.inHead || d.colCount !== ins.colCount) return 0;
+          const sim = quickCharSimilarity(d.plain, ins.plain);
+          return sim >= 0.2 ? sim : 0;
+        }
+      );
+      for (const act of paired) {
+        if (act.kind === 'pair') {
+          const oldTr = act.oldItem.el.cloneNode(true);
+          const newTr = act.newItem.el.cloneNode(true);
+          oldTr.classList.add('md-diff-del');
+          newTr.classList.add('md-diff-add');
+          oldTr.dataset.diff = 'del';
+          newTr.dataset.diff = 'add';
+          const cols = Math.min(oldTr.children.length, newTr.children.length);
+          for (let c = 0; c < cols; c++) {
+            if (oldTr.children[c].innerHTML !== newTr.children[c].innerHTML) {
+              applyInlineDomDiff(oldTr.children[c], newTr.children[c], lcs);
+            }
+          }
+          emitRow(oldTr, act.oldItem.inHead);
+          emitRow(newTr, act.newItem.inHead);
+          stats.del++; stats.add++;
+        } else if (act.kind === 'del') {
+          const oldTr = act.oldItem.el.cloneNode(true);
+          oldTr.classList.add('md-diff-del');
+          oldTr.dataset.diff = 'del';
+          emitRow(oldTr, act.oldItem.inHead);
+          stats.del++;
+        } else {
+          const newTr = act.newItem.el.cloneNode(true);
+          newTr.classList.add('md-diff-add');
+          newTr.dataset.diff = 'add';
+          emitRow(newTr, act.newItem.inHead);
+          stats.add++;
+        }
+      }
+    }
+    if (thead.children.length > 0) table.appendChild(thead);
+    if (tbody.children.length > 0) table.appendChild(tbody);
+    return table;
+  }
+
+  function buildDiffList(oldUnit, newUnit, lcs, stats) {
+    const oldItems = oldUnit.items, newItems = newUnit.items;
+    const ops = lcs(oldItems.map(x => x.key), newItems.map(x => x.key));
+    const rootWrap = document.createDocumentFragment();
+    const stack = [];
+
+    const getContainer = (tag, depth) => {
+      while (stack.length > 0 && stack[stack.length - 1].depth > depth) stack.pop();
+      if (stack.length > 0 && stack[stack.length - 1].depth === depth && stack[stack.length - 1].tag !== tag) {
+        stack.pop();
+      }
+      while (stack.length === 0 || stack[stack.length - 1].depth < depth) {
+        const nextDepth = stack.length;
+        const listEl = document.createElement(tag);
+        if (stack.length === 0) {
+          rootWrap.appendChild(listEl);
+        } else {
+          const parentList = stack[stack.length - 1].el;
+          let hostLi = parentList.lastElementChild;
+          if (!hostLi || hostLi.tagName !== 'LI') {
+            hostLi = document.createElement('li');
+            hostLi.style.listStyle = 'none';
+            parentList.appendChild(hostLi);
+          }
+          hostLi.appendChild(listEl);
+        }
+        stack.push({ tag, depth: nextDepth, el: listEl });
+      }
+      return stack[stack.length - 1].el;
+    };
+
+    const appendLi = (item, diffType, prebuiltEl = null) => {
+      const parent = getContainer(item.listTag, item.depth);
+      const li = prebuiltEl || document.createElement('li');
+      if (!prebuiltEl) li.innerHTML = item.ownHtml;
+      if (diffType === 'add') { li.classList.add('md-diff-add'); li.dataset.diff = 'add'; stats.add++; }
+      else if (diffType === 'del') { li.classList.add('md-diff-del'); li.dataset.diff = 'del'; stats.del++; }
+      parent.appendChild(li);
+    };
+
+    for (const grp of groupDiffOps(ops)) {
+      if (grp.kind === 'equal') {
+        appendLi(newItems[grp.newIdx], null);
+        continue;
+      }
+      const paired = pairReplaceRun(
+        grp.dels.map(i => oldItems[i]),
+        grp.ins.map(i => newItems[i]),
+        (d, ins) => {
+          if (d.depth !== ins.depth) return 0;
+          const sim = quickCharSimilarity(d.plain, ins.plain);
+          return sim >= 0.25 ? sim : 0;
+        }
+      );
+      for (const act of paired) {
+        if (act.kind === 'pair') {
+          const oldLi = document.createElement('li');
+          oldLi.innerHTML = act.oldItem.ownHtml;
+          const newLi = document.createElement('li');
+          newLi.innerHTML = act.newItem.ownHtml;
+          applyInlineDomDiff(oldLi, newLi, lcs);
+          appendLi(act.oldItem, 'del', oldLi);
+          appendLi(act.newItem, 'add', newLi);
+        } else if (act.kind === 'del') {
+          appendLi(act.oldItem, 'del');
+        } else {
+          appendLi(act.newItem, 'add');
+        }
+      }
+    }
+    return rootWrap;
+  }
+
+  function buildDiffCodeBlock(oldUnit, newUnit, lcs, stats) {
+    const oldLines = oldUnit.lines, newLines = newUnit.lines;
+    const ops = lcs(oldLines.map(x => x.key), newLines.map(x => x.key));
+    const pre = document.createElement('pre');
+    pre.className = 'md-diff-pre';
+    const code = document.createElement('code');
+    if (newUnit.codeClass || oldUnit.codeClass) code.className = newUnit.codeClass || oldUnit.codeClass;
+
+    const makeLine = (html, diffType) => {
+      const sp = document.createElement('span');
+      sp.className = 'md-diff-cline' + (diffType === 'add' ? ' md-diff-add' : diffType === 'del' ? ' md-diff-del' : '');
+      if (diffType) sp.dataset.diff = diffType;
+      sp.innerHTML = html || '\u00A0';
+      return sp;
+    };
+
+    for (const grp of groupDiffOps(ops)) {
+      if (grp.kind === 'equal') {
+        code.appendChild(makeLine(newLines[grp.newIdx].html, null));
+        continue;
+      }
+      const paired = pairReplaceRun(
+        grp.dels.map(i => oldLines[i]),
+        grp.ins.map(i => newLines[i]),
+        (d, ins) => {
+          const sim = quickCharSimilarity(d.plain, ins.plain);
+          return sim >= 0.28 ? sim : 0;
+        }
+      );
+      for (const act of paired) {
+        if (act.kind === 'pair') {
+          const oldSp = makeLine(act.oldItem.html, 'del');
+          const newSp = makeLine(act.newItem.html, 'add');
+          applyInlineDomDiff(oldSp, newSp, lcs);
+          code.append(oldSp, newSp);
+          stats.del++; stats.add++;
+        } else if (act.kind === 'del') {
+          code.appendChild(makeLine(act.oldItem.html, 'del'));
+          stats.del++;
+        } else {
+          code.appendChild(makeLine(act.newItem.html, 'add'));
+          stats.add++;
+        }
+      }
+    }
+    pre.appendChild(code);
+    return pre;
+  }
+
+  function wrapWholeBlock(el, diffType) {
+    const wrap = document.createElement('div');
+    wrap.className = 'md-diff-blk ' + (diffType === 'add' ? 'md-diff-add' : 'md-diff-del');
+    wrap.dataset.diff = diffType;
+    wrap.appendChild(el);
+    return wrap;
+  }
+
+  // ── 折叠未变上下文 & 按需展开 ────────────────────────────────────
+  function expandFoldGroup(foldId) {
+    out.querySelectorAll(`[data-fold-id="${CSS.escape(foldId)}"]`).forEach(el => {
+      el.classList.remove('md-diff-hidden');
+      delete el.dataset.foldId;
+    });
+    const btn = out.querySelector(`button[data-fold-trigger="${CSS.escape(foldId)}"]`);
+    if (btn) btn.remove();
+  }
+
+  function applyRenderedOnlyChangesFold() {
+    if (!diffOnlyChanges) return;
+    const kids = Array.from(out.children);
+    const keep = new Uint8Array(kids.length);
+    for (let i = 0; i < kids.length; i++) {
+      const el = kids[i];
+      const isHeading = /^H[1-6]$/.test(el.tagName);
+      const isChanged = el.dataset.diff === 'add' || el.dataset.diff === 'del' || !!el.querySelector('[data-diff]');
+      if (isHeading || isChanged) {
+        keep[i] = 1;
+        if (isChanged) {
+          if (i > 0) keep[i - 1] = 1;
+          if (i + 1 < kids.length) keep[i + 1] = 1;
+        }
+      }
+    }
+    let foldSeq = 0;
+    let i = 0;
+    while (i < kids.length) {
+      if (keep[i]) { i++; continue; }
+      let j = i;
+      while (j < kids.length && !keep[j]) j++;
+      const count = j - i;
+      if (count >= 2) {
+        const fid = 'rf_' + (++foldSeq);
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'md-diff-fold';
+        btn.dataset.foldTrigger = fid;
+        btn.textContent = `··· 展开 ${count} 个未变动区块 ···`;
+        btn.onclick = () => expandFoldGroup(fid);
+        out.insertBefore(btn, kids[i]);
+        for (let k = i; k < j; k++) {
+          kids[k].classList.add('md-diff-hidden');
+          kids[k].dataset.foldId = fid;
+        }
+      }
+      i = j;
+    }
+  }
+
+  // ── 渲染态 Diff 主入口 ────────────────────────────────────────────
+  function renderRenderedDiff(oldText, newText, lcs) {
+    out.classList.remove('is-source-diff');
+    const oldHost = document.createElement('div');
+    const newHost = document.createElement('div');
+    renderMarkdownInto(oldHost, oldText);
+    renderMarkdownInto(newHost, newText);
+
+    const oldUnits = extractTopUnits(oldHost);
+    const newUnits = extractTopUnits(newHost);
+    const ops = lcs(oldUnits.map(u => u.key), newUnits.map(u => u.key));
+
+    const frag = document.createDocumentFragment();
+    const stats = { add: 0, del: 0 };
+
+    for (const grp of groupDiffOps(ops)) {
+      if (grp.kind === 'equal') {
+        frag.appendChild(newUnits[grp.newIdx].el.cloneNode(true));
+        continue;
+      }
+      const dels = grp.dels.map(i => oldUnits[i]);
+      const ins = grp.ins.map(i => newUnits[i]);
+      const paired = pairReplaceRun(dels, ins, (d, n) => {
+        if (d.groupType !== n.groupType) return 0;
+        if (d.groupType === 'table' || d.groupType === 'list' || d.groupType === 'code') {
+          if (dels.length === 1 && ins.length === 1) return 1;
+          const sim = quickCharSimilarity(d.plain, n.plain);
+          return sim >= 0.15 ? 0.5 + 0.5 * sim : 0;
+        }
+        const sim = quickCharSimilarity(d.plain, n.plain);
+        return sim >= 0.25 ? sim : 0;
+      });
+
+      for (const act of paired) {
+        if (act.kind === 'pair') {
+          const o = act.oldItem, n = act.newItem;
+          if (o.groupType === 'table') {
+            frag.appendChild(buildDiffTable(o, n, lcs, stats));
+          } else if (o.groupType === 'list') {
+            frag.appendChild(buildDiffList(o, n, lcs, stats));
+          } else if (o.groupType === 'code') {
+            frag.appendChild(buildDiffCodeBlock(o, n, lcs, stats));
+          } else {
+            const oldClone = o.el.cloneNode(true);
+            const newClone = n.el.cloneNode(true);
+            applyInlineDomDiff(oldClone, newClone, lcs);
+            frag.append(wrapWholeBlock(oldClone, 'del'), wrapWholeBlock(newClone, 'add'));
+            stats.del++; stats.add++;
+          }
+        } else if (act.kind === 'del') {
+          frag.appendChild(wrapWholeBlock(act.oldItem.el.cloneNode(true), 'del'));
+          stats.del++;
+        } else {
+          frag.appendChild(wrapWholeBlock(act.newItem.el.cloneNode(true), 'add'));
+          stats.add++;
+        }
+      }
+    }
+
+    out.replaceChildren(frag);
+    applyRenderedOnlyChangesFold();
+    tocSig = '';
+    buildToc();
+    annotateRenderedTocDots();
+    collectDiffHunks();
+    return stats;
+  }
+
+  function annotateRenderedTocDots() {
+    if (!tocHeadings.length || !tocLinks.length) return;
+    const allChanged = Array.from(out.querySelectorAll('[data-diff="add"],[data-diff="del"]'));
+    if (!allChanged.length) return;
+
+    const states = new Array(tocHeadings.length).fill(0);
+    const headingTopIdx = (el) => {
+      let lo = 0, hi = tocHeadings.length - 1, ans = -1;
+      while (lo <= hi) {
+        const mid = (lo + hi) >> 1;
+        const h = tocHeadings[mid];
+        if (h === el || h.contains(el) || el.contains(h)) return mid;
+        const pos = h.compareDocumentPosition(el);
+        if (pos & Node.DOCUMENT_POSITION_FOLLOWING) { ans = mid; lo = mid + 1; }
+        else hi = mid - 1;
+      }
+      return ans;
+    };
+
+    for (const el of allChanged) {
+      const idx = headingTopIdx(el);
+      if (idx >= 0) {
+        states[idx] |= (el.dataset.diff === 'add' ? 1 : 2);
+      }
+    }
+
+    tocLinks.forEach((a, i) => {
+      const oldDot = a.querySelector('.toc-diff-dot');
+      if (oldDot) oldDot.remove();
+      const mask = states[i];
+      if (!mask) return;
+      const dot = document.createElement('span');
+      dot.className = 'toc-diff-dot ' + (mask === 3 ? 'is-mod' : mask === 1 ? 'is-add' : 'is-del');
+      dot.title = mask === 3 ? '本节含修改' : mask === 1 ? '本节含新增' : '本节含删除';
+      a.appendChild(dot);
+    });
+  }
+
+  // ── 源码态 Unified Diff 主入口 ────────────────────────────────────
+  function renderSourceDiff(oldText, newText, lcs) {
+    out.classList.add('is-source-diff');
+    const oldLines = oldText.split('\n');
+    const newLines = newText.split('\n');
+    const ops = lcs(oldLines, newLines);
+
+    const wrap = document.createElement('div');
+    wrap.className = 'md-src-diff';
+    const rows = [];
+    const stats = { add: 0, del: 0 };
+
+    const makeRow = (type, oldNo, newNo, contentNode) => {
+      const r = document.createElement('div');
+      r.className = 'md-src-row' + (type === 'add' ? ' is-add' : type === 'del' ? ' is-del' : '');
+      if (type) r.dataset.diff = type;
+      const ln1 = document.createElement('span'); ln1.className = 'md-src-ln'; ln1.textContent = oldNo != null ? String(oldNo) : '';
+      const ln2 = document.createElement('span'); ln2.className = 'md-src-ln'; ln2.textContent = newNo != null ? String(newNo) : '';
+      const sg = document.createElement('span'); sg.className = 'md-src-sign'; sg.textContent = type === 'add' ? '+' : type === 'del' ? '-' : '';
+      const cd = document.createElement('span'); cd.className = 'md-src-code';
+      if (typeof contentNode === 'string') cd.textContent = contentNode || '\u00A0';
+      else cd.appendChild(contentNode);
+      r.append(ln1, ln2, sg, cd);
+      rows.push({ el: r, type, raw: type === 'del' ? oldLines[oldNo - 1] : newLines[newNo - 1] });
+      return r;
+    };
+
+    for (const grp of groupDiffOps(ops)) {
+      if (grp.kind === 'equal') {
+        makeRow(null, grp.oldIdx + 1, grp.newIdx + 1, newLines[grp.newIdx]);
+        continue;
+      }
+      const dels = grp.dels.map(i => ({ idx: i, text: oldLines[i] }));
+      const ins = grp.ins.map(i => ({ idx: i, text: newLines[i] }));
+      const paired = pairReplaceRun(dels, ins, (d, n) => {
+        const sim = quickCharSimilarity(d.text, n.text);
+        return sim >= 0.25 ? sim : 0;
+      });
+      for (const act of paired) {
+        if (act.kind === 'pair') {
+          const inl = renderInlineTextPair(act.oldItem.text, act.newItem.text, lcs);
+          makeRow('del', act.oldItem.idx + 1, null, inl ? inl.oldFrag : act.oldItem.text);
+          makeRow('add', null, act.newItem.idx + 1, inl ? inl.newFrag : act.newItem.text);
+          stats.del++; stats.add++;
+        } else if (act.kind === 'del') {
+          makeRow('del', act.oldItem.idx + 1, null, act.oldItem.text);
+          stats.del++;
+        } else {
+          makeRow('add', null, act.newItem.idx + 1, act.newItem.text);
+          stats.add++;
+        }
+      }
+    }
+
+    const keep = new Uint8Array(rows.length);
+    if (!diffOnlyChanges) {
+      keep.fill(1);
+    } else {
+      for (let i = 0; i < rows.length; i++) {
+        if (rows[i].type) {
+          for (let k = Math.max(0, i - 3); k <= Math.min(rows.length - 1, i + 3); k++) keep[k] = 1;
+        }
+      }
+    }
+
+    let foldSeq = 0;
+    let i = 0;
+    while (i < rows.length) {
+      if (keep[i]) {
+        wrap.appendChild(rows[i].el);
+        i++;
+        continue;
+      }
+      let j = i;
+      while (j < rows.length && !keep[j]) j++;
+      const cnt = j - i;
+      if (cnt >= 3) {
+        const fid = 'sf_' + (++foldSeq);
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'md-src-fold';
+        btn.dataset.foldTrigger = fid;
+        btn.textContent = `··· 展开 ${cnt} 行未变源码 ···`;
+        btn.onclick = () => expandFoldGroup(fid);
+        wrap.appendChild(btn);
+        for (let k = i; k < j; k++) {
+          rows[k].el.classList.add('md-diff-hidden');
+          rows[k].el.dataset.foldId = fid;
+          wrap.appendChild(rows[k].el);
+        }
+      } else {
+        for (let k = i; k < j; k++) wrap.appendChild(rows[k].el);
+      }
+      i = j;
+    }
+
+    out.replaceChildren(wrap);
+    buildSourceDiffToc(rows);
+    collectDiffHunks();
+    return stats;
+  }
+
+  function buildSourceDiffToc(rows) {
+    const hs = [];
+    let fence = '';
+    const usedIds = new Set();
+    let curHIdx = -1;
+
+    for (const r of rows) {
+      const line = r.raw || '';
+      const fm = /^\s*(`{3,}|~{3,})/.exec(line);
+      if (fence) {
+        if (fm && fm[1][0] === fence[0] && fm[1].length >= fence.length && /^\s*[`~]+\s*$/.test(line)) fence = '';
+      } else if (fm) {
+        fence = fm[1];
+      } else if (r.type !== 'del') {
+        const hm = /^(#{1,6})\s+(.+)$/.exec(line.trim());
+        if (hm) {
+          const lv = hm[1].length;
+          const title = hm[2].replace(/\s+#+\s*$/, '').trim();
+          const base = 'src-' + slugify(title);
+          let id = base, n = 1;
+          while (usedIds.has(id)) id = `${base}-${n++}`;
+          usedIds.add(id);
+          r.el.id = id;
+          curHIdx = hs.length;
+          hs.push({ id, lv, title, el: r.el, mask: r.type === 'add' ? 1 : 0 });
+        }
+      }
+      if (curHIdx >= 0 && r.type) {
+        hs[curHIdx].mask |= (r.type === 'add' ? 1 : 2);
+      }
+    }
+
+    tocSig = '';
+    tocHeadings = hs.map(h => h.el);
+    tocList.textContent = '';
+    tocLinks = [];
+
+    if (!hs.length) {
+      const empty = document.createElement('div');
+      empty.className = 'toc-empty';
+      empty.textContent = '暂无标题';
+      tocList.appendChild(empty);
+      return;
+    }
+
+    const minLv = Math.min(...hs.map(h => h.lv));
+    const counters = [0, 0, 0, 0, 0, 0];
+    const frag = document.createDocumentFragment();
+    hs.forEach(h => {
+      const depth = Math.max(0, h.lv - minLv);
+      for (let k = depth + 1; k < counters.length; k++) counters[k] = 0;
+      counters[depth]++;
+      const numStr = counters.slice(0, depth + 1).filter(n => n > 0).join('.');
+
+      const a = document.createElement('a');
+      a.href = '#' + h.id;
+      a.dataset.targetId = h.id;
+      a.style.paddingLeft = (8 + depth * 12) + 'px';
+      a.title = `${numStr} ${h.title}`;
+
+      const noSpan = document.createElement('span');
+      noSpan.className = 'toc-no';
+      noSpan.textContent = numStr;
+      const txtSpan = document.createElement('span');
+      txtSpan.className = 'toc-txt';
+      txtSpan.textContent = h.title;
+      a.append(noSpan, txtSpan);
+      if (h.mask) {
+        const dot = document.createElement('span');
+        dot.className = 'toc-diff-dot ' + (h.mask === 3 ? 'is-mod' : h.mask === 1 ? 'is-add' : 'is-del');
+        dot.title = h.mask === 3 ? '本节含修改' : h.mask === 1 ? '本节含新增' : '本节含删除';
+        a.appendChild(dot);
+      }
+      frag.appendChild(a);
+      tocLinks.push(a);
+    });
+    tocList.appendChild(frag);
+    updateActiveToc();
+  }
+
+  // ── 改动块聚集与顺序导航 (▲ / ▼) ──────────────────────────────────
+  function collectDiffHunks() {
+    const els = Array.from(out.querySelectorAll('[data-diff="add"],[data-diff="del"]'));
+    diffHunks = [];
+    let prevEl = null;
+    for (const el of els) {
+      const contiguous = prevEl && prevEl.parentNode === el.parentNode && prevEl.nextElementSibling === el;
+      if (!contiguous) diffHunks.push(el);
+      prevEl = el;
+    }
+    diffHunkIdx = -1;
+    updateDiffNavUI();
+  }
+
+  function updateDiffNavUI() {
+    const total = diffHunks.length;
+    diffPosEl.textContent = total > 0 ? `${diffHunkIdx >= 0 ? diffHunkIdx + 1 : 0}/${total}` : '0/0';
+    diffPrevBtn.disabled = total === 0;
+    diffNextBtn.disabled = total === 0;
+  }
+
+  function stepDiffHunk(delta) {
+    const total = diffHunks.length;
+    if (!total) return;
+    if (diffHunkIdx >= 0 && diffHunks[diffHunkIdx]) {
+      diffHunks[diffHunkIdx].classList.remove('md-diff-hunk-active');
+    }
+    if (diffHunkIdx < 0) diffHunkIdx = delta > 0 ? 0 : total - 1;
+    else diffHunkIdx = (diffHunkIdx + delta + total) % total;
+
+    const target = diffHunks[diffHunkIdx];
+    if (target) {
+      if (target.classList.contains('md-diff-hidden') && target.dataset.foldId) {
+        expandFoldGroup(target.dataset.foldId);
+      }
+      target.classList.add('md-diff-hunk-active');
+      target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+    updateDiffNavUI();
+  }
+
+  function updateDiffStatsUI(stats, sameVersion = false) {
+    diffStatEl.textContent = '';
+    if (sameVersion) {
+      const sp = document.createElement('span');
+      sp.className = 'st-eq';
+      sp.textContent = '相同版本';
+      diffStatEl.appendChild(sp);
+      return;
+    }
+    if (stats.add === 0 && stats.del === 0) {
+      const sp = document.createElement('span');
+      sp.className = 'st-eq';
+      sp.textContent = '无差异';
+      diffStatEl.appendChild(sp);
+      return;
+    }
+    const sAdd = document.createElement('span'); sAdd.className = 'st-add'; sAdd.textContent = `+${stats.add}`;
+    const sDel = document.createElement('span'); sDel.className = 'st-del'; sDel.textContent = `-${stats.del}`;
+    diffStatEl.append(sAdd, sDel);
+  }
+
+  async function runDiff({ preserveScroll = false } = {}) {
+    if (!diffActive) return;
+    const seq = ++diffRenderSeq;
+    const savedScroll = preserveScroll ? pv.scrollTop : 0;
+
+    diffBusy = true;
+    diffStatEl.textContent = '计算中...';
+    try {
+      const fromVal = diffFromSel.value;
+      const toVal = diffToSel.value;
+      const [oldText, newText] = await Promise.all([getVersionText(fromVal), getVersionText(toVal)]);
+      if (seq !== diffRenderSeq || !diffActive) return;
+
+      if (fromVal === toVal || oldText === newText) {
+        out.classList.remove('is-source-diff');
+        const banner = document.createElement('div');
+        banner.className = 'md-diff-banner';
+        banner.textContent = fromVal === toVal ? '当前选择的基准版本与目标版本相同。' : '所选两个版本内容完全一致，无差异。';
+        const body = document.createElement('div');
+        renderMarkdownInto(body, newText);
+        out.replaceChildren(banner, ...Array.from(body.childNodes));
+        tocSig = '';
+        buildToc();
+        diffHunks = []; diffHunkIdx = -1;
+        updateDiffNavUI();
+        updateDiffStatsUI({ add: 0, del: 0 }, fromVal === toVal);
+        pv.scrollTop = preserveScroll ? savedScroll : 0;
+        return;
+      }
+
+      const lcs = await ensureLcsDiff();
+      if (seq !== diffRenderSeq || !diffActive) return;
+
+      const stats = diffMode === 'source'
+        ? renderSourceDiff(oldText, newText, lcs)
+        : renderRenderedDiff(oldText, newText, lcs);
+
+      updateDiffStatsUI(stats, false);
+      if (preserveScroll) {
+        pv.scrollTop = savedScroll;
+      } else if (diffHunks.length > 0) {
+        stepDiffHunk(1);
+      } else {
+        pv.scrollTop = 0;
+      }
+    } catch (err) {
+      if (seq !== diffRenderSeq) return;
+      console.error('[MD Diff] 对比失败:', err);
+      diffStatEl.textContent = '对比失败';
+    } finally {
+      if (seq === diffRenderSeq) diffBusy = false;
+    }
+  }
+
+  function enterDiff() {
+    const versions = getAvailableDiffVersions();
+    if (versions.length < 2) return;
+    diffActive = true;
+    diffBar.hidden = false;
+    diffToggleBtn.classList.add('active');
+    const defTo = versions[0].val;
+    const defFrom = versions[1].val;
+    syncVersionSelects(defTo, defFrom);
+    runDiff({ preserveScroll: false });
+  }
+
+  function exitDiff() {
+    if (!diffActive) return;
+    clearTimeout(diffLiveTimer);
+    diffRenderSeq++;
+    diffActive = false;
+    diffBar.hidden = true;
+    diffToggleBtn.classList.remove('active');
+    diffHunks = [];
+    diffHunkIdx = -1;
+    tocSig = '';
+    render();
+    refreshDiffControls();
+  }
+
+  diffToggleBtn.onclick = () => { if (diffActive) exitDiff(); else enterDiff(); };
+  diffExitBtn.onclick = exitDiff;
+  diffToSel.onchange = () => runDiff({ preserveScroll: false });
+  diffFromSel.onchange = () => runDiff({ preserveScroll: false });
+  diffSwapBtn.onclick = () => {
+    const a = diffToSel.value, b = diffFromSel.value;
+    diffToSel.value = b;
+    diffFromSel.value = a;
+    runDiff({ preserveScroll: false });
+  };
+  diffModeRenderBtn.onclick = () => {
+    if (diffMode === 'render') return;
+    diffMode = 'render';
+    diffModeRenderBtn.classList.add('active');
+    diffModeSourceBtn.classList.remove('active');
+    runDiff({ preserveScroll: false });
+  };
+  diffModeSourceBtn.onclick = () => {
+    if (diffMode === 'source') return;
+    diffMode = 'source';
+    diffModeSourceBtn.classList.add('active');
+    diffModeRenderBtn.classList.remove('active');
+    runDiff({ preserveScroll: false });
+  };
+  diffOnlyCb.onchange = () => {
+    diffOnlyChanges = diffOnlyCb.checked;
+    runDiff({ preserveScroll: false });
+  };
+  diffPrevBtn.onclick = () => stepDiffHunk(-1);
+  diffNextBtn.onclick = () => stepDiffHunk(1);
+  // ═══ MD-DIFF ENGINE END ══════════════════════════════════════════
+
   initMdPinyinAndExcerpt();
 
   (async () => {

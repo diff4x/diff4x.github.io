@@ -3,8 +3,21 @@ use regex::Regex;
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
-use std::path::Path;
+use std::path::PathBuf;
 use std::sync::OnceLock;
+
+pub struct StagedSynonymsJs {
+    pub out_path: PathBuf,
+    pub minified_js: String,
+    pub raw_sha: String,
+    pub out_sha: String,
+    pub total_public_docs: usize,
+}
+
+pub struct PreparedSynonyms {
+    pub oov_report: String,
+    pub staged_js: Option<StagedSynonymsJs>,
+}
 
 use crate::api_files::write_atomic;
 use crate::builder::{log_info, log_warn};
@@ -308,6 +321,23 @@ fn tokenize_cilin_body(body: &str, split_fixes: &HashMap<String, Vec<String>>) -
     out
 }
 
+#[inline]
+fn has_valid_ascii_boundary(chars: &[char], start: usize, end: usize) -> bool {
+    if chars[start].is_ascii_alphanumeric()
+        && start > 0
+        && chars[start - 1].is_ascii_alphanumeric()
+    {
+        return false;
+    }
+    if chars[end - 1].is_ascii_alphanumeric()
+        && end < chars.len()
+        && chars[end].is_ascii_alphanumeric()
+    {
+        return false;
+    }
+    true
+}
+
 fn fmm_extract_words(
     lower: &str,
     lexicon: &HashSet<String>,
@@ -326,6 +356,9 @@ fn fmm_extract_words(
         let mut matched = false;
         let max_l = max_lex_len.min(n - i);
         for l in (2..=max_l).rev() {
+            if !has_valid_ascii_boundary(&chars, i, i + l) {
+                continue;
+            }
             let sub = &lower[bounds[i]..bounds[i + l]];
             if lexicon.contains(sub) {
                 seen.insert(sub.to_string());
@@ -485,15 +518,11 @@ fn load_cilin_text(cfg: &ServerConfig) -> Result<Option<String>, String> {
     Ok(None)
 }
 
-fn write_oov_report(
-    report_path: &Path,
+fn render_oov_report(
     total_public_docs: usize,
     ascii_oov: &HashMap<String, TokenStat>,
     cjk_oov: &HashMap<String, TokenStat>,
-) {
-    if let Some(parent) = report_path.parent() {
-        let _ = fs::create_dir_all(parent);
-    }
+) -> String {
 
     let min_df = if total_public_docs >= 50 { 2 } else { 1 };
     let min_tf = if total_public_docs >= 50 { 3 } else { 2 };
@@ -573,15 +602,16 @@ fn write_oov_report(
         sb.push_str("(暂无达到阈值的候选词)\n");
     }
 
-    let _ = write_atomic(report_path, &sb, false);
+    sb
 }
 
-pub fn build_if_needed(
+pub fn prepare_if_needed(
     cfg: &ServerConfig,
     public_docs_for_df: &BTreeMap<i64, String>,
     lite_data_tree: &Value,
+    force: bool,
     logs: Option<&LogBus>,
-) -> Result<bool, String> {
+) -> Result<Option<PreparedSynonyms>, String> {
     let Some(raw_cilin) = load_cilin_text(cfg)? else {
         log_warn(
             logs,
@@ -590,7 +620,7 @@ pub fn build_if_needed(
                 cfg.cilin_file.display()
             ),
         );
-        return Ok(false);
+        return Ok(None);
     };
 
     let custom_raw = crate::config::read_synonyms_custom_json(cfg);
@@ -762,7 +792,7 @@ pub fn build_if_needed(
         }
     }
 
-    write_oov_report(&cfg.oov_report_file, total_public_docs, &ascii_oov, &cjk_oov);
+    let oov_report = render_oov_report(total_public_docs, &ascii_oov, &cjk_oov);
 
     let mut cilin_raw = String::with_capacity(900 * 1024);
     for (idx, entry) in cilin_entries.iter().enumerate() {
@@ -810,13 +840,16 @@ pub fn build_if_needed(
     let out_path = cfg.js_out_dir.join("synonyms.js");
     let sha_state_file = &cfg.synonyms_sha_file;
 
-    if out_path.is_file() && sha_state_file.is_file() {
+    if !force && out_path.is_file() && sha_state_file.is_file() {
         if let Ok(saved) = fs::read_to_string(sha_state_file) {
             if let Some((saved_raw, saved_out)) = saved.trim().split_once('|') {
                 if saved_raw == raw_sha {
                     if let Ok(cur_out_bytes) = fs::read(&out_path) {
                         if sha256_hex(&cur_out_bytes) == saved_out {
-                            return Ok(false);
+                            return Ok(Some(PreparedSynonyms {
+                                oov_report,
+                                staged_js: None,
+                            }));
                         }
                     }
                 }
@@ -826,142 +859,57 @@ pub fn build_if_needed(
 
     let minified_js = minify_js(&raw_js)
         .map_err(|e| format!("synonyms.js 内置 JS 压缩失败，已中止写出: {}", e))?;
-    if let Some(parent) = out_path.parent() {
+    let out_sha = sha256_hex(minified_js.as_bytes());
+
+    Ok(Some(PreparedSynonyms {
+        oov_report,
+        staged_js: Some(StagedSynonymsJs {
+            out_path,
+            minified_js,
+            raw_sha,
+            out_sha,
+            total_public_docs,
+        }),
+    }))
+}
+
+pub fn commit_prepared(
+    cfg: &ServerConfig,
+    prepared: &PreparedSynonyms,
+    logs: Option<&LogBus>,
+) -> Result<bool, String> {
+    if let Some(parent) = cfg.oov_report_file.parent() {
         let _ = fs::create_dir_all(parent);
     }
-    write_atomic(&out_path, &minified_js, false)?;
+    let _ = write_atomic(&cfg.oov_report_file, &prepared.oov_report, false);
 
-    let out_sha = sha256_hex(minified_js.as_bytes());
-    if let Some(p) = sha_state_file.parent() { let _ = fs::create_dir_all(p); }
-    let _ = write_atomic(sha_state_file, &format!("{}|{}", raw_sha, out_sha), false);
+    let Some(ref staged) = prepared.staged_js else {
+        return Ok(false);
+    };
+
+    if let Some(parent) = staged.out_path.parent() {
+        fs::create_dir_all(parent).map_err(|e| format!("创建 synonyms.js 目录失败: {}", e))?;
+    }
+    write_atomic(&staged.out_path, &staged.minified_js, false)?;
+
+    if let Some(p) = cfg.synonyms_sha_file.parent() {
+        let _ = fs::create_dir_all(p);
+    }
+    let _ = write_atomic(
+        &cfg.synonyms_sha_file,
+        &format!("{}|{}", staged.raw_sha, staged.out_sha),
+        false,
+    );
 
     log_info(
         logs,
         format!(
             "[Synonyms] 已生成 {} ({} bytes, 公开文档 {})",
-            out_path.display(),
-            minified_js.len(),
-            total_public_docs
+            staged.out_path.display(),
+            staged.minified_js.len(),
+            staged.total_public_docs
         ),
     );
     Ok(true)
 }
 
-pub fn run_standalone(cfg: &ServerConfig) -> Result<(), String> {
-    run_standalone_with_logger(cfg, None)
-}
-
-pub fn run_standalone_with_logger(
-    cfg: &ServerConfig,
-    logs: Option<&LogBus>,
-) -> Result<(), String> {
-    let mut lite_tree = Value::Object(serde_json::Map::new());
-    let mut id_to_title: HashMap<i64, String> = HashMap::new();
-    let mut id_to_anchor: HashMap<i64, String> = HashMap::new();
-
-    let lite_file = cfg.data_dir.join("lite_data.js");
-    if lite_file.is_file() {
-        if let Ok(raw) = fs::read_to_string(&lite_file) {
-            if let (Some(s), Some(e)) = (raw.find('{'), raw.rfind('}')) {
-                if let Ok(parsed) = serde_json::from_str::<Value>(&raw[s..=e]) {
-                    if let Some(html_branch) = parsed.get("html") {
-                        collect_html_meta_standalone(html_branch, &mut id_to_title, &mut id_to_anchor);
-                    }
-                    lite_tree = parsed;
-                }
-            }
-        }
-    }
-
-    let anchor_prefix_re = Regex::new(r"^\d{14}-\S+\s*").unwrap();
-    let mut public_docs: BTreeMap<i64, String> = BTreeMap::new();
-    if cfg.data_dir.is_dir() {
-        let mut fat_files: Vec<_> = fs::read_dir(&cfg.data_dir)
-            .map_err(|e| format!("读取 dataDir 失败: {}", e))?
-            .filter_map(|e| e.ok().map(|x| x.path()))
-            .filter(|p| {
-                p.file_name()
-                    .and_then(|s| s.to_str())
-                    .map(|n| n.starts_with("fat_data_") && n.ends_with(".json"))
-                    .unwrap_or(false)
-            })
-            .collect();
-        fat_files.sort();
-
-        for fp in fat_files {
-            if let Ok(raw) = fs::read_to_string(&fp) {
-                if let Ok(Value::Object(map)) = serde_json::from_str::<Value>(&raw) {
-                    for (k, v) in map {
-                        let val = v.as_str().unwrap_or("");
-                        if val.is_empty() || val == "localOnly" {
-                            continue;
-                        }
-                        if let Ok(doc_id) = k.parse::<i64>() {
-                            let cleaned = match id_to_anchor.get(&doc_id) {
-                                Some(anchor) if !anchor.is_empty() && val.starts_with(anchor) => {
-                                    val[anchor.len()..].trim().to_string()
-                                }
-                                _ => anchor_prefix_re.replace(val, "").into_owned(),
-                            };
-                            let combined = match id_to_title.get(&doc_id) {
-                                Some(t) if !t.is_empty() => format!("{} {}", t, cleaned),
-                                _ => cleaned,
-                            };
-                            public_docs.insert(doc_id, combined);
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    let updated = build_if_needed(cfg, &public_docs, &lite_tree, logs)?;
-    if !updated {
-        log_info(logs, "[Synonyms] 无变化，跳过重建。");
-    }
-    Ok(())
-}
-
-fn collect_html_meta_standalone(
-    node: &Value,
-    id_to_title: &mut HashMap<i64, String>,
-    id_to_anchor: &mut HashMap<i64, String>,
-) {
-    let Some(map) = node.as_object() else {
-        return;
-    };
-    if let Some(arr) = map.get("_f").and_then(|v| v.as_array()) {
-        for item in arr {
-            let Some(lst) = item.as_array() else {
-                continue;
-            };
-            if lst.len() < 2 {
-                continue;
-            }
-            let file_name = lst[0].as_str().unwrap_or("");
-            let info = lst.get(3).and_then(|v| v.as_str()).unwrap_or("");
-            if info.contains("localOnly") {
-                continue;
-            }
-            let doc_id = lst[1]
-                .as_i64()
-                .or_else(|| lst[1].as_str().and_then(|s| s.parse().ok()))
-                .unwrap_or(-1);
-            if doc_id < 0 {
-                continue;
-            }
-            let title = file_name.strip_suffix(".html").unwrap_or(file_name);
-            if !title.is_empty() {
-                id_to_title.insert(doc_id, title.to_string());
-            }
-            if !info.is_empty() {
-                id_to_anchor.insert(doc_id, info.to_string());
-            }
-        }
-    }
-    for (k, v) in map {
-        if k != "_f" {
-            collect_html_meta_standalone(v, id_to_title, id_to_anchor);
-        }
-    }
-}

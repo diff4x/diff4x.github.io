@@ -7,6 +7,7 @@ use axum::{
 };
 use percent_encoding::percent_decode_str;
 use serde_json::json;
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use subtle::ConstantTimeEq;
 
@@ -28,11 +29,13 @@ pub struct AppState {
     pub config: ServerConfig,
     pub token: String,
     pub allowed_origins: Vec<String>,
+    pub allowed_hosts: Vec<String>,
     pub verbose: bool,
     pub logs: Arc<LogBus>,
     pub runtime: Arc<RuntimeStatus>,
     pub html_change_tx: tokio::sync::broadcast::Sender<String>,
     pub shutdown_notify: Arc<tokio::sync::Notify>,
+    pub shutting_down: AtomicBool,
 }
 
 pub fn generate_token_hex() -> Result<String, String> {
@@ -59,6 +62,56 @@ pub fn build_allowed_origins(port: u16) -> Vec<String> {
             format!("http://127.0.0.1:{}", port),
         ]
     }
+}
+
+pub fn build_allowed_hosts(port: u16) -> Vec<String> {
+    if port == 80 {
+        vec![
+            "localhost".to_string(),
+            "127.0.0.1".to_string(),
+            "localhost:80".to_string(),
+            "127.0.0.1:80".to_string(),
+        ]
+    } else {
+        vec![
+            format!("localhost:{}", port),
+            format!("127.0.0.1:{}", port),
+        ]
+    }
+}
+
+pub fn validate_host_header(raw_host: &str, allowed_hosts: &[String]) -> bool {
+    let h = raw_host.trim().to_ascii_lowercase();
+    !h.is_empty() && allowed_hosts.iter().any(|a| a == &h)
+}
+
+pub fn is_windows_reserved_device_name(seg: &str) -> bool {
+    let stem = seg.split('.').next().unwrap_or(seg).to_ascii_uppercase();
+    matches!(
+        stem.as_str(),
+        "CON"
+            | "PRN"
+            | "AUX"
+            | "NUL"
+            | "COM1"
+            | "COM2"
+            | "COM3"
+            | "COM4"
+            | "COM5"
+            | "COM6"
+            | "COM7"
+            | "COM8"
+            | "COM9"
+            | "LPT1"
+            | "LPT2"
+            | "LPT3"
+            | "LPT4"
+            | "LPT5"
+            | "LPT6"
+            | "LPT7"
+            | "LPT8"
+            | "LPT9"
+    )
 }
 
 pub fn is_short_name_segment(seg: &str) -> bool {
@@ -119,8 +172,8 @@ pub fn validate_static_request_path(raw_path: &str, mode: RunMode) -> Option<Vec
         if seg.ends_with('.') || seg.ends_with(' ') {
             return None;
         }
-        // 堵住 Windows 8.3 短文件名绕过 (_BUILD~1 / PROTOC~1.KEY)
-        if is_short_name_segment(seg) {
+        // 堵住 Windows 8.3 短文件名与保留设备名绕过 (_BUILD~1 / CON / NUL)
+        if is_short_name_segment(seg) || is_windows_reserved_device_name(seg) {
             return None;
         }
         if seg.contains(':') {
@@ -141,6 +194,9 @@ pub fn validate_static_request_path(raw_path: &str, mode: RunMode) -> Option<Vec
                 return None;
             }
             if lower_joined.starts_with("src/js/data/shadow") {
+                return None;
+            }
+            if lower_joined.starts_with("html/__") && lower_joined.ends_with(".html") {
                 return None;
             }
         }
@@ -207,7 +263,7 @@ pub fn validate_rel_md_path(raw: &str) -> Option<Vec<String>> {
         if seg.starts_with('.') || seg.ends_with('.') || seg.ends_with(' ') {
             return None;
         }
-        if is_short_name_segment(seg) {
+        if is_short_name_segment(seg) || is_windows_reserved_device_name(seg) {
             return None;
         }
         const FORBIDDEN: &[char] = &['\\', ':', '*', '?', '"', '<', '>', '|'];
@@ -283,6 +339,74 @@ pub async fn security_headers_middleware(req: Request, next: Next) -> Response {
     res
 }
 
+/// 全路由 Host 白名单中间件：防止 DNS Rebinding 绕过本地监听读取静态私密资源
+pub async fn host_guard_middleware(
+    State(state): State<Arc<AppState>>,
+    req: Request,
+    next: Next,
+) -> Response {
+    let host_hdr = req
+        .headers()
+        .get(header::HOST)
+        .and_then(|v| v.to_str().ok())
+        .or_else(|| req.uri().authority().map(|a| a.as_str()));
+
+    let ok = host_hdr
+        .map(|h| validate_host_header(h, &state.allowed_hosts))
+        .unwrap_or(false);
+    if !ok {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({ "ok": false, "error": "禁止非本机白名单 Host 访问" })),
+        )
+            .into_response();
+    }
+    next.run(req).await
+}
+
+pub fn verify_api_auth(
+    origin: Option<&str>,
+    sec_fetch_site: Option<&str>,
+    token: Option<&str>,
+    is_safe_method: bool,
+    allowed_origins: &[String],
+    expected_token: &str,
+) -> Result<(), (StatusCode, &'static str)> {
+    match origin.map(|s| s.trim().to_ascii_lowercase()) {
+        Some(o) if allowed_origins.contains(&o) => {}
+        Some(_) => {
+            return Err((StatusCode::FORBIDDEN, "禁止跨源或未授权 Origin 访问本地 API"));
+        }
+        None if !is_safe_method => {
+            return Err((StatusCode::FORBIDDEN, "写接口缺少合法 Origin 头"));
+        }
+        None => {}
+    }
+
+    if let Some(sfs) = sec_fetch_site {
+        if !sfs.eq_ignore_ascii_case("same-origin") {
+            return Err((StatusCode::FORBIDDEN, "拒绝非同源 Fetch 请求"));
+        }
+    }
+
+    let provided = match token {
+        Some(t) => t.trim(),
+        None => {
+            return Err((StatusCode::UNAUTHORIZED, "缺少 X-Swamp-Token 会话令牌"));
+        }
+    };
+
+    let eq: bool = provided.as_bytes().ct_eq(expected_token.as_bytes()).into();
+    if !eq {
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            "会话令牌无效或服务已重启，请通过 Swamp 管理窗口点击 Open Site 重新打开",
+        ));
+    }
+
+    Ok(())
+}
+
 /// `/__api/*` 四重鉴权中间件：Origin 白名单 + Sec-Fetch-Site + 常量时间 Token 比对
 pub async fn api_auth_middleware(
     State(state): State<Arc<AppState>>,
@@ -290,59 +414,20 @@ pub async fn api_auth_middleware(
     next: Next,
 ) -> Response {
     let headers = req.headers();
-
     let is_safe_method = *req.method() == Method::GET || *req.method() == Method::HEAD;
-    match headers
-        .get(header::ORIGIN)
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.trim().to_ascii_lowercase())
-    {
-        Some(o) if state.allowed_origins.contains(&o) => {}
-        Some(_) => {
-            return (
-                StatusCode::FORBIDDEN,
-                Json(json!({ "ok": false, "error": "禁止跨源或未授权 Origin 访问本地 API" })),
-            )
-                .into_response();
-        }
-        None if !is_safe_method => {
-            return (
-                StatusCode::FORBIDDEN,
-                Json(json!({ "ok": false, "error": "写接口缺少合法 Origin 头" })),
-            )
-                .into_response();
-        }
-        None => {}
-    }
+    let origin = headers.get(header::ORIGIN).and_then(|v| v.to_str().ok());
+    let sfs = headers.get("sec-fetch-site").and_then(|v| v.to_str().ok());
+    let token = headers.get("x-swamp-token").and_then(|v| v.to_str().ok());
 
-    if let Some(sfs) = headers.get("sec-fetch-site").and_then(|v| v.to_str().ok()) {
-        if !sfs.eq_ignore_ascii_case("same-origin") {
-            return (
-                StatusCode::FORBIDDEN,
-                Json(json!({ "ok": false, "error": "拒绝非同源 Fetch 请求" })),
-            )
-                .into_response();
-        }
-    }
-
-    let provided = match headers.get("x-swamp-token").and_then(|v| v.to_str().ok()) {
-        Some(t) => t.trim(),
-        None => {
-            return (
-                StatusCode::UNAUTHORIZED,
-                Json(json!({ "ok": false, "error": "缺少 X-Swamp-Token 会话令牌" })),
-            )
-                .into_response();
-        }
-    };
-
-    let eq: bool = provided.as_bytes().ct_eq(state.token.as_bytes()).into();
-    if !eq {
-        return (
-            StatusCode::UNAUTHORIZED,
-            Json(json!({ "ok": false, "error": "会话令牌无效或服务已重启，请通过 Swamp 管理窗口点击 Open Site 重新打开" })),
-        )
-            .into_response();
+    if let Err((status, msg)) = verify_api_auth(
+        origin,
+        sfs,
+        token,
+        is_safe_method,
+        &state.allowed_origins,
+        &state.token,
+    ) {
+        return (status, Json(json!({ "ok": false, "error": msg }))).into_response();
     }
 
     next.run(req).await
@@ -543,6 +628,102 @@ const d = obj.return / 2;"#;
             .as_ref()
             .map(|h| !h.contains("https://old.example"))
             .unwrap_or(false),
+    );
+
+    // P0/P1/P2 新增回归自检：Host 白名单、Sim 私有页、保留设备名、ASI/CSS/HTML 抽取、补丁分级与 API 鉴权
+    let hosts_8000 = build_allowed_hosts(8000);
+    check("host-guard-allow-localhost", validate_host_header("localhost:8000", &hosts_8000));
+    check("host-guard-block-rebinding", !validate_host_header("evil.example:8000", &hosts_8000));
+    check("sim-block-private-html", validate_static_request_path("/html/__secret.html", RunMode::Sim).is_none());
+    check("serve-block-reserved-device", validate_static_request_path("/src/CON.txt", RunMode::Serve).is_none());
+    check("md-reject-reserved-device", validate_rel_md_path("NUL.md").is_none());
+
+    let js_rbrace_while = "const f = () => {}\nwhile (ok) { f(); }";
+    let js_rw_min = crate::builder::minify::minify_js(js_rbrace_while);
+    check(
+        "minify-js-rbrace-while-asi",
+        js_rw_min
+            .as_ref()
+            .map(|m| m.contains("}\nwhile(") && !m.contains("}while("))
+            .unwrap_or(false),
+    );
+    let js_for_await = "async function g(xs){ for await (const x of xs) /ab/.test(x); }";
+    let js_fa_min = crate::builder::minify::minify_js(js_for_await);
+    check(
+        "minify-js-for-await-regex",
+        js_fa_min
+            .as_ref()
+            .map(|m| m.contains("for await(const x of xs)/ab/.test(x)"))
+            .unwrap_or(false),
+    );
+    let js_priv_div = "class A { #return = 4; f() { return this.#return / 2; } }";
+    let js_pd_min = crate::builder::minify::minify_js(js_priv_div);
+    check(
+        "minify-js-private-field-div",
+        js_pd_min
+            .as_ref()
+            .map(|m| m.contains("this.#return/2"))
+            .unwrap_or(false),
+    );
+    let css_custom_empty = ":root { --empty: ; }";
+    let css_ce_min = crate::builder::minify::minify_css(css_custom_empty);
+    check("minify-css-empty-custom-prop", css_ce_min.contains("--empty: ;"));
+
+    let html_lt_nl = "<body><pre>if (a < b && c > 0)\nline2</pre></body>";
+    let body_lt_nl = crate::builder::html_utils::extract_body_text(html_lt_nl, true);
+    check(
+        "html-body-preserve-lt-and-newlines",
+        body_lt_nl == "if (a < b && c > 0)\nline2",
+    );
+
+    check(
+        "pack-classify-build-exec",
+        crate::services::pack_apply::is_build_or_exec_rel("_build/swamp-server/build.bat")
+            && crate::services::pack_apply::is_build_or_exec_rel("_build/swamp.toml")
+            && crate::services::pack_apply::is_build_or_exec_rel(".gitignore")
+            && !crate::services::pack_apply::is_build_or_exec_rel("src/js/raw/index.js"),
+    );
+    check(
+        "pack-block-privy",
+        crate::services::pack_apply::is_hard_private_rel("_build/privy/local.toml"),
+    );
+
+    let origs = build_allowed_origins(8000);
+    check(
+        "api-auth-allow-valid",
+        verify_api_auth(
+            Some("http://localhost:8000"),
+            Some("same-origin"),
+            Some("deadbeef"),
+            false,
+            &origs,
+            "deadbeef",
+        )
+        .is_ok(),
+    );
+    check(
+        "api-auth-reject-bad-origin",
+        verify_api_auth(
+            Some("https://evil.example"),
+            Some("same-origin"),
+            Some("deadbeef"),
+            false,
+            &origs,
+            "deadbeef",
+        )
+        .is_err(),
+    );
+    check(
+        "api-auth-reject-bad-token",
+        verify_api_auth(
+            Some("http://localhost:8000"),
+            Some("same-origin"),
+            Some("wrong"),
+            false,
+            &origs,
+            "deadbeef",
+        )
+        .is_err(),
     );
 
     if fails > 0 {

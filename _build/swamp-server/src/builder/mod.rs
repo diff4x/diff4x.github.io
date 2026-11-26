@@ -4,7 +4,7 @@ pub mod minify;
 pub mod synonyms;
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Mutex, TryLockError};
+use std::sync::{Mutex, MutexGuard, TryLockError};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use crate::config::ServerConfig;
@@ -31,6 +31,15 @@ pub fn is_gen_active_or_recent(cooldown_ms: u64) -> bool {
     }
     let last = LAST_GEN_FINISHED_MS.load(Ordering::SeqCst);
     last > 0 && now_epoch_ms().saturating_sub(last) < cooldown_ms
+}
+
+/// 供 File Watcher 热压缩与独立任务使用：非阻塞获取构建互斥锁，避免与 gen 竞态覆写产物
+pub fn try_acquire_build_lock() -> Option<MutexGuard<'static, ()>> {
+    match GEN_LOCK.try_lock() {
+        Ok(g) => Some(g),
+        Err(TryLockError::Poisoned(p)) => Some(p.into_inner()),
+        Err(TryLockError::WouldBlock) => None,
+    }
 }
 
 struct GenProgressGuard;
@@ -62,11 +71,20 @@ pub(crate) fn log_warn(logs: Option<&LogBus>, msg: impl Into<String>) {
 
 /// 全量构建管线：`swamp gen`
 pub fn run_gen(cfg: &ServerConfig) -> Result<(), String> {
-    run_gen_with_logger(cfg, None)
+    run_gen_with_options(cfg, None, false)
 }
 
 /// 带日志总线的单飞全量构建管线（GUI / HTTP API 调用，防并发覆盖与 Watcher 竞态）
 pub fn run_gen_with_logger(cfg: &ServerConfig, logs: Option<&LogBus>) -> Result<(), String> {
+    run_gen_with_options(cfg, logs, false)
+}
+
+/// 支持强制重建同义词的单飞全量构建管线（避免先单独扫描再 gen 的双重全库扫描）
+pub fn run_gen_with_options(
+    cfg: &ServerConfig,
+    logs: Option<&LogBus>,
+    force_synonyms: bool,
+) -> Result<(), String> {
     let _lock = match GEN_LOCK.try_lock() {
         Ok(g) => g,
         Err(TryLockError::Poisoned(p)) => p.into_inner(),
@@ -83,7 +101,7 @@ pub fn run_gen_with_logger(cfg: &ServerConfig, logs: Option<&LogBus>) -> Result<
     let mut ledger = minify::IncrementalLedger::load(cfg);
 
     minify::build_phase1_assets(cfg, &mut ledger, logs)?;
-    let _new_ver = generator::run(cfg, logs)?;
+    let _new_ver = generator::run_with_options(cfg, logs, force_synonyms)?;
     minify::build_phase3_tail(cfg, &mut ledger, logs)?;
 
     ledger.save()?;

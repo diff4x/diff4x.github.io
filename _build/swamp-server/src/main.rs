@@ -24,6 +24,7 @@ use std::io::{self, Write};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc as std_mpsc, Arc, OnceLock};
 use std::time::{Duration, Instant};
 use tokio::net::TcpListener;
@@ -37,8 +38,8 @@ use crate::gui::{run_management_window, WM_APP_LOG, WM_APP_VPN};
 use crate::media::keep2html::{run_keep2html, KeepOptions};
 use crate::media::webp::{run_webp_batch, WebpOptions};
 use crate::security::{
-    api_auth_middleware, build_allowed_origins, generate_token_hex, run_selftest,
-    security_headers_middleware, AppState, RunMode,
+    api_auth_middleware, build_allowed_hosts, build_allowed_origins, generate_token_hex,
+    host_guard_middleware, run_selftest, security_headers_middleware, AppState, RunMode,
 };
 use crate::services::log_bus::LogBus;
 use crate::services::tasks::{spawn_background_monitors, RuntimeStatus};
@@ -349,26 +350,38 @@ async fn oauth_callback(
     State(state): State<Arc<AppState>>,
     Query(q): Query<OAuthCallbackQuery>,
 ) -> Response {
-    let pending = state
-        .runtime
-        .oauth_pending
-        .lock()
-        .ok()
-        .and_then(|mut g| g.take());
+    // 严格先校验 state 再取走 pending 会话，防止第三方伪造请求提前中止正在进行的授权并触发冷却
+    let q_state = q.state.unwrap_or_default();
+    let pending = {
+        let Ok(mut guard) = state.runtime.oauth_pending.lock() else {
+            return oauth_html_response("<h3>授权状态锁异常，请重试。</h3>".to_string());
+        };
+        let Some(ref current) = *guard else {
+            return oauth_html_response("<h3>当前无待处理的授权会话，可关闭此标签页。</h3>".to_string());
+        };
+        if q_state.is_empty() || q_state != current.state {
+            return (
+                StatusCode::FORBIDDEN,
+                oauth_html_response("<h3>安全校验失败（state 不匹配），已忽略本次请求。</h3>".to_string()),
+            )
+                .into_response();
+        }
+        guard.take()
+    };
 
     let Some(p) = pending else {
         return oauth_html_response("<h3>当前无待处理的授权会话，可关闭此标签页。</h3>".to_string());
     };
 
     if let Some(err) = q.error {
-        let _ = p.tx.send(Err(err.clone()));
-        let safe_err = crate::builder::html_utils::escape_html(&err);
+        let clean_err: String = err
+            .chars()
+            .map(|c| if matches!(c, '\r' | '\n') { ' ' } else { c })
+            .take(200)
+            .collect();
+        let _ = p.tx.send(Err(clean_err.clone()));
+        let safe_err = crate::builder::html_utils::escape_html(&clean_err);
         return oauth_html_response(format!("<h3>授权未完成：{}</h3>", safe_err));
-    }
-
-    if q.state.unwrap_or_default() != p.state {
-        let _ = p.tx.send(Err("OAuth state 校验不匹配".to_string()));
-        return oauth_html_response("<h3>安全校验失败（state 不匹配），已中止授权。</h3>".to_string());
     }
 
     match q.code {
@@ -500,7 +513,13 @@ async fn api_auth_refresh(
             .into_response();
     }
 
-    let mut gate = auth_refresh_gate().lock().await;
+    let Ok(mut gate) = auth_refresh_gate().try_lock() else {
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(json!({ "ok": false, "error": "已有桌面续签确认弹窗等待处理，请先完成当前确认" })),
+        )
+            .into_response();
+    };
     if let Some(approved_at) = gate.last_approved_at {
         if approved_at.elapsed() < Duration::from_secs(3) {
             return Json(json!({ "ok": true, "token": state.token })).into_response();
@@ -616,11 +635,19 @@ fn build_router(mode: RunMode, state: Arc<AppState>) -> Router {
                 .nest("/__api", api_router)
                 .fallback(static_fs::handle_static)
                 .layer(middleware::from_fn(security_headers_middleware))
+                .layer(middleware::from_fn_with_state(
+                    state.clone(),
+                    host_guard_middleware,
+                ))
                 .with_state(state)
         }
         RunMode::Sim => Router::new()
             .fallback(static_fs::handle_static)
             .layer(middleware::from_fn(security_headers_middleware))
+            .layer(middleware::from_fn_with_state(
+                state.clone(),
+                host_guard_middleware,
+            ))
             .with_state(state),
     }
 }
@@ -715,13 +742,8 @@ fn main() {
             return;
         }
         SubCommand::Synonyms => {
-            if let Err(e) = builder::synonyms::run_standalone(&cfg) {
-                eprintln!("[swamp synonyms] 失败: {}", e);
-                std::process::exit(1);
-            }
-            println!("[swamp synonyms] 自动执行全量构建 (gen)...");
-            if let Err(e) = builder::run_gen(&cfg) {
-                eprintln!("[swamp synonyms] 自动 gen 失败: {}", e);
+            if let Err(e) = builder::run_gen_with_options(&cfg, None, true) {
+                eprintln!("[swamp synonyms] 强制重建同义词与全量构建失败: {}", e);
                 std::process::exit(1);
             }
             return;
@@ -896,17 +918,20 @@ fn run_server_mode(cfg: ServerConfig, mode: RunMode, open_browser: bool) {
     let port = cfg.port;
     let verbose = cfg.log_level == "info" || cfg.log_level == "debug";
     let allowed_origins = build_allowed_origins(port);
+    let allowed_hosts = build_allowed_hosts(port);
 
     let state = Arc::new(AppState {
         mode,
         config: cfg.clone(),
         token: token.clone(),
         allowed_origins,
+        allowed_hosts,
         verbose,
         logs: logs.clone(),
         runtime: runtime.clone(),
         html_change_tx: html_change_tx.clone(),
         shutdown_notify: shutdown_notify.clone(),
+        shutting_down: AtomicBool::new(false),
     });
 
     let rt = tokio::runtime::Builder::new_multi_thread()
@@ -961,12 +986,18 @@ fn run_server_mode(cfg: ServerConfig, mode: RunMode, open_browser: bool) {
                 spawn_background_monitors(cfg_bg.clone(), runtime_bg, logs_bg.clone());
             }
 
+            let state_for_shutdown = state_bg.clone();
             let app = build_router(mode, state_bg);
 
             let shutdown_fut = async move {
                 tokio::select! {
-                    _ = tokio::signal::ctrl_c() => {}
-                    _ = shutdown_bg.notified() => {}
+                    _ = tokio::signal::ctrl_c() => {
+                        state_for_shutdown.shutting_down.store(true, Ordering::SeqCst);
+                        shutdown_bg.notify_waiters();
+                    }
+                    _ = shutdown_bg.notified() => {
+                        state_for_shutdown.shutting_down.store(true, Ordering::SeqCst);
+                    }
                 }
             };
 

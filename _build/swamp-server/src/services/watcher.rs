@@ -134,6 +134,9 @@ pub fn spawn_asset_watcher(
                         let batch: Vec<PathBuf> = pending.drain().collect();
                         last_event_at = None;
                         for path in batch {
+                            let Some(_build_lock) = crate::builder::try_acquire_build_lock() else {
+                                break;
+                            };
                             if crate::builder::is_gen_in_progress() {
                                 break;
                             }

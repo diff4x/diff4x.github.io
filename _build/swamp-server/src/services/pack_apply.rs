@@ -87,6 +87,7 @@ pub struct ApplyEntryInfo {
     pub exists: bool,
     pub blocked: bool,
     pub is_secret: bool,
+    pub is_dangerous: bool,
     pub is_skip_doc: bool,
     pub default_checked: bool,
     pub status: String,
@@ -159,6 +160,35 @@ pub fn is_hard_private_rel(rel: &str) -> bool {
         return true;
     }
     false
+}
+
+/// 判定补丁条目是否属于构建期/配置期会被执行或影响隐私防线的高危文件
+pub fn is_build_or_exec_rel(rel: &str) -> bool {
+    let low = rel.replace('\\', "/").to_ascii_lowercase();
+    if low == ".gitignore"
+        || low == "_build/swamp.toml"
+        || low.starts_with(".github/")
+        || low.starts_with(".cargo/")
+        || low.starts_with("_build/swamp-server/.cargo/")
+        || low == "cargo.toml"
+        || low.ends_with("/cargo.toml")
+        || low == "cargo.lock"
+        || low.ends_with("/cargo.lock")
+        || low == "build.rs"
+        || low.ends_with("/build.rs")
+        || low == "build.bat"
+        || low.ends_with("/build.bat")
+    {
+        return true;
+    }
+    let ext = Path::new(&low)
+        .extension()
+        .and_then(|s| s.to_str())
+        .unwrap_or("");
+    matches!(
+        ext,
+        "bat" | "cmd" | "ps1" | "exe" | "dll" | "msi" | "vbs" | "scr"
+    )
 }
 
 fn is_default_excluded_pack_file(rel: &str) -> bool {
@@ -745,6 +775,7 @@ pub fn inspect_apply_zip(cfg: &ServerConfig, zip_bytes: &[u8]) -> Result<Vec<App
                 exists: false,
                 blocked: true,
                 is_secret: false,
+                is_dangerous: false,
                 is_skip_doc: false,
                 default_checked: false,
                 status: "blocked".to_string(),
@@ -752,14 +783,15 @@ pub fn inspect_apply_zip(cfg: &ServerConfig, zip_bytes: &[u8]) -> Result<Vec<App
             continue;
         };
 
-        let low = rel.to_ascii_lowercase();
-        if low == ".git" || low.starts_with(".git/") || entry.size() > MAX_APPLY_ENTRY_BYTES {
+        let is_hard_priv = is_hard_private_rel(&rel);
+        if is_hard_priv || entry.size() > MAX_APPLY_ENTRY_BYTES {
             entries.push(ApplyEntryInfo {
                 rel,
                 size: entry.size(),
                 exists: false,
                 blocked: true,
-                is_secret: low == ".git" || low.starts_with(".git/"),
+                is_secret: is_hard_priv,
+                is_dangerous: false,
                 is_skip_doc: false,
                 default_checked: false,
                 status: "blocked".to_string(),
@@ -768,12 +800,12 @@ pub fn inspect_apply_zip(cfg: &ServerConfig, zip_bytes: &[u8]) -> Result<Vec<App
         }
 
         let exists = full.is_file();
-        let is_secret = low.starts_with("_build/privy/") || low.starts_with("_build/secrets/");
+        let is_dangerous = is_build_or_exec_rel(&rel);
         let is_skip_doc = !rel.contains('/')
             && skip_re.as_ref().map(|r| r.is_match(&rel)).unwrap_or(false);
-        let default_checked = !is_secret && !is_skip_doc;
-        let status = if is_secret {
-            "secret"
+        let default_checked = !is_dangerous && !is_skip_doc;
+        let status = if is_dangerous {
+            "exec_risk"
         } else if is_skip_doc {
             "skip_doc"
         } else if exists {
@@ -787,7 +819,8 @@ pub fn inspect_apply_zip(cfg: &ServerConfig, zip_bytes: &[u8]) -> Result<Vec<App
             size: entry.size(),
             exists,
             blocked: false,
-            is_secret,
+            is_secret: false,
+            is_dangerous,
             is_skip_doc,
             default_checked,
             status: status.to_string(),
@@ -836,6 +869,49 @@ fn write_bytes_with_encoding_guard(
     write_bytes_atomic(target_full, final_bytes)
 }
 
+struct ManifestGuard {
+    backup_dir: Option<PathBuf>,
+    source_zip: String,
+    overwritten: Vec<String>,
+    created: Vec<String>,
+    written: bool,
+}
+
+impl ManifestGuard {
+    fn flush(&mut self) -> Result<(), String> {
+        if self.written {
+            return Ok(());
+        }
+        let Some(ref bdir) = self.backup_dir else {
+            self.written = true;
+            return Ok(());
+        };
+        if self.overwritten.is_empty() && self.created.is_empty() {
+            self.written = true;
+            return Ok(());
+        }
+        let manifest = ApplyManifest {
+            applied_at: Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
+            source_zip: self.source_zip.clone(),
+            overwritten: self.overwritten.clone(),
+            created: self.created.clone(),
+        };
+        let mf_json = serde_json::to_string_pretty(&manifest)
+            .map_err(|e| format!("序列化回滚清单失败: {}", e))?;
+        write_atomic(&bdir.join("_manifest.json"), &mf_json, false)?;
+        self.written = true;
+        Ok(())
+    }
+}
+
+impl Drop for ManifestGuard {
+    fn drop(&mut self) {
+        if !self.written {
+            let _ = self.flush();
+        }
+    }
+}
+
 pub fn execute_apply_zip(
     cfg: &ServerConfig,
     source_name: &str,
@@ -855,23 +931,11 @@ pub fn execute_apply_zip(
     let mut archive =
         ZipArchive::new(Cursor::new(zip_bytes)).map_err(|e| format!("解析 ZIP 失败: {}", e))?;
 
-    let mut backup_name = String::new();
-    let mut backup_dir: Option<PathBuf> = None;
-    if auto_backup {
-        let stamp = Local::now().format("%Y%m%d_%H%M%S").to_string();
-        backup_name = format!("ai_apply_{}", stamp);
-        let dir = cfg.backup_dir.join(&backup_name);
-        fs::create_dir_all(&dir).map_err(|e| format!("创建回滚备份目录失败: {}", e))?;
-        backup_dir = Some(dir);
-    }
-
-    let mut overwritten_list = Vec::new();
-    let mut created_list = Vec::new();
+    // 第一遍：先全量解压校验（私密禁区 / 单文件上限 / 总解压上限），全部通过前绝不改动磁盘
+    let mut staged_items: Vec<(String, PathBuf, Vec<u8>)> = Vec::new();
     let mut seen_lower: HashSet<String> = HashSet::new();
     let mut total_extracted: u64 = 0;
 
-    // 按条目映射提取选中项（带大小写去重与 Zip Bomb 解压上限防护）
-    let mut buf = Vec::new();
     for i in 0..archive.len() {
         let entry = archive
             .by_index(i)
@@ -883,22 +947,25 @@ pub fn execute_apply_zip(
         let Some((rel, full)) = resolve_safe_target(&cfg.repo_root, &raw_name) else {
             continue;
         };
-        let low = rel.to_ascii_lowercase();
-        if low == ".git" || low.starts_with(".git/") || !selected.contains(&rel) {
+        if !selected.contains(&rel) {
             continue;
         }
+        if is_hard_private_rel(&rel) {
+            return Err(format!("安全策略禁止补丁写入私密或受保护路径: {}", rel));
+        }
+        let low = rel.to_ascii_lowercase();
         if !seen_lower.insert(low) {
             continue;
         }
 
-        buf.clear();
+        let mut buf = Vec::new();
         entry
             .take(MAX_APPLY_ENTRY_BYTES + 1)
             .read_to_end(&mut buf)
             .map_err(|e| format!("解压 {} 失败: {}", rel, e))?;
         if buf.len() as u64 > MAX_APPLY_ENTRY_BYTES {
             return Err(format!(
-                "条目 {} 解压后超过单文件安全上限 ({} MB)，已中止回填",
+                "条目 {} 解压后超过单文件安全上限 ({} MB)，已中止回填（未改动任何文件）",
                 rel,
                 MAX_APPLY_ENTRY_BYTES / (1024 * 1024)
             ));
@@ -906,14 +973,39 @@ pub fn execute_apply_zip(
         total_extracted = total_extracted.saturating_add(buf.len() as u64);
         if total_extracted > MAX_APPLY_TOTAL_BYTES {
             return Err(format!(
-                "本次回填累计解压体积超过安全上限 ({} MB)，已中止回填",
+                "本次回填累计解压体积超过安全上限 ({} MB)，已中止回填（未改动任何文件）",
                 MAX_APPLY_TOTAL_BYTES / (1024 * 1024)
             ));
         }
+        staged_items.push((rel, full, buf));
+    }
 
+    if staged_items.is_empty() {
+        return Err("补丁包中未匹配到任何可回填的有效条目".to_string());
+    }
+
+    let mut backup_name = String::new();
+    let mut backup_dir: Option<PathBuf> = None;
+    if auto_backup {
+        let stamp = Local::now().format("%Y%m%d_%H%M%S").to_string();
+        backup_name = format!("ai_apply_{}", stamp);
+        let dir = cfg.backup_dir.join(&backup_name);
+        fs::create_dir_all(&dir).map_err(|e| format!("创建回滚备份目录失败: {}", e))?;
+        backup_dir = Some(dir);
+    }
+
+    // 第二遍：受 ManifestGuard 保护逐个备份与原子落盘，即使中途出错也会自动写出 _manifest.json 保证可回滚
+    let mut guard = ManifestGuard {
+        backup_dir: backup_dir.clone(),
+        source_zip: source_name.to_string(),
+        overwritten: Vec::new(),
+        created: Vec::new(),
+        written: false,
+    };
+
+    for (rel, full, buf) in &staged_items {
         let exists = full.is_file();
         if exists {
-            overwritten_list.push(rel.clone());
             if let Some(ref bdir) = backup_dir {
                 let mut bak_path = bdir.clone();
                 for seg in rel.split('/') {
@@ -922,31 +1014,21 @@ pub fn execute_apply_zip(
                 if let Some(bp) = bak_path.parent() {
                     fs::create_dir_all(bp).map_err(|e| format!("创建备份父目录失败: {}", e))?;
                 }
-                fs::copy(&full, &bak_path).map_err(|e| format!("备份 {} 失败: {}", rel, e))?;
+                fs::copy(full, &bak_path).map_err(|e| format!("备份 {} 失败: {}", rel, e))?;
             }
+            write_bytes_with_encoding_guard(full, buf, fix_win_encoding)?;
+            guard.overwritten.push(rel.clone());
         } else {
-            created_list.push(rel.clone());
+            write_bytes_with_encoding_guard(full, buf, fix_win_encoding)?;
+            guard.created.push(rel.clone());
         }
-
-        write_bytes_with_encoding_guard(&full, &buf, fix_win_encoding)?;
     }
 
-    if let Some(ref bdir) = backup_dir {
-        let manifest = ApplyManifest {
-            applied_at: Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
-            source_zip: source_name.to_string(),
-            overwritten: overwritten_list.clone(),
-            created: created_list.clone(),
-        };
-        let mf_json = serde_json::to_string_pretty(&manifest)
-            .map_err(|e| format!("序列化回滚清单失败: {}", e))?;
-        fs::write(bdir.join("_manifest.json"), mf_json.as_bytes())
-            .map_err(|e| format!("写入 _manifest.json 失败: {}", e))?;
-    }
+    guard.flush()?;
 
     Ok(ApplyResult {
-        overwritten: overwritten_list.len(),
-        created: created_list.len(),
+        overwritten: guard.overwritten.len(),
+        created: guard.created.len(),
         backup_name,
     })
 }

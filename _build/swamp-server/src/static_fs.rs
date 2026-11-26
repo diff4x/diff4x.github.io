@@ -1,7 +1,7 @@
 use axum::{
     body::Body,
     extract::State,
-    http::{header, HeaderMap, HeaderValue, Method, StatusCode, Uri},
+    http::{header, HeaderMap, HeaderName, HeaderValue, Method, StatusCode, Uri},
     response::{IntoResponse, Response},
 };
 use std::path::Path;
@@ -41,6 +41,21 @@ pub async fn handle_static(
         return StatusCode::FORBIDDEN.into_response();
     }
 
+    // 规范化后在真实相对路径上二次复核静态路径守卫，防止符号链接 / Junction 绕过 _build 与 shadow 限制
+    let canon_rel_path = match canonical.strip_prefix(&state.config.repo_root) {
+        Ok(rel) => format!("/{}", rel.to_string_lossy().replace('\\', "/")),
+        Err(_) => return StatusCode::FORBIDDEN.into_response(),
+    };
+    if validate_static_request_path(&canon_rel_path, state.mode).is_none() {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+
+    let is_svg = canonical
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|s| s.eq_ignore_ascii_case("svg"))
+        .unwrap_or(false);
+
     let meta = match tokio::fs::metadata(&canonical).await {
         Ok(m) if m.is_file() => m,
         _ => return StatusCode::NOT_FOUND.into_response(),
@@ -58,7 +73,7 @@ pub async fn handle_static(
             match parsed {
                 Ok((start, end)) => {
                     let chunk_len = end - start + 1;
-                    let builder = Response::builder()
+                    let mut builder = Response::builder()
                         .status(StatusCode::PARTIAL_CONTENT)
                         .header(header::CONTENT_TYPE, mime)
                         .header(header::ACCEPT_RANGES, "bytes")
@@ -68,6 +83,12 @@ pub async fn handle_static(
                         )
                         .header(header::CONTENT_LENGTH, chunk_len.to_string())
                         .header(header::CACHE_CONTROL, cache_ctrl);
+                    if is_svg {
+                        builder = builder.header(
+                            HeaderName::from_static("content-security-policy"),
+                            "sandbox",
+                        );
+                    }
 
                     if method == Method::HEAD {
                         return builder.body(Body::empty()).unwrap_or_else(|_| {
@@ -98,12 +119,18 @@ pub async fn handle_static(
         }
     }
 
-    let builder = Response::builder()
+    let mut builder = Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, HeaderValue::from_static(mime))
         .header(header::ACCEPT_RANGES, "bytes")
         .header(header::CONTENT_LENGTH, file_len.to_string())
         .header(header::CACHE_CONTROL, cache_ctrl);
+    if is_svg {
+        builder = builder.header(
+            HeaderName::from_static("content-security-policy"),
+            "sandbox",
+        );
+    }
 
     if method == Method::HEAD {
         return builder

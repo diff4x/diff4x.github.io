@@ -2174,6 +2174,7 @@ unsafe fn rebuild_apply_tree(g: &mut GuiData) {
         let tag = match entry.status.as_str() {
             "overwrite" => "[覆盖] ",
             "new" => "[新增] ",
+            "exec_risk" => "[高危/构建] ",
             "skip_doc" => "[说明-跳过] ",
             "secret" => "[敏感] ",
             "blocked" => "[禁止] ",
@@ -2213,13 +2214,13 @@ unsafe fn update_apply_status_label(g: &GuiData) {
     }
     let mut ov = 0usize;
     let mut nw = 0usize;
-    let mut sec = 0usize;
+    let mut danger = 0usize;
     for e in &g.apply_entries {
         if e.blocked || !g.apply_checked.contains(&e.rel) {
             continue;
         }
-        if e.is_secret {
-            sec += 1;
+        if e.is_dangerous {
+            danger += 1;
         }
         if e.exists {
             ov += 1;
@@ -2235,8 +2236,8 @@ unsafe fn update_apply_status_label(g: &GuiData) {
         sel,
         ov,
         nw,
-        if sec > 0 {
-            format!("，含敏感 {}", sec)
+        if danger > 0 {
+            format!("，含高危构建 {}", danger)
         } else {
             String::new()
         }
@@ -2999,6 +3000,7 @@ unsafe fn begin_safe_close(
 
     g.handoff_build = handoff;
     g.mailbox.kill_sim_child();
+    g.state.shutting_down.store(true, Ordering::SeqCst);
     g.shutdown_notify.notify_waiters();
     DestroyWindow(hwnd);
     true
@@ -3105,7 +3107,22 @@ unsafe fn handle_command(g: &mut GuiData, hwnd: HWND, id: u16, code: u16) {
                     st.logs.info("[push] 开始执行 Git 提交与推送...");
                 }
 
+                if !run_gen_first {
+                    st.logs.info("[push] 执行推送前公私隔离复核...");
+                    if let Err(e) =
+                        crate::builder::generator::verify_public_outputs_clean(&st.config, Some(&st.logs))
+                    {
+                        st.logs.error(format!("[push] {}", e));
+                        return;
+                    }
+                }
+
                 let root = strip_verbatim_prefix(&st.config.repo_root);
+                if !st.config.gitignore_file.is_file() {
+                    st.logs.error("[git] 仓库根目录缺少 .gitignore，为防隐私泄露已拒绝推送！");
+                    return;
+                }
+
                 let add_res = Command::new("git")
                     .args(["add", "-A"])
                     .current_dir(&root)
@@ -3122,6 +3139,54 @@ unsafe fn handle_command(g: &mut GuiData, hwnd: HWND, id: u16, code: u16) {
                     }
                     Err(e) => {
                         st.logs.error(format!("[git] 启动 git add 失败: {}", e));
+                        return;
+                    }
+                }
+
+                // 隐私防线：检查暂存区是否包含任何私密/敏感路径，命中立即撤回暂存并中止推送
+                let staged_out = Command::new("git")
+                    .args(["-c", "core.quotepath=false", "diff", "--cached", "--name-only", "-z"])
+                    .current_dir(&root)
+                    .creation_flags(CREATE_NO_WINDOW)
+                    .output();
+                match staged_out {
+                    Ok(o) if o.status.success() => {
+                        let staged_str = String::from_utf8_lossy(&o.stdout);
+                        let violations: Vec<String> = staged_str
+                            .split('\0')
+                            .filter(|s| !s.is_empty())
+                            .map(|s| s.replace('\\', "/"))
+                            .filter(|p| {
+                                let low = p.to_ascii_lowercase();
+                                pack_apply::is_hard_private_rel(p)
+                                    || low.starts_with("html/__")
+                                    || low.starts_with("src/js/data/shadow")
+                                    || low.starts_with("_build/privy/")
+                                    || low.starts_with("_build/temp/")
+                            })
+                            .collect();
+                        if !violations.is_empty() {
+                            let _ = Command::new("git")
+                                .arg("reset")
+                                .current_dir(&root)
+                                .creation_flags(CREATE_NO_WINDOW)
+                                .status();
+                            st.logs.error(format!(
+                                "[git] 隐私防线拦截：暂存区包含私密/敏感文件，已撤回暂存并中止推送:\n  {}",
+                                violations.join("\n  ")
+                            ));
+                            return;
+                        }
+                    }
+                    Ok(o) => {
+                        st.logs.error(format!(
+                            "[git] 暂存区隐私检查失败，已中止推送: {}",
+                            String::from_utf8_lossy(&o.stderr).trim()
+                        ));
+                        return;
+                    }
+                    Err(e) => {
+                        st.logs.error(format!("[git] 启动暂存区隐私检查失败，已中止推送: {}", e));
                         return;
                     }
                 }
@@ -3199,8 +3264,15 @@ unsafe fn handle_command(g: &mut GuiData, hwnd: HWND, id: u16, code: u16) {
                 };
                 mailbox.kill_sim_child();
                 let sim_port = st.config.sim_port;
+                if sim_port == st.config.port {
+                    st.logs.error(format!(
+                        "[sim] 仿真端口 sim_port={} 与主服务端口冲突，请修改 _build/swamp.toml 后重试",
+                        sim_port
+                    ));
+                    return;
+                }
                 let kill_cmd = format!(
-                    "Get-NetTCPConnection -LocalAddress 127.0.0.1 -LocalPort {} -State Listen -ErrorAction SilentlyContinue | ForEach-Object {{ Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }}",
+                    "Get-NetTCPConnection -LocalAddress 127.0.0.1 -LocalPort {} -State Listen -ErrorAction SilentlyContinue | ForEach-Object {{ Get-Process -Id $_.OwningProcess -ErrorAction SilentlyContinue | Where-Object {{ $_.ProcessName -eq 'swamp' }} | Stop-Process -Force -ErrorAction SilentlyContinue }}",
                     sim_port
                 );
                 let _ = Command::new("powershell")
@@ -3498,7 +3570,36 @@ unsafe fn handle_command(g: &mut GuiData, hwnd: HWND, id: u16, code: u16) {
             let selected: Vec<String> = g.apply_checked.iter().cloned().collect();
             let auto_bak = is_checked(g.hwnd_chk_apply_bak);
             let fix_enc = is_checked(g.hwnd_chk_apply_enc);
-            let build_and_exit = is_checked(g.hwnd_chk_apply_build);
+            let mut build_and_exit = is_checked(g.hwnd_chk_apply_build);
+
+            let dangerous_selected: Vec<String> = g
+                .apply_entries
+                .iter()
+                .filter(|e| !e.blocked && e.is_dangerous && g.apply_checked.contains(&e.rel))
+                .map(|e| e.rel.clone())
+                .collect();
+
+            if !dangerous_selected.is_empty() {
+                let disabled_note = if build_and_exit {
+                    build_and_exit = false;
+                    "\n已自动禁用「回填后拉起 build.bat」，请先人工核对改动后再手动编译。"
+                } else {
+                    ""
+                };
+                let warn_msg = format!(
+                    "以下 {} 个选中文件属于高危构建/配置/隐私规则文件：\n\n  - {}{}\n\n确认您已信任此补丁来源并覆盖这些文件吗？",
+                    dangerous_selected.len(),
+                    dangerous_selected.join("\n  - "),
+                    disabled_note
+                );
+                let warn_w = to_wide(&warn_msg);
+                let warn_t = to_wide("高危构建文件二次确认");
+                if MessageBoxW(hwnd, warn_w.as_ptr(), warn_t.as_ptr(), MB_YESNO | MB_ICONWARNING)
+                    != IDYES
+                {
+                    return;
+                }
+            }
 
             let confirm_msg = if build_and_exit {
                 format!(
@@ -3822,22 +3923,14 @@ unsafe fn handle_command(g: &mut GuiData, hwnd: HWND, id: u16, code: u16) {
             let mailbox = g.mailbox.clone();
             std::thread::spawn(move || {
                 let _busy = st.runtime.begin_op();
-                st.logs.info("[synonyms] 第 1 步：重建 src/js/synonyms.js 与 OOV 新词报告...");
-                match crate::builder::synonyms::run_standalone_with_logger(&st.config, Some(&st.logs)) {
+                st.logs.info("[synonyms] 开始单遍强制重建 synonyms.js + OOV 报告并执行全量构建 (gen)...");
+                match crate::builder::run_gen_with_options(&st.config, Some(&st.logs), true) {
                     Ok(()) => {
-                        st.logs.info("[synonyms] 第 2 步：自动执行全量构建 (gen) 同步清单...");
-                        match crate::builder::run_gen_with_logger(&st.config, Some(&st.logs)) {
-                            Ok(()) => {
-                                st.logs.info("[synonyms] 同义词重建 + 自动 gen 全部完成！");
-                            }
-                            Err(e) => {
-                                st.logs.error(format!("[synonyms] synonyms.js 已重建，但自动 gen 失败: {}", e));
-                            }
-                        }
+                        st.logs.info("[synonyms] 同义词重建 + 全量构建全部完成！");
                         spawn_load_synonyms_data(st.config.clone(), mailbox.clone(), false);
                         spawn_load_backup_tree(st.config.clone(), mailbox);
                     }
-                    Err(e) => st.logs.error(format!("[synonyms] 重建失败: {}", e)),
+                    Err(e) => st.logs.error(format!("[synonyms] 重建与构建失败: {}", e)),
                 }
             });
         }

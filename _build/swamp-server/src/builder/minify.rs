@@ -111,7 +111,8 @@ fn is_safe_drop_nl_after_punct(p: &str) -> bool {
 
 fn is_safe_drop_nl_after_rbrace_before(kind: TokKind, val: &str) -> bool {
     match kind {
-        TokKind::Word => matches!(val, "else" | "catch" | "finally" | "while"),
+        // 不包含 "while"：防止 `const f = () => {}\nwhile (cond) {}` 去换行后产生 SyntaxError
+        TokKind::Word => matches!(val, "else" | "catch" | "finally"),
         TokKind::Punct => matches!(val, "," | ";" | ")" | "]" | "}"),
         _ => false,
     }
@@ -122,6 +123,7 @@ struct JsMinState {
     prev_kind: Option<TokKind>,
     prev_val: String,
     had_nl: bool,
+    after_for_await: bool,
 }
 
 impl JsMinState {
@@ -131,6 +133,7 @@ impl JsMinState {
             prev_kind: None,
             prev_val: String::new(),
             had_nl: false,
+            after_for_await: false,
         }
     }
 
@@ -158,7 +161,8 @@ impl JsMinState {
     }
 
     fn is_after_ctrl_keyword(&self) -> bool {
-        self.prev_kind == Some(TokKind::Word) && is_ctrl_keyword(&self.prev_val)
+        (self.prev_kind == Some(TokKind::Word) && is_ctrl_keyword(&self.prev_val))
+            || self.after_for_await
     }
 
     fn emit(&mut self, kind: TokKind, val: &str, raw_text: &str) {
@@ -189,6 +193,7 @@ impl JsMinState {
             {
                 let need_sp = (is_ident_part(last_ch) && is_ident_part(first_ch))
                     || (pk == TokKind::Word && kind == TokKind::Regex)
+                    || (pk == TokKind::Word && first_ch == '#')
                     || (last_ch == '+' && first_ch == '+')
                     || (last_ch == '-' && first_ch == '-')
                     || (last_ch == '!' && raw_text.starts_with("--") && self.out.ends_with("<!"))
@@ -200,11 +205,16 @@ impl JsMinState {
                 }
             }
         }
+        let next_for_await = self.prev_kind == Some(TokKind::Word)
+            && self.prev_val == "for"
+            && kind == TokKind::Word
+            && val == "await";
         self.out.push_str(raw_text);
         self.prev_kind = Some(kind);
         self.prev_val.clear();
         self.prev_val.push_str(val);
         self.had_nl = false;
+        self.after_for_await = next_for_await;
     }
 }
 
@@ -366,6 +376,17 @@ pub fn minify_js(src: &str) -> Result<String, String> {
             }
             let raw: String = chars[i..j].iter().collect();
             st.emit(TokKind::Regex, &raw, &raw);
+            i = j;
+            continue;
+        }
+
+        if ch == '#' && i + 1 < n && is_ident_start(chars[i + 1]) {
+            let mut j = i + 2;
+            while j < n && is_ident_part(chars[j]) {
+                j += 1;
+            }
+            let priv_ident: String = chars[i..j].iter().collect();
+            st.emit(TokKind::Prop, &priv_ident, &priv_ident);
             i = j;
             continue;
         }
@@ -604,6 +625,21 @@ pub fn minify_css(src: &str) -> String {
             continue;
         }
 
+        if ch == '\\' && i + 1 < n {
+            if pending_space {
+                if let Some(last) = out.chars().last() {
+                    if !matches!(last, '{' | '}' | ';' | ':' | ',' | '(') {
+                        out.push(' ');
+                    }
+                }
+                pending_space = false;
+            }
+            out.push(ch);
+            out.push(chars[i + 1]);
+            i += 2;
+            continue;
+        }
+
         if ch.is_whitespace() {
             pending_space = true;
             i += 1;
@@ -611,7 +647,10 @@ pub fn minify_css(src: &str) -> String {
         }
 
         if matches!(ch, '{' | '}' | ';' | ',') {
-            if ch == '}' && out.ends_with(';') {
+            if matches!(ch, ';' | '}') && pending_space && out.ends_with(':') {
+                // 保留 CSS 空自定义属性值（如 `--foo: ;` 或块尾 `--foo: }`）所需的单个空格
+                out.push(' ');
+            } else if ch == '}' && out.ends_with(';') && !out.ends_with(": ;") {
                 out.pop();
             }
             pending_space = false;

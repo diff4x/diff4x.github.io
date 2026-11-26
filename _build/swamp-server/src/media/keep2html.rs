@@ -111,8 +111,14 @@ fn ensure_unzipped(zip_path: &Path) -> Result<PathBuf, String> {
     }
 
     if dest_dir.exists() {
+        if !sig_file.is_file() {
+            return Err(format!(
+                "目标解压目录 {} 已存在且缺少 .swamp_unzip_sig 标记（可能非本工具创建），为防止误删已中止",
+                dest_dir.display()
+            ));
+        }
         fs::remove_dir_all(&dest_dir)
-            .map_err(|e| format!("清理旧的残缺/过期解压目录失败: {}", e))?;
+            .map_err(|e| format!("清理旧的过期解压目录失败: {}", e))?;
     }
 
     fs::create_dir_all(&dest_dir).map_err(|e| format!("创建解压目录失败: {}", e))?;
@@ -253,13 +259,46 @@ fn compress_attachment(
     Ok(webp_name)
 }
 
+fn escape_pre_body(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        match ch {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            other => out.push(other),
+        }
+    }
+    out
+}
+
+fn resolve_attachment_in_unzip(
+    canon_unzip_dir: &Path,
+    note_parent_dir: &Path,
+    raw_fp: &str,
+) -> Result<PathBuf, String> {
+    let trimmed = raw_fp.trim();
+    if trimmed.is_empty() || trimmed.contains("..") || Path::new(trimmed).is_absolute() {
+        return Err(format!("检测到非法 Keep 附件路径: {}", raw_fp));
+    }
+    let candidate = note_parent_dir.join(trimmed);
+    if !candidate.exists() {
+        return Ok(candidate);
+    }
+    let canon = fs::canonicalize(&candidate)
+        .map_err(|e| format!("规范化 Keep 附件路径失败 ({}): {}", raw_fp, e))?;
+    if !canon.starts_with(canon_unzip_dir) {
+        return Err(format!("Keep 附件路径越界解压目录，已拒绝读取: {}", raw_fp));
+    }
+    Ok(canon)
+}
+
 fn render_from_template(template: &str, title: &str, ts: &str, category: &str, body: &str) -> String {
     static PRE_RE: OnceLock<Regex> = OnceLock::new();
-    static CLOSE_PRE_RE: OnceLock<Regex> = OnceLock::new();
     let pre_re = PRE_RE.get_or_init(|| Regex::new(r"(?s)<pre>.*?</pre>").unwrap());
-    let close_pre_re = CLOSE_PRE_RE.get_or_init(|| Regex::new(r"(?i)</pre\s*>").unwrap());
 
-    let safe_body = close_pre_re.replace_all(body, "&lt;/pre&gt;");
+    // 默认转义 & / < / >，防止 Keep 笔记原文注入 HTML 或内联脚本，同时保留引号可读性
+    let safe_body = escape_pre_body(body);
     let step1 = template
         .replace("<title></title>", &format!("<title>{}</title>", escape_html(title)))
         .replace(
@@ -290,6 +329,7 @@ pub fn run_keep2html(cfg: &ServerConfig, opts: KeepOptions) -> Result<KeepSummar
 
     let latest_zip = find_latest_zip(&keep_folder)?;
     let unzip_dir = ensure_unzipped(&latest_zip)?;
+    let canon_unzip_dir = fs::canonicalize(&unzip_dir).unwrap_or_else(|_| unzip_dir.clone());
 
     let mut json_files: Vec<PathBuf> = WalkDir::new(&unzip_dir)
         .into_iter()
@@ -389,7 +429,7 @@ pub fn run_keep2html(cfg: &ServerConfig, opts: KeepOptions) -> Result<KeepSummar
 
                 let parent_dir = jf.parent().unwrap();
                 for (i, fp) in sorted.iter().enumerate() {
-                    let img_path = parent_dir.join(fp);
+                    let img_path = resolve_attachment_in_unzip(&canon_unzip_dir, parent_dir, fp)?;
                     let new_name = compress_attachment(
                         &img_path,
                         &target_img_dir,
@@ -473,7 +513,7 @@ pub fn run_keep2html(cfg: &ServerConfig, opts: KeepOptions) -> Result<KeepSummar
                 sorted.sort_by_key(|fp| parse_hex_prefix(fp));
                 let parent_dir = jf.parent().unwrap();
                 for (i, fp) in sorted.iter().enumerate() {
-                    let img_path = parent_dir.join(fp);
+                    let img_path = resolve_attachment_in_unzip(&canon_unzip_dir, parent_dir, fp)?;
                     let new_name = compress_attachment(
                         &img_path,
                         &cfg.webp_output_dir,

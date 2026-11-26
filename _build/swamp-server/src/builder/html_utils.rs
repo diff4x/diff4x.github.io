@@ -1,6 +1,7 @@
 use chrono::Local;
-use regex::Regex;
-use std::fs;
+use regex::{NoExpand, Regex};
+use std::fs::{self, OpenOptions};
+use std::io::Write;
 use std::path::PathBuf;
 use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -84,9 +85,40 @@ pub fn extract_anchor_text(html: &str) -> String {
         .unwrap_or_default()
 }
 
+fn is_block_tag_name(raw_tag: &str) -> bool {
+    let trimmed = raw_tag.trim_start_matches('/').trim_start();
+    let name_len = trimmed
+        .bytes()
+        .take_while(|b| b.is_ascii_alphanumeric())
+        .count();
+    let name = &trimmed[..name_len];
+    name.eq_ignore_ascii_case("br")
+        || name.eq_ignore_ascii_case("p")
+        || name.eq_ignore_ascii_case("div")
+        || name.eq_ignore_ascii_case("li")
+        || name.eq_ignore_ascii_case("tr")
+        || name.eq_ignore_ascii_case("pre")
+        || name.eq_ignore_ascii_case("blockquote")
+        || name.eq_ignore_ascii_case("hr")
+        || name.eq_ignore_ascii_case("section")
+        || name.eq_ignore_ascii_case("article")
+        || name.eq_ignore_ascii_case("table")
+        || name.eq_ignore_ascii_case("ul")
+        || name.eq_ignore_ascii_case("ol")
+        || name.eq_ignore_ascii_case("dt")
+        || name.eq_ignore_ascii_case("dd")
+        || name.eq_ignore_ascii_case("h1")
+        || name.eq_ignore_ascii_case("h2")
+        || name.eq_ignore_ascii_case("h3")
+        || name.eq_ignore_ascii_case("h4")
+        || name.eq_ignore_ascii_case("h5")
+        || name.eq_ignore_ascii_case("h6")
+}
+
 pub fn extract_body_text(html: &str, strip_anchor: bool) -> String {
     static BODY_RE: OnceLock<Regex> = OnceLock::new();
-    static SCRIPT_STYLE_RE: OnceLock<Regex> = OnceLock::new();
+    static SCRIPT_RE: OnceLock<Regex> = OnceLock::new();
+    static STYLE_RE: OnceLock<Regex> = OnceLock::new();
     static COMMENT_RE: OnceLock<Regex> = OnceLock::new();
     static ANCHOR_SPAN_RE: OnceLock<Regex> = OnceLock::new();
 
@@ -103,53 +135,86 @@ pub fn extract_body_text(html: &str, strip_anchor: bool) -> String {
         slice = a_re.replace(&slice, " ").into_owned();
     }
 
-    let ss_re = SCRIPT_STYLE_RE.get_or_init(|| {
-        Regex::new(r"(?is)<(script|style)\b[^>]*>.*?</(script|style)>").unwrap()
-    });
-    slice = ss_re.replace_all(&slice, " ").into_owned();
+    let sc_re = SCRIPT_RE.get_or_init(|| Regex::new(r"(?is)<script\b[^>]*>.*?</script>").unwrap());
+    slice = sc_re.replace_all(&slice, " ").into_owned();
+
+    let st_re = STYLE_RE.get_or_init(|| Regex::new(r"(?is)<style\b[^>]*>.*?</style>").unwrap());
+    slice = st_re.replace_all(&slice, " ").into_owned();
 
     let cm_re = COMMENT_RE.get_or_init(|| Regex::new(r"(?s)<!--.*?-->").unwrap());
     slice = cm_re.replace_all(&slice, " ").into_owned();
 
-    let mut stripped = String::with_capacity(slice.len());
-    let mut in_tag = false;
-    let mut in_quote: Option<char> = None;
-    for ch in slice.chars() {
-        if in_tag {
-            if let Some(q) = in_quote {
-                if ch == q {
-                    in_quote = None;
+    // 仅对合法 HTML 标签起始（<[A-Za-z/!?]）且在后续存在闭合 '>' 的片段做剥离，避免吞掉正文中的 `a < b`
+    let bytes = slice.as_bytes();
+    let n = bytes.len();
+    let mut stripped = String::with_capacity(n);
+    let mut i = 0usize;
+    while i < n {
+        if bytes[i] == b'<' && i + 1 < n {
+            let next_b = bytes[i + 1];
+            let valid_tag_start =
+                next_b.is_ascii_alphabetic() || matches!(next_b, b'/' | b'!' | b'?');
+            if valid_tag_start {
+                let mut j = i + 2;
+                let mut in_quote: Option<u8> = None;
+                let mut found_end = None;
+                while j < n {
+                    let b = bytes[j];
+                    if let Some(q) = in_quote {
+                        if b == q {
+                            in_quote = None;
+                        }
+                    } else if b == b'"' || b == b'\'' {
+                        in_quote = Some(b);
+                    } else if b == b'>' {
+                        found_end = Some(j);
+                        break;
+                    }
+                    j += 1;
                 }
-            } else if ch == '"' || ch == '\'' {
-                in_quote = Some(ch);
-            } else if ch == '>' {
-                in_tag = false;
-                stripped.push(' ');
+                if let Some(end_idx) = found_end {
+                    let tag_inner = &slice[i + 1..end_idx];
+                    if is_block_tag_name(tag_inner) {
+                        stripped.push('\n');
+                    } else {
+                        stripped.push(' ');
+                    }
+                    i = end_idx + 1;
+                    continue;
+                }
             }
-        } else if ch == '<' {
-            in_tag = true;
-            in_quote = None;
-        } else {
-            stripped.push(ch);
         }
+        let ch = slice[i..].chars().next().unwrap();
+        stripped.push(ch);
+        i += ch.len_utf8();
     }
 
+    // 保留换行硬边界（与 lib.rs is_hard_break 和 content.js 页内搜索对齐），仅折叠行内空白并去除空行
     let decoded = decode_html_entities(&stripped);
     let mut collapsed = String::with_capacity(decoded.len());
-    let mut prev_ws = true;
-    for ch in decoded.chars() {
-        if ch.is_whitespace() {
-            if !prev_ws {
-                collapsed.push(' ');
-                prev_ws = true;
+    for raw_line in decoded.replace("\r\n", "\n").replace('\r', "\n").split('\n') {
+        let mut line_buf = String::new();
+        let mut prev_ws = true;
+        for ch in raw_line.chars() {
+            if ch.is_whitespace() {
+                if !prev_ws {
+                    line_buf.push(' ');
+                    prev_ws = true;
+                }
+            } else {
+                line_buf.push(ch);
+                prev_ws = false;
             }
-        } else {
-            collapsed.push(ch);
-            prev_ws = false;
         }
-    }
-    if collapsed.ends_with(' ') {
-        collapsed.pop();
+        if line_buf.ends_with(' ') {
+            line_buf.pop();
+        }
+        if !line_buf.is_empty() {
+            if !collapsed.is_empty() {
+                collapsed.push('\n');
+            }
+            collapsed.push_str(&line_buf);
+        }
     }
     collapsed
 }
@@ -190,13 +255,28 @@ pub fn create_new_html(cfg: &ServerConfig, title: &str, category: &str) -> Resul
         return Err("模板中未找到 <span id=\"anchor\"> 标签".to_string());
     }
 
-    let with_title = title_re.replace(&tpl, format!("<title>{}</title>", escape_html(title)));
-    let final_html = anchor_re.replace(
-        &with_title,
-        format!(r#"<span id="anchor">{}-{}</span>"#, ts, escape_html(category)),
-    );
+    let title_rep = format!("<title>{}</title>", escape_html(title));
+    let with_title = title_re.replace(&tpl, NoExpand(&title_rep));
+    let anchor_rep = format!(r#"<span id="anchor">{}-{}</span>"#, ts, escape_html(category));
+    let final_html = anchor_re.replace(&with_title, NoExpand(&anchor_rep));
 
-    write_atomic(&out_path, final_html.as_ref(), false)?;
+    // 使用 create_new(true) 原子排他创建，消除 exists() 到落盘间的竞态覆盖
+    let mut f = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&out_path)
+        .map_err(|e| {
+            if e.kind() == std::io::ErrorKind::AlreadyExists {
+                format!("目标文件已存在: {}", out_path.display())
+            } else {
+                format!("创建新页面失败: {}", e)
+            }
+        })?;
+    if let Err(e) = f.write_all(final_html.as_bytes()) {
+        drop(f);
+        let _ = fs::remove_file(&out_path);
+        return Err(format!("写入新页面失败: {}", e));
+    }
     Ok(out_path)
 }
 

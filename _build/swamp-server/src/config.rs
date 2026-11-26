@@ -310,19 +310,25 @@ impl ServerConfig {
             .or(main_toml.server.watch_assets)
             .unwrap_or(true);
 
-        let vscode_path = pick_local_str(
-            local_toml.local.vscode_path,
-            main_toml.local.vscode_path,
-            "vscode_path",
-        )
-        .unwrap_or_else(|| "code".to_string());
+        // 可执行路径与外部进程目录仅信任本机私有的 _build/privy/local.toml（不信任入库的 swamp.toml）
+        let pick_private_only = |toml_local: Option<String>, prop_key: &str| -> Option<String> {
+            toml_local
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .or_else(|| {
+                    legacy_local
+                        .get(prop_key)
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty())
+                })
+        };
 
-        let katrain_dir = pick_local_str(
-            local_toml.local.katrain_dir,
-            main_toml.local.katrain_dir,
-            "katrain_dir",
-        )
-        .unwrap_or_default();
+        let vscode_path =
+            pick_private_only(local_toml.local.vscode_path, "vscode_path")
+                .unwrap_or_else(|| "code".to_string());
+
+        let katrain_dir =
+            pick_private_only(local_toml.local.katrain_dir, "katrain_dir").unwrap_or_default();
 
         let img_input_dir = resolve_dir(pick_local_str(
             local_toml.local.img_input_dir,
@@ -330,14 +336,24 @@ impl ServerConfig {
             "imgInputDir",
         ));
 
-        let webp_output_dir = resolve_dir(
-            local_toml
+        let default_webp_dir = repo_root.join("gallery").join("img");
+        let webp_output_dir = if let Some(local_dir) = resolve_dir(local_toml.media.webp_output_dir) {
+            local_dir
+        } else if let Some(main_dir) = resolve_dir(
+            main_toml
                 .media
                 .webp_output_dir
-                .or(main_toml.media.webp_output_dir)
                 .or_else(|| pick_legacy("webpOutputDir")),
-        )
-        .unwrap_or_else(|| repo_root.join("gallery").join("img"));
+        ) {
+            // 来自入库配置的输出目录必须约束在仓库根目录内
+            if main_dir.starts_with(&repo_root) {
+                main_dir
+            } else {
+                default_webp_dir
+            }
+        } else {
+            default_webp_dir
+        };
 
         let webp_output_dir2 = resolve_dir(
             pick_local_str(
@@ -369,12 +385,19 @@ impl ServerConfig {
             .or_else(|| pick_legacy("imgMaxWidth").and_then(|s| s.parse().ok()))
             .unwrap_or(800);
 
-        let heartbeat_url = local_toml
+        let raw_heartbeat_url = local_toml
             .tray
             .heartbeat_url
             .or(main_toml.tray.heartbeat_url)
             .or_else(|| pick_legacy("URL_TO_CHECK"))
             .unwrap_or_else(|| "https://www.google.com".to_string());
+        let heartbeat_url = if raw_heartbeat_url.starts_with("https://")
+            || raw_heartbeat_url.starts_with("http://")
+        {
+            raw_heartbeat_url
+        } else {
+            "https://www.google.com".to_string()
+        };
 
         let heartbeat_interval_sec = local_toml
             .tray
@@ -775,21 +798,32 @@ fn replace_marked_block(
     end_marker: &str,
     new_inner: &str,
 ) -> Result<(), String> {
+    if new_inner.contains(begin_marker) || new_inner.contains(end_marker) {
+        return Err("配置内容不能包含内部区块边界标记".to_string());
+    }
     let raw = fs::read_to_string(swamp_toml_path)
         .map_err(|e| format!("读取 swamp.toml 失败: {}", e))?;
     let use_crlf = raw.contains("\r\n");
     let norm = raw.replace("\r\n", "\n");
     let block = format!("{}\n{}\n{}", begin_marker, new_inner.trim(), end_marker);
 
-    let updated = if let (Some(s), Some(e)) = (norm.find(begin_marker), norm.find(end_marker)) {
-        if e > s {
+    let updated = match (norm.find(begin_marker), norm.find(end_marker)) {
+        (Some(s), Some(e)) if e > s => {
             format!("{}{}{}", &norm[..s], block, &norm[e + end_marker.len()..])
-        } else {
-            format!("{}\n\n{}\n", norm.trim_end(), block)
         }
-    } else {
-        format!("{}\n\n{}\n", norm.trim_end(), block)
+        (None, None) => format!("{}\n\n{}\n", norm.trim_end(), block),
+        _ => {
+            return Err(format!(
+                "swamp.toml 中的配置区块标记 ({} / {}) 缺失或乱序，已拒绝写回以防损坏配置",
+                begin_marker, end_marker
+            ));
+        }
     };
+
+    // 写盘前先用 TOML 解析器完整校验，确保不会写出语法损坏或重复段头的 swamp.toml
+    let check_clean = updated.strip_prefix('\u{FEFF}').unwrap_or(&updated);
+    toml::from_str::<SwampToml>(check_clean)
+        .map_err(|e| format!("写回前 TOML 校验失败，已中止保存: {}", e))?;
 
     let final_text = if use_crlf {
         updated.replace('\n', "\r\n")
