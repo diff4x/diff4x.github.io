@@ -1,3 +1,5 @@
+//! AI 协作源码打包（ZIP + 分卷 Markdown）、补丁安全分级回填、快照回滚与 Downloads/backup 清理。
+
 use chrono::Local;
 use ignore::gitignore::GitignoreBuilder;
 use regex::Regex;
@@ -53,6 +55,7 @@ const ALWAYS_SHOW_FILES: &[&str] = &[
 
 const HARD_BLOCKED_PREFIXES: &[&str] = &[
     ".git/",
+    ".vscode/",
     "_build/privy/",
     "_build/temp/",
     "_build/secrets/",
@@ -139,7 +142,7 @@ pub struct DownloadTreeItem {
 
 pub fn is_hard_private_rel(rel: &str) -> bool {
     let low = rel.to_ascii_lowercase();
-    if low == ".git" {
+    if low == ".git" || low == ".vscode" {
         return true;
     }
     for pfx in HARD_BLOCKED_PREFIXES {
@@ -159,6 +162,10 @@ pub fn is_hard_private_rel(rel: &str) -> bool {
         || low.ends_with("/credentials.json")
         || low == "tokens.json"
         || low.ends_with("/tokens.json")
+        || low == "streetview_credentials.json"
+        || low.ends_with("/streetview_credentials.json")
+        || low == "streetview_tokens.json"
+        || low.ends_with("/streetview_tokens.json")
     {
         return true;
     }
@@ -174,6 +181,41 @@ pub fn is_private_push_path(rel: &str) -> bool {
         || low.starts_with("src/js/data/shadow")
         || low.starts_with("_build/privy/")
         || low.starts_with("_build/temp/")
+        || low == "gallery/diary"
+        || low.starts_with("gallery/diary/")
+        || low == "gallery/playboy"
+        || low.starts_with("gallery/playboy/")
+        || low == "miyuki"
+        || low.starts_with("miyuki/")
+        || low == "spongebob squarepants"
+        || low.starts_with("spongebob squarepants/")
+        || low == "vtt"
+        || low.starts_with("vtt/")
+        || low == "big"
+        || low.starts_with("big/")
+        || low == "playboy collection - 1377 issues"
+        || low.starts_with("playboy collection - 1377 issues/")
+}
+
+/// 推送前隐私判定并集：硬编码底线 + 仓库 `.gitignore` 规则，避免后续新增忽略目录逃逸推送门禁
+pub fn is_private_push_path_with_gitignore(
+    rel: &str,
+    gi: Option<&ignore::gitignore::Gitignore>,
+) -> bool {
+    if is_private_push_path(rel) {
+        return true;
+    }
+    if let Some(g) = gi {
+        let norm = rel.replace('\\', "/");
+        let trimmed = norm.trim_start_matches('/');
+        if !trimmed.is_empty()
+            && g.matched_path_or_any_parents(Path::new(trimmed), false)
+                .is_ignore()
+        {
+            return true;
+        }
+    }
+    false
 }
 
 /// 判定补丁条目是否属于构建期/配置期会被执行或影响隐私防线的高危文件
@@ -206,7 +248,8 @@ pub fn is_build_or_exec_rel(rel: &str) -> bool {
         .unwrap_or("");
     matches!(
         ext,
-        "bat"
+        "rs"
+            | "bat"
             | "cmd"
             | "ps1"
             | "exe"
@@ -223,10 +266,10 @@ pub fn is_build_or_exec_rel(rel: &str) -> bool {
     )
 }
 
-fn is_default_excluded_pack_file(rel: &str) -> bool {
+pub(crate) fn is_default_excluded_pack_file(rel: &str) -> bool {
     static EX_RE: OnceLock<Regex> = OnceLock::new();
     let re = EX_RE.get_or_init(|| {
-        Regex::new(r"(?i)^(src/js/[^/]+\.js|src/css/[^/]+\.css|sw\.js|src/js/data/shadow.*|html/__.*\.html|.*\.map|.*\.exe|.*\.dll|.*\.jar|.*\.wasm|.*\.zip|.*\.png|.*\.jpg|.*\.jpeg|.*\.webp|.*\.gif|.*\.mp3|.*\.mp4|.*\.mkv|.*\.pdf|.*\.epub|.*\.woff2?)$").unwrap()
+        Regex::new(r"(?i)^(src/js/[^/]+\.js|src/js/raw/core-list\.js|src/css/[^/]+\.css|sw\.js|src/js/data/shadow.*|html/__.*\.html|.*\.map|.*\.exe|.*\.dll|.*\.jar|.*\.wasm|.*\.zip|.*\.png|.*\.jpg|.*\.jpeg|.*\.webp|.*\.gif|.*\.mp3|.*\.mp4|.*\.mkv|.*\.pdf|.*\.epub|.*\.woff2?)$").unwrap()
     });
     re.is_match(rel)
 }
@@ -355,7 +398,6 @@ pub fn list_pack_files(cfg: &ServerConfig, include_more_dirs: bool) -> Result<Ve
             continue;
         }
 
-        // 用 .gitignore 过滤私有文件
         if let Some(ref g) = gi {
             if g.matched_path_or_any_parents(Path::new(&rel), false).is_ignore() {
                 continue;
@@ -779,7 +821,37 @@ pub fn create_pack_zip_with_options(
     })
 }
 
+/// 检测补丁 ZIP 中是否存在重复或仅大小写不同的条目，防止 Windows 覆盖歧义与绕过 Diff 审阅
+pub(crate) fn find_zip_case_collision(
+    repo_root: &Path,
+    zip_bytes: &[u8],
+) -> Result<Option<String>, String> {
+    let mut archive =
+        ZipArchive::new(Cursor::new(zip_bytes)).map_err(|e| format!("无效的 ZIP 文件: {}", e))?;
+    let mut seen_lower: HashSet<String> = HashSet::new();
+    for i in 0..archive.len() {
+        let entry = archive
+            .by_index(i)
+            .map_err(|e| format!("读取 ZIP 条目失败: {}", e))?;
+        let raw_name = entry.name();
+        if raw_name.is_empty() || raw_name.ends_with('/') || raw_name.ends_with('\\') {
+            continue;
+        }
+        let key = match resolve_safe_target(repo_root, raw_name) {
+            Some((rel, _)) => rel,
+            None => raw_name.replace('\\', "/").trim().to_string(),
+        };
+        if !seen_lower.insert(key.to_ascii_lowercase()) {
+            return Ok(Some(key));
+        }
+    }
+    Ok(None)
+}
+
 pub fn inspect_apply_zip(cfg: &ServerConfig, zip_bytes: &[u8]) -> Result<Vec<ApplyEntryInfo>, String> {
+    if let Some(dup) = find_zip_case_collision(&cfg.repo_root, zip_bytes)? {
+        return Err(format!("补丁包包含重复或大小写冲突的条目，已拒绝加载: {}", dup));
+    }
     let presets = load_presets_json(cfg);
     let skip_re_str = presets
         .get("skipApplyDocRegex")
@@ -958,6 +1030,9 @@ pub fn execute_apply_zip(
         .collect();
     if selected.is_empty() {
         return Err("未选中任何回填条目".to_string());
+    }
+    if let Some(dup) = find_zip_case_collision(&cfg.repo_root, zip_bytes)? {
+        return Err(format!("补丁包包含重复或大小写冲突的条目，已中止回填: {}", dup));
     }
 
     let mut archive =
@@ -1420,6 +1495,9 @@ pub fn extract_zip_entry_for_diff(
     if is_hard_private_rel(&clean_target) {
         return Err(format!("安全策略禁止预览私密路径: {}", clean_target));
     }
+    if let Some(dup) = find_zip_case_collision(&cfg.repo_root, zip_bytes)? {
+        return Err(format!("补丁包包含重复或大小写冲突的条目，拒绝预览: {}", dup));
+    }
 
     let mut archive =
         ZipArchive::new(Cursor::new(zip_bytes)).map_err(|e| format!("解析 ZIP 失败: {}", e))?;
@@ -1534,4 +1612,29 @@ pub(crate) fn selftest_manifest_guard_drop() -> bool {
         .unwrap_or(false);
     let _ = fs::remove_dir_all(&dir);
     ok
+}
+
+pub(crate) fn selftest_zip_reject_case_collision() -> bool {
+    let build_zip = |names: &[&str]| -> Option<Vec<u8>> {
+        let mut cursor = Cursor::new(Vec::new());
+        {
+            let mut w = ZipWriter::new(&mut cursor);
+            let opts = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+            for name in names {
+                w.start_file(*name, opts).ok()?;
+                w.write_all(b"test").ok()?;
+            }
+            w.finish().ok()?;
+        }
+        Some(cursor.into_inner())
+    };
+    let Some(bad_zip) = build_zip(&["src/a.js", "src/A.js"]) else {
+        return false;
+    };
+    let Some(ok_zip) = build_zip(&["src/a.js", "src/b.js"]) else {
+        return false;
+    };
+    let root = Path::new(".");
+    matches!(find_zip_case_collision(root, &bad_zip), Ok(Some(_)))
+        && matches!(find_zip_case_collision(root, &ok_zip), Ok(None))
 }

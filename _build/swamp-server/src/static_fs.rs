@@ -1,3 +1,5 @@
+//! 静态文件托管（单段 Byte Range、canonicalize 二次路径守卫与 SVG sandbox CSP）。
+
 use axum::{
     body::Body,
     extract::State,
@@ -48,6 +50,17 @@ pub async fn handle_static(
     };
     if validate_decoded_static_path(&canon_rel_path, state.mode).is_none() {
         return StatusCode::FORBIDDEN.into_response();
+    }
+    if state.mode == RunMode::Sim {
+        if let Some(ref gi) = state.sim_gitignore {
+            let rel_no_slash = canon_rel_path.trim_start_matches('/');
+            if gi
+                .matched_path_or_any_parents(Path::new(rel_no_slash), false)
+                .is_ignore()
+            {
+                return StatusCode::NOT_FOUND.into_response();
+            }
+        }
     }
 
     let is_svg = canonical

@@ -40,6 +40,8 @@ include = [
   "/README.md",
   "/src/tpl/*.html",
   "/src/css/*.css",
+  "/src/css/icon/*",
+  "/src/css/sound/*",
   "/src/js/*.js",
   "/src/discussion_id_mapper.json",
   "/src/wasm/compute_intensive_task_processor.min.js",
@@ -57,6 +59,7 @@ include = [
   "/src/third/pdfjs/web/viewer.mjs",
   "/src/third/pdfjs/web/locale/locale.json",
   "/src/third/pdfjs/web/locale/en-US/viewer.ftl",
+  "/src/third/pdfjs/web/locale/zh-CN/*.ftl",
   "/src/third/photo-sphere-viewer/photo-sphere-viewer.min.js",
   "/src/third/photo-sphere-viewer/three.min.js",
   "/src/third/prism/prism.css",
@@ -87,8 +90,8 @@ tasks_poll_interval_sec = 300
 due_within_days = 7
 
 [local]
-# 本机私有路径请在 _build/privy/local.toml 中覆盖
-vscode_path = "code"
+# 仅作字段占位（不参与运行期加载；实际只读取不入库的 _build/privy/local.toml）
+vscode_path = ""
 katrain_dir = ""
 img_input_dir = ""
 webp_output_dir2 = ""
@@ -128,18 +131,26 @@ presets_json = '''
       "_build/swamp-server/src/services/md_history.rs",
       "_build/swamp-server/src/services/mod.rs",
       "_build/swamp-server/src/services/pack_apply.rs",
+      "_build/swamp-server/src/services/street_view.rs",
       "_build/swamp-server/src/services/tasks.rs",
       "_build/swamp-server/src/services/watcher.rs",
       "_build/swamp-server/src/static_fs.rs",
       "_build/swamp.toml",
       "index.html",
+      "src/css/font/font.css",
+      "src/css/raw/bilingual.css",
+      "src/css/raw/bookmark.css",
+      "src/css/raw/content.css",
+      "src/css/raw/index.css",
+      "src/css/raw/pdf-viewer.css",
+      "src/css/raw/side.css",
+      "src/css/sound/stone2.wav",
       "src/js/raw/audio-player.js",
       "src/js/raw/bilingual.js",
       "src/js/raw/book-db.js",
       "src/js/raw/bookmark.js",
       "src/js/raw/comments.js",
       "src/js/raw/content.js",
-      "src/js/raw/core-list.js",
       "src/js/raw/deferred-features.js",
       "src/js/raw/excerpts.js",
       "src/js/raw/index.js",
@@ -165,7 +176,6 @@ presets_json = '''
       "src/tpl/pano.html",
       "src/tpl/pdf.html",
       "src/tpl/side.html",
-      "src/tpl/street_view_uploader.html",
       "src/tpl/txn_parser.html",
       "src/tpl/txt.html"
     ]
@@ -1263,29 +1273,17 @@ custom_json = '''
     "Ab01B01": [
       "石女"
     ],
-    "Ba03A18": [
-      "佳品奶制品"
-    ],
     "Bb06A01": [
       "网络"
     ],
     "Bg03B01": [
       "光饼"
     ],
-    "Bg07A40": [
-      "汽笛声声"
-    ],
-    "Bh13B15": [
-      "棉桃腰果仁"
-    ],
     "Bi10B01": [
       "蝌蚪"
     ],
     "Bn07A07": [
       "防火墙"
-    ],
-    "Bn21B03": [
-      "候车亭电话亭"
     ],
     "Bo01A27": [
       "处理器",

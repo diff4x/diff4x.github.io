@@ -1,9 +1,10 @@
 /**
- * search-preview.js —— 中央悬浮预览窗（统一服务搜索结果与 What's new 更新日志）
- * 支持：正文/评论高亮摘要自动滚动、图片预览、音视频右键播控+倒计时+进度持久化。
+ * search-preview.js —— 中央悬浮预览窗（运行于主线程）
+ * 统一提供搜索结果与 What's new 的摘要滚动、图片预览及音视频右键试播。
  */
 import {
     escapeHtml,
+    encodePathSegments,
     saveMediaPosition,
     saveMediaPositionsIn,
     resumeMediaPosition,
@@ -13,6 +14,9 @@ import {
     publishSearchHighlights
 } from './shared-utils.js';
 
+// 音频波形样式与滚动参数
+const HOVER_SNIPPET_DELAY_MS = 60;   // 悬停请求摘要防抖 (ms)
+const SCROLL_PX_PER_SEC = 60;        // 自动滚屏速度 (px/s)
 const WAVE_STYLE_ID = 'wave-bars-style';
 const WAVE_STYLE_TEXT =
     '.wave-bars { display: flex; align-items: flex-end; gap: 4px; height: 40px; justify-content: center; }' +
@@ -20,6 +24,9 @@ const WAVE_STYLE_TEXT =
     '.wave-bar.paused { animation-play-state: paused !important; }' +
     '@keyframes waveAnim { 0% { height: 10px; } 100% { height: 100%; } }' +
     '.wb-1 { animation-delay: 0s; } .wb-2 { animation-delay: 0.2s; } .wb-3 { animation-delay: 0.4s; } .wb-4 { animation-delay: 0.6s; } .wb-5 { animation-delay: 0.8s; }';
+
+
+// --- 预览容器与媒体播控辅助 ---
 
 function ensureWaveBarsStyle() {
     if (document.getElementById(WAVE_STYLE_ID)) return;
@@ -118,6 +125,9 @@ function attachPreviewCountdown(previewBox, mediaEl) {
     update();
 }
 
+
+// --- 独立图片与音视频预览 ---
+
 export function showStandaloneImagePreview(path, isStillCurrent) {
     const { box, content } = getPreviewBoxParts();
     removePreviewCountdown();
@@ -136,7 +146,7 @@ export function showStandaloneImagePreview(path, isStillCurrent) {
             box.style.display = 'none';
         }
     };
-    img.src = path;
+    img.src = encodePathSegments(path);
     content.replaceChildren(img);
     box.style.display = 'flex';
     requestAnimationFrame(() => box.setAttribute('data-active', 'true'));
@@ -202,11 +212,14 @@ export function toggleStandaloneMediaPreview(path, kind, opts = {}) {
     mediaEl.dataset.path = path;
     mediaEl.loop = true;
     mediaEl.volume = 0.1;
-    mediaEl.src = path;
+    mediaEl.src = encodePathSegments(path);
     if (opts.withCountdown) attachPreviewCountdown(box, mediaEl);
     resumeMediaPosition(mediaEl, path);
     safePlayMedia(mediaEl);
 }
+
+
+// --- 搜索列表预览控制器 ---
 
 export function createSearchPreviewController(ctx) {
     const { store, elSearchResults, elSearchInput, requestSnippets } = ctx;
@@ -341,7 +354,6 @@ export function createSearchPreviewController(ctx) {
             if (blockHeight <= visibleHeight) return;
 
             scrollContent.appendChild(buildBlock());
-            const SCROLL_PX_PER_SEC = 60;
             let lastTs = 0;
             const autoScroll = (ts) => {
                 if (gen !== previewScrollGen) return;
@@ -409,7 +421,7 @@ export function createSearchPreviewController(ctx) {
             const data = await requestSnippets(path, keyword);
             if (lastHoveredPath !== path || !data) return;
             showSnippetPreview(resultData, data);
-        }, 60);
+        }, HOVER_SNIPPET_DELAY_MS);
     });
 
     elSearchResults.addEventListener('contextmenu', (e) => {

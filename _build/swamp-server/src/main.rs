@@ -1,4 +1,5 @@
 #![cfg_attr(windows, windows_subsystem = "windows")]
+//! swamp 原生伴生服务与 CLI 主入口（Serve / Sim 路由、本地令牌交接与子命令分发）。
 
 mod api_files;
 mod api_ops;
@@ -387,7 +388,7 @@ async fn oauth_callback(
     match q.code {
         Some(code) if !code.is_empty() => {
             let _ = p.tx.send(Ok(code));
-            oauth_html_response("<h2 style='font-family:sans-serif;color:#16a34a;padding:24px;'>Google Tasks 授权已完成，可关闭此页面。</h2>".to_string())
+            oauth_html_response("<h2 style='font-family:sans-serif;color:#16a34a;padding:24px;'>Google OAuth 授权已完成，可关闭此页面。</h2>".to_string())
         }
         _ => {
             let _ = p.tx.send(Err("回调缺少 code 参数".to_string()));
@@ -921,6 +922,21 @@ fn run_server_mode(cfg: ServerConfig, mode: RunMode, open_browser: bool) {
     let verbose = cfg.log_level == "info" || cfg.log_level == "debug";
     let allowed_origins = build_allowed_origins(port);
     let allowed_hosts = build_allowed_hosts(port);
+    let sim_gitignore = if is_sim && cfg.gitignore_file.is_file() {
+        let mut b = ignore::gitignore::GitignoreBuilder::new(&cfg.repo_root);
+        if b.add(&cfg.gitignore_file).is_none() {
+            b.build().ok()
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("创建 Tokio 运行时失败");
 
     let state = Arc::new(AppState {
         mode,
@@ -934,12 +950,9 @@ fn run_server_mode(cfg: ServerConfig, mode: RunMode, open_browser: bool) {
         html_change_tx: html_change_tx.clone(),
         shutdown_notify: shutdown_notify.clone(),
         shutting_down: AtomicBool::new(false),
+        sim_gitignore,
+        rt_handle: rt.handle().clone(),
     });
-
-    let rt = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-        .expect("创建 Tokio 运行时失败");
 
     let (ready_tx, ready_rx) = std_mpsc::channel::<Result<(), String>>();
 

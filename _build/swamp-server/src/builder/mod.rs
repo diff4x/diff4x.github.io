@@ -1,3 +1,5 @@
+//! 站点构建编排入口与双锁并发控制（GEN_LOCK 单飞构建 -> ASSET_LOCK 互斥热压缩）。
+
 pub mod generator;
 pub mod html_utils;
 pub mod minify;

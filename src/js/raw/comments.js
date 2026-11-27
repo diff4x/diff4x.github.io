@@ -1,9 +1,13 @@
 /**
- * comments.js —— Giscus 评论浮窗、评论映射与后台同步索引模块
+ * comments.js —— Giscus 评论浮窗、映射加载与后台同步索引（运行于主线程）
  */
 import { $, makeDraggable } from './shared-utils.js';
 
+// 定时同步间隔 (ms)
 const COMMENTS_SYNC_INTERVAL = 10 * 60 * 1000;
+
+
+// --- 评论文本清洗与目录收集 ---
 
 function commentToPlainText(md) {
     return String(md || "")
@@ -40,6 +44,9 @@ function collectHtmlFiles(node, out = new Map()) {
     return out;
 }
 
+
+// --- 评论模块工厂 ---
+
 export function createCommentsModule(ctx) {
     const {
         store,
@@ -56,6 +63,7 @@ export function createCommentsModule(ctx) {
     let comments_first_flag = false;
     let records = [];
     let totalCount = 0;
+    let currentLoadedTerm = null;
 
     const model = {
         ready: false,
@@ -65,6 +73,8 @@ export function createCommentsModule(ctx) {
         meta: new Map(),
         index: null
     };
+
+    // --- Giscus 弹窗与映射加载 ---
 
     function updatePopupHeaderWithStamp(stampText) {
         const header = document.getElementById("popup-header");
@@ -155,6 +165,8 @@ export function createCommentsModule(ctx) {
 
                     const data = e.data.giscus;
                     if (data.discussion) {
+                        const dTerm = data.discussion.title !== undefined ? String(data.discussion.title).trim() : '';
+                        if (currentLoadedTerm !== null && dTerm && dTerm !== currentLoadedTerm) return;
                         totalCount = data.discussion.totalCommentCount || 0;
                         emitEvent("cm_count", totalCount, "content");
                     }
@@ -166,7 +178,7 @@ export function createCommentsModule(ctx) {
                     }
                     if (data.error) {
                         if (data.error == "Discussion not found") {
-                            emitEvent("cm_count", 0, "content");
+                            if (currentLoadedTerm !== null) emitEvent("cm_count", 0, "content");
                         } else {
                             console.error("Giscus 错误:", data.error);
                         }
@@ -192,13 +204,16 @@ export function createCommentsModule(ctx) {
         }
     }
 
+    // --- 评论快照同步与索引推送 ---
+
     async function getCommentMapperRecords() {
         if (records && records.length > 0) return records;
         try {
             const res = await fetch('/src/discussion_id_mapper.json', { cache: 'no-cache' });
             if (res.ok) {
                 const data = await res.json();
-                return data.records || [];
+                records = data.records || [];
+                return records;
             }
         } catch (e) { }
         return [];
@@ -374,6 +389,8 @@ export function createCommentsModule(ctx) {
         });
     }
 
+    // --- 外部调度接口 ---
+
     function loadComments(payload) {
         const commentTitle = (payload && typeof payload === 'object') ? payload.title : payload;
         const currentStamp = (payload && typeof payload === 'object') ? payload.stamp : '';
@@ -389,7 +406,13 @@ export function createCommentsModule(ctx) {
             } catch (e) { }
             if (window._latestCommentTitle !== commentTitle) return;
             const record = records.find(r => r.title === commentTitle);
-            if (!record) return;
+            if (!record) {
+                currentLoadedTerm = null;
+                totalCount = 0;
+                emitEvent("cm_count", 0, "content");
+                return;
+            }
+            currentLoadedTerm = String(record.id);
             if (!comments_first_flag) {
                 discussion(record.id);
                 comments_first_flag = true;

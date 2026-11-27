@@ -1,8 +1,8 @@
 <!DOCTYPE html>
-<html lang="zh-CN" data-theme="light">
+<html lang="zh-CN" data-theme="dark">
 <head>
 <meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; object-src 'none'; base-uri 'self';">
+<meta http-equiv="Content-Security-Policy" content="script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; connect-src 'self'; object-src 'none'; base-uri 'self';">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Markdown Preview</title>
 <link rel="stylesheet" href="../css/font.css">
@@ -229,7 +229,7 @@ html,body{height:auto;overflow:visible}#panes,.pv-wrap{display:block}.pv{overflo
   <span id="status" class="status"></span>
   <div class="opts">
     <label class="edit-only"><input type="checkbox" id="sync" checked> Sync scroll</label>
-    <label><input type="checkbox" id="dark"> Dark mode</label>
+    <label><input type="checkbox" id="dark" checked> Dark mode</label>
   </div>
 </header>
 <div id="diff-bar" hidden>
@@ -270,6 +270,9 @@ html,body{height:auto;overflow:visible}#panes,.pv-wrap{display:block}.pv{overflo
 <script src="../third/markdown/purify.min.js"></script>
 <script src="../third/markdown/highlight.min.js"></script>
 <script>
+/**
+ * md_viewer.html 内联引擎 —— Markdown 预览/编辑、TeX 数学渲染、目录联动与双轨 Diff
+ */
 (() => {
   if (window.top && window.top.VirtualCursor) {
     try { window.top.VirtualCursor.attach(window); } catch (_) { }
@@ -296,21 +299,39 @@ html,body{height:auto;overflow:visible}#panes,.pv-wrap{display:block}.pv{overflo
   if (!isEditable) document.body.classList.add('readonly');
 
   const params = new URLSearchParams(location.search);
-  const rawMdPath = params.get('file') || (window.top && window.top.readme_md) || readStore('readme_md') || '/README.md';
-  const mdPath = rawMdPath.startsWith('/') ? rawMdPath : '/' + rawMdPath;
-  const relPath = mdPath.replace(/^\/+/, '');
+  const rawMdPath = (params.get('file') || (window.top && window.top.readme_md) || readStore('readme_md') || '/README.md').trim();
+  let mdPath = '/README.md';
+  let relPath = 'README.md';
+  let invalidMdPathReason = '';
+  try {
+    if (!rawMdPath || /\\/.test(rawMdPath) || /^\/\//.test(rawMdPath)) throw new Error('非法路径格式');
+    const candidate = rawMdPath.startsWith('/') ? rawMdPath : '/' + rawMdPath;
+    const parsed = new URL(candidate, location.origin);
+    if (parsed.origin !== location.origin) throw new Error('禁止跨源路径');
+    let decodedPath = parsed.pathname;
+    try { decodedPath = decodeURIComponent(decodedPath); } catch (_) { }
+    const segs = decodedPath.replace(/^\/+/, '').split('/');
+    if (!segs.length || segs.some(s => !s || s === '.' || s === '..' || s.startsWith('.'))) {
+      throw new Error('路径含非法段');
+    }
+    if (/^_build$/i.test(segs[0])) throw new Error('禁止访问 _build 目录');
+    if (!/\.md$/i.test(decodedPath)) throw new Error('仅支持 .md 文件');
+    mdPath = '/' + segs.map(encodeURIComponent).join('/');
+    relPath = segs.join('/');
+  } catch (err) {
+    invalidMdPathReason = (err && err.message) || '非法 Markdown 路径';
+    relPath = rawMdPath || 'README.md';
+  }
   const initHash = params.get('hash') || '';
   $('#title').textContent = relPath;
 
-  // 默认 light 模式（仅用户显式切换后持久化为 dark）
   const setTheme = d => { root.dataset.theme = d ? 'dark' : 'light'; dark.checked = d; };
-  setTheme(localStorage.getItem('mlp-dark') === '1');
+  setTheme(localStorage.getItem('mlp-dark') !== '0');
   dark.onchange = () => {
     setTheme(dark.checked);
     try { localStorage.setItem('mlp-dark', dark.checked ? '1' : '0'); } catch (_) { }
   };
 
-  // 自动对齐主站正文与 code 标签字体（基于 font.css + content.css）
   (async function syncMainSiteFonts() {
     try {
       const topFont = window.top && window.top.getComputedStyle
@@ -342,7 +363,6 @@ html,body{height:auto;overflow:visible}#panes,.pv-wrap{display:block}.pv{overflo
     } catch (_) { }
   })();
 
-  // Markdown renderer (local same-origin marked + DOMPurify + highlight.js)
   const ok = !!(window.marked && window.DOMPurify);
   if (ok) {
     marked.setOptions({ gfm: true });
@@ -356,7 +376,7 @@ html,body{height:auto;overflow:visible}#panes,.pv-wrap{display:block}.pv{overflo
   let cm = null, rawText = '', diskText = '', raf = 0, saving = false;
   let tocSig = '', tocHeadings = [], tocLinks = [], spyRaf = 0;
   let diffActive = false, diffMode = 'render', diffOnlyChanges = false, diffBusy = false;
-  let diffSnapshots = [], localMdVersions = [], localLatestVer = '', localRevCache = new Map();
+  let diffSnapshots = [], localMdVersions = [], localLatestVer = '', localRevCache = new Map(), localAuthExpired = false;
   let diffHunks = [], diffHunkIdx = -1, diffLiveTimer = 0, diffRenderSeq = 0;
   let lcsDiffFn = null, lcsLoadPromise = null;
 
@@ -369,15 +389,12 @@ html,body{height:auto;overflow:visible}#panes,.pv-wrap{display:block}.pv{overflo
     render();
   };
 
-  // ═══ MD-PIPELINE BEGIN ═══════════════════════════════════════════
-  // Markdown 渲染管线（不依赖 marked 的具体版本）：
-  //   protectMath → marked.parse → restoreMath → DOMPurify → fixBold → highlightCode
-  const escHtml = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-  const PH_OPEN = '\uE000', PH_CLOSE = '\uE001';   // 公式占位符：私有区字符，Markdown 规则不会处理它们
+  // --- Markdown 与轻量 TeX 渲染管线 ---
 
-  // 1) 渲染前把 $…$ / $$…$$ 换成占位符。否则 marked 会破坏 TeX 源码：
-  //    吃掉 \_ \% 的反斜杠、把 x*y*z 变斜体、把表格单元格里的 | 当作列分隔符等。
-  //    围栏代码块、行内代码、\$ 转义内的 $ 不处理；$5 与 $10 这类金额不会被误判为公式。
+  const escHtml = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const PH_OPEN = '\uE000', PH_CLOSE = '\uE001';
+
+  // 先用私有区字符保护公式，防止 marked 吞掉反斜杠或表格分隔符
   function protectMath(src) {
     const store = [];
     const hold = (raw, tex, display) => PH_OPEN + (store.push({ raw, tex, display }) - 1) + PH_CLOSE;
@@ -387,7 +404,7 @@ html,body{height:auto;overflow:visible}#panes,.pv-wrap{display:block}.pv{overflo
       while (i < s.length) {
         const c = s[i];
         if (c === '\\') { out += s.substr(i, 2); i += 2; continue; }
-        if (c === '`') {                                     // 行内代码：原样跳过
+        if (c === '`') {
           let j = i; while (s[j] === '`') j++;
           const len = j - i; let k = j, end = -1;
           while (k < s.length) {
@@ -400,16 +417,16 @@ html,body{height:auto;overflow:visible}#panes,.pv-wrap{display:block}.pv{overflo
           out += s.slice(i, end); i = end; continue;
         }
         if (c === '$') {
-          if (s[i + 1] === '$') {                            // $$ 展示公式
+          if (s[i + 1] === '$') {
             const e = s.indexOf('$$', i + 2);
             if (e > i + 2 && s.slice(i + 2, e).trim()) { out += hold(s.slice(i, e + 2), s.slice(i + 2, e), true); i = e + 2; }
             else { out += '$$'; i += 2; }
             continue;
           }
-          if (i + 1 < s.length && !/\s/.test(s[i + 1])) {    // $ 行内公式：开头 $ 后不能是空白
+          if (i + 1 < s.length && !/\s/.test(s[i + 1])) {
             let j = i + 1;
             while (j < s.length && s[j] !== '$') j += s[j] === '\\' ? 2 : 1;
-            if (j < s.length && !/\s/.test(s[j - 1]) && !/\d/.test(s[j + 1] || '')) {   // 结尾 $ 前不能是空白、后不能是数字
+            if (j < s.length && !/\s/.test(s[j - 1]) && !/\d/.test(s[j + 1] || '')) {
               out += hold(s.slice(i, j + 1), s.slice(i + 1, j), false); i = j + 1; continue;
             }
           }
@@ -432,7 +449,7 @@ html,body{height:auto;overflow:visible}#panes,.pv-wrap{display:block}.pv{overflo
       if (fm) { fence = fm[1]; out.push(line); continue; }
 
       const t = line.trim();
-      if (t.startsWith('$$') && t.indexOf('$$', 2) < 0) {    // 跨行 $$ … $$（不跨空行，最多 30 行）
+      if (t.startsWith('$$') && t.indexOf('$$', 2) < 0) {
         const body = [t.slice(2)], raw = [line];
         let j = i + 1, tail = null;
         for (; j < lines.length && j - i <= 30 && lines[j].trim() !== ''; j++) {
@@ -451,7 +468,6 @@ html,body{height:auto;overflow:visible}#panes,.pv-wrap{display:block}.pv{overflo
     return { text: out.join('\n'), store };
   }
 
-  // 2) 占位符 → 公式 HTML。代码块与标签属性内出现的占位符还原为原文。
   function restoreMath(html, store) {
     if (!store.length) return html;
     const PH = new RegExp(PH_OPEN + '(\\d+)' + PH_CLOSE, 'g');
@@ -465,11 +481,9 @@ html,body{height:auto;overflow:visible}#panes,.pv-wrap{display:block}.pv{overflo
 
   function renderMath({ raw, tex, display }) {
     try { return `<span class="math${display ? ' math-display' : ''}">${texToHtml(tex)}</span>`; }
-    catch (_) { return `<code class="math-src">${escHtml(raw)}</code>`; }   // 不支持的写法：显示 TeX 源码
+    catch (_) { return `<code class="math-src">${escHtml(raw)}</code>`; }
   }
 
-  // 轻量 TeX → HTML：覆盖 README 类文档常见的子集（上下标、分式、根号、\text、希腊字母、常用符号）。
-  // 遇到不支持的命令（如 \begin{cases}）会抛错，由 renderMath 退回显示源码。
   const TEX_SYM = {
     sim: '∼', approx: '≈', le: '≤', leq: '≤', ge: '≥', geq: '≥', ne: '≠', neq: '≠', equiv: '≡', ll: '≪', gg: '≫',
     in: '∈', notin: '∉', subset: '⊂', subseteq: '⊆', supset: '⊃', cup: '∪', cap: '∩', emptyset: '∅', forall: '∀', exists: '∃',
@@ -494,7 +508,7 @@ html,body{height:auto;overflow:visible}#panes,.pv-wrap{display:block}.pv{overflo
       const e = escHtml(ch);
       return !ch ? '' : TEX_REL.includes(ch) ? `<span class="mr">${e}</span>` : TEX_BIN.includes(ch) ? `<span class="mb">${e}</span>` : e;
     };
-    const readRaw = () => {                                  // 读取 {…} 内的原文（\text 等使用）
+    const readRaw = () => {
       skipWs();
       if (tex[i] !== '{') return tex[i++] || '';
       let d = 0, s = '';
@@ -508,7 +522,7 @@ html,body{height:auto;overflow:visible}#panes,.pv-wrap{display:block}.pv{overflo
       throw new Error('unclosed group');
     };
     const seq = stop => { let h = ''; while (i < tex.length && tex[i] !== stop) h += atom(true); return h; };
-    const group = () => {                                    // 参数：{…} 或单个记号
+    const group = () => {
       skipWs();
       if (tex[i] !== '{') return atom(false);
       i++; const h = seq('}');
@@ -547,7 +561,7 @@ html,body{height:auto;overflow:visible}#panes,.pv-wrap{display:block}.pv{overflo
       return sym(c);
     }
     function command() {
-      i++;                                                   // 跳过 \
+      i++;
       const m = /^[A-Za-z]+/.exec(tex.slice(i));
       const name = m ? m[0] : (tex[i] || '');
       i += name.length || 1;
@@ -572,10 +586,7 @@ html,body{height:auto;overflow:visible}#panes,.pv-wrap{display:block}.pv{overflo
     return html;
   }
 
-  // 3) 兜底：修复仍以字面量残留的 **加粗**。
-  //    marked ≤ v4 判定强调边界时只认 ASCII 标点，遇到「…)**：」「…]**：」「…`code`**：」这类
-  //    收尾 ** 前是标点、后是全角标点/汉字的写法就不会闭合。这里在同一父节点内把成对的 ** 补成 <strong>。
-  //    只处理恰好两个星号的标记；开头 ** 后、结尾 ** 前不能是空白；不跨越块级元素；代码内不处理。
+  // 补齐 marked v4 在全角标点/汉字紧接标点时未闭合的 **加粗**
   function fixBold(root) {
     const BLOCK = 'ul,ol,pre,table,blockquote,p,div,h1,h2,h3,h4,h5,h6,hr';
     const groups = new Map();
@@ -596,12 +607,12 @@ html,body{height:auto;overflow:visible}#panes,.pv-wrap{display:block}.pv{overflo
       const pairs = []; let open = null;
       for (const mk of marks) {
         const v = mk.node.nodeValue, before = v[mk.idx - 1], after = v[mk.idx + 2];
-        const canClose = before === undefined || !/\s/.test(before);     // 节点边界外是行内元素（如 <code>），视为非空白
+        const canClose = before === undefined || !/\s/.test(before);
         const canOpen = after === undefined || !/\s/.test(after);
         if (open && canClose) { pairs.push([open, mk]); open = null; }
         else if (!open && canOpen) open = mk;
       }
-      for (const [o, c] of pairs.reverse()) {                            // 从后往前处理，前面的偏移不受影响
+      for (const [o, c] of pairs.reverse()) {
         const probe = document.createRange();
         probe.setStart(o.node, o.idx + 2); probe.setEnd(c.node, c.idx);
         if (probe.collapsed || probe.cloneContents().querySelector(BLOCK)) continue;
@@ -617,8 +628,6 @@ html,body{height:auto;overflow:visible}#panes,.pv-wrap{display:block}.pv{overflo
     }
   }
 
-  // 4) 代码高亮：marked v8 起移除了 highlight 选项，改为渲染后统一处理（对所有版本一致）。
-  //    只高亮显式标注且 highlight.js 认识的语言；text / 无标注的代码块（如 ASCII 架构图）保持原样。
   function highlightCode(root) {
     if (!window.hljs) return;
     root.querySelectorAll('pre > code').forEach(el => {
@@ -628,10 +637,10 @@ html,body{height:auto;overflow:visible}#panes,.pv-wrap{display:block}.pv{overflo
       try { el.innerHTML = hljs.highlight(el.textContent, { language: lang }).value; } catch (_) { }
     });
   }
-  // ═══ MD-PIPELINE END ═════════════════════════════════════════════
 
-  // 标题锚点规则与 GitHub 一致：小写 → 去掉标点（保留字母/数字/下划线/连字符/空格）→ 每个空格换成 "-"。
-  // 注意不能合并连续空格：「附录 A — 标题」应得到 附录-a--标题，README 目录里的锚点正是这种写法。
+  // --- 目录大纲、文档读写与工具栏 ---
+
+  // 锚点规则对齐 GitHub：不合并连续空格，确保含破折号标题锚点一致
   function slugify(text) {
     return String(text || '').trim().toLowerCase()
       .replace(/[^\p{L}\p{M}\p{N}_\s-]/gu, '')
@@ -789,7 +798,11 @@ html,body{height:auto;overflow:visible}#panes,.pv-wrap{display:block}.pv{overflo
       || hs.find(h => h.id === slug)
       || hs.find(h => h.textContent.trim().toLowerCase() === norm)
       || hs.find(h => h.textContent.trim().toLowerCase().includes(norm));
-    if (hit) hit.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    if (hit) {
+      const folded = hit.classList.contains('md-diff-hidden') ? hit : (hit.closest && hit.closest('.md-diff-hidden[data-fold-id]'));
+      if (folded && folded.dataset.foldId) expandFoldGroup(folded.dataset.foldId);
+      hit.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
   }
   out.addEventListener('click', e => {
     const a = e.target.closest && e.target.closest('a[href^="#"]');
@@ -797,6 +810,7 @@ html,body{height:auto;overflow:visible}#panes,.pv-wrap{display:block}.pv{overflo
   });
 
   async function fetchMd() {
+    if (invalidMdPathReason) throw new Error(invalidMdPathReason);
     const url = mdPath + (isEditable ? '?_t=' + Date.now() : '');
     const res = await fetch(url, { cache: isEditable ? 'no-store' : 'default' });
     if (!res.ok) throw new Error('HTTP ' + res.status);
@@ -879,7 +893,6 @@ html,body{height:auto;overflow:visible}#panes,.pv-wrap{display:block}.pv{overflo
     }
   }
 
-  // Toolbar
   const flash = (b, t) => { const o = b.textContent; b.textContent = t; setTimeout(() => { b.textContent = o; }, 1200); };
   saveBtn.onclick = saveDoc;
   $('#reload').onclick = () => {
@@ -915,7 +928,8 @@ html,body{height:auto;overflow:visible}#panes,.pv-wrap{display:block}.pv{overflo
     if (e.origin === location.origin && e.data?.type === 'SCROLL_HASH') scrollToHash(e.data.hash);
   });
 
-  // Sync scroll & divider (默认严格 50/50 平分，双击分隔条恢复平分)
+  // --- 同步滚动与分隔条拖拽 ---
+
   let lock = '', tm = 0;
   const bindSync = sc => {
     const link = (a, b, id) => a.addEventListener('scroll', () => {
@@ -968,7 +982,6 @@ html,body{height:auto;overflow:visible}#panes,.pv-wrap{display:block}.pv{overflo
     }
   }
 
-  // 分隔条 1：宽窗调节「左编辑 | 中预览」，窄窗调节「上预览+目录 | 下编辑」
   sep.addEventListener('pointerdown', e => {
     if (!isEditable) return;
     try { sep.setPointerCapture(e.pointerId); } catch (_) { }
@@ -977,7 +990,6 @@ html,body{height:auto;overflow:visible}#panes,.pv-wrap{display:block}.pv{overflo
     const onMove = ev => {
       const r = panes.getBoundingClientRect();
       if (stacked) {
-        // column-reverse：.ed 在下方，高度 = r.bottom - clientY
         const rawH = r.bottom - ev.clientY - 3;
         const minH = Math.min(120, r.height * 0.2);
         const maxH = Math.max(minH, r.height - 6 - Math.min(120, r.height * 0.2));
@@ -1010,7 +1022,6 @@ html,body{height:auto;overflow:visible}#panes,.pv-wrap{display:block}.pv{overflo
     if (cm) cm.refresh();
   });
 
-  // 分隔条 2：调节「预览 | 目录」两列宽度（线上两列、线下宽/窄窗均可用）
   tocSep.addEventListener('pointerdown', e => {
     try { tocSep.setPointerCapture(e.pointerId); } catch (_) { }
     tocSep.classList.add('on');
@@ -1045,7 +1056,8 @@ html,body{height:auto;overflow:visible}#panes,.pv-wrap{display:block}.pv{overflo
     }).observe(panes);
   }
 
-  // 线下模式：按需加载同源 CodeMirror 5（线上不加载，不入 coreFiles）
+  // --- 本地 CodeMirror 5 编辑器按需加载 ---
+
   async function initLocalCodeMirror() {
     const base = '../third/markdown/codemirror/';
     const files = [
@@ -1106,7 +1118,6 @@ html,body{height:auto;overflow:visible}#panes,.pv-wrap{display:block}.pv{overflo
       }
     });
     cm.on('change', onEdit);
-    // 表格着色：表头行/分隔行整行、数据行仅 | 管道符（对齐 Monaco 的 keyword 配色）
     try {
       const sepRe = /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)*\|?\s*$/;
       cm.addOverlay({
@@ -1152,7 +1163,8 @@ html,body{height:auto;overflow:visible}#panes,.pv-wrap{display:block}.pv{overflo
     addEventListener('blur', hide);
   }
 
-  // ── BUS 通信（供摘抄写入主站） ──
+  // --- BUS 通信、拼音与摘抄 ---
+
   let mdBus = null;
   try { mdBus = new BroadcastChannel('bus'); } catch (_) { }
   window.addEventListener('pagehide', (e) => {
@@ -1169,7 +1181,6 @@ html,body{height:auto;overflow:visible}#panes,.pv-wrap{display:block}.pv{overflo
     } catch (_) { }
   }
 
-  // ── 拼音与摘抄（预览区 + 编辑区均支持，摘抄按钮位于结束光标正下方） ──
   function initMdPinyinAndExcerpt() {
     const pyTip = document.createElement('div');
     pyTip.id = 'md-pinyin-tooltip';
@@ -1359,7 +1370,8 @@ html,body{height:auto;overflow:visible}#panes,.pv-wrap{display:block}.pv{overflo
     }, true);
   }
 
-  // ═══ MD-DIFF ENGINE BEGIN ════════════════════════════════════════
+  // --- 双轨历史 Diff 引擎（渲染态 + 源码态） ---
+
   function formatSnapTime(ts) {
     if (!ts) return '未知时间';
     const d = new Date(ts);
@@ -1431,12 +1443,12 @@ html,body{height:auto;overflow:visible}#panes,.pv-wrap{display:block}.pv{overflo
     return text;
   }
 
-  async function callMdLocalApi(method, endpoint, body = null) {
+  async function callMdLocalApi(method, endpoint, body = null, options = {}) {
     if (window.top && typeof window.top.callLocalApi === 'function') {
-      return await window.top.callLocalApi(method, endpoint, body);
+      return await window.top.callLocalApi(method, endpoint, body, options);
     }
     const m = await import('/src/js/shared-utils.js');
-    return await m.callLocalApi(method, endpoint, body);
+    return await m.callLocalApi(method, endpoint, body, options);
   }
 
   function formatLocalVerTooltip(v) {
@@ -1448,20 +1460,24 @@ html,body{height:auto;overflow:visible}#panes,.pv-wrap{display:block}.pv{overflo
     return (v && v.is_latest ? '最新落盘 · ' : '') + timeStr + deltaStr;
   }
 
-  async function loadMdSnapshots() {
+  async function loadMdSnapshots(interactive = false) {
     diffSnapshots = [];
     localMdVersions = [];
     localLatestVer = '';
     localRevCache.clear();
+    localAuthExpired = false;
+
+    if (invalidMdPathReason) return;
 
     if (isEditable) {
       try {
-        const res = await callMdLocalApi('GET', `/__api/ops/md-history?path=${encodeURIComponent(relPath)}`);
+        const res = await callMdLocalApi('GET', `/__api/ops/md-history?path=${encodeURIComponent(relPath)}`, null, { interactive });
         if (res && Array.isArray(res.versions)) {
           localMdVersions = res.versions;
           localLatestVer = res.latest_ver || (res.versions[0] && res.versions[0].ver) || '';
         }
       } catch (e) {
+        if (e && e.status === 401) localAuthExpired = true;
         console.warn('[MD Diff] 本地版本历史读取失败:', e);
       }
       return;
@@ -1573,7 +1589,9 @@ html,body{height:auto;overflow:visible}#panes,.pv-wrap{display:block}.pv{overflo
   function refreshDiffControls() {
     const versions = getAvailableDiffVersions();
     const available = versions.length >= 2;
-    diffToggleBtn.hidden = !available && !diffActive;
+    const needAuthRetry = isEditable && localAuthExpired && !diffActive;
+    diffToggleBtn.hidden = !available && !diffActive && !needAuthRetry;
+    diffToggleBtn.title = needAuthRetry ? '本地会话已失效，点击续签并加载历史版本' : '对比不同版本改动';
     if (diffActive) syncVersionSelects();
   }
 
@@ -1587,7 +1605,9 @@ html,body{height:auto;overflow:visible}#panes,.pv-wrap{display:block}.pv{overflo
       if (localRevCache.has(val)) return localRevCache.get(val);
       const res = await callMdLocalApi(
         'GET',
-        `/__api/ops/md-rev?path=${encodeURIComponent(relPath)}&ver=${encodeURIComponent(val)}`
+        `/__api/ops/md-rev?path=${encodeURIComponent(relPath)}&ver=${encodeURIComponent(val)}`,
+        null,
+        { interactive: true }
       );
       const txt = normLF(res && typeof res.content === 'string' ? res.content : '').replace(/^\uFEFF/, '');
       localRevCache.set(val, txt);
@@ -1600,7 +1620,6 @@ html,body{height:auto;overflow:visible}#panes,.pv-wrap{display:block}.pv{overflo
     return '';
   }
 
-  // ── 文本相似度与行内字/词级 DOM Diff ──────────────────────────────
   function splitInlineTokens(str) {
     if (!str) return [];
     const re = /[A-Za-z0-9_]+|\s+|[\s\S]/gu;
@@ -1743,7 +1762,6 @@ html,body{height:auto;overflow:visible}#panes,.pv-wrap{display:block}.pv{overflo
     };
   }
 
-  // ── 顺序保持最优配对（把 replace hunk 内同类型块/行/列表项精准配对） ──
   function pairReplaceRun(delItems, insItems, scoreFn) {
     const m = delItems.length, n = insItems.length;
     if (m === 0 || n === 0) {
@@ -1803,7 +1821,6 @@ html,body{height:auto;overflow:visible}#panes,.pv-wrap{display:block}.pv{overflo
     return out;
   }
 
-  // ── 代码块 highlight.js 跨行 <span> 标签配平 ──────────────────────
   function splitBalancedHtmlLines(html) {
     const lines = [];
     let cur = '';
@@ -2151,7 +2168,6 @@ html,body{height:auto;overflow:visible}#panes,.pv-wrap{display:block}.pv{overflo
     return wrap;
   }
 
-  // ── 折叠未变上下文 & 按需展开 ────────────────────────────────────
   function expandFoldGroup(foldId) {
     out.querySelectorAll(`[data-fold-id="${CSS.escape(foldId)}"]`).forEach(el => {
       el.classList.remove('md-diff-hidden');
@@ -2202,7 +2218,6 @@ html,body{height:auto;overflow:visible}#panes,.pv-wrap{display:block}.pv{overflo
     }
   }
 
-  // ── 渲染态 Diff 主入口 ────────────────────────────────────────────
   function renderRenderedDiff(oldText, newText, lcs) {
     out.classList.remove('is-source-diff');
     const oldHost = document.createElement('div');
@@ -2308,7 +2323,6 @@ html,body{height:auto;overflow:visible}#panes,.pv-wrap{display:block}.pv{overflo
     });
   }
 
-  // ── 源码态 Unified Diff 主入口 ────────────────────────────────────
   function renderSourceDiff(oldText, newText, lcs) {
     out.classList.add('is-source-diff');
     const oldLines = oldText.split('\n');
@@ -2490,7 +2504,6 @@ html,body{height:auto;overflow:visible}#panes,.pv-wrap{display:block}.pv{overflo
     updateActiveToc();
   }
 
-  // ── 改动块聚集与顺序导航 (▲ / ▼) ──────────────────────────────────
   function collectDiffHunks() {
     const els = Array.from(out.querySelectorAll('[data-diff="add"],[data-diff="del"]'));
     diffHunks = [];
@@ -2632,7 +2645,25 @@ html,body{height:auto;overflow:visible}#panes,.pv-wrap{display:block}.pv{overflo
     refreshDiffControls();
   }
 
-  diffToggleBtn.onclick = () => { if (diffActive) exitDiff(); else enterDiff(); };
+  diffToggleBtn.onclick = async () => {
+    if (diffActive) { exitDiff(); return; }
+    if (isEditable) {
+      statusEl.textContent = localAuthExpired ? '正在续签并加载版本...' : '正在刷新版本列表...';
+      const prevLatest = localLatestVer;
+      await loadMdSnapshots(true);
+      if (!localAuthExpired && localLatestVer && localLatestVer !== prevLatest) {
+        try {
+          const freshText = await fetchMd();
+          diskText = freshText;
+          if (!window._mdDirty) setVal(freshText);
+        } catch (_) { }
+      }
+      refreshDiffControls();
+      statusEl.textContent = localAuthExpired ? '未授权，无法加载历史版本' : (window._mdDirty ? '● 未固化' : '');
+      if (getAvailableDiffVersions().length < 2) return;
+    }
+    enterDiff();
+  };
   diffExitBtn.onclick = exitDiff;
   diffToSel.onchange = () => runDiff({ preserveScroll: false });
   diffFromSel.onchange = () => runDiff({ preserveScroll: false });
@@ -2662,7 +2693,8 @@ html,body{height:auto;overflow:visible}#panes,.pv-wrap{display:block}.pv{overflo
   };
   diffPrevBtn.onclick = () => stepDiffHunk(-1);
   diffNextBtn.onclick = () => stepDiffHunk(1);
-  // ═══ MD-DIFF ENGINE END ══════════════════════════════════════════
+
+  // --- 启动引导 ---
 
   initMdPinyinAndExcerpt();
 

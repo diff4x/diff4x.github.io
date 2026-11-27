@@ -1,3 +1,5 @@
+//! 站点全量构建核心：参数注入、HTML/媒体扫描、切片与清单生成、Aho-Corasick 全覆盖隐私隔离断言与原子提交。
+
 use aho_corasick::AhoCorasick;
 use chrono::Local;
 use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
@@ -184,6 +186,17 @@ pub fn run_with_options(
         logs,
     )?;
 
+    let pruned_private_recs = prune_deleted_private_records(&mut records, &current_titles);
+    if pruned_private_recs > 0 {
+        log_info(
+            logs,
+            format!(
+                "[gen] 已从 discussion_id_mapper.json 清理 {} 条已删除的私有页历史记录",
+                pruned_private_recs
+            ),
+        );
+    }
+
     let orphan_ids: Vec<Value> = records
         .iter()
         .filter_map(|r| {
@@ -241,6 +254,7 @@ pub fn run_with_options(
         prepared_index_html.as_deref(),
         &html_outcome.rewritten_html_map,
         staged_syn_js,
+        &cmt_json,
         logs,
     )?;
 
@@ -260,10 +274,10 @@ pub fn run_with_options(
         &core_bundle,
         staged_syn_js,
         staged_core_list_js,
+        &cmt_json,
         logs,
     )?;
 
-    // 全部校验与隔离断言通过，统一原子提交正式产物
     if let Some(ref syn_out) = prepared_syn {
         synonyms::commit_prepared(cfg, syn_out, logs)?;
     }
@@ -521,15 +535,69 @@ fn query_git_ignored(
     out
 }
 
+/// 清理已从磁盘删除的 `__*` 私有页历史映射，避免历史私有标题永久滞留公网 discussion_id_mapper.json
+pub(crate) fn prune_deleted_private_records(
+    records: &mut Vec<Value>,
+    current_titles: &HashSet<String>,
+) -> usize {
+    let before = records.len();
+    records.retain(|r| {
+        let title = r.get("title").and_then(|v| v.as_str()).unwrap_or("");
+        current_titles.contains(title) || !title.starts_with("__")
+    });
+    before.saturating_sub(records.len())
+}
+
+/// 提取正文行中的站内图片引用（与 lib.rs::MEDIA_RE 对齐，覆盖独立成行与行内图，跳过 http(s) 与其他协议）
+pub(crate) fn extract_inline_image_refs(line: &str) -> Vec<String> {
+    static INLINE_IMG_RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+    let re = INLINE_IMG_RE.get_or_init(|| {
+        Regex::new(r#"(?i)([^\s"'<>]+\.(?:jpg|jpeg|png|webp|gif))"#).unwrap()
+    });
+    let mut out = Vec::new();
+    for caps in re.captures_iter(line) {
+        let tok = &caps[1];
+        let low = tok.to_ascii_lowercase();
+        if low.starts_with("http://") || low.starts_with("https://") || tok.contains(':') {
+            continue;
+        }
+        let norm = if !tok.contains('/') && !tok.contains('\\') {
+            format!("../gallery/img/{}", tok)
+        } else {
+            let slash = tok.replace('\\', "/");
+            if slash.starts_with("../gallery/") {
+                slash
+            } else if let Some(rest) = slash.strip_prefix("/gallery/") {
+                format!("../gallery/{}", rest)
+            } else if let Some(rest) = slash.strip_prefix("gallery/") {
+                format!("../gallery/{}", rest)
+            } else {
+                continue;
+            }
+        };
+        if !out.contains(&norm) {
+            out.push(norm);
+        }
+    }
+    out
+}
+
 fn is_excluded_html(file_stem: &str, patterns: &[Regex]) -> bool {
     patterns.iter().any(|re| re.is_match(file_stem))
 }
 
-fn build_gallery_image_set(cfg: &ServerConfig) -> HashSet<String> {
-    let mut set = HashSet::new();
+fn build_gallery_image_sets(
+    cfg: &ServerConfig,
+    rules: &IgnoreRules,
+    logs: Option<&LogBus>,
+) -> (HashSet<String>, HashSet<String>) {
+    let mut all_set = HashSet::new();
+    let mut public_set = HashSet::new();
     if !cfg.gallery_dir.is_dir() {
-        return set;
+        return (all_set, public_set);
     }
+
+    let mut items: Vec<(String, String, bool)> = Vec::new();
     for entry in WalkDir::new(&cfg.gallery_dir).into_iter().filter_map(|e| e.ok()) {
         if !entry.file_type().is_file() {
             continue;
@@ -545,10 +613,27 @@ fn build_gallery_image_set(cfg: &ServerConfig) -> HashSet<String> {
         }
         if let Ok(rel) = path.strip_prefix(&cfg.gallery_dir) {
             let rel_slash = rel.to_string_lossy().replace('\\', "/");
-            set.insert(format!("../gallery/{}", rel_slash));
+            let repo_rel = format!("gallery/{}", rel_slash);
+            let web_ref = format!("../gallery/{}", rel_slash);
+            let is_priv = rules.is_private_rel(&repo_rel, false);
+            items.push((repo_rel, web_ref, is_priv));
         }
     }
-    set
+
+    let unchecked: Vec<String> = items
+        .iter()
+        .filter(|(_, _, is_priv)| !*is_priv)
+        .map(|(repo_rel, _, _)| repo_rel.clone())
+        .collect();
+    let git_ignored = query_git_ignored(cfg, &unchecked, logs);
+
+    for (repo_rel, web_ref, is_priv) in items {
+        all_set.insert(web_ref.clone());
+        if !is_priv && !git_ignored.contains(&repo_rel) {
+            public_set.insert(web_ref);
+        }
+    }
+    (all_set, public_set)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -568,10 +653,15 @@ fn process_html_files_and_images(
     private_page_names: &mut BTreeSet<String>,
     logs: Option<&LogBus>,
 ) -> Result<HtmlScanOutcome, String> {
-    let image_set = build_gallery_image_set(cfg);
+    let (image_set, public_image_set) = build_gallery_image_sets(cfg, rules, logs);
     let mut image_lower_to_actual: HashMap<String, String> = HashMap::with_capacity(image_set.len());
     for img in &image_set {
         image_lower_to_actual.insert(img.to_lowercase(), img.clone());
+    }
+    let mut public_lower_to_actual: HashMap<String, String> =
+        HashMap::with_capacity(public_image_set.len());
+    for img in &public_image_set {
+        public_lower_to_actual.insert(img.to_lowercase(), img.clone());
     }
     let mut used_images: HashSet<String> = HashSet::new();
 
@@ -620,6 +710,7 @@ fn process_html_files_and_images(
     let mut failures: Vec<String> = Vec::new();
     let mut missing_images: Vec<String> = Vec::new();
     let mut case_mismatches: Vec<String> = Vec::new();
+    let mut private_img_refs_in_public: Vec<String> = Vec::new();
     let mut pending_rewrites: Vec<(PathBuf, String)> = Vec::new();
     let mut rewritten_html_map: HashMap<String, String> = HashMap::new();
     let mut seen_titles: HashMap<String, String> = HashMap::new();
@@ -676,25 +767,42 @@ fn process_html_files_and_images(
             }
 
             let mut keep_line = true;
-            let img_ref = if skip_img_check {
-                None
-            } else if let Some(c) = full_img_re.captures(line) {
-                Some(c[1].to_string())
-            } else if let Some(c) = flat_img_re.captures(line) {
-                Some(format!("../gallery/img/{}", &c[1]))
+            let standalone_img = !skip_img_check
+                && (full_img_re.is_match(line) || flat_img_re.is_match(line));
+            let line_imgs = if skip_img_check {
+                Vec::new()
             } else {
-                None
+                extract_inline_image_refs(line)
             };
 
-            if let Some(ref img) = img_ref {
-                if image_set.contains(img) {
+            for img in &line_imgs {
+                if !is_private {
+                    if public_image_set.contains(img) {
+                        used_images.insert(img.clone());
+                    } else if let Some(actual) = public_lower_to_actual.get(&img.to_lowercase()) {
+                        used_images.insert(actual.clone());
+                        case_mismatches.push(format!("{}: {} != {}", file_stem, img, actual));
+                    } else if image_set.contains(img) {
+                        used_images.insert(img.clone());
+                        private_img_refs_in_public.push(format!("{}: {}", file_stem, img));
+                    } else if let Some(actual) = image_lower_to_actual.get(&img.to_lowercase()) {
+                        used_images.insert(actual.clone());
+                        private_img_refs_in_public.push(format!("{}: {} ({})", file_stem, img, actual));
+                    } else {
+                        missing_images.push(format!("{}: {}", file_stem, img));
+                        if cfg.prune_missing_images && standalone_img && keep_line {
+                            keep_line = false;
+                            pruned_lines += 1;
+                        }
+                    }
+                } else if image_set.contains(img) {
                     used_images.insert(img.clone());
                 } else if let Some(actual) = image_lower_to_actual.get(&img.to_lowercase()) {
                     used_images.insert(actual.clone());
                     case_mismatches.push(format!("{}: {} != {}", file_stem, img, actual));
                 } else {
                     missing_images.push(format!("{}: {}", file_stem, img));
-                    if cfg.prune_missing_images {
+                    if cfg.prune_missing_images && standalone_img && keep_line {
                         keep_line = false;
                         pruned_lines += 1;
                     }
@@ -853,6 +961,21 @@ fn process_html_files_and_images(
             format!(
                 "[gen] 发现 {} 处图片路径大小写不一致（线上将 404）:\n  {}",
                 case_mismatches.len(),
+                preview.join("\n  ")
+            ),
+        );
+    }
+    if !private_img_refs_in_public.is_empty() {
+        let preview: Vec<&str> = private_img_refs_in_public
+            .iter()
+            .take(30)
+            .map(|s| s.as_str())
+            .collect();
+        log_warn(
+            logs,
+            format!(
+                "[gen] 发现 {} 处公开页引用了被 .gitignore 忽略的图片（线上将 404）:\n  {}",
+                private_img_refs_in_public.len(),
                 preview.join("\n  ")
             ),
         );
@@ -1468,6 +1591,7 @@ fn prepare_manifest(
     prepared_index_html: Option<&str>,
     rewritten_html_map: &HashMap<String, String>,
     staged_synonyms_js: Option<&str>,
+    staged_cmt_json: &str,
     logs: Option<&LogBus>,
 ) -> Result<PreparedManifest, String> {
     let mut sw_manifest: BTreeMap<String, FileMeta> = BTreeMap::new();
@@ -1526,6 +1650,18 @@ fn prepare_manifest(
             let new_idx = prepared_index_html.unwrap();
             let hash = format!("{:x}", crc32fast::hash(new_idx.as_bytes()));
             core_bundle.insert(web_path.clone(), new_idx.to_string());
+            sw_manifest.insert(
+                web_path,
+                FileMeta {
+                    hash,
+                    source: "core-bundle.json",
+                },
+            );
+            continue;
+        }
+        if web_path == "/src/discussion_id_mapper.json" {
+            let hash = format!("{:x}", crc32fast::hash(staged_cmt_json.as_bytes()));
+            core_bundle.insert(web_path.clone(), staged_cmt_json.to_string());
             sw_manifest.insert(
                 web_path,
                 FileMeta {
@@ -1829,10 +1965,34 @@ pub(crate) fn scan_private_pages_against_blobs(
             }
         }
 
+        fn push_sliding(
+            chunks: &mut Vec<ChunkMeta>,
+            seen: &mut HashSet<String>,
+            entry_idx: usize,
+            lc: &[char],
+        ) {
+            let n = lc.len();
+            if n <= WIN {
+                if lc.iter().filter(|c| !c.is_whitespace()).count() >= 6 {
+                    push_chunk(chunks, seen, entry_idx, lc.iter().collect());
+                }
+                return;
+            }
+            let mut pos = 0usize;
+            while pos + WIN <= n {
+                push_chunk(chunks, seen, entry_idx, lc[pos..pos + WIN].iter().collect());
+                pos += STEP;
+            }
+            if pos < n {
+                push_chunk(chunks, seen, entry_idx, lc[n - WIN..n].iter().collect());
+            }
+        }
+
         let total_chars = trimmed.chars().count();
         if total_chars <= WIN {
             push_chunk(&mut chunks, &mut seen, entry_idx, trimmed.to_string());
         } else {
+            let mut short_buf: Vec<char> = Vec::new();
             for raw_line in trimmed.lines() {
                 let line = raw_line.trim();
                 if line.is_empty() {
@@ -1840,30 +2000,22 @@ pub(crate) fn scan_private_pages_against_blobs(
                 }
                 let lc: Vec<char> = line.chars().collect();
                 let n = lc.len();
-                if n <= WIN {
-                    if lc.iter().filter(|c| !c.is_whitespace()).count() >= 6 {
-                        push_chunk(&mut chunks, &mut seen, entry_idx, line.to_string());
+                let non_ws = lc.iter().filter(|c| !c.is_whitespace()).count();
+                if n <= WIN && non_ws < 6 {
+                    if !short_buf.is_empty() {
+                        short_buf.push('\n');
                     }
-                } else {
-                    let mut pos = 0usize;
-                    while pos + WIN <= n {
-                        push_chunk(
-                            &mut chunks,
-                            &mut seen,
-                            entry_idx,
-                            lc[pos..pos + WIN].iter().collect(),
-                        );
-                        pos += STEP;
-                    }
-                    if pos < n && n > WIN {
-                        push_chunk(
-                            &mut chunks,
-                            &mut seen,
-                            entry_idx,
-                            lc[n - WIN..n].iter().collect(),
-                        );
-                    }
+                    short_buf.extend_from_slice(&lc);
+                    continue;
                 }
+                if !short_buf.is_empty() {
+                    push_sliding(&mut chunks, &mut seen, entry_idx, &short_buf);
+                    short_buf.clear();
+                }
+                push_sliding(&mut chunks, &mut seen, entry_idx, &lc);
+            }
+            if !short_buf.is_empty() {
+                push_sliding(&mut chunks, &mut seen, entry_idx, &short_buf);
             }
             if seen.is_empty() {
                 let all_c: Vec<char> = trimmed.chars().collect();
@@ -1903,7 +2055,7 @@ pub(crate) fn scan_private_pages_against_blobs(
 
     for (blob_name, blob_text) in blobs {
         let is_syn = blob_name.starts_with("synonyms.js");
-        let is_lite = blob_name == "lite_data.js";
+        let is_lite = blob_name == "lite_data.js" || blob_name == "discussion_id_mapper.json";
         let min_len_for_blob = if is_syn { WIN } else { 4 };
         let mut reported_entries: HashSet<usize> = HashSet::new();
 
@@ -2004,6 +2156,7 @@ fn assert_no_private_leak(
     core_bundle: &BTreeMap<String, String>,
     staged_synonyms_js: Option<&str>,
     staged_core_list_js: Option<&str>,
+    staged_cmt_json: &str,
     logs: Option<&LogBus>,
 ) -> Result<(), String> {
     if private_page_names.is_empty() {
@@ -2059,8 +2212,11 @@ fn assert_no_private_leak(
     if let Some(core_list) = staged_core_list_js {
         blobs.push(("core-list.js (staged)".to_string(), core_list.to_string()));
     }
+    blobs.push((
+        "discussion_id_mapper.json".to_string(),
+        staged_cmt_json.to_string(),
+    ));
 
-    // 独立从磁盘读取公开正文构造排除集，避免流水线错误自洗白
     let disk_public_docs =
         load_independent_public_corpus_from_disk(cfg, rules, private_page_names);
     let public_refs: Vec<&str> = disk_public_docs.iter().map(|d| d.as_str()).collect();
@@ -2197,6 +2353,7 @@ pub fn verify_public_outputs_clean(
     for (label, path) in [
         ("synonyms.js", cfg.js_out_dir.join("synonyms.js")),
         ("core-list.js", cfg.js_out_dir.join("core-list.js")),
+        ("discussion_id_mapper.json", cfg.discussion_id_mapper.clone()),
     ] {
         if path.is_file() {
             if let Ok(txt) = fs::read_to_string(&path) {

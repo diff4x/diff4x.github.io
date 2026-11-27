@@ -1,6 +1,6 @@
 /**
- * search-ui.js —— 搜索框交互、历史联想、自定义结果列表、过滤工具条 (#sf-bar)
- * 以及搜索结果高亮渲染。
+ * search-ui.js —— 搜索交互界面、历史联想、结果列表高亮与筛选条 (#sf-bar)
+ * 运行于主线程，对接 search-engine.js 与 search-preview.js。
  */
 import {
     $,
@@ -19,7 +19,11 @@ import {
 } from './search-engine.js';
 import { createSearchPreviewController } from './search-preview.js';
 
+// 筛选工具条宽度 (px)
 const SF_BAR_WIDTH = 270;
+
+
+// --- 自定义历史/结果下拉组件 ---
 
 function upgradeSearchHistoryBox(oldEl) {
     if (!oldEl || oldEl.tagName !== 'SELECT') return oldEl;
@@ -201,6 +205,9 @@ ${hlRules}
     return box;
 }
 
+
+// --- 搜索 UI 控制器工厂 ---
+
 export function createSearchUI(ctx) {
     const { store, iframes, emitEvent, engine, getActiveWorker, runActionCommand, exitLightbox } = ctx;
 
@@ -217,6 +224,8 @@ export function createSearchUI(ctx) {
         expanded: new Set(),
         activeHitIndex: -1
     };
+
+    // --- 筛选工具条 (#sf-bar) ---
 
     function sfState() {
         if (!window._sfState) {
@@ -681,6 +690,8 @@ export function createSearchUI(ctx) {
         sfLayout();
     }
 
+    // --- 结果渲染与高亮 ---
+
     function appendHighlightedText(parent, text, ranges) {
         if (!ranges || ranges.length === 0) {
             parent.appendChild(document.createTextNode(text));
@@ -997,6 +1008,8 @@ export function createSearchUI(ctx) {
         updateSearchResults(window._baseRenderedResults, window._currentRenderedKeyword);
     }
 
+    // --- 搜索历史与自动补全 ---
+
     function showSearchHistoryByTime() {
         const elSearchHistory = $("#searchHistory");
         if (!elSearchHistory) return;
@@ -1091,6 +1104,8 @@ export function createSearchUI(ctx) {
         });
         if (typeof elSearchHistory.syncHeight === 'function') elSearchHistory.syncHeight();
     }
+
+    // --- 事件绑定与初始化 ---
 
     function init() {
         if (_initialized) return;

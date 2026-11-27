@@ -15,6 +15,7 @@ const st=getStorageForKey(prop);const val=st?st.getItem(prop):null;if(val===null
 try{return JSON.parse(val);}catch{return val;}},set(_,prop,value){if(typeof prop==='symbol')return false;if(readonlyKeys.has(prop)){console.warn(`store.${prop} 是只读内置对象，禁止覆盖！`);return false;}
 if(prop==='pinyinData')return true;if(prop==='protocol_name'){const clean=sanitizeProtocolName(value);if(!clean){console.warn('拒绝写入非法 protocol_name:',value);return false;}
 value=clean;}
-const st=getStorageForKey(prop);if(st)st.setItem(prop,JSON.stringify(value));return true;},deleteProperty(_,prop){if(typeof prop==='symbol')return false;if(readonlyKeys.has(prop))return false;if(prop==='pinyinData')return true;const st=getStorageForKey(prop);if(st)st.removeItem(prop);return true;}});}
+const st=getStorageForKey(prop);if(st){if(value===undefined)st.removeItem(prop);else st.setItem(prop,JSON.stringify(value));}
+return true;},deleteProperty(_,prop){if(typeof prop==='symbol')return false;if(readonlyKeys.has(prop))return false;if(prop==='pinyinData')return true;const st=getStorageForKey(prop);if(st)st.removeItem(prop);return true;}});}
 root.SiteCore=Object.freeze({MAINDB_NAME,MAINDB_VERSION,TAB_SCOPED_KEYS,ensureMainDBSchema,openMainDB,createStore,cleanupLegacyTabKeys,sanitizeProtocolName,sanitizeAudioPath,sanitizeAudioList
 });})(typeof globalThis!=='undefined'?globalThis:self);

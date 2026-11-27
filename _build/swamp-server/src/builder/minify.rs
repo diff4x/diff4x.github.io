@@ -1,3 +1,5 @@
+//! 内置纯 Rust ES2020 JS / CSS 压缩器、增量哈希账本与单文件热压缩入口。
+
 use rayon::prelude::*;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashSet};

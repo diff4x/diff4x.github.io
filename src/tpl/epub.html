@@ -22,6 +22,38 @@
 
 		<link id="bibi-style" rel="stylesheet" href="../third/bibi/resources/styles/bibi.css" />
 		<link id="bibi-dress" rel="stylesheet" href="../third/bibi/wardrobe/everyday/bibi.dress.css" />
+		<script>
+			(function () {
+				const origCreateElement = Document.prototype.createElement;
+				const origCreateElementNS = Document.prototype.createElementNS;
+				const origSetAttr = Element.prototype.setAttribute;
+				const origRemoveAttr = Element.prototype.removeAttribute;
+				const lockIframe = (el) => {
+					if (el && el.tagName === 'IFRAME') {
+						try { origSetAttr.call(el, 'sandbox', 'allow-same-origin'); } catch (_) { }
+					}
+					return el;
+				};
+				Document.prototype.createElement = function (tagName, options) {
+					return lockIframe(origCreateElement.call(this, tagName, options));
+				};
+				Document.prototype.createElementNS = function (ns, qualifiedName, options) {
+					return lockIframe(origCreateElementNS.call(this, ns, qualifiedName, options));
+				};
+				Element.prototype.setAttribute = function (name, value) {
+					if (this.tagName === 'IFRAME' && typeof name === 'string' && name.toLowerCase() === 'sandbox') {
+						return origSetAttr.call(this, name, 'allow-same-origin');
+					}
+					return origSetAttr.call(this, name, value);
+				};
+				Element.prototype.removeAttribute = function (name) {
+					if (this.tagName === 'IFRAME' && typeof name === 'string' && name.toLowerCase() === 'sandbox') {
+						return;
+					}
+					return origRemoveAttr.call(this, name);
+				};
+			})();
+		</script>
 		<script id="bibi-script" src="../third/bibi/resources/scripts/bibi.js"></script>
 		<script id="bibi-preset" src="../third/bibi/presets/default.js" data-bibi-bookshelf=""></script>
 	</head>
@@ -81,6 +113,9 @@
 		</style>
 
 		<script type="module">
+			/**
+			 * epub.html 检索增强层 —— Bibi 章节安全加固、TOC 叶子分段、Wasm 书内搜索与瞬时定位
+			 */
 			import {
 				SEARCH_HL_STYLE,
 				SEARCH_SYN_HL_STYLE,
@@ -130,14 +165,12 @@
 				opened: false,
 				title: '',
 				bookKey: '',
-				// items[itemIndex] = { itemIndex, item, text, nodes: [{node, start, end}], anchorOffsets: Map, globalStart, globalEnd }
 				items: [],
 				totalChars: 0,
-				// sections: [{ index, title, startGlobal, endGlobal, percent }]
 				sections: [],
 				groupUnit: '节',
 				activeSearchToken: 0,
-				lastSearch: null, // { keyword, wasmKeywords, noise, hits, groups, groupMap, itemHitsMap }
+				lastSearch: null,
 				activeHit: null,
 				searchScope: 'txt',
 				scopeBtn: null,
@@ -146,9 +179,7 @@
 				highlightedItemIndices: new Set()
 			};
 
-			// =========================================================================
-			// 1. BUS 通信与快捷键接管
-			// =========================================================================
+			// --- BUS 通信、快捷键与顶部作用域按钮 ---
 			function getTabId() {
 				try { return (window.top && window.top.__TAB_ID__) || ''; } catch (_) { return ''; }
 			}
@@ -256,9 +287,7 @@
 				syncScopeUI(State.searchScope);
 			}
 
-			// =========================================================================
-			// 2. 章节 DOM 文本提取（跳过 <rt>/<rp> 注音，保留段界 \n 与精确偏移表）
-			// =========================================================================
+			// --- 章节安全加固与 DOM 文本提取 ---
 			function ensureItemHighlightStyle(doc) {
 				if (!doc || !doc.head) return;
 				if (doc.getElementById('epub-search-hl-style')) return;
@@ -363,9 +392,7 @@
 				}
 			}
 
-			// =========================================================================
-			// 3. 构建全文索引与 TOC 最细叶子节点分段
-			// =========================================================================
+			// --- 全文索引与 TOC 叶子分段 ---
 			function resolveAnchorOffset(itemData, rawSelector) {
 				if (!itemData || !rawSelector || typeof rawSelector !== 'string') return 0;
 				let id = rawSelector.replace(/^#/, '');
@@ -377,7 +404,6 @@
 					id = dec;
 				} catch (_) { }
 
-				// 兜底：通过 DOM 顺序找该元素后的首个 Text 节点偏移
 				const doc = itemData.item && itemData.item.contentDocument;
 				const el = doc && doc.getElementById(id);
 				if (el && itemData.nodes.length > 0) {
@@ -436,7 +462,6 @@
 					};
 					walkList(tocNav, 0);
 
-					// 若导航结构不是标准的 nav > ol/ul > li，兜底扫所有 a
 					if (rawEntries.length === 0) {
 						const allLinks = tocNav.querySelectorAll('a');
 						allLinks.forEach((a, idx) => {
@@ -464,7 +489,6 @@
 				}
 
 				if (rawEntries.length > 0) {
-					// 同一起点时，最深 / 叶子节点覆盖父节点
 					rawEntries.sort((a, b) =>
 						(a.globalPos - b.globalPos)
 						|| (Number(a.isLeaf) - Number(b.isLeaf))
@@ -506,7 +530,6 @@
 					return;
 				}
 
-				// 无目录大纲兜底：按章节 item 或超长单章切段
 				const sections = [];
 				const nonEmptyItems = State.items.filter(it => it && it.text.trim().length > 0);
 				if (nonEmptyItems.length <= 2 && State.totalChars > 36000) {
@@ -601,9 +624,67 @@
 				buildLeafTocSections();
 			}
 
-			// =========================================================================
-			// 4. 章节 iframe 内 CSS Custom Highlight 绘制与清理
-			// =========================================================================
+			function recomputeBookOffsets() {
+				let cursor = 0;
+				for (let i = 0; i < State.items.length; i++) {
+					const it = State.items[i];
+					if (!it) continue;
+					it.globalStart = cursor;
+					cursor += it.text.length;
+					it.globalEnd = cursor;
+				}
+				State.totalChars = cursor;
+				buildLeafTocSections();
+			}
+
+			async function ensureAllItemsLoadedForSearch(token, reportStatus) {
+				const pending = [];
+				for (let i = 0; i < State.items.length; i++) {
+					const entry = State.items[i];
+					const item = entry && entry.item;
+					if (item && (item.IsPlaceholder || !item.contentDocument) && !entry.text) {
+						pending.push(entry);
+					}
+				}
+				if (pending.length === 0) return { complete: true, aborted: false };
+
+				const pageObs = window.I && window.I.PageObserver;
+				if (!pageObs || typeof pageObs.turnItem !== 'function') {
+					return { complete: false, aborted: false };
+				}
+
+				let loadedAny = false;
+				let failedCount = 0;
+				for (let k = 0; k < pending.length; k++) {
+					if (token !== State.activeSearchToken) return { complete: false, aborted: true };
+					if (typeof reportStatus === 'function') {
+						reportStatus(`正在加载未展开章节 ${k + 1}/${pending.length}...`);
+					}
+					const entry = pending[k];
+					const item = entry.item;
+					try {
+						await pageObs.turnItem(item, { Up: true });
+						if (token !== State.activeSearchToken) return { complete: false, aborted: true };
+						prepareItemForSearch(item);
+						if (!item.IsPlaceholder && item.contentDocument) {
+							const extracted = extractItemText(item);
+							entry.text = extracted.text;
+							entry.nodes = extracted.nodes;
+							entry.anchorOffsets = extracted.anchorOffsets;
+							loadedAny = true;
+						} else {
+							failedCount++;
+						}
+					} catch (_) {
+						failedCount++;
+					}
+				}
+
+				if (loadedAny) recomputeBookOffsets();
+				return { complete: failedCount === 0, aborted: false };
+			}
+
+			// --- 章节 iframe 高亮绘制 ---
 			function clearItemHighlights(itemIndex) {
 				const itemData = State.items[itemIndex];
 				const win = itemData && itemData.item && itemData.item.contentWindow;
@@ -664,7 +745,8 @@
 				const item = itemData && itemData.item;
 				const win = item && item.contentWindow;
 				const doc = item && item.contentDocument;
-				if (!win || !doc || !win.CSS || !win.CSS.highlights || typeof win.Highlight === 'undefined') return;
+				const HighlightCtor = (win && win.Highlight) || window.Highlight;
+				if (!win || !doc || !win.CSS || !win.CSS.highlights || typeof HighlightCtor === 'undefined') return;
 
 				ensureItemHighlightStyle(doc);
 				clearItemHighlights(itemIndex);
@@ -680,7 +762,7 @@
 					if (count >= MAX_RANGES_PER_ITEM) break;
 					const slot = hlSlot(hit.noise);
 					if (!pools[slot]) {
-						const h = new win.Highlight();
+						const h = new HighlightCtor();
 						const tier = Math.floor(slot / TIER_SIZE);
 						const bucket = slot % TIER_SIZE;
 						h.priority = tier === 0 ? (100 - bucket * 10) : (tier === 1 ? (40 - bucket * 5) : (20 - bucket * 3));
@@ -702,7 +784,7 @@
 				if (State.activeHit && State.activeHit.itemIndex === itemIndex) {
 					const activeRanges = mapSpanToItemRanges(itemData, State.activeHit.localStart, State.activeHit.localEnd);
 					if (activeRanges.length > 0) {
-						const ah = new win.Highlight();
+						const ah = new HighlightCtor();
 						ah.priority = 200;
 						for (const r of activeRanges) ah.add(r);
 						win.CSS.highlights.set('epub-active-hit', ah);
@@ -711,9 +793,7 @@
 				State.highlightedItemIndices.add(itemIndex);
 			}
 
-			// =========================================================================
-			// 5. Wasm 宽容 + 近义搜索与预览片段生成
-			// =========================================================================
+			// --- Wasm 书内搜索与摘要生成 ---
 			async function waitForSharedWasm(timeoutMs = 5000) {
 				const start = Date.now();
 				while (Date.now() - start < timeoutMs) {
@@ -814,6 +894,9 @@
 					return { totalHits: 0, shownHits: 0, truncated: false, groups: [], groupUnit: State.groupUnit };
 				}
 
+				const loadState = await ensureAllItemsLoadedForSearch(token, reportStatus);
+				if (loadState.aborted || token !== State.activeSearchToken) return null;
+
 				if (State.totalChars === 0) {
 					State.lastSearch = null;
 					return {
@@ -827,7 +910,7 @@
 					};
 				}
 
-				const canCache = !!(State.bookKey && (!cacheMeta || cacheMeta.canCache !== false));
+				const canCache = !!(loadState.complete && State.bookKey && (!cacheMeta || cacheMeta.canCache !== false));
 				const queryKey = canCache ? buildBookSearchCacheKey({
 					bookSig: `epub:${State.items.length}:${State.totalChars}:${State.sections.length}`,
 					algoVer: (cacheMeta && cacheMeta.algoVer) || 11,
@@ -961,7 +1044,6 @@
 						? State.sections
 						: [{ index: 0, title: '正文', startGlobal: 0, endGlobal: State.totalChars, percent: '0.0%' }];
 
-					// 预定位每个 section 覆盖的 spine item 切片（按 globalOffset 单调推进）
 					let itemCursor = 0;
 					for (const sec of secs) {
 						if (token !== State.activeSearchToken) return null;
@@ -1128,9 +1210,7 @@
 				return null;
 			}
 
-			// =========================================================================
-			// 6. 跨视图 / 跨书写方向精确瞬时切页与脉冲反馈
-			// =========================================================================
+			// --- 跨视图瞬时切页与脉冲反馈 ---
 			function toOuterViewportRect(item, localRect) {
 				const ir = item.getBoundingClientRect();
 				const cs = getComputedStyle(item);
@@ -1202,7 +1282,6 @@
 					paintItemHighlights(prevHit.itemIndex);
 				}
 
-				// 若为 pre-paginated 占位章节，先拉起加载
 				if (item.IsPlaceholder && window.I && window.I.PageObserver) {
 					try { await window.I.PageObserver.turnItem(item, { Up: true }); } catch (_) { }
 					prepareItemForSearch(item);
@@ -1211,7 +1290,6 @@
 				const ranges = mapSpanToItemRanges(itemData, hit.localStart, hit.localEnd);
 				paintItemHighlights(hit.itemIndex);
 
-				// 中断正在进行的滚动动画，保证瞬时切页不被 R.Moving 拦截
 				try {
 					if (window.I && window.I.ScrollObserver) window.I.ScrollObserver.forceStopScrolling();
 					if (window.R) window.R.Moving = false;
@@ -1237,7 +1315,6 @@
 					} catch (_) { }
 				}
 
-				// 连续滚动模式（horizontal / vertical）下把命中微调居中到 R.Main
 				if (rvm !== 'paged' && primaryRange && window.R && window.R.Main) {
 					const afterLocal = primaryRange.getBoundingClientRect();
 					if (afterLocal && (afterLocal.width > 0 || afterLocal.height > 0)) {
@@ -1264,9 +1341,7 @@
 				}
 			}
 
-			// =========================================================================
-			// 7. 绑定 Bibi 生命周期与主站桥接
-			// =========================================================================
+			// --- Bibi 生命周期与主站桥接 ---
 			function onBookOpened() {
 				if (State.opened) return;
 				State.opened = true;
@@ -1311,7 +1386,16 @@
 			}
 
 			window.addEventListener('pagehide', (e) => {
+				clearAllHighlights();
+				const bridge = getSearchBridge();
+				if (bridge && State.provider) bridge.unregister(State.provider);
 				if (!e.persisted) cleanupOnUnload();
+			});
+
+			window.addEventListener('pageshow', (e) => {
+				if (!e.persisted || !State.opened || !State.provider) return;
+				const bridge = getSearchBridge();
+				if (bridge) bridge.register(State.provider);
 			});
 
 			function initEpubSearchBridge() {
@@ -1325,7 +1409,8 @@
 					prepareItemForSearch(item);
 					if (State.opened && item && typeof item.Index === 'number' && State.items[item.Index]) {
 						const prev = State.items[item.Index];
-						if (!prev.text && !item.IsPlaceholder) {
+						const staleNodes = prev.nodes.length > 0 && (!prev.nodes[0].node || !prev.nodes[0].node.isConnected);
+						if ((!prev.text || staleNodes) && !item.IsPlaceholder) {
 							const extracted = extractItemText(item);
 							prev.text = extracted.text;
 							prev.nodes = extracted.nodes;

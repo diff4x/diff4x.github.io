@@ -1,28 +1,41 @@
+/**
+ * side.js —— 侧边栏目录树、已阅标记 (SideDB)、历史菜单与悬停预览（运行于 #side iframe）
+ */
 if (window.top && window.top.VirtualCursor) {
     window.top.VirtualCursor.attach(window);
 }
 
+// 交互与高亮时间参数
 const childId = "side";
-
-const RIGHT_CLICK_DOUBLE_MS = 300;
-const RIGHT_CLICK_DISTANCE = 8;
-const RECENT_WINDOW_MS = 4320 * 60 * 1000;
-const HOVER_PREVIEW_DELAY_MS = 350;
+const RIGHT_CLICK_DOUBLE_MS = 300;          // 判定右键双击的时间窗 (ms)
+const RIGHT_CLICK_DISTANCE = 8;             // 判定右键双击的最大位移 (px)
+const RECENT_WINDOW_MS = 4320 * 60 * 1000;  // 近期更新高亮窗口 (72 小时, ms)
+const HOVER_PREVIEW_DELAY_MS = 350;         // 悬停缩略图延迟 (ms)
 const DUAL_CLICK_DELAY_MS = 250;
 
+// 侧栏运行态与通道
+const $ = sel => document.querySelector(sel);
+const $$ = sel => document.querySelectorAll(sel);
 let flag_jump_from_search = false;
 let lastRightClickTime = 0;
 let lastRightClickX = 0;
 let lastRightClickY = 0;
 let rightClickTimer = null;
-
 let previewTooltip = null;
 let hoverTimeout = null;
 let lastMouseX = 0;
 let lastMouseY = 0;
+let commentCounts = {};
 
-const $ = sel => document.querySelector(sel);
-const $$ = sel => document.querySelectorAll(sel);
+window.childId = childId;
+const store = createStore({ last_li_a: [] });
+if (window.__LITE_BUS__) window.__LITE_BUS__.close();
+window.__LITE_BUS__ = new BroadcastChannel("bus");
+const BUS = window.__LITE_BUS__;
+const ctxId = window.top === window.self ? "index" : window.childId;
+
+
+// --- 基础辅助与评论数显示 ---
 
 function createStore(defaults = {}) {
     return window.top.SiteCore.createStore(defaults);
@@ -51,7 +64,9 @@ function getFileNameFromPath(path) {
     return path.split("/").pop();
 }
 
-let commentCounts = {};
+function encodePathSegments(path) {
+    return String(path ?? "").split("/").map(s => (s === "" || s === "." || s === "..") ? s : encodeURIComponent(s)).join("/");
+}
 
 function refreshHtmlTitle(a) {
     const parts = [];
@@ -67,124 +82,8 @@ function applyCommentCounts(counts) {
     document.querySelectorAll("#html a[data-path]").forEach(refreshHtmlTitle);
 }
 
-window.childId = childId;
 
-const store = createStore({ last_li_a: [] });
-
-if (window.__LITE_BUS__) window.__LITE_BUS__.close();
-window.__LITE_BUS__ = new BroadcastChannel("bus");
-const BUS = window.__LITE_BUS__;
-const ctxId = window.top === window.self ? "index" : window.childId;
-
-window.addEventListener('pagehide', (e) => {
-    if (e.persisted) return;
-    if (window.__LITE_BUS__) {
-        window.__LITE_BUS__.close();
-        window.__LITE_BUS__ = null;
-    }
-});
-
-BUS.addEventListener("message", e => {
-    const { type, payload, target, from, tabId } = e.data || {};
-    const myTab = getTabId();
-    if (tabId && myTab && tabId !== myTab) return;
-    if (target !== "*" && target !== ctxId) return;
-
-    switch (type) {
-        case "RENDER_CATALOG":
-            buildCatalogFromLiteData(payload);
-            break;
-
-        case "show_update_banner": {
-            if (document.getElementById("update-banner")) return;
-            const banner = document.createElement("div");
-            banner.id = "update-banner";
-            banner.innerText = "发现新版本, 点击更新";
-            banner.onclick = () => {
-                emitEvent("execute_update", null, "index");
-                banner.remove();
-            };
-            document.body.prepend(banner);
-            break;
-        }
-
-        case "#html a":
-        case "#gallery a":
-        case "#video a":
-        case "#audio a":
-        case "#ebook a": {
-            const el = document.querySelector(`${type}[data-path="${CSS.escape(payload)}"]`);
-            if (el) {
-                if (type === "#html a") flag_jump_from_search = true;
-                el.click();
-            }
-            break;
-        }
-
-        case "SYNC_CURRENT": {
-            if (payload) {
-                const el = document.querySelector(`a[data-path="${CSS.escape(payload)}"]`);
-                if (el) setCurrent(el);
-                recordHistory(payload);
-            }
-            break;
-        }
-
-        case "show_current":
-            show_current();
-            break;
-
-        case "UPDATE_FAV_LIST":
-            render_fav_trigger();
-            break;
-
-        case "COMMENT_COUNTS":
-            applyCommentCounts(payload);
-            break;
-
-        case "update_bookmark_menu":
-            document.querySelectorAll("a.current").forEach(a => a.classList.remove("current"));
-            emitEvent("mask", { op: "remove" }, "index");
-            break;
-
-        default:
-            break;
-    }
-});
-
-window.addEventListener("contextmenu", e => {
-    if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") return;
-
-    const now = Date.now();
-    const dx = e.clientX - lastRightClickX;
-    const dy = e.clientY - lastRightClickY;
-    const isDouble = (now - lastRightClickTime) <= RIGHT_CLICK_DOUBLE_MS
-        && Math.sqrt(dx * dx + dy * dy) <= RIGHT_CLICK_DISTANCE;
-
-    lastRightClickTime = now;
-    lastRightClickX = e.clientX;
-    lastRightClickY = e.clientY;
-
-    if (isDouble) {
-        clearTimeout(rightClickTimer);
-        lastRightClickTime = 0;
-        return;
-    }
-
-    e.preventDefault();
-    rightClickTimer = setTimeout(() => {
-        emitEvent("SHOW_GLOBAL_BOOKMARKS", { x: e.clientX, y: e.clientY, source: "side" }, "index");
-    }, RIGHT_CLICK_DOUBLE_MS);
-});
-
-document.addEventListener("keydown", e => {
-    if (e.key === "\\") emitEvent("quick_search", null, "index");
-});
-
-window.onload = () => {
-    adj_width();
-    go_top();
-};
+// --- 目录树渲染 ---
 
 function buildCatalogFromLiteData(data) {
     if (!data || typeof data !== "object") return;
@@ -219,12 +118,17 @@ function buildCatalogFromLiteData(data) {
 
     if (typeof updateRecentLinks === "function") updateRecentLinks();
 
-    if (!window._markSystemBound) { mark(); window._markSystemBound = true; }
+    if (!window._markSystemBound) {
+        window._markSystemBound = true;
+        mark();
+    } else if (window._markSystemReady) {
+        attachMarkButtonsToDOM();
+    }
     if (!window._menuSystemBound) { menu(); window._menuSystemBound = true; }
 
     try {
         applyCommentCounts(window.top && window.top.commentCounts);
-    } catch { /* 跨窗口读取失败时等待 index 推送 */ }
+    } catch {}
 }
 
 function renderStructuredTree(node, container, type, pathPrefix) {
@@ -270,7 +174,7 @@ function renderStructuredTree(node, container, type, pathPrefix) {
         const isLocalOnly = typeof flags === "string" && flags.includes("localOnly");
 
         if (type === "html") {
-            a.href = "../../html/" + name;
+            a.href = "../../html/" + encodeURIComponent(name);
             a.target = "content";
             if (typeof flags === "string" && flags.includes("-")) {
                 a.dataset.stamp = flags.split("-")[0];
@@ -292,6 +196,9 @@ function renderStructuredTree(node, container, type, pathPrefix) {
     });
     container.appendChild(frag);
 }
+
+
+// --- 已阅标记 (SideDB) ---
 
 function createMarkButton(path) {
     const btn = document.createElement("span");
@@ -342,7 +249,7 @@ async function mark() {
                             os.clear();
                             legacy.forEach(url => os.put({ url }));
                             delete store.ss_marks_lifepod;
-                        } catch { /* ignore migration errors */ }
+                        } catch {}
                     }
 
                     const getAllReq = os.getAll();
@@ -416,17 +323,27 @@ async function mark() {
 
     window.MarkSystem = markSystem;
     await markSystem.init();
+    window._markSystemReady = true;
+    attachMarkButtonsToDOM();
+}
 
+function attachMarkButtonsToDOM() {
+    const ms = window.MarkSystem;
+    if (!ms) return;
     document.querySelectorAll("li").forEach(li => {
         const a = li.querySelector("a");
         if (!a || !a.dataset.path) return;
         const path = a.dataset.path;
-        if (markSystem.urls.has(path)) a.classList.add("item-marked");
-        li.appendChild(createMarkButton(path));
+        if (ms.urls.has(path)) a.classList.add("item-marked");
+        if (!li.querySelector(".mark-btn")) {
+            li.appendChild(createMarkButton(path));
+        }
     });
-
-    markSystem.restoreDOM();
+    ms.restoreDOM();
 }
+
+
+// --- 导航点击与双击复制 ---
 
 function bindDelegatedClick(containerSelector, childSelector, handler) {
     const container = document.querySelector(containerSelector);
@@ -533,8 +450,10 @@ function click_func() {
         recordHistory(a.dataset.path);
     });
 
-    $("#a a").addEventListener("click", () => emitEvent("mask", { op: "remove" }, "index"));
-    store.resource_type = "bookmark";
+    $("#a a").addEventListener("click", () => {
+        store.resource_type = "bookmark";
+        emitEvent("mask", { op: "remove" }, "index");
+    });
 }
 
 function copyToClipboard(text) {
@@ -599,6 +518,9 @@ function bindDualClick(el, onSingle, onDouble, delay = DUAL_CLICK_DELAY_MS) {
         }
     });
 }
+
+
+// --- 顶部菜单、历史与近期更新 ---
 
 function makeMenuLink(text, onClick) {
     const a = document.createElement("a");
@@ -729,7 +651,9 @@ function render_fav_trigger() {
         document.querySelectorAll("#audio li").forEach(li => li.classList.remove("current"));
         emitEvent("play_fav_list", null, "index");
     };
-    document.getElementById("historyWrapper").after(btn);
+    const anchor = document.getElementById("historyWrapper");
+    if (!anchor) return;
+    anchor.after(btn);
 }
 
 function recordHistory(path) {
@@ -800,6 +724,9 @@ function show_current() {
     setTimeout(() => current.scrollIntoView({ behavior: "smooth", block: "center" }), 100);
 }
 
+
+// --- 侧栏布局与媒体悬停预览 ---
+
 function adj_width() {
     $("#c").addEventListener("click", () => emitEvent("adj_side_width", { op: "+" }, "index"));
     $("#d").addEventListener("click", () => emitEvent("adj_side_width", { op: "-" }, "index"));
@@ -833,6 +760,19 @@ function initPreviewTooltip() {
     document.body.appendChild(previewTooltip);
 }
 
+function clearPreviewTooltip() {
+    if (!previewTooltip) return;
+    previewTooltip.querySelectorAll("video, audio").forEach(m => {
+        try {
+            m.pause();
+            m.removeAttribute("src");
+            m.load();
+        } catch (_) { }
+    });
+    previewTooltip.style.display = "none";
+    previewTooltip.innerHTML = "";
+}
+
 function movePreviewTooltip() {
     if (!previewTooltip) return;
     const x = Math.min(lastMouseX + 15, window.innerWidth - 200);
@@ -855,13 +795,21 @@ function bindHoverPreview(selector, type) {
         if (hoverTimeout) clearTimeout(hoverTimeout);
 
         hoverTimeout = setTimeout(() => {
-            const src = "../../" + a.dataset.path;
+            clearPreviewTooltip();
+            const src = "../../" + encodePathSegments(a.dataset.path);
             if (type === "image") {
-                previewTooltip.innerHTML = `<img src="${src}" class="preview-media" />`;
+                const img = document.createElement("img");
+                img.src = src;
+                img.className = "preview-media";
+                previewTooltip.replaceChildren(img);
             } else if (type === "video") {
-                previewTooltip.innerHTML = `<video src="${src}" preload="metadata" muted class="preview-media"></video>`;
-                const video = previewTooltip.querySelector("video");
+                const video = document.createElement("video");
+                video.src = src;
+                video.preload = "metadata";
+                video.muted = true;
+                video.className = "preview-media";
                 video.addEventListener("loadeddata", () => { video.currentTime = 0.5; });
+                previewTooltip.replaceChildren(video);
             }
             movePreviewTooltip();
             previewTooltip.style.display = "block";
@@ -882,8 +830,7 @@ function bindHoverPreview(selector, type) {
         if (e.relatedTarget && a.contains(e.relatedTarget)) return;
 
         if (hoverTimeout) { clearTimeout(hoverTimeout); hoverTimeout = null; }
-        previewTooltip.style.display = "none";
-        previewTooltip.innerHTML = "";
+        clearPreviewTooltip();
     });
 }
 
@@ -892,6 +839,119 @@ function hover_func() {
     bindHoverPreview("#gallery", "image");
     bindHoverPreview("#video", "video");
 }
+
+
+// --- 事件绑定与启动 ---
+
+window.addEventListener('pagehide', (e) => {
+    if (e.persisted) return;
+    if (window.__LITE_BUS__) {
+        window.__LITE_BUS__.close();
+        window.__LITE_BUS__ = null;
+    }
+});
+
+BUS.addEventListener("message", e => {
+    const { type, payload, target, from, tabId } = e.data || {};
+    const myTab = getTabId();
+    if (tabId && myTab && tabId !== myTab) return;
+    if (target !== "*" && target !== ctxId) return;
+
+    switch (type) {
+        case "RENDER_CATALOG":
+            buildCatalogFromLiteData(payload);
+            break;
+
+        case "show_update_banner": {
+            if (document.getElementById("update-banner")) return;
+            const banner = document.createElement("div");
+            banner.id = "update-banner";
+            banner.innerText = "发现新版本, 点击更新";
+            banner.onclick = () => {
+                emitEvent("execute_update", null, "index");
+                banner.remove();
+            };
+            document.body.prepend(banner);
+            break;
+        }
+
+        case "#html a":
+        case "#gallery a":
+        case "#video a":
+        case "#audio a":
+        case "#ebook a": {
+            const el = document.querySelector(`${type}[data-path="${CSS.escape(payload)}"]`);
+            if (el) {
+                if (type === "#html a") flag_jump_from_search = true;
+                el.click();
+            }
+            break;
+        }
+
+        case "SYNC_CURRENT": {
+            if (payload) {
+                const el = document.querySelector(`a[data-path="${CSS.escape(payload)}"]`);
+                if (el) setCurrent(el);
+                recordHistory(payload);
+            }
+            break;
+        }
+
+        case "show_current":
+            show_current();
+            break;
+
+        case "UPDATE_FAV_LIST":
+            render_fav_trigger();
+            break;
+
+        case "COMMENT_COUNTS":
+            applyCommentCounts(payload);
+            break;
+
+        case "update_bookmark_menu":
+            document.querySelectorAll("a.current").forEach(a => a.classList.remove("current"));
+            emitEvent("mask", { op: "remove" }, "index");
+            break;
+
+        default:
+            break;
+    }
+});
+
+window.addEventListener("contextmenu", e => {
+    if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") return;
+
+    const now = Date.now();
+    const dx = e.clientX - lastRightClickX;
+    const dy = e.clientY - lastRightClickY;
+    const isDouble = (now - lastRightClickTime) <= RIGHT_CLICK_DOUBLE_MS
+        && Math.sqrt(dx * dx + dy * dy) <= RIGHT_CLICK_DISTANCE;
+
+    lastRightClickTime = now;
+    lastRightClickX = e.clientX;
+    lastRightClickY = e.clientY;
+
+    if (isDouble) {
+        clearTimeout(rightClickTimer);
+        lastRightClickTime = 0;
+        return;
+    }
+
+    e.preventDefault();
+    rightClickTimer = setTimeout(() => {
+        emitEvent("SHOW_GLOBAL_BOOKMARKS", { x: e.clientX, y: e.clientY, source: "side" }, "index");
+    }, RIGHT_CLICK_DOUBLE_MS);
+});
+
+document.addEventListener("keydown", e => {
+    if (e.key === "\\") emitEvent("quick_search", null, "index");
+});
+
+window.onload = () => {
+    adj_width();
+    go_top();
+};
 
 if (window.top?.lite_data) {
     buildCatalogFromLiteData(window.top.lite_data);

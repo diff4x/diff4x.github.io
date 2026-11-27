@@ -29,6 +29,9 @@
 	<div id="container"></div>
 
 	<script>
+		/**
+		 * pano.html 内联逻辑 —— 校验同源 /gallery/ 全景路径并挂载 PhotoSphereViewer
+		 */
 		(function () {
 			const urlParams = new URLSearchParams(window.location.search);
 			const rawSrc = (urlParams.get("src") || "").trim();

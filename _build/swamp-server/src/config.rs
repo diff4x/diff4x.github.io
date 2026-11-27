@@ -1,3 +1,5 @@
+//! 两层分级配置加载（入库 swamp.toml + 本机私有 privy/local.toml）与标记块 TOML 预校验原子写回。
+
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::fs;
@@ -165,7 +167,6 @@ pub struct ServerConfig {
     pub precache_include: Vec<String>,
     pub precache_exclude: Vec<String>,
 
-    // Media / Keep
     pub webp_quality: u8,
     pub img_max_width: u32,
     pub webp_output_dir: PathBuf,
@@ -173,13 +174,11 @@ pub struct ServerConfig {
     pub webp_output_dir2: Option<PathBuf>,
     pub keep_takeout_zip_folder: Option<PathBuf>,
 
-    // Tray / Heartbeat / Tasks
     pub heartbeat_url: String,
     pub heartbeat_interval_sec: u64,
     pub tasks_poll_interval_sec: u64,
     pub due_within_days: i64,
 
-    // Server / Local tools
     pub port: u16,
     pub sim_port: u16,
     pub log_level: String,

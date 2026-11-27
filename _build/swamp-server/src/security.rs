@@ -1,3 +1,5 @@
+//! 本地服务安全守卫：Host 白名单、双阶段静态路径校验、API 四重鉴权与内置自检套件。
+
 use axum::{
     extract::{Request, State},
     http::{header, HeaderName, HeaderValue, Method, StatusCode},
@@ -16,7 +18,6 @@ use crate::services::log_bus::LogBus;
 use crate::services::tasks::RuntimeStatus;
 
 pub const CSP_HEADER_VALUE: &str = "script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' https://giscus.app; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; frame-ancestors 'self';";
-pub const CSP_STREET_VIEW_VALUE: &str = "script-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com https://accounts.google.com; object-src 'none'; base-uri 'self'; frame-ancestors 'self';";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RunMode {
@@ -36,6 +37,8 @@ pub struct AppState {
     pub html_change_tx: tokio::sync::broadcast::Sender<String>,
     pub shutdown_notify: Arc<tokio::sync::Notify>,
     pub shutting_down: AtomicBool,
+    pub sim_gitignore: Option<ignore::gitignore::Gitignore>,
+    pub rt_handle: tokio::runtime::Handle,
 }
 
 pub fn generate_token_hex() -> Result<String, String> {
@@ -204,6 +207,13 @@ pub fn validate_decoded_static_path(decoded: &str, mode: RunMode) -> Option<Vec<
             if lower_joined.starts_with("html/__") && lower_joined.ends_with(".html") {
                 return None;
             }
+            if lower_joined == "gallery/diary"
+                || lower_joined.starts_with("gallery/diary/")
+                || lower_joined == "gallery/playboy"
+                || lower_joined.starts_with("gallery/playboy/")
+            {
+                return None;
+            }
         }
         RunMode::Serve => {
             // 本地模式下 _build/** 实行默认拒绝 + 精确白名单，仅放行本地工具页必需的两个只读文件
@@ -222,7 +232,6 @@ pub fn validate_decoded_static_path(decoded: &str, mode: RunMode) -> Option<Vec<
     Some(segs)
 }
 
-/// 校验 HTML 标题合法性
 pub fn validate_title(t: &str) -> bool {
     let trimmed = t.trim();
     if trimmed.is_empty() || trimmed.chars().count() > 150 {
@@ -247,7 +256,6 @@ pub fn validate_title(t: &str) -> bool {
     true
 }
 
-/// 校验仓库内相对 Markdown 路径（如 README.md）
 pub fn validate_rel_md_path(raw: &str) -> Option<Vec<String>> {
     let rel = raw.trim().trim_start_matches('/');
     if rel.is_empty() || rel.chars().count() > 260 || has_control_chars(rel) {
@@ -289,10 +297,24 @@ pub fn validate_rel_md_path(raw: &str) -> Option<Vec<String>> {
 }
 
 pub fn validate_bookmark_block(b: &str) -> bool {
-    !b.is_empty()
-        && b.len() <= 32
-        && b.chars()
+    if b.is_empty()
+        || b.len() > 32
+        || !b
+            .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    {
+        return false;
+    }
+    let low = b.to_ascii_lowercase();
+    !matches!(
+        low.as_str(),
+        "wallpaper-bg"
+            | "wallpaper-panel"
+            | "b1"
+            | "glass-calendar-host"
+            | "end_flag"
+            | "copyright"
+    )
 }
 
 pub fn validate_http_url(u: &str) -> bool {
@@ -314,12 +336,7 @@ pub fn validate_bookmark_title(t: &str) -> bool {
     !t.chars().any(|c| c == '<' || c == '>' || c == '|')
 }
 
-/// 全站安全响应头中间件
 pub async fn security_headers_middleware(req: Request, next: Next) -> Response {
-    let is_svu = req
-        .uri()
-        .path()
-        .eq_ignore_ascii_case("/src/tpl/street_view_uploader.html");
     let mut res = next.run(req).await;
     let headers = res.headers_mut();
     headers.insert(
@@ -334,11 +351,7 @@ pub async fn security_headers_middleware(req: Request, next: Next) -> Response {
     if !headers.contains_key("content-security-policy") {
         headers.insert(
             HeaderName::from_static("content-security-policy"),
-            HeaderValue::from_static(if is_svu {
-                CSP_STREET_VIEW_VALUE
-            } else {
-                CSP_HEADER_VALUE
-            }),
+            HeaderValue::from_static(CSP_HEADER_VALUE),
         );
     }
     res
@@ -498,7 +511,7 @@ pub fn run_selftest_with_logger(logs: Option<&LogBus>) -> Result<(), String> {
     check("serve-block-swamp-toml", validate_static_request_path("/_build/swamp.toml", RunMode::Serve).is_none());
     check("serve-block-local-toml", validate_static_request_path("/_build/privy/local.toml", RunMode::Serve).is_none());
 
-    // Step A 纯 Rust 构建器自检：JS/CSS 压缩、HTML 抽取、书签原子操作
+    // --- 构建器压缩、HTML 抽取与书签操作自检 ---
     let js_sample = r#"const a = 1; // cmt
 const r = /a\/b[\]/]/g;
 const s = `hi ${fn(`ok ${1 + ++x}`)}`;
@@ -635,7 +648,7 @@ const d = obj.return / 2;"#;
             .unwrap_or(false),
     );
 
-    // P0/P1/P2 新增回归自检：Host 白名单、Sim 私有页、保留设备名、ASI/CSS/HTML 抽取、补丁分级与 API 鉴权
+    // --- Host 白名单、路径守卫、压缩边角与 API 鉴权自检 ---
     let hosts_8000 = build_allowed_hosts(8000);
     check("host-guard-allow-localhost", validate_host_header("localhost:8000", &hosts_8000));
     check("host-guard-block-rebinding", !validate_host_header("evil.example:8000", &hosts_8000));
@@ -731,7 +744,7 @@ const d = obj.return / 2;"#;
         .is_err(),
     );
 
-    // 复审第 2 轮回归自检：防二次解码、嵌套 .cargo/脚本分级、推送隐私路径、RFC 7636 PKCE、ManifestGuard Drop 与全覆盖隔离断言
+    // --- 补丁分级、推送隐私、PKCE、隔离断言与 Markdown 历史自检 ---
     check(
         "static-decoded-allow-literal-percent",
         validate_decoded_static_path("/html/100%20percent%E4%BD.html", RunMode::Serve).is_some(),
@@ -858,6 +871,212 @@ const d = obj.return / 2;"#;
         crate::services::pack_apply::safe_diff_preview_filename("my.code-workspace")
             == "my.code-workspace.txt"
             && crate::services::pack_apply::safe_diff_preview_filename("main.rs") == "main.rs",
+    );
+    check(
+        "sim-block-gallery-diary",
+        validate_static_request_path("/gallery/diary/a.webp", RunMode::Sim).is_none(),
+    );
+    check(
+        "sim-block-gallery-playboy",
+        validate_static_request_path("/gallery/playboy/01.jpg", RunMode::Sim).is_none(),
+    );
+    check(
+        "pack-block-vscode",
+        crate::services::pack_apply::is_hard_private_rel(".vscode/tasks.json")
+            && crate::services::pack_apply::is_hard_private_rel(".vscode"),
+    );
+    check(
+        "push-privacy-gallery-dirs",
+        crate::services::pack_apply::is_private_push_path("gallery/diary/1.webp")
+            && crate::services::pack_apply::is_private_push_path("gallery/playboy/1.jpg")
+            && crate::services::pack_apply::is_private_push_path("MIYUKI/a.mkv")
+            && !crate::services::pack_apply::is_private_push_path("gallery/img/1.webp"),
+    );
+    check(
+        "pack-exclude-raw-core-list",
+        crate::services::pack_apply::is_default_excluded_pack_file("src/js/raw/core-list.js")
+            && !crate::services::pack_apply::is_default_excluded_pack_file("src/js/raw/index.js"),
+    );
+    check(
+        "keep-diary-force-prefix",
+        crate::media::keep2html::normalize_keep_html_title("20261127", true) == "__20261127"
+            && crate::media::keep2html::normalize_keep_html_title("__20261127", true) == "__20261127"
+            && crate::media::keep2html::normalize_keep_html_title("note", false) == "note",
+    );
+    check(
+        "csp-no-external-tool-cdn",
+        !CSP_HEADER_VALUE.contains("tailwindcss") && !CSP_HEADER_VALUE.contains("accounts.google.com"),
+    );
+    check(
+        "pack-block-streetview-secrets",
+        crate::services::pack_apply::is_hard_private_rel("_build/privy/streetview_tokens.json")
+            && crate::services::pack_apply::is_hard_private_rel("streetview_credentials.json"),
+    );
+    check(
+        "streetview-upload-url-guard",
+        crate::services::street_view::is_allowed_upload_url(
+            "https://streetviewpublish.googleapis.com/media/user/123",
+        ) && !crate::services::street_view::is_allowed_upload_url(
+            "http://streetviewpublish.googleapis.com/media/1",
+        ) && !crate::services::street_view::is_allowed_upload_url("https://evil.example/upload")
+            && !crate::services::street_view::is_allowed_upload_url(
+                "https://evil@streetviewpublish.googleapis.com/upload",
+            ),
+    );
+    check(
+        "streetview-time-and-mask",
+        crate::services::street_view::selftest_time_and_update_mask(),
+    );
+    check(
+        "streetview-upload-url-parser-differential",
+        !crate::services::street_view::is_allowed_upload_url(
+            "https://evil.example?.googleapis.com/upload",
+        ) && !crate::services::street_view::is_allowed_upload_url(
+            "https://evil.example#.googleapis.com/upload",
+        ) && !crate::services::street_view::is_allowed_upload_url(
+            r"https://evil.example\.googleapis.com/upload",
+        ) && !crate::services::street_view::is_allowed_upload_url("https://.googleapis.com/upload")
+            && !crate::services::street_view::is_allowed_upload_url(
+                "https://streetviewpublish.googleapis.com:8443/media/1",
+            ) && crate::services::street_view::is_allowed_upload_url(
+                "https://streetviewpublish.googleapis.com:443/media/1",
+            ),
+    );
+    check(
+        "pack-classify-rust-sources",
+        crate::services::pack_apply::is_build_or_exec_rel("_build/swamp-server/src/main.rs")
+            && crate::services::pack_apply::is_build_or_exec_rel("_build/swamp-server/src/lib.rs")
+            && crate::services::pack_apply::is_build_or_exec_rel(
+                "_build/swamp-server/src/services/street_view.rs",
+            ) && !crate::services::pack_apply::is_build_or_exec_rel("src/js/raw/index.js"),
+    );
+    check(
+        "pack-reject-zip-case-collision",
+        crate::services::pack_apply::selftest_zip_reject_case_collision(),
+    );
+    let md_repo_root = std::path::Path::new("repo_root_dummy");
+    check(
+        "api-md-canon-path-recheck",
+        crate::api_files::validate_canonical_md_target(
+            md_repo_root,
+            &md_repo_root.join("README.md"),
+        ) == Some("README.md".to_string())
+            && crate::api_files::validate_canonical_md_target(
+                md_repo_root,
+                &md_repo_root.join("_build").join("evil.md"),
+            )
+            .is_none()
+            && crate::api_files::validate_canonical_md_target(
+                md_repo_root,
+                &md_repo_root.join(".git").join("a.md"),
+            )
+            .is_none()
+            && crate::api_files::validate_canonical_md_target(
+                md_repo_root,
+                std::path::Path::new("outside_root/README.md"),
+            )
+            .is_none(),
+    );
+
+    let mut mock_recs = vec![
+        json!({ "id": 1, "title": "public_active" }),
+        json!({ "id": 2, "title": "public_deleted" }),
+        json!({ "id": 3, "title": "__priv_active" }),
+        json!({ "id": 4, "title": "__priv_deleted" }),
+    ];
+    let cur_titles: std::collections::HashSet<String> = ["public_active", "__priv_active"]
+        .into_iter()
+        .map(String::from)
+        .collect();
+    let pruned_cnt =
+        crate::builder::generator::prune_deleted_private_records(&mut mock_recs, &cur_titles);
+    check(
+        "gen-prune-deleted-private-mapper",
+        pruned_cnt == 1
+            && mock_recs.len() == 3
+            && !mock_recs
+                .iter()
+                .any(|r| r.get("title").and_then(|v| v.as_str()) == Some("__priv_deleted"))
+            && mock_recs
+                .iter()
+                .any(|r| r.get("title").and_then(|v| v.as_str()) == Some("__priv_active"))
+            && mock_recs
+                .iter()
+                .any(|r| r.get("title").and_then(|v| v.as_str()) == Some("public_deleted")),
+    );
+
+    let inline_refs = crate::builder::generator::extract_inline_image_refs(
+        "说明图 20260101.webp 与 ../gallery/diary/p1.png 和 https://cdn.example/a.png 以及 javascript:x.png",
+    );
+    check(
+        "gen-inline-image-ref-extract",
+        inline_refs.len() == 2
+            && inline_refs.contains(&"../gallery/img/20260101.webp".to_string())
+            && inline_refs.contains(&"../gallery/diary/p1.png".to_string()),
+    );
+
+    let short_priv = vec![crate::builder::generator::PrivateLeakInput {
+        label: "__short.html".to_string(),
+        body: "短甲一\n短乙二\n短丙三\n短丁四\n短戊五\n短己六\n短庚七\n短辛八".to_string(),
+        allowed_lite_meta: vec!["__short.html".to_string()],
+    }];
+    let short_blob = vec![(
+        "fat_data_1.json".to_string(),
+        r#"{"9":"短甲一\n短乙二\n短丙三\n短丁四\n短戊五\n短己六\n短庚七\n短辛八"}"#.to_string(),
+    )];
+    let mut short_probs = Vec::new();
+    crate::builder::generator::scan_private_pages_against_blobs(
+        &short_priv,
+        &short_blob,
+        &[],
+        &mut short_probs,
+    );
+    check("private-leak-short-lines-merged", !short_probs.is_empty());
+
+    let mut tmp_gi_b = ignore::gitignore::GitignoreBuilder::new(".");
+    let _ = tmp_gi_b.add_line(None, "secret_notes/");
+    let tmp_gi = tmp_gi_b.build().ok();
+    check(
+        "push-privacy-gitignore-union",
+        crate::services::pack_apply::is_private_push_path_with_gitignore(
+            "secret_notes/a.txt",
+            tmp_gi.as_ref(),
+        ) && !crate::services::pack_apply::is_private_push_path_with_gitignore(
+            "html/public.html",
+            tmp_gi.as_ref(),
+        ),
+    );
+
+    let bm_leading_br = r#"<div id="c">
+   <a href="https://one.example" target="_blank">One</a>
+   <br><a href="https://two.example" target="_blank">Two</a>
+  </div>
+  <a id="end_flag" href="1" style="display:none"></a>"#;
+    let bm_rm_tail = crate::builder::html_utils::apply_bookmark_mutation(
+        bm_leading_br,
+        "del",
+        "Two",
+        "https://two.example",
+    );
+    check(
+        "bookmark-block-reserved-and-leading-br",
+        !validate_bookmark_block("wallpaper-bg")
+            && !validate_bookmark_block("b1")
+            && crate::builder::html_utils::apply_bookmark_mutation(
+                bm_leading_br,
+                "wallpaper-bg",
+                "Bad",
+                "https://bad.example",
+            )
+            .is_err()
+            && bm_rm_tail
+                .as_ref()
+                .map(|h| {
+                    h.contains("https://one.example")
+                        && !h.contains("https://two.example")
+                        && !h.contains("<br>")
+                })
+                .unwrap_or(false),
     );
 
     if fails > 0 {

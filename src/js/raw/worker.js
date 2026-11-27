@@ -1,5 +1,10 @@
+/**
+ * worker.js —— 后台检索工作线程（Web Worker）
+ * 托管 Wasm 全文/评论索引、近义词展开、8 ms 自适应抢占式扫描与摘要提取。
+ */
 import init, * as wasm from '../wasm/compute_intensive_task_processor.min.js';
 
+// Wasm 导出绑定
 const {
     set_data, build_flat_data, doc_count, search_multi_range,
     set_comments, search_comments, get_snippets
@@ -16,10 +21,58 @@ const comment_doc_count = wasm.comment_doc_count;
 const prepare_comment_search = wasm.prepare_comment_search;
 const scan_prepared_comments_range = wasm.scan_prepared_comments_range;
 
+// 抢占式时间片调度参数
+const SLICE_MS = 8;        // 单时间片预算 (ms)
+const MIN_SLICE = 16;      // 单片最少文档数
+const MAX_SLICE = 4096;    // 单片最多文档数
+
+// 引擎与索引运行态
 let wasmReady = false;
 let wasmSupportsWeighted = false;
 let synReady = false;
 let synMod = null;
+let dataReady = false;
+let dataGen = 0;
+let commentGen = 0;
+
+// 调度与消息队列状态
+let messageQueue = [];
+let pendingSearch = null;
+let lastSavedKw = "";
+let latestToken = 0;
+let sliceDocs = 256;
+let commentSliceDocs = 128;
+const yieldWaiters = [];
+const yieldChan = new MessageChannel();
+
+
+// --- 协作让步与排序 ---
+
+const yieldToQueue = () => new Promise(resolve => {
+    yieldWaiters.push(resolve);
+    yieldChan.port2.postMessage(0);
+});
+
+function bumpToken(t) {
+    if (typeof t === 'number' && t > latestToken) latestToken = t;
+}
+
+function compareResults(a, b) {
+    return (b.score - a.score)
+        || (b.count - a.count)
+        || (a.title < b.title ? -1 : a.title > b.title ? 1 : 0);
+}
+
+function compareCommentHits(a, b) {
+    const sa = typeof a.score === 'number' ? a.score : 0;
+    const sb = typeof b.score === 'number' ? b.score : 0;
+    return (sb - sa)
+        || (b.count - a.count)
+        || (a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
+}
+
+
+// --- 规范化、Wasm 适配与近义词展开 ---
 
 function toHalfwidth(str) {
     let out = "";
@@ -48,49 +101,6 @@ function adaptAdsPlanForWasm(plan) {
     if (!plan || !Array.isArray(plan.terms)) return plan;
     if (wasmSupportsWeighted) return plan;
     return { terms: adaptAdsTermsForWasm(plan.terms), expr: plan.expr };
-}
-
-let messageQueue = [];
-let lastSavedKw = "";
-let dataReady = false;
-let pendingSearch = null;
-let dataGen = 0;
-let commentGen = 0;
-
-let latestToken = 0;
-const SLICE_MS = 8;
-const MIN_SLICE = 16;
-const MAX_SLICE = 4096;
-let sliceDocs = 256;
-let commentSliceDocs = 128;
-
-const yieldWaiters = [];
-const yieldChan = new MessageChannel();
-yieldChan.port1.onmessage = () => {
-    const resolve = yieldWaiters.shift();
-    if (resolve) resolve();
-};
-const yieldToQueue = () => new Promise(resolve => {
-    yieldWaiters.push(resolve);
-    yieldChan.port2.postMessage(0);
-});
-
-function bumpToken(t) {
-    if (typeof t === 'number' && t > latestToken) latestToken = t;
-}
-
-function compareResults(a, b) {
-    return (b.score - a.score)
-        || (b.count - a.count)
-        || (a.title < b.title ? -1 : a.title > b.title ? 1 : 0);
-}
-
-function compareCommentHits(a, b) {
-    const sa = typeof a.score === 'number' ? a.score : 0;
-    const sb = typeof b.score === 'number' ? b.score : 0;
-    return (sb - sa)
-        || (b.count - a.count)
-        || (a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
 }
 
 function expandTermSpecs(rawText, useSyn, opts = {}) {
@@ -149,6 +159,9 @@ function resolveAdsTerms(rawTerms) {
         };
     }).filter(t => t && t.keywords.length > 0);
 }
+
+
+// --- 摘要合并与提取 ---
 
 function mergeRanges(dst, src) {
     const bySpan = new Map();
@@ -276,6 +289,9 @@ function getAdsSnippets(payload) {
     return mergeAdsSnippets(parts, maxBody, maxComments);
 }
 
+
+// --- 数据瘦身与指纹 ---
+
 function slimFlat(raw) {
     const n = raw.length;
     const out = new Array(n);
@@ -309,9 +325,12 @@ function fingerprintFlat(raw, isOffline) {
     return (h1 >>> 0).toString(16) + (h2 >>> 0).toString(16) + '.' + raw.length;
 }
 
-async function scanAll(token, prepare, scan) {
+
+// --- 抢占式检索执行 ---
+
+async function scanAll(token, prepare, scan, getGen = () => dataGen) {
     for (; ;) {
-        const gen = dataGen;
+        const gen = getGen();
         if (token !== latestToken) return null;
         if (typeof prepare === 'function' && !prepare()) {
             return [];
@@ -322,7 +341,7 @@ async function scanAll(token, prepare, scan) {
 
         for (let from = 0; from < total;) {
             if (token !== latestToken) return null;
-            if (gen !== dataGen) {
+            if (gen !== getGen()) {
                 restart = true;
                 break;
             }
@@ -339,7 +358,7 @@ async function scanAll(token, prepare, scan) {
 
             if (from < total) await yieldToQueue();
         }
-        if (restart || gen !== dataGen) continue;
+        if (restart || gen !== getGen()) continue;
         if (token !== latestToken) return null;
 
         results.sort(compareResults);
@@ -468,7 +487,8 @@ async function runAdsSearch(payload) {
         usePrepared ? () => !!prepare_ads_search(wasmPlan) : null,
         usePrepared
             ? (from, to) => scan_prepared_ads_range(from, to)
-            : (from, to) => search_ads_range(wasmPlan, from, to)
+            : (from, to) => search_ads_range(wasmPlan, from, to),
+        () => dataGen + ':' + commentGen
     );
     if (results === null) return;
 
@@ -494,6 +514,9 @@ function flushPendingSearch() {
     startSearch(p);
 }
 
+
+// --- 词库加载与消息路由 ---
+
 async function loadSynonymsInWorker() {
     try {
         const mod = await import('./synonyms.js');
@@ -515,7 +538,6 @@ async function loadSynonymsInWorker() {
 }
 
 async function initWorker() {
-    // 并行在 Worker 线程加载词库，完全释放主线程阻塞与内存
     loadSynonymsInWorker();
     try {
         await init();
@@ -535,26 +557,6 @@ async function initWorker() {
         });
     }
 }
-
-initWorker();
-
-self.onmessage = function (e) {
-    const data = e.data;
-    if (data && data.payload && (data.type === 'SEARCH' || data.type === 'SEARCH_ADS' || data.type === 'CANCEL' || data.type === 'SEARCH_COMMENTS')) {
-        bumpToken(data.payload.token);
-    }
-
-    if (!wasmReady) {
-        if (data.type === 'SEARCH' || data.type === 'SEARCH_ADS') {
-            messageQueue = messageQueue.filter(
-                m => m.type !== 'SEARCH' && m.type !== 'SEARCH_ADS'
-            );
-        }
-        messageQueue.push(data);
-        return;
-    }
-    processMessage(data);
-};
 
 function processMessage(data) {
     const { type, payload } = data;
@@ -705,3 +707,31 @@ function processMessage(data) {
             break;
     }
 }
+
+
+// --- 线程启动与事件绑定 ---
+
+yieldChan.port1.onmessage = () => {
+    const resolve = yieldWaiters.shift();
+    if (resolve) resolve();
+};
+
+self.onmessage = function (e) {
+    const data = e.data;
+    if (data && data.payload && (data.type === 'SEARCH' || data.type === 'SEARCH_ADS' || data.type === 'CANCEL' || data.type === 'SEARCH_COMMENTS')) {
+        bumpToken(data.payload.token);
+    }
+
+    if (!wasmReady) {
+        if (data.type === 'SEARCH' || data.type === 'SEARCH_ADS') {
+            messageQueue = messageQueue.filter(
+                m => m.type !== 'SEARCH' && m.type !== 'SEARCH_ADS'
+            );
+        }
+        messageQueue.push(data);
+        return;
+    }
+    processMessage(data);
+};
+
+initWorker();

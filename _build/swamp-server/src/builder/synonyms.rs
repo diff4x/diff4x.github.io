@@ -1,3 +1,5 @@
+//! 同义词引擎构建器：合并外置词林、自定义规则与公开语料 DF 分桶，暂存产出 synonyms.js 与 oov_report.txt。
+
 use chrono::Local;
 use regex::Regex;
 use serde_json::{json, Value};

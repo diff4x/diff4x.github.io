@@ -1,3 +1,10 @@
+@charset "UTF-8";
+/* bilingual.css —— 双语对照页排版与悬浮控制栏（运行于 #content iframe） */
+/* 全篇 !important 用于压制 content.js 运行期动态注入的 content.css */
+
+
+/* --- 全局基础 --- */
+
 * {
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
@@ -8,6 +15,13 @@ body {
     padding: 0 !important;
     background: #f0f0f0 !important;
 }
+
+.hidden {
+    display: none !important;
+}
+
+
+/* --- 双栏对照容器 --- */
 
 .container {
     width: 1040px !important;
@@ -38,6 +52,7 @@ body {
     color: #333 !important;
 }
 
+/* 兼容旧版采用 textarea 的双语页 */
 .right textarea {
     background: lightsteelblue !important;
     color: black !important;
@@ -48,6 +63,9 @@ body {
 .right textarea::-webkit-scrollbar {
     display: none !important;
 }
+
+
+/* --- 顶部控制栏与锁定遮罩 --- */
 
 #control-panel {
     position: fixed !important;
@@ -114,8 +132,4 @@ body {
     margin-top: 15px;
     font-size: 16px;
     color: #666;
-}
-
-.hidden {
-    display: none !important
 }

@@ -1,3 +1,5 @@
+//! 截图批量缩放转 WebP（静态链接 libwebp）、原图归档、HTML 引用替换与剪贴板输出。
+
 use chrono::Local;
 use image::imageops::FilterType;
 use regex::{Regex, RegexBuilder};
@@ -64,7 +66,6 @@ pub fn encode_image_to_webp(
     Ok(bytes.len() as u64)
 }
 
-/// 纯 Rust 取代 WebpConverter.java + cwebp.exe + Swing Clipboard
 pub fn run_webp_batch(cfg: &ServerConfig, opts: WebpOptions) -> Result<WebpSummary, String> {
     let t0 = Instant::now();
     let max_width = opts.max_width.unwrap_or(cfg.img_max_width);
@@ -153,7 +154,6 @@ pub fn run_webp_batch(cfg: &ServerConfig, opts: WebpOptions) -> Result<WebpSumma
         }
     }
 
-    // 可选：同步替换 HTML 文件中的旧图片引用
     let mut updated_html_count = 0usize;
     if opts.update_img_mapping && !records.is_empty() && cfg.html_dir.is_dir() {
         let exclude_res: Vec<Regex> = cfg
@@ -210,7 +210,6 @@ pub fn run_webp_batch(cfg: &ServerConfig, opts: WebpOptions) -> Result<WebpSumma
         }
     }
 
-    // 写入剪贴板（纯 Rust arboard）
     let mut clipboard_copied = false;
     if !generated_files.is_empty() {
         let clip_text = generated_files.join("\n") + "\n";

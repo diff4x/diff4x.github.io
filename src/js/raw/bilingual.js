@@ -1,3 +1,6 @@
+/**
+ * bilingual.js —— 双语对照页本地编辑、AlignDrafts 草稿暂存与原子固化（运行于 #content iframe）
+ */
 if (window.top && window.top.VirtualCursor) {
     window.top.VirtualCursor.attach(window);
 }
@@ -6,7 +9,10 @@ if (window.top && window.top.VirtualCursor) {
     const store = window.top.SiteCore.createStore();
 
     if (store.online_flag === "1") {
-        document.getElementById('control-panel').classList.add("hidden")
+        const panel = document.getElementById('control-panel');
+        if (panel) panel.classList.add("hidden");
+        const zhEl = document.getElementById('zhText');
+        if (zhEl) zhEl.removeAttribute('contenteditable');
     } else {
         const zhText = document.getElementById('zhText');
         const engText = document.getElementById('engText');
@@ -19,11 +25,14 @@ if (window.top && window.top.VirtualCursor) {
         const DOC_KEY = document.title.trim();
         let insertMode = false;
 
+        // 草稿库与运行态
         const DB_NAME = "AlignDrafts";
         const STORE_NAME = "draft_texts";
 
         let _db = null;
         let _dbPromise = null;
+        // --- AlignDrafts 持久化 ---
+
         function initDB() {
             if (_db) return Promise.resolve(_db);
             if (_dbPromise) return _dbPromise;
@@ -93,6 +102,8 @@ if (window.top && window.top.VirtualCursor) {
                 saveDraft(zhText.innerText);
             }, 2000);
         }
+
+        // --- 编辑器交互与启动 ---
 
         function syncHeight() {
             zhText.style.height = "auto";
@@ -172,6 +183,8 @@ if (window.top && window.top.VirtualCursor) {
 
         bootstrap();
 
+        // --- 剥离运行期节点并固化回原 HTML ---
+
         saveBtn.addEventListener('click', async () => {
             clearTimeout(debounceTimer);
 
@@ -196,6 +209,7 @@ if (window.top && window.top.VirtualCursor) {
                 '#gotop',
                 '.pinyin-tooltip',
                 '#giscus-popup',
+                'link[href*="font.css"]',
                 'link[href*="content.css"]',
                 '#toc',
                 '#excerpt-pop-btn',

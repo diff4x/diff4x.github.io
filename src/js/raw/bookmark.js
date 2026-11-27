@@ -1,7 +1,11 @@
+/**
+ * bookmark.js —— 首页书签页逻辑（拖拽增删、Favicon 懒加载、壁纸轮播与月历，运行于 #content iframe）
+ */
 if (window.top && window.top.VirtualCursor) {
     window.top.VirtualCursor.attach(window);
 }
 
+// 页面标识与运行态
 const childId = 'content';
 window.childId = childId;
 const store = createStore();
@@ -16,134 +20,10 @@ if (window.__LITE_BUS__) {
 }
 window.__LITE_BUS__ = new BroadcastChannel('bus');
 const BUS = window.__LITE_BUS__;
-
 const ctxId = window.top === window.self ? 'index' : window.childId;
 
-window.addEventListener('pagehide', (e) => {
-    if (e.persisted) return;
-    if (window.__LITE_BUS__) {
-        window.__LITE_BUS__.close();
-        window.__LITE_BUS__ = null;
-    }
-});
 
-window.addEventListener('DOMContentLoaded', () => {
-    const isLocalMode = store.online_flag === "0" || (
-        (location.hostname === "localhost" || location.hostname === "127.0.0.1" || location.protocol === "file:")
-        && location.port !== "9000"
-    );
-
-    const katrainLink = document.getElementById('katrain-link');
-    const katrainBr = document.getElementById('katrain-br');
-    if (katrainLink) {
-        if (isLocalMode) {
-            if (katrainBr) katrainBr.style.display = '';
-            katrainLink.style.display = '';
-            katrainLink.style.cursor = 'pointer';
-            katrainLink.addEventListener('click', async (e) => {
-                e.preventDefault();
-                try {
-                    if (window.top && typeof window.top.callLocalApi === 'function') {
-                        await window.top.callLocalApi('POST', '/__api/ops/katrain', {});
-                    } else {
-                        const m = await import('/src/js/shared-utils.js');
-                        await m.callLocalApi('POST', '/__api/ops/katrain', {});
-                    }
-                } catch (err) {
-                    alert('❌ 启动 KaTrain 失败：' + (err && err.message ? err.message : String(err)));
-                }
-            });
-        } else {
-            if (katrainBr) katrainBr.style.display = 'none';
-            katrainLink.style.display = 'none';
-        }
-    }
-
-    store.bookmarkhtml_linksHash = getALinksHash();
-
-    const links = Array.from(document.querySelectorAll('a'))
-        .filter(a => {
-            if (!a.textContent || a.textContent.trim().length === 0) return false;
-            if (a.id === 'katrain-link' && !isLocalMode) return false;
-            return a.style.display !== 'none';
-        })
-        .map(a => {
-            if (a.id === 'katrain-link') {
-                return { text: a.textContent.trim(), href: '#katrain', target: '_blank', action: 'katrain' };
-            }
-            return {
-                text: a.textContent.trim(),
-                href: a.href,
-                target: a.target || '_blank'
-            };
-        });
-    store.bookmark_links = links;
-
-    if (store.online_flag === "0") {
-        setupDragAndDrop();
-    }
-
-    loadFaviconsWhenIdle();
-    initWallpaperModule();
-
-    const githubApi = 'https://api.github.com/repos/diff4x/diff4x.github.io';
-    const CACHE_TIME = 60 * 1000;
-    let cache = null;
-    let pendingRequest = null;
-    document.querySelector('#copyright')?.addEventListener('mouseenter', async function () {
-    if (cache && Date.now() - cache.time < CACHE_TIME) {
-        this.title = cache.title;
-        return;
-    }
-    if (pendingRequest) {
-        this.title = await pendingRequest;
-        return;
-    }
-    pendingRequest = fetch(githubApi)
-        .then(res => {
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return res.json();
-        })
-        .then(data => {
-        const sizeMB = data.size / 1024;
-        const title = `线上仓库体积：${sizeMB.toFixed(2)} MB`;
-
-        cache = {
-            title,
-            time: Date.now()
-        };
-
-        return title;
-        })
-        .finally(() => {
-        pendingRequest = null;
-        });
-
-    try {
-        this.title = await pendingRequest;
-    } catch (err) {
-        console.error(err);
-    }
-    });
-    
-    createCalendar();
-
-    document.addEventListener('click', (e) => {
-        if (e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return;
-        const a = e.target.closest && e.target.closest('a');
-        if (!a || !/\bREADME\b/i.test((a.textContent || '').trim())) return;
-        e.preventDefault();
-        let hash = '';
-        try { const u = new URL(a.href, location.href); hash = decodeURIComponent((u.hash || '').slice(1)); } catch (_) { }
-        emitEvent("OPEN_MD_VIEWER", { hash }, "index");
-    });
-});
-
-document.addEventListener('keydown', (e) => {
-    if (e.key === '\\') {
-        emitEvent("quick_search", "", "index");
-    }
-});
+// --- BUS 与存储代理 ---
 
 function getTabId() {
     try { return (window.top && window.top.__TAB_ID__) || ''; } catch (_) { return ''; }
@@ -166,8 +46,15 @@ function createStore(defaults = {}) {
     return window.top.SiteCore.createStore(defaults);
 }
 
+
+// --- 本地书签拖拽维护 ---
+
+const NON_BOOKMARK_DIV_IDS = new Set(['wallpaper-bg', 'wallpaper-panel', 'b1', 'glass-calendar-host']);
+
 function setupDragAndDrop() {
-    document.querySelectorAll('div').forEach(block => {
+    Array.from(document.querySelectorAll('body > div[id]'))
+        .filter(block => block.id && !NON_BOOKMARK_DIV_IDS.has(block.id))
+        .forEach(block => {
         block.addEventListener('dragover', e => {
             e.preventDefault();
             block.classList.add('dragover');
@@ -230,6 +117,9 @@ function setupDragAndDrop() {
         });
     });
 }
+
+
+// --- 站点图标懒加载与链接哈希 ---
 
 function getFaviconStyleEl() {
     if (!faviconStyleEl) {
@@ -321,6 +211,9 @@ function getALinksHash() {
     return hash.toString(16);
 }
 
+
+// --- 壁纸轮播与管理面板 ---
+
 function initWallpaperModule() {
     const config = store.wallpaper_config;
 
@@ -376,13 +269,15 @@ function applyWallpaper(config) {
         config.currentIndex = 0;
     }
 
+    const encodePath = (p) => String(p ?? '').split('/').map(s => (s === '' || s === '.' || s === '..') ? s : encodeURIComponent(s)).join('/');
     const currentUrl = config.list[config.currentIndex];
-    const resolvedUrl = `../../${currentUrl}`;
+    const resolvedUrl = `../../${encodePath(currentUrl)}`;
+    const cssSafeUrl = resolvedUrl.replace(/[\\"']/g, '\\$&');
     const probe = new Image();
     probe.onload = () => {
         document.body.style.background = "transparent";
         document.documentElement.style.background = "#000";
-        bgLayer.style.backgroundImage = `url("${resolvedUrl}")`;
+        bgLayer.style.backgroundImage = `url("${cssSafeUrl}")`;
         bgLayer.style.backgroundSize = config.layout || 'contain';
     };
     probe.onerror = () => {
@@ -403,7 +298,7 @@ function startWallpaperTimer(config) {
         return;
     }
 
-    const interval = Number(config.interval) || 3600000; // 默认1小时
+    const interval = Number(config.interval) || 3600000;
 
     wallpaperTimer = setInterval(() => {
         if (document.hidden) return;
@@ -505,8 +400,9 @@ function fillWallpaperListItems(config, tooltip) {
         actionSpan.append(setBtn, delBtn);
         item.append(titleSpan, actionSpan);
 
+        const encodedUrl = `../../${String(url ?? '').split('/').map(s => (s === '' || s === '.' || s === '..') ? s : encodeURIComponent(s)).join('/')}`.replace(/[\\"']/g, '\\$&');
         item.onmouseenter = (e) => {
-            tooltip.style.backgroundImage = `url("../../${url}")`;
+            tooltip.style.backgroundImage = `url("${encodedUrl}")`;
             tooltip.style.display = 'block';
             moveTooltip(e, tooltip);
         };
@@ -626,6 +522,9 @@ function updateWallpaperPanelUI(config) {
     bindPanelEvents(config);
 }
 
+
+// --- 玻璃态月历挂件 ---
+
 function createCalendar(container = document.body) {
   const d = new Date(), y = d.getFullYear(), m = d.getMonth();
   const daysInMonth = new Date(y, m + 1, 0).getDate();
@@ -703,3 +602,129 @@ function createCalendar(container = document.body) {
   `;
   container.appendChild(host);
 }
+
+
+// --- 页面事件与启动 ---
+
+window.addEventListener('pagehide', (e) => {
+    if (e.persisted) return;
+    if (window.__LITE_BUS__) {
+        window.__LITE_BUS__.close();
+        window.__LITE_BUS__ = null;
+    }
+});
+
+window.addEventListener('DOMContentLoaded', () => {
+    const isLocalMode = store.online_flag === "0";
+
+    const katrainLink = document.getElementById('katrain-link');
+    const katrainBr = document.getElementById('katrain-br');
+    if (katrainLink) {
+        if (isLocalMode) {
+            if (katrainBr) katrainBr.style.display = '';
+            katrainLink.style.display = '';
+            katrainLink.style.cursor = 'pointer';
+            katrainLink.addEventListener('click', async (e) => {
+                e.preventDefault();
+                try {
+                    if (window.top && typeof window.top.callLocalApi === 'function') {
+                        await window.top.callLocalApi('POST', '/__api/ops/katrain', {});
+                    } else {
+                        const m = await import('/src/js/shared-utils.js');
+                        await m.callLocalApi('POST', '/__api/ops/katrain', {});
+                    }
+                } catch (err) {
+                    alert('❌ 启动 KaTrain 失败：' + (err && err.message ? err.message : String(err)));
+                }
+            });
+        } else {
+            if (katrainBr) katrainBr.style.display = 'none';
+            katrainLink.style.display = 'none';
+        }
+    }
+
+    store.bookmarkhtml_linksHash = getALinksHash();
+
+    const links = Array.from(document.querySelectorAll('a'))
+        .filter(a => {
+            if (!a.textContent || a.textContent.trim().length === 0) return false;
+            if (a.id === 'katrain-link' && !isLocalMode) return false;
+            return a.style.display !== 'none';
+        })
+        .map(a => {
+            if (a.id === 'katrain-link') {
+                return { text: a.textContent.trim(), href: '#katrain', target: '_blank', action: 'katrain' };
+            }
+            return {
+                text: a.textContent.trim(),
+                href: a.href,
+                target: a.target || '_blank'
+            };
+        });
+    store.bookmark_links = links;
+
+    if (store.online_flag === "0") {
+        setupDragAndDrop();
+    }
+
+    loadFaviconsWhenIdle();
+    initWallpaperModule();
+
+    const githubApi = 'https://api.github.com/repos/diff4x/diff4x.github.io';
+    const CACHE_TIME = 60 * 1000;
+    let cache = null;
+    let pendingRequest = null;
+    document.querySelector('#copyright')?.addEventListener('mouseenter', async function () {
+    if (cache && Date.now() - cache.time < CACHE_TIME) {
+        this.title = cache.title;
+        return;
+    }
+    if (pendingRequest) {
+        this.title = await pendingRequest;
+        return;
+    }
+    pendingRequest = fetch(githubApi)
+        .then(res => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.json();
+        })
+        .then(data => {
+        const sizeMB = data.size / 1024;
+        const title = `线上仓库体积：${sizeMB.toFixed(2)} MB`;
+
+        cache = {
+            title,
+            time: Date.now()
+        };
+
+        return title;
+        })
+        .finally(() => {
+        pendingRequest = null;
+        });
+
+    try {
+        this.title = await pendingRequest;
+    } catch (err) {
+        console.error(err);
+    }
+    });
+    
+    createCalendar();
+
+    document.addEventListener('click', (e) => {
+        if (e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return;
+        const a = e.target.closest && e.target.closest('a');
+        if (!a || !/\bREADME\b/i.test((a.textContent || '').trim())) return;
+        e.preventDefault();
+        let hash = '';
+        try { const u = new URL(a.href, location.href); hash = decodeURIComponent((u.hash || '').slice(1)); } catch (_) { }
+        emitEvent("OPEN_MD_VIEWER", { hash }, "index");
+    });
+});
+
+document.addEventListener('keydown', (e) => {
+    if (e.key === '\\') {
+        emitEvent("quick_search", "", "index");
+    }
+});

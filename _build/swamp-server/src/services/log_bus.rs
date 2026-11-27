@@ -1,3 +1,5 @@
+//! 内存环形 + 磁盘持久化日志总线（swamp_runtime.log），支持重启虚线衔接、自动瘦身与 GUI 实时通知。
+
 use chrono::Local;
 use serde::Serialize;
 use std::collections::VecDeque;

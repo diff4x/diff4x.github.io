@@ -1,4 +1,7 @@
-/* ================================== txn_parser.js, 初代 by diff4x | 进化 by Gemini & ChatGPT & Claude ================================== */
+/**
+ * txn_parser.js —— 交易流水文本 (txnl) 解析、多维筛选、统计与 12 月趋势图
+ * 运行于独立标签页 src/tpl/txn_parser.html；本地模式下自动加载 txn.txt 并支持跳行编辑。
+ */
 
 if ('serviceWorker' in navigator) {
     let _initSwCtrl = navigator.serviceWorker.controller;
@@ -14,9 +17,7 @@ if ('serviceWorker' in navigator) {
     });
 }
 
-// ==================================
-// LS 代理与记忆库 (升级版：基于文件名自动分发默认值)
-// ==================================
+// --- 存储代理与文件名隔离状态 ---
 function createStore() {
     return SiteCore.createStore({}, {
         fallback(prop) {
@@ -31,13 +32,11 @@ function createStore() {
 }
 const store = createStore();
 
-// 核心文件名记忆钩子
 let currentFilename = 'txn.txt'; 
 function getFileKey(suffix) {
     return `txn_${currentFilename}_${suffix}`;
 }
 
-// 节流保存当前账本的滚动位置
 let scrollTid;
 window.addEventListener('scroll', () => {
     clearTimeout(scrollTid);
@@ -47,9 +46,7 @@ window.addEventListener('scroll', () => {
 });
 
 
-/*---------------
-  映射
----------------*/
+// --- 账户与分类映射常量 ---
 const ACCOUNTS = {
     a: '现金(♂️)',
     b: '储蓄(♂️)',
@@ -60,13 +57,13 @@ const ACCOUNTS = {
     p: '信用(♀️)'
 };
 
-const DST_MAP = {   // 流向
+const DST_MAP = {
     i: '收入',
     e: '支出',
     ...ACCOUNTS
 };
 
-const CAT_MAP = {   // 流向支出必须带上支出类别代码
+const CAT_MAP = {
     s: '食物',
     z: '住所',
     w: '网络',
@@ -84,12 +81,10 @@ const CAT_MAP_EXT = { ...CAT_MAP, income: '报酬', transfer: '中转' };
 const SRC_MAP = { ...ACCOUNTS };
 const ACCOUNT_KEYS = Object.keys(ACCOUNTS);
 
-// 解析与状态隔离变量
 let flows = [];
 let stats = null;
 let hasParseError = false; 
 
-// 过滤
 const filterState = {
   y: new Set(),
   m: new Set(),
@@ -110,19 +105,16 @@ const MAP_LOOKUP = {
   cat: CAT_MAP_EXT
 };
 
-// 趋势
 let trendState = {
   endYear: null,
   endMonth: null,
   activeCat: null
 };
 
-// 十字准星与折点吸附
 let hoverX = null;
 let hoverY = null;
 let hoverActive = false;
 
-// 汇率
 const FX_PRESET = {
   CNY: 1,
   USD: 0.14,
@@ -140,7 +132,6 @@ if (cached?.rates) {
   console.log('[FX] init from ls');
 }
 
-// 分页
 const PAGE_SIZE = 50;
 let currentFiltered = [];
 let pagedContext = {
@@ -159,16 +150,15 @@ function escapeHtml(str) {
   ));
 }
 
-// 色彩
 const COLORS = {
-  expense: '#c0392b',   // 支出 / 负数 / 左轴
-  income: '#0a8f3c',   // 收入 / 正数 / 净变化
-  transfer: '#2980b9',   // 中转
+  expense: '#c0392b',
+  income: '#0a8f3c',
+  transfer: '#2980b9',
   axis: '#666',
   axisIdle: '#999',
   grid: '#ddd',
-  inactive: '#bbb', // 折线
-  text: '#333' // 文本
+  inactive: '#bbb',
+  text: '#333'
 };
 const CAT_COLORS = {
   s: COLORS.expense,
@@ -181,7 +171,6 @@ const CAT_COLORS = {
   q: COLORS.expense
 };
 
-// 样式表
 const css = `
 html,body { background:#cae4ff }
 .hide { display:none; }
@@ -222,7 +211,6 @@ fileInput.id = "fileInput";
 fileInput.accept = ".txt";
 fileInput.style = "width: 150px;"
 
-// 创建并挂载纯静态示例下载链接
 const a = document.createElement("a");
 a.href = "data:text/plain;charset=utf-8,%23 ------------------- sample_txn.txt ---------------------%0A%0Aoef-100 外套颜色不对,退款                    %23 如果记成 %22oi100%22 会导致 %22总支%22 和 %22总收%22 双双虚高，财报失真%0Aoef100 外套                                 %23 从储蓄(♀️) 支出100到 服装%0Acew1000 订阅PlayBoy                         %23 从信用(♂️) 支出1000到 网络%0Abp800 替♀️还帐                              %23 从储蓄(♂️) 中转800到 信用(♀️) %0Aci1000 为中情局提供现索得到的赏金             %23 信用(♂️) 收入1000%0A%0A%23 ---------------------------------->  ➗ 金额可写四则运算与括号 (先括号, 再乘除, 后加减; 表达式内不留空格; 最终结果一次性四舍五入到分)%0Abes(86.4%2B13.6)/3 三人AA                     %23 从储蓄(♂️) 支出 (86.4%2B13.6)/3 = 33.33 到 食物%0Abew116.3%2B5*(-2)d3 两件退货各冲5              %23 当月03号 从储蓄(♂️) 支出 116.3%2B5*(-2) = 106.3 到 网络%0A%0A%23 ---------------------------------->  ❤️ 财务高度共享, 谁付钱不重要，重要的是家庭总资产%0Aoew50 给♂️充话费                            %23 从储蓄(♀️) 支出50到 网络%0A%0A%23 ---------------------------------->  🤣 严格AA, ♀️ 给 ♂️ 垫付话费并保留债权%0Abew50 用向♀️借来的钱充话费                   %23 从储蓄(♂️) 支出50到 网络%0Aob50 借给♂️                                 %23 从储蓄(♀️) 中转50到 储蓄(♂️)%0A%0Aab100                                       %23 从现金(♂️) 中转100到 储蓄(♂️)%0Aba300                                       %23 从储蓄(♂️) 中转300到 现金(♂️)%0A1%0A2026%0A%0Aaej20d03 加油                               %23 当月03号 从现金(♂️) 流向 支出20到 交通%0Aob100 转帐给♂️                              %23 从储蓄(♀️)  中转100到 储蓄(♂️)%0Aci-200 初始本金                              %23 ♂️的当前信用账单 (负债登记)%0A12%0Aai500 初始本金                               %23 ♂️的当前现金%0Abi1000 初始本金                              %23 ♂️的当前储蓄%0Api800 初始本金                               %23 ♀️的当前信用溢缴%0Aoi2000 初始本金                              %23 ♀️的当前储蓄%0A11%0A2025";
 a.download = "sample_txn.txt";
@@ -240,15 +228,11 @@ out.className = "hide";
 out.id = "output";
 document.body.append(fileInput, a, srcLink, out);
 
-/*---------------
-  监听
----------------*/
-// 文件选择 (线上用户切换文件入口)
+// --- 页面交互事件绑定 ---
 document.getElementById('fileInput').addEventListener('change', e => {
   const file = e.target.files[0];
   if (!file) return;
 
-  // 核心：捕捉文件名，实现状态快照隔离切换
   currentFilename = file.name;
 
   const reader = new FileReader();
@@ -261,13 +245,11 @@ document.getElementById('fileInput').addEventListener('change', e => {
   reader.readAsText(file, 'utf-8');
   out.classList.remove("hide");
 });
-// 焦点
 document.addEventListener('focusin', e => {
   if (e.target.id === 'fa_min' || e.target.id === 'fa_max' || e.target.id === 'fnote') {
     e.target.select();
   }
 });
-// 点击
 document.addEventListener('click', e => {
   if (e.target.id === 'freset') {
     resetFilterState();
@@ -301,15 +283,7 @@ document.addEventListener('click', e => {
     .forEach(i => i.classList.remove('open'));
 });
 
-/*---------------
-  金额表达式
----------------*/
-// <expr>   ::= ["-"] <term> { ("+" | "-") <term> }
-// <term>   ::= <factor> { ("*" | "/") <factor> }
-// <factor> ::= <number> | "(" <expr> ")"
-// 手写递归下降求值, 不使用 eval; 负号只出现在 <expr> 开头 (整体开头或左括号之后)
-// 取整: 只在最终结果上一次性四舍五入到分; 中间每一步保持全精度, 仅抹掉浮点噪声
-// 返回 { value } 或 { error }
+// --- 金额四则表达式求值（零 eval 递归下降） ---
 const MAX_PAREN_DEPTH = 32;
 function evalAmount(src) {
   const tokens = [];
@@ -357,30 +331,29 @@ function evalAmount(src) {
     const v = expr();
     if (pos < tokens.length) fail(tokens[pos].op === ')' ? '括号不匹配' : '缺少运算符 (不能省略乘号)');
     if (!Number.isFinite(v)) fail('金额溢出');
-    return { value: roundCent(v) };   // 整个表达式唯一的一次取整 (roundCent 同时把 -0 归一为 0)
+    return { value: roundCent(v) };
   } catch (e) {
     if (e && e.msg) return { error: e.msg };
     throw e;
   }
 }
-// 四舍五入到分 (远离0); 先 toPrecision 抹掉浮点噪声, 如 1.005*100 = 100.49999999999999
-// |x| >= 1e13 时双精度已无法表示"分", 原样返回 (否则会丢掉整数部分的低位)
+// 仅在求值终态一次性四舍五入到分，避免中间舍入误差
 function roundCent(x) {
   if (Math.abs(x) >= 1e13) return x + 0;
   const r = Math.round(Number((Math.abs(x) * 100).toPrecision(15))) / 100;
-  return (x < 0 ? -r : r) + 0;   // +0 把 -0 归一为 0
+  return (x < 0 ? -r : r) + 0;
 }
-// 抹掉每步运算的浮点噪声 (0.1+0.2 → 0.3; 保留15位有效数字, 单次运算误差约1e-16), 不按小数位取整
-// 这样 0.1*3-0.3 得到的是 0 而不是 5.55e-17, 除数为0的判断才可靠; >=1e15 的整数量级无噪声可抹, 原样返回
 function scrubFloat(x) {
   return Math.abs(x) >= 1e15 ? x : Number(x.toPrecision(15));
 }
+function normalizeZero(n) {
+  if (typeof n !== 'number' || !Number.isFinite(n)) return 0;
+  return Math.abs(n) < 1e-9 ? 0 : n;
+}
 
-/*---------------
-  文件解析
----------------*/
+// --- 流水文本解析与视图恢复 ---
 function parse(text) {
-  hasParseError = false; // 每次解析前复位
+  hasParseError = false;
 
   const rawLines = text.split(/\r?\n/).map((l, i) => ({ line: l, lineNum: i + 1 }));
   const revLines = rawLines.slice().reverse();
@@ -394,7 +367,7 @@ function parse(text) {
 
   for (let idx = 0; idx < revLines.length; idx++) {
     const { line, lineNum } = revLines[idx];
-    const l = line.trim();
+    const l = line.replace(/\s+#.*$/, '').trim();
     if (l === '' || l.startsWith('#')) continue;
 
     if (/^\d{4}$/.test(l)) {
@@ -420,7 +393,6 @@ function parse(text) {
     if (!curMonth) { errors.push({ lineNum, msg: '流水无归属月份' }); continue; }
 
     const ACC = ACCOUNT_KEYS.join('');
-    // 金额段先宽松截取 [\d.+\-*/()]+, 再交给 evalAmount 校验文法并求值, 以便给出具体的表达式报错
     const REG = new RegExp(
       `^([${ACC}])([ie${ACC}])([szjwyrfq]?)([\\d.+\\-*/()]+)(d(0?[1-9]|[12]\\d|3[01]))?(?:\\s+(.+))?$`
     );
@@ -441,7 +413,7 @@ function parse(text) {
       src, dst,
       cat: dst === 'e' ? cat || null : null,
       amount,
-      expr: /^-?\d+(?:\.\d+)?$/.test(amt) ? undefined : amt,   // 原算式 (非单个数字时), 仅用于明细悬停提示
+      expr: /^-?\d+(?:\.\d+)?$/.test(amt) ? undefined : amt,
       day: dayNum ? Number(dayNum) : undefined,
       note,
       lineNum
@@ -449,7 +421,7 @@ function parse(text) {
   }
 
   if (errors.length) { 
-    hasParseError = true; // 拦截激活：存在严重语法错误
+    hasParseError = true;
     renderErrors(errors); 
     return; 
   }
@@ -458,9 +430,8 @@ function parse(text) {
   restoreState();
 }
 
-// 恢复总控函数
 function restoreState() {
-  if (hasParseError) return; // 🛡️ 语法报错拦截
+  if (hasParseError) return;
 
   const view = store[getFileKey('view')];
   if (view.type === 'year') {
@@ -471,15 +442,12 @@ function restoreState() {
     renderDefaultView(); 
   }
   
-  // 恢复属于该文件的滚动位置
   setTimeout(() => {
     window.scrollTo(0, store[getFileKey('scroll')] || 0);
   }, 50);
 }
 
-/*---------------
-  错误报告
----------------*/
+// --- 错误报告 ---
 function renderErrors(errors) {
   out.innerHTML = '<h4 class="error">原始记录错误报告</h4>';
   errors.sort((a, b) => a.lineNum - b.lineNum).forEach(e => {
@@ -487,9 +455,7 @@ function renderErrors(errors) {
   });
 }
 
-/*---------------
-  统计
----------------*/
+// --- 账户与净债权统计 ---
 function computeStats() {
   stats = {
     accounts: {},
@@ -524,15 +490,12 @@ function calcNetDebt(flowList) {
     if (SHE_ACCTS.includes(f.src) && HE_ACCTS.includes(f.dst)) sheToHe += f.amount;
   });
   
-  // 逻辑：她给我花的钱 - 我给她花的钱。
-  // 如果为正数，说明 ♂️ 欠 ♀️ 钱；如果为负数，说明 ♀️ 欠 ♂️ 钱。
-  const netOwe = sheToHe - heToShe; 
-  return { heToShe, sheToHe, netOwe };
+  // netOwe > 0 表示 ♂️ 欠 ♀️，反之 ♀️ 欠 ♂️
+  const netOwe = normalizeZero(sheToHe - heToShe);
+  return { heToShe: normalizeZero(heToShe), sheToHe: normalizeZero(sheToHe), netOwe };
 }
 
-/*---------------
-  筛选状态记忆
----------------*/
+// --- 筛选状态持久化 ---
 function saveFilterState(isActive) {
   store[getFileKey('filter')] = {
     y: [...filterState.y],
@@ -581,11 +544,8 @@ function resetFilterState() {
   store[getFileKey('page')] = pages;
 }
 
-/*---------------
-  筛选
----------------*/
+// --- 多维筛选与选项联动 ---
 function renderFilteredFlows() {
-  // 正则合法性
   const noteVal = document.getElementById('fnote')?.value?.trim();
   filterState.noteRegex = null;
   if (noteVal) {
@@ -597,7 +557,6 @@ function renderFilteredFlows() {
     }
   }
 
-  // 区间值处理
   const minVal = document.getElementById('fa_min')?.value;
   const maxVal = document.getElementById('fa_max')?.value;
   filterState.amtMin = minVal !== '' ? Number(minVal) : null;
@@ -611,7 +570,6 @@ function renderFilteredFlows() {
       [filterState.amtMax, filterState.amtMin];
   }
 
-  // 过滤逻辑
   currentFiltered = flows.filter(f => {
     if (filterState.y.size && !filterState.y.has(String(f.year))) return false;
     if (filterState.m.size && !filterState.m.has(String(f.month))) return false;
@@ -631,7 +589,6 @@ function renderFilteredFlows() {
     return true;
   }).reverse();
 
-  // 统计
   let totalIncome = 0;
   let totalExpense = 0;
   let totalTransfer = 0;
@@ -643,7 +600,6 @@ function renderFilteredFlows() {
     }
   });
 
-  // 交付渲染
   let rs = document.getElementById('rs');
   if (!rs) {
     rs = document.createElement('div');
@@ -652,7 +608,7 @@ function renderFilteredFlows() {
   }
   pagedContext = {
     data: currentFiltered,
-    page: store[getFileKey('page')].filter || 1, // 各自独立的筛选页码
+    page: store[getFileKey('page')].filter || 1,
     totals: {
       totalIncome,
       totalExpense,
@@ -714,15 +670,15 @@ function updateFilterOptions() {
 function buildCheckboxGroup(key, el, getter, map) {
   el.innerHTML = '';
   const filtered = flows.filter(f => {
-    if (filterState.y.size && !filterState.y.has(String(f.year))) return false;
-    if (filterState.m.size && !filterState.m.has(String(f.month))) return false;
-    if (filterState.d.size) {
+    if (key !== 'y' && filterState.y.size && !filterState.y.has(String(f.year))) return false;
+    if (key !== 'm' && filterState.m.size && !filterState.m.has(String(f.month))) return false;
+    if (key !== 'd' && filterState.d.size) {
       if (f.day == null) return false;
       if (!filterState.d.has(String(f.day))) return false;
     }
-    if (filterState.src.size && !filterState.src.has(f.src)) return false;
-    if (filterState.dst.size && !filterState.dst.has(f.dst)) return false;
-    if (filterState.cat.size && !filterState.cat.has(getDisplayCat(f))) return false;
+    if (key !== 'src' && filterState.src.size && !filterState.src.has(f.src)) return false;
+    if (key !== 'dst' && filterState.dst.size && !filterState.dst.has(f.dst)) return false;
+    if (key !== 'cat' && filterState.cat.size && !filterState.cat.has(getDisplayCat(f))) return false;
     return true;
   });
 
@@ -751,9 +707,7 @@ function getDisplayCat(f) {
   return 'transfer';
 }
 
-/*---------------
-  渲染分页
----------------*/
+// --- 分页渲染与导航 ---
 function renderPagedContext() {
   const { data, totals, container } = pagedContext;
   const total = data.length;
@@ -790,9 +744,7 @@ function renderPagedContext() {
   container.innerHTML = html;
 }
 
-/*---------------
-  分页导航条
----------------*/
+
 function renderPager(totalPages) {
   if (totalPages <= 1) return '';
 
@@ -848,9 +800,7 @@ function gotoPage(p) {
   renderPagedContext();
 }
 
-/*---------------
-  填充表
----------------*/
+// --- 流水明细表格 ---
 function renderFlowTable(flowList, startIndex = 0) {
   let html = `<table>`;
   html += `
@@ -897,9 +847,7 @@ function renderFlowTable(flowList, startIndex = 0) {
   return html;
 }
 
-/*---------------
-  趋势图选择器
----------------*/
+// --- 12 个月趋势数据与绘图 ---
 function initTrendSelector() {
   const monthInput = document.getElementById('trendEnd');
   if (!monthInput) return;
@@ -911,7 +859,6 @@ function initTrendSelector() {
     }
   });
 
-  // 读取属于该文件的趋势参数
   const savedTrend = store[getFileKey('trend')] || {};
   trendState.endYear = savedTrend.endYear || maxY;
   trendState.endMonth = savedTrend.endMonth || maxM;
@@ -1001,9 +948,7 @@ function collect12MonthData() {
   return data;
 }
 
-/*---------------
-  趋势图绘制
----------------*/
+
 function renderTrendChart() {
   const canvas = document.getElementById('trendCanvas');
   if (!canvas) return;
@@ -1013,9 +958,12 @@ function renderTrendChart() {
   const rect = canvas.getBoundingClientRect();
   const W = rect.width || canvas.offsetWidth || parseFloat(canvas.style.width) || 600;
   const H = rect.height || canvas.offsetHeight || parseFloat(canvas.style.height) || 200;
-  ctx.setTransform(1,0,0,1,0,0);
-  canvas.width = W * dpr;
-  canvas.height = H * dpr;
+  const targetW = Math.round(W * dpr);
+  const targetH = Math.round(H * dpr);
+  if (canvas.width !== targetW || canvas.height !== targetH) {
+    canvas.width = targetW;
+    canvas.height = targetH;
+  }
   ctx.setTransform(dpr,0,0,dpr,0,0);
   ctx.clearRect(0,0,W,H);
   const pad = 40;
@@ -1168,16 +1116,14 @@ function renderTrendChart() {
   }
 }
 
-/*---------------
-  默认视图 
----------------*/
+// --- 总览 / 年 / 月视图渲染 ---
 function renderDefaultView() {
   store[getFileKey('view')] = { type: 'default' }; 
   const buf = [];
 
-  const netAsset = Object.values(stats.accounts).reduce((sum, v) => sum + v, 0);
-  const totalIncome = Object.values(stats.years).reduce((a, y) => a + y.income, 0);
-  const totalExpense = Object.values(stats.years).reduce((a, y) => a + y.expense, 0);
+  const netAsset = normalizeZero(Object.values(stats.accounts).reduce((sum, v) => sum + v, 0));
+  const totalIncome = normalizeZero(Object.values(stats.years).reduce((a, y) => a + y.income, 0));
+  const totalExpense = normalizeZero(Object.values(stats.years).reduce((a, y) => a + y.expense, 0));
 
   buf.push(`<div class="sep"><b>总览:</b><br>`);
   buf.push(`总收: <span class="amount positive">${fmt(totalIncome)}</span> `);
@@ -1194,7 +1140,8 @@ function renderDefaultView() {
   buf.push(`<span style="color:var(--${debtColor}, ${COLORS[debtColor]});">${debtText}</span></div>`);
 
   buf.push(`<div class="sep"><b>帐户分布:</b><br>`);
-  Object.entries(stats.accounts).forEach(([k, v]) => {
+  Object.entries(stats.accounts).forEach(([k, rawV]) => {
+    const v = normalizeZero(rawV);
     buf.push(`${ACCOUNTS[k]}: <span class="amount ${v >= 0 ? 'positive' : 'negative'}">${fmt(v)}</span><br>`);
   });
   buf.push(`</div>`);
@@ -1258,23 +1205,20 @@ function renderDefaultView() {
   updateFilterOptions();
   ['y', 'm', 'd', 'src', 'dst', 'cat'].forEach(updateFilterButton);
   
-  // 恢复属于该文件的筛选激活状态
   if (store[getFileKey('filter')] && store[getFileKey('filter')].active) {
     renderFilteredFlows();
   }
 }
 
-/*---------------
-  年视图 
----------------*/
+
 function renderYear(y) {
   store[getFileKey('view')] = { type: 'year', y };
   const buf = ['<button onclick="resetFilterState();renderDefaultView();">' + y + '年 | 返回' + '</button>'];
 
   const yData = stats.years[y];
-  const net = yData.income - yData.expense;
+  const net = normalizeZero(yData.income - yData.expense);
   const bal = calcBalanceUntil(y);
-  const totalBal = Object.values(bal).reduce((a, b) => a + b, 0);
+  const totalBal = normalizeZero(Object.values(bal).reduce((a, b) => a + b, 0));
 
   buf.push(`<div class="sep"><b>总览:</b><br>`);
   buf.push(`净变化: <span class="amount ${net >= 0 ? 'positive' : 'negative'}">${fmt(net)}</span> `);
@@ -1283,12 +1227,13 @@ function renderYear(y) {
   buf.push(`截止余额: <span class="amount ${totalBal >= 0 ? 'positive' : 'negative'}">${fmt(totalBal)}</span></div>`);
 
   buf.push(`<div class="sep"><b>截止帐户分布:</b><br>`);
-  Object.entries(bal).forEach(([k, v]) => {
+  Object.entries(bal).forEach(([k, rawV]) => {
+    const v = normalizeZero(rawV);
     buf.push(`${ACCOUNTS[k]}: <span class="amount ${v >= 0 ? 'positive' : 'negative'}">${fmt(v)}</span><br>`);
   });
   buf.push(`</div>`);
 
-  let yTotal = Object.values(yData.cats).reduce((a, b) => a + b, 0);
+  let yTotal = normalizeZero(Object.values(yData.cats).reduce((a, b) => a + b, 0));
   buf.push(`<div class="sep"><b>支出占比:</b><br>`);
   Object.entries(yData.cats).sort((a, b) => b[1] - a[1]).forEach(([c, sum]) => {
       const pct = yTotal ? ((sum / yTotal) * 100).toFixed(1) : 0;
@@ -1322,9 +1267,7 @@ function renderYear(y) {
   }
 }
 
-/*---------------
-  月视图 
----------------*/
+
 function renderMonth(y, m) {
   store[getFileKey('view')] = { type: 'month', y, m };
   const buf = ['<button onclick="renderYear(' + y + ')">' + y + '年' + m + '月 | 返回</button>'];
@@ -1336,16 +1279,18 @@ function renderMonth(y, m) {
     else if (f.dst === 'e') { expense += f.amount; catSum[f.cat] = (catSum[f.cat] || 0) + f.amount; }
   });
   const bal = calcBalanceUntil(y, m);
-  const totalBal = Object.values(bal).reduce((a, b) => a + b, 0);
+  const totalBal = normalizeZero(Object.values(bal).reduce((a, b) => a + b, 0));
+  const monthNet = normalizeZero(income - expense);
 
   buf.push(`<div class="sep"><b>总览:</b><br>`);
-  buf.push(`净变化: <span class="amount ${(income - expense) >= 0 ? 'positive' : 'negative'}">${fmt((income - expense))}</span> `);
+  buf.push(`净变化: <span class="amount ${monthNet >= 0 ? 'positive' : 'negative'}">${fmt(monthNet)}</span> `);
   buf.push(`月收: <span class="amount positive">${fmt(income)}</span> `);
   buf.push(`月支: <span class="amount negative">${fmt(expense)}</span> `);
   buf.push(`截止余额: <span class="amount ${totalBal >= 0 ? 'positive' : 'negative'}">${fmt(totalBal)}</span></div>`);
 
   buf.push(`<div class="sep"><b>截止帐户分布:</b><br>`);
-  Object.entries(bal).forEach(([k, v]) => {
+  Object.entries(bal).forEach(([k, rawV]) => {
+    const v = normalizeZero(rawV);
     buf.push(`${ACCOUNTS[k]}: <span class="amount ${v >= 0 ? 'positive' : 'negative'}">${fmt(v)}</span><br>`);
   });
   buf.push(`</div>`);
@@ -1375,9 +1320,7 @@ function renderMonth(y, m) {
   }
 }
 
-/*---------------
-  期间累计
----------------*/
+
 function calcBalanceUntil(year, month = null) {
   let acc = {}; ACCOUNT_KEYS.forEach(k => acc[k] = 0);
   flows.forEach(f => {
@@ -1391,9 +1334,7 @@ function calcBalanceUntil(year, month = null) {
   return acc;
 }
 
-/*---------------
-  汇率参考
----------------*/
+// --- 多币种汇率拉取与浮窗格式化 ---
 async function loadFX(retry = 1) {
   if (fxLoaded) return;
   fxLoaded = true;
@@ -1402,7 +1343,7 @@ async function loadFX(retry = 1) {
     FX = rates; fxMeta = { source: 'api', approx: false };
     localStorage.setItem(FX_KEY, JSON.stringify({ ts: Date.now(), rates: FX }));
     console.log('[FX] updated from api');
-    refreshCurrencyTips(); // 原地无损刷新汇率浮窗，不冲毁筛选表单与滚动位置
+    refreshCurrencyTips();
   } catch (e) {
     console.warn('[FX] all api failed');
     if (retry > 0) {
@@ -1436,22 +1377,26 @@ function fxSourceLabel() {
   if (fxMeta.source === 'ls') return '⚠ 汇率来自本地存储';
   return '⚠ 使用预设汇率';
 }
-function fmtMain(n) { return n.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+function fmtMain(n) {
+  return normalizeZero(n).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
 function fmtTip(n, expr) {
+  const clean = normalizeZero(n);
   const approx = fxMeta.approx ? '≈ ' : ''; const header = fxSourceLabel();
   return `
     ${expr ? `<div class="tip-row" style="margin-bottom:4px"><span class="tip-cur">算式</span><span class="tip-val">${escapeHtml(expr)}</span></div>` : ''}
     ${header ? `<div style="opacity:.7;margin-bottom:4px">${header}</div>` : ''}
     ${Object.entries(FX).map(([c, rate]) => {
-        const value = n * rate;
+        const value = normalizeZero(clean * rate);
         const text = value.toLocaleString('zh-CN', { style: 'currency', currency: c, currencyDisplay: 'symbol', minimumFractionDigits: 2, maximumFractionDigits: 2 });
         return `<div class="tip-row"><span class="tip-cur">${c}</span><span class="tip-val">${approx}${text}</span></div>`;
       }).join('')}
   `;
 }
 function fmt(n, expr) {
+  const clean = normalizeZero(n);
   const exprAttr = expr ? ` data-expr="${escapeHtml(expr)}"` : '';
-  return `<span class="has-tip" data-amt="${n}"${exprAttr}>${fmtMain(n)}<span class="tip">${fmtTip(n, expr)}</span></span>`;
+  return `<span class="has-tip" data-amt="${clean}"${exprAttr}>${fmtMain(clean)}<span class="tip">${fmtTip(clean, expr)}</span></span>`;
 }
 function withTip(innerHTML, tipHTML) { return `<span class="has-tip">${innerHTML}<span class="tip">${tipHTML}</span></span>`; }
 function refreshCurrencyTips() {
@@ -1463,11 +1408,9 @@ function refreshCurrencyTips() {
   });
 }
 
-/*---------------
-  本地环境自动加载及增强交互
----------------*/
+// --- 本地模式自动加载与 VS Code 行号跳转 ---
 if (store.online_flag === "0") {
-  currentFilename = "txn.txt"; // 本地环境固定使用默认文件名
+  currentFilename = "txn.txt";
 
   fetch(`../../_build/privy/txn.txt?t=${Date.now()}`)
     .then(res => {
@@ -1506,7 +1449,6 @@ if (store.online_flag === "0") {
   };
 
   document.addEventListener('click', e => {
-    // 1. 表格物理行号定位跳转
     const td = e.target.closest('td');
     if (td && td.closest('#output table') && td.cellIndex === 7) {
       const lineText = td.textContent.trim();
@@ -1516,7 +1458,6 @@ if (store.online_flag === "0") {
       return;
     }
 
-    // 2. 纠错错误列表中行号精准穿梭跳转
     const errLink = e.target.closest('.error-line-link');
     if (errLink) {
       const lineText = errLink.dataset.line;
@@ -1527,7 +1468,6 @@ if (store.online_flag === "0") {
     }
   });
 
-  // 右键第二象限弹出层 [reload]
   document.addEventListener('contextmenu', e => {
     e.preventDefault();
     let menu = document.getElementById('local-context-menu');

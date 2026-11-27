@@ -1,29 +1,22 @@
 @charset "UTF-8";
+/* index.css —— 主站外框布局、搜索浮层、弹窗、悬浮音频播放器与触控板样式 */
 
-/* ==========================================================================
-   基础 / 全局重置
-   ========================================================================== */
 
-@keyframes elasticBounce {
-    0% {
-        transform: scale(0.94);
-        opacity: 0;
-    }
-    70% {
-        transform: scale(1.01);
-        opacity: 1;
-    }
-    100% {
-        transform: scale(1);
-        opacity: 1;
-    }
+/* --- 可调变量 --- */
+
+:root {
+    --tp-height: 38dvh;              /* 触控板面板高度 */
+    --tp-bg: #1b1d22;
+    --tp-line: rgba(255, 255, 255, 0.08);
+    --tp-accent: #4f8cff;
+    --tp-cursor: 18px;               /* 虚拟光标直径 */
 }
 
-.elastic-anim {
-    animation: elasticBounce 0.25s ease-out forwards;
-}
 
-html, body {
+/* --- 全局基础与通用状态类 --- */
+
+html,
+body {
     -webkit-touch-callout: none;
     -webkit-user-select: none;
     user-select: none;
@@ -53,10 +46,6 @@ body.touchpad-active {
     overflow: hidden;
 }
 
-/* ==========================================================================
-   通用工具类
-   ========================================================================== */
-
 .hide {
     display: none !important;
 }
@@ -71,12 +60,30 @@ body.touchpad-active {
 }
 
 .current {
-    background-color: #98fda5
+    background-color: #98fda5;
 }
 
-/* ==========================================================================
-   主体布局：content / side
-   ========================================================================== */
+.elastic-anim {
+    animation: elasticBounce 0.25s ease-out forwards;
+}
+
+@keyframes elasticBounce {
+    0% {
+        transform: scale(0.94);
+        opacity: 0;
+    }
+    70% {
+        transform: scale(1.01);
+        opacity: 1;
+    }
+    100% {
+        transform: scale(1);
+        opacity: 1;
+    }
+}
+
+
+/* --- 主体双栏布局 --- */
 
 #stage {
     display: flex;
@@ -96,9 +103,8 @@ body.touchpad-active {
     flex: 25;
 }
 
-/* ==========================================================================
-   搜索
-   ========================================================================== */
+
+/* --- 搜索栏与结果列表 --- */
 
 #search {
     z-index: 1;
@@ -124,11 +130,11 @@ input#searchInput {
 }
 
 #searchResults::-webkit-scrollbar-thumb {
-    background: #ff0
+    background: #ff0;
 }
 
 #searchResults::-webkit-scrollbar-track {
-    background: #adadad
+    background: #adadad;
 }
 
 #searchHistory {
@@ -142,6 +148,7 @@ option:hover,
     background: aliceblue;
 }
 
+/* 保留 option[data-type]：search-ui.js 升级结果框前借临时 <option> 读取分类配色 */
 #searchResults option[data-type="image"],
 #searchResults .sr-opt[data-type="image"] {
     color: #00a8ff;
@@ -172,13 +179,12 @@ option:hover,
     color: #7f8fa6;
 }
 
-/* ==========================================================================
-   Giscus 评论弹窗
-   ========================================================================== */
+
+/* --- Giscus 评论弹窗与更新日志弹窗 --- */
 
 #giscus-popup {
     position: absolute;
-    top: 15%; 
+    top: 15%;
     left: 50%;
     transform: translateX(-50%);
     width: 600px;
@@ -222,13 +228,9 @@ option:hover,
     overflow: auto;
 }
 
-/* ==========================================================================
-   更新日志弹窗
-   ========================================================================== */
-
 #changelog-popup {
     position: absolute;
-    top: 15%; 
+    top: 15%;
     left: 50%;
     transform: translateX(-50%);
     width: 600px;
@@ -281,22 +283,18 @@ option:hover,
     padding: 1px 6px;
 }
 
-/* ==========================================================================
-   摘抄薄按钮
-   ========================================================================== */
-
-#exc-btn-save-and-copy, #exc-btn-save {
+#exc-btn-save-and-copy,
+#exc-btn-save {
     border: 1px solid gray;
     background-color: #f6ead4;
     cursor: pointer;
     padding: 5px;
-    margin: .5rem;
+    margin: 0.5rem;
     border-radius: 5px;
 }
 
-/* ==========================================================================
-   通用确认 / 协议弹窗 (proto-*)
-   ========================================================================== */
+
+/* --- 数据管理确认弹窗 (@bomb / @rebirth) --- */
 
 .proto-overlay {
     position: fixed;
@@ -426,38 +424,58 @@ option:hover,
     color: #333;
 }
 
-/* ==========================================================================
-   代码片段预览悬浮框
-   ========================================================================== */
+
+/* --- 中央悬浮预览窗与任务提醒浮窗 --- */
 
 #center-snippet-preview {
-    position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
-    width: 450px; 
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 450px;
     max-width: 90%;
     box-sizing: border-box;
     height: 350px;
-    background: rgba(40, 44, 52, 0.98); color: #abb2bf;
-    border: 1px solid #61afef; border-radius: 8px;
-    box-shadow: 0 15px 40px rgba(0,0,0,0.6);
-    z-index: 2147483647; overflow: hidden; display: none;
+    background: rgba(40, 44, 52, 0.98);
+    color: #abb2bf;
+    border: 1px solid #61afef;
+    border-radius: 8px;
+    box-shadow: 0 15px 40px rgba(0, 0, 0, 0.6);
+    z-index: 2147483647;
+    overflow: hidden;
+    display: none;
     pointer-events: none;
-    font-family: 'Noto Serif SC', serif; font-size: 13px; line-height: 1.6;
-    transition: border-color 0.3s;
+    font-family: 'Noto Serif SC', serif;
+    font-size: 13px;
+    line-height: 1.6;
+    transition: opacity 0.15s ease, border-color 0.3s;
+    opacity: 0;
     flex-direction: column;
     padding: 5px;
 }
 
+#center-snippet-preview[data-active="true"] {
+    opacity: 1;
+}
+
 #preview-header {
     background: #21252b;
-    border-bottom: 1px solid #4b5263; color: #abb2bf;
-    font-weight: bold; flex-shrink: 0;
-    display: flex; justify-content: space-between; align-items: center;
+    border-bottom: 1px solid #4b5263;
+    color: #abb2bf;
+    font-weight: bold;
+    flex-shrink: 0;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
     transition: color 0.3s;
     width: 100%;
 }
 
-#preview-scroll-wrapper{
-    flex: 1; padding: 15px; overflow: hidden; position: relative;
+#preview-scroll-wrapper {
+    flex: 1;
+    padding: 15px;
+    overflow: hidden;
+    position: relative;
 }
 
 #center-snippet-preview.image-preview-mode {
@@ -474,10 +492,6 @@ option:hover,
     align-items: center;
     padding: 0;
 }
-
-/* ==========================================================================
-   任务提醒浮窗 (task-pingpong)
-   ========================================================================== */
 
 #task-pingpong-box {
     position: fixed;
@@ -502,12 +516,12 @@ option:hover,
 }
 
 #task-pingpong-box .close-btn:hover {
-    background: rgba(0,0,0,0.4);
+    background: rgba(0, 0, 0, 0.4);
 }
 
 #task-pingpong-box h3 {
     margin: 0 0 8px 0;
-    border-bottom: 1px solid rgba(255,255,255,.3);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.3);
     padding-bottom: 4px;
 }
 
@@ -518,14 +532,14 @@ option:hover,
     max-height: 120px;
     overflow-y: auto;
 }
+
 #task-pingpong-box li {
     margin-bottom: 4px;
     word-break: break-all;
 }
 
-/* ==========================================================================
-   音频播放器
-   ========================================================================== */
+
+/* --- 悬浮音频播放器 --- */
 
 #audio {
     width: 350px;
@@ -537,21 +551,21 @@ option:hover,
 
 #audio .active {
     font-weight: 700;
-    color: red
+    color: red;
 }
 
 #audio .active2 {
     border: 1px solid #000;
-    background-color: #00ff40
+    background-color: #00ff40;
+}
+
+#audio li {
+    list-style: decimal;
 }
 
 #audio li:hover {
     cursor: pointer;
-    background: #98fda5
-}
-
-#audio li {
-    list-style: decimal
+    background: #98fda5;
 }
 
 #audio button:last-child {
@@ -569,64 +583,55 @@ option:hover,
     width: 15px;
     height: 100vh;
     background-color: #96c0f7;
-    cursor: pointer
+    cursor: pointer;
 }
 
 .audio-progress-bar {
     bottom: 0;
     width: 100%;
     background-color: pink;
-    height: 23.9913%
+    height: 0%;
 }
 
 .audio_div {
-    margin-left: 30px
+    margin-left: 30px;
 }
 
 .playlist {
     overflow-y: scroll;
     margin-top: 20px;
-    max-height: 60vh
+    max-height: 60vh;
 }
 
 .header {
     background: #000;
-    color: #fff
+    color: #fff;
 }
 
 .fav {
-    color: red
+    color: red;
 }
 
 audio {
     padding: 2rem 0;
-    display: block
+    display: block;
 }
 
 audio::-webkit-media-controls-timeline,
 audio::-moz-media-controls-timeline,
 audio::-ms-media-controls-timeline,
 audio::media-controls-timeline {
-    display: none
+    display: none;
 }
 
-/* ==========================================================================
-   触控板 (touchpad)
-   ========================================================================== */
 
-:root {
-  --tp-height: 38dvh;
-  --tp-bg: #1b1d22;
-  --tp-line: rgba(255,255,255,0.08);
-  --tp-accent: #4f8cff;
-  --tp-cursor: 18px;
-}
+/* --- 虚拟触控板 (touchpad) --- */
 
 body.touchpad-active #stage {
     height: calc(100dvh - var(--tp-height)) !important;
     max-height: calc(100dvh - var(--tp-height)) !important;
     overflow: hidden;
-    transition: height .18s ease;
+    transition: height 0.18s ease;
     border-bottom: 1px solid rgba(79, 140, 255, 0.35);
     box-sizing: border-box;
 }
@@ -636,7 +641,6 @@ body.touchpad-active .proto-overlay {
     max-height: calc(100dvh - var(--tp-height));
 }
 
-/* 触控板收起:#stage 与覆盖层占满整屏 */
 body.touchpad-active.tp-collapsed #stage {
     height: 100dvh !important;
     max-height: 100dvh !important;
@@ -649,129 +653,124 @@ body.touchpad-active.tp-collapsed .proto-overlay {
 }
 
 #touchpad-panel {
-  flex-shrink: 0;
-  display: none;
-  -webkit-text-size-adjust: none;
-  text-size-adjust: none;
+    flex-shrink: 0;
+    display: none;
+    -webkit-text-size-adjust: none;
+    text-size-adjust: none;
 }
 
 body.touchpad-active #touchpad-panel {
-  display: flex;
-  position: fixed;
-  left: 0; right: 0; bottom: 0;
-  height: var(--tp-height);
-  padding-bottom: env(safe-area-inset-bottom, 0px);
-  background: var(--tp-bg);
-  z-index: 999999;
-  touch-action: none;
-  user-select: none;
-  -webkit-user-select: none;
-  box-sizing: border-box;
-  border-top: 2px solid var(--tp-accent);
-  box-shadow: 0 -6px 18px rgba(0, 0, 0, 0.45);
-  transition: transform .18s ease, visibility 0s linear 0s;
+    display: flex;
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: var(--tp-height);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+    background: var(--tp-bg);
+    z-index: 999999;
+    touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
+    box-sizing: border-box;
+    border-top: 2px solid var(--tp-accent);
+    box-shadow: 0 -6px 18px rgba(0, 0, 0, 0.45);
+    transition: transform 0.18s ease, visibility 0s linear 0s;
 }
 
-/* 收起:面板滑出屏幕并隐藏(保持布局存在,按钮拖动范围仍可按其高度计算) */
+/* 收起后滑出视口并保留布局盒子，供 touchpad.js 计算悬浮钮拖动范围 */
 body.touchpad-active.tp-collapsed #touchpad-panel {
-  transform: translateY(100%);
-  visibility: hidden;
-  pointer-events: none;
-  transition: transform .18s ease, visibility 0s linear .18s;
+    transform: translateY(100%);
+    visibility: hidden;
+    pointer-events: none;
+    transition: transform 0.18s ease, visibility 0s linear 0.18s;
 }
 
 .tp-col-buttons {
-  width: 18%;
-  min-width: 64px;
-  display: flex;
-  flex-direction: column;
-  border-right: 1px solid var(--tp-line);
+    width: 18%;
+    min-width: 64px;
+    display: flex;
+    flex-direction: column;
+    border-right: 1px solid var(--tp-line);
 }
 
 .tp-btn {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: #cfd3dc;
-  font-size: 22px !important;
-  -webkit-text-size-adjust: none !important;
-  text-size-adjust: none !important;
-  line-height: 1;
-  letter-spacing: .5px;
-  border-bottom: 1px solid var(--tp-line);
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #cfd3dc;
+    font-size: 22px !important;
+    -webkit-text-size-adjust: none !important;
+    text-size-adjust: none !important;
+    line-height: 1;
+    letter-spacing: 0.5px;
+    border-bottom: 1px solid var(--tp-line);
 }
-.tp-btn:last-child { border-bottom: none; }
+
+.tp-btn:last-child {
+    border-bottom: none;
+}
+
 .tp-btn.tp-active {
-  background: rgba(79,140,255,0.25);
-  color: #fff;
+    background: rgba(79, 140, 255, 0.25);
+    color: #fff;
 }
 
 .tp-col-move {
-  flex: 1;
-  position: relative;
-  border-right: 1px solid var(--tp-line);
-  background:
-    radial-gradient(circle at 50% 50%, rgba(255,255,255,0.03), transparent 70%);
-}
-.tp-col-move::before {
-  content: "触控区";
-  position: absolute;
-  top: 6px; left: 50%;
-  transform: translateX(-50%);
-  font-size: 22px!important;
-  color: rgba(255,255,255,0.28);
-  pointer-events: none;
+    flex: 1;
+    position: relative;
+    border-right: 1px solid var(--tp-line);
+    background: radial-gradient(circle at 50% 50%, rgba(255, 255, 255, 0.03), transparent 70%);
 }
 
-.tp-col-wheel {
-  width: 16%;
-  min-width: 56px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: rgba(255,255,255,0.35);
-  font-size: 14px;
-  writing-mode: vertical-rl;
-  letter-spacing: 2px;
-}
-.tp-col-wheel.tp-active {
-  color: var(--tp-accent);
-  background: rgba(79,140,255,0.12);
+.tp-col-move::before {
+    content: "触控区";
+    position: absolute;
+    top: 6px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 22px !important;
+    color: rgba(255, 255, 255, 0.28);
+    pointer-events: none;
 }
 
 #tp-cursor {
-  position: fixed;
-  width: var(--tp-cursor);
-  height: var(--tp-cursor);
-  margin-left: calc(var(--tp-cursor) / -2);
-  margin-top: calc(var(--tp-cursor) / -2);
-  pointer-events: none;
-  z-index: 999998;
-  display: none;
-  background: rgba(79,140,255,0.9);
-  border: 2px solid #fff;
-  border-radius: 50%;
-  box-shadow: 0 0 0 1px rgba(0,0,0,0.25);
-  transition: transform 0.08s cubic-bezier(0.34, 1.56, 0.64, 1), background 0.12s ease;
-  will-change: transform;
+    position: fixed;
+    width: var(--tp-cursor);
+    height: var(--tp-cursor);
+    margin-left: calc(var(--tp-cursor) / -2);
+    margin-top: calc(var(--tp-cursor) / -2);
+    pointer-events: none;
+    z-index: 999998;
+    display: none;
+    background: rgba(79, 140, 255, 0.9);
+    border: 2px solid #fff;
+    border-radius: 50%;
+    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.25);
+    transition: transform 0.08s cubic-bezier(0.34, 1.56, 0.64, 1), background 0.12s ease;
+    will-change: transform;
 }
-body.touchpad-active #tp-cursor { display: block; }
+
+body.touchpad-active #tp-cursor {
+    display: block;
+}
 
 #tp-cursor.tp-cursor-down {
-  transform: scale(0.72);
-  background: rgba(255,120,80,0.95);
-  box-shadow: 0 0 0 3px rgba(255,120,80,0.35);
+    transform: scale(0.72);
+    background: rgba(255, 120, 80, 0.95);
+    box-shadow: 0 0 0 3px rgba(255, 120, 80, 0.35);
 }
 
 #tp-cursor.tp-cursor-click {
-  animation: tpCursorElastic 0.32s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+    animation: tpCursorElastic 0.32s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
 }
+
 @keyframes tpCursorElastic {
-  0%   { transform: scale(0.72); }
-  45%  { transform: scale(1.28); }
-  70%  { transform: scale(0.92); }
-  100% { transform: scale(1); }
+    0% { transform: scale(0.72); }
+    45% { transform: scale(1.28); }
+    70% { transform: scale(0.92); }
+    100% { transform: scale(1); }
 }
 
 #tp-cursor.tp-cursor-text {
@@ -782,57 +781,47 @@ body.touchpad-active #tp-cursor { display: block; }
     border-radius: 0;
     margin-left: -1px;
     margin-top: -11px;
-    box-shadow: 0 0 4px rgba(0,0,0,0.5);
+    box-shadow: 0 0 4px rgba(0, 0, 0, 0.5);
 }
 
-/* 收起/展开按钮:悬浮在触控板范围内,按住可拖动并固定位置 */
 #tp-toggle {
-  position: fixed;
-  left: 0; top: 0; /* 实际位置由 touchpad.js 写入 */
-  z-index: 1000000;
-  width: 60px;
-  height: 40px;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font: inherit;
-  font-size: 20px !important;
-  line-height: 1;
-  letter-spacing: .5px;
-  color: #fff;
-  background: rgba(79, 140, 255, 0.92);
-  border: 1px solid rgba(255, 255, 255, 0.55);
-  border-radius: 10px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
-  box-sizing: border-box;
-  cursor: pointer;
-  touch-action: none;
-  user-select: none;
-  -webkit-user-select: none;
-  -webkit-touch-callout: none;
-  -webkit-tap-highlight-color: transparent;
-  -webkit-text-size-adjust: none !important;
-  text-size-adjust: none !important;
-  transition: opacity .15s ease, transform .12s ease;
+    position: fixed;
+    left: 0;
+    top: 0;
+    z-index: 1000000;
+    width: 60px;
+    height: 40px;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font: inherit;
+    font-size: 20px !important;
+    line-height: 1;
+    letter-spacing: 0.5px;
+    color: #fff;
+    background: rgba(79, 140, 255, 0.92);
+    border: 1px solid rgba(255, 255, 255, 0.55);
+    border-radius: 10px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+    box-sizing: border-box;
+    cursor: pointer;
+    touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-touch-callout: none;
+    -webkit-tap-highlight-color: transparent;
+    -webkit-text-size-adjust: none !important;
+    text-size-adjust: none !important;
+    transition: opacity 0.15s ease, transform 0.12s ease;
 }
 
-/* 收起后悬浮在页面内容上,降低存在感 */
 body.tp-collapsed #tp-toggle {
-  opacity: .6;
+    opacity: 0.6;
 }
 
 body #tp-toggle.tp-dragging {
-  opacity: 1;
-  transform: scale(1.08);
-}
-
-
-#center-snippet-preview {
-    transition: opacity 0.15s ease, border-color 0.3s;
-    opacity: 0;
-}
-#center-snippet-preview[data-active="true"] {
     opacity: 1;
+    transform: scale(1.08);
 }

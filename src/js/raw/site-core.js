@@ -1,13 +1,15 @@
 /**
  * site-core.js —— 全站单一事实源（兼容 Window / iframe / Service Worker）
- * 统一维护：MainDB Schema、每标签页 sessionStorage 隔离路由、createStore Proxy、协议名与音频路径校验。
+ * 维护 MainDB Schema、标签页隔离存储路由、createStore 代理及路径/协议校验。
  */
 (function (root) {
     'use strict';
 
+    // IndexedDB 契约
     const MAINDB_NAME = 'MainDB';
     const MAINDB_VERSION = 3;
 
+    // 每标签页隔离键（路由至 sessionStorage，其余键走 localStorage）
     const TAB_SCOPED_KEYS = new Set([
         'resource_type',
         'content_src',
@@ -31,10 +33,14 @@
         'force_refresh_cache'
     ]);
 
+    // 禁用协议黑名单
     const BLOCKED_SCHEMES = new Set([
         'javascript', 'data', 'vbscript', 'file', 'blob', 'about',
         'http', 'https', 'ws', 'wss', 'ftp', 'mailto', 'tel'
     ]);
+
+
+    // --- 路径与协议校验 ---
 
     function sanitizeProtocolName(raw) {
         let s = raw;
@@ -77,6 +83,9 @@
         return out;
     }
 
+
+    // --- MainDB 生命周期 ---
+
     function ensureMainDBSchema(db) {
         if (!db.objectStoreNames.contains('chunks')) db.createObjectStore('chunks');
         if (!db.objectStoreNames.contains('update_logs')) db.createObjectStore('update_logs', { autoIncrement: true });
@@ -94,6 +103,9 @@
             if (typeof onBlocked === 'function') req.onblocked = onBlocked;
         });
     }
+
+
+    // --- 存储路由与代理 ---
 
     function getStorageForKey(key) {
         return TAB_SCOPED_KEYS.has(key) ? root.sessionStorage : root.localStorage;
@@ -148,7 +160,10 @@
                     value = clean;
                 }
                 const st = getStorageForKey(prop);
-                if (st) st.setItem(prop, JSON.stringify(value));
+                if (st) {
+                    if (value === undefined) st.removeItem(prop);
+                    else st.setItem(prop, JSON.stringify(value));
+                }
                 return true;
             },
             deleteProperty(_, prop) {
@@ -161,6 +176,9 @@
             }
         });
     }
+
+
+    // --- 导出 ---
 
     root.SiteCore = Object.freeze({
         MAINDB_NAME,

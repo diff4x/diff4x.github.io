@@ -89,31 +89,53 @@ fn err_resp(status: StatusCode, msg: impl Into<String>) -> Response {
     (status, Json(json!({ "ok": false, "error": msg.into() }))).into_response()
 }
 
+/// 对 canonicalize 后的真实目标路径复核 Markdown 安全边界，防止目录或文件符号链接绕过 _build/.git 禁区
+pub(crate) fn validate_canonical_md_target(
+    repo_root: &Path,
+    canonical_target: &Path,
+) -> Option<String> {
+    let rel = canonical_target.strip_prefix(repo_root).ok()?;
+    let rel_slash = rel.to_string_lossy().replace('\\', "/");
+    validate_rel_md_path(&rel_slash).map(|segs| segs.join("/"))
+}
+
 pub async fn put_html(
     State(state): State<Arc<AppState>>,
     Json(req): Json<PutHtmlReq>,
 ) -> Response {
     let _busy = state.runtime.begin_op();
-    let title = req.title.trim();
-    if !validate_title(title) {
+    let title = req.title.trim().to_string();
+    if !validate_title(&title) {
         return err_resp(StatusCode::BAD_REQUEST, "非法页面标题");
     }
     if req.html.trim().is_empty() {
         return err_resp(StatusCode::BAD_REQUEST, "HTML 内容为空，已拒绝写入");
     }
 
-    let candidate = state.config.html_dir.join(format!("{}.html", title));
-    let target = match std::fs::canonicalize(&candidate) {
-        Ok(p) if p.is_file() && p.starts_with(&state.config.html_dir) => p,
-        _ => return err_resp(StatusCode::NOT_FOUND, "目标 HTML 页面不存在"),
-    };
+    let html_dir = state.config.html_dir.clone();
+    let title_bg = title.clone();
+    let html = req.html;
+    let res = tokio::task::spawn_blocking(move || -> Result<(), (StatusCode, String)> {
+        let candidate = html_dir.join(format!("{}.html", title_bg));
+        let target = match std::fs::canonicalize(&candidate) {
+            Ok(p) if p.is_file() && p.starts_with(&html_dir) => p,
+            _ => return Err((StatusCode::NOT_FOUND, "目标 HTML 页面不存在".to_string())),
+        };
+        write_atomic(&target, &html, true).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))
+    })
+    .await;
 
-    if let Err(e) = write_atomic(&target, &req.html, true) {
-        return err_resp(StatusCode::INTERNAL_SERVER_ERROR, e);
+    match res {
+        Ok(Ok(())) => {
+            state.logs.info(format!("[api] 已保存双语页: {}.html", title));
+            Json(json!({ "ok": true })).into_response()
+        }
+        Ok(Err((code, msg))) => err_resp(code, msg),
+        Err(e) => err_resp(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("保存任务异常中止: {}", e),
+        ),
     }
-
-    state.logs.info(format!("[api] 已保存双语页: {}.html", title));
-    Json(json!({ "ok": true })).into_response()
 }
 
 pub async fn put_md(
@@ -142,12 +164,36 @@ pub async fn put_md(
             _ => return Err((StatusCode::NOT_FOUND, "目标目录不存在或越界".to_string())),
         };
         let final_target = parent.join(segs.last().unwrap());
+        let Some(rel_joined) =
+            validate_canonical_md_target(&state_bg.config.repo_root, &final_target)
+        else {
+            return Err((
+                StatusCode::FORBIDDEN,
+                "目标 Markdown 路径规范化后非法或越界".to_string(),
+            ));
+        };
+        if final_target.exists() {
+            let canon_file = match std::fs::canonicalize(&final_target) {
+                Ok(p) if p.is_file() && p.starts_with(&state_bg.config.repo_root) => p,
+                _ => {
+                    return Err((
+                        StatusCode::FORBIDDEN,
+                        "目标 Markdown 文件符号链接越界或非普通文件".to_string(),
+                    ));
+                }
+            };
+            if validate_canonical_md_target(&state_bg.config.repo_root, &canon_file).is_none() {
+                return Err((
+                    StatusCode::FORBIDDEN,
+                    "目标 Markdown 真实路径受保护，禁止写入".to_string(),
+                ));
+            }
+        }
 
         if let Err(e) = write_atomic(&final_target, &content, false) {
             return Err((StatusCode::INTERNAL_SERVER_ERROR, e));
         }
 
-        let rel_joined = segs.join("/");
         let latest_ver = match crate::services::md_history::record_if_changed(
             &state_bg.config,
             &rel_joined,
@@ -183,9 +229,26 @@ pub async fn post_bookmark(
     Json(req): Json<BookmarkReq>,
 ) -> Response {
     let _busy = state.runtime.begin_op();
-    if let Err(e) = update_bookmark(&state.config, &req.block, &req.title, &req.href) {
-        return err_resp(StatusCode::BAD_REQUEST, e);
+    let cfg = state.config.clone();
+    let block = req.block;
+    let title = req.title;
+    let href = req.href;
+    let block_log = block.clone();
+    let href_log = href.clone();
+    let res =
+        tokio::task::spawn_blocking(move || update_bookmark(&cfg, &block, &title, &href)).await;
+
+    match res {
+        Ok(Ok(())) => {
+            state
+                .logs
+                .info(format!("[api] 已更新书签: block={} href={}", block_log, href_log));
+            Json(json!({ "ok": true })).into_response()
+        }
+        Ok(Err(e)) => err_resp(StatusCode::BAD_REQUEST, e),
+        Err(e) => err_resp(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("书签更新任务异常中止: {}", e),
+        ),
     }
-    state.logs.info(format!("[api] 已更新书签: block={} href={}", req.block, req.href));
-    Json(json!({ "ok": true })).into_response()
 }

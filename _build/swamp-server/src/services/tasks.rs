@@ -1,10 +1,12 @@
+//! 后台 VPN 网络心跳监测与 Google Tasks OAuth 2.0 (PKCE) 定时同步服务。
+
 use chrono::{Duration as ChronoDuration, Utc};
 use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
 use sha2::{Digest, Sha256};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -37,13 +39,13 @@ pub struct UpcomingTask {
 }
 
 #[derive(Deserialize, Debug, Clone)]
-struct ClientSecretBlock {
-    client_id: String,
-    client_secret: String,
+pub(crate) struct ClientSecretBlock {
+    pub(crate) client_id: String,
+    pub(crate) client_secret: String,
     #[serde(default = "default_auth_uri")]
-    auth_uri: String,
+    pub(crate) auth_uri: String,
     #[serde(default = "default_token_uri")]
-    token_uri: String,
+    pub(crate) token_uri: String,
 }
 
 fn default_auth_uri() -> String {
@@ -61,11 +63,11 @@ struct CredentialsFile {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
-struct StoredToken {
-    access_token: String,
+pub(crate) struct StoredToken {
+    pub(crate) access_token: String,
     #[serde(default)]
-    refresh_token: String,
-    expires_at: i64,
+    pub(crate) refresh_token: String,
+    pub(crate) expires_at: i64,
 }
 
 pub struct PendingOAuth {
@@ -158,7 +160,7 @@ impl RuntimeStatus {
     }
 }
 
-fn unix_now() -> i64 {
+pub(crate) fn unix_now() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
@@ -210,50 +212,72 @@ fn generate_pkce_pair() -> Result<(String, String), String> {
     Ok((verifier, challenge))
 }
 
-fn load_client_secrets(cfg: &ServerConfig) -> Result<ClientSecretBlock, String> {
-    let path = cfg.privy_dir.join("credentials.json");
+pub(crate) fn load_client_secrets_from(path: &Path) -> Result<ClientSecretBlock, String> {
     if !path.is_file() {
         return Err(format!("找不到 {}", path.display()));
     }
-    let raw = fs::read_to_string(&path).map_err(|e| format!("读取 credentials.json 失败: {}", e))?;
+    let fname = path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("credentials.json");
+    let raw = fs::read_to_string(path).map_err(|e| format!("读取 {} 失败: {}", fname, e))?;
     let parsed: CredentialsFile =
-        serde_json::from_str(&raw).map_err(|e| format!("解析 credentials.json 失败: {}", e))?;
+        serde_json::from_str(&raw).map_err(|e| format!("解析 {} 失败: {}", fname, e))?;
     let block = parsed
         .installed
         .or(parsed.web)
-        .ok_or_else(|| "credentials.json 缺少 installed/web 字段".to_string())?;
+        .ok_or_else(|| format!("{} 缺少 installed/web 字段", fname))?;
     if !is_allowed_google_oauth_url(&block.auth_uri)
         || !is_allowed_google_oauth_url(&block.token_uri)
     {
-        return Err("credentials.json 中的 auth_uri 或 token_uri 不在 Google HTTPS 白名单域名内".to_string());
+        return Err(format!(
+            "{} 中的 auth_uri 或 token_uri 不在 Google HTTPS 白名单域名内",
+            fname
+        ));
     }
     Ok(block)
+}
+
+fn load_client_secrets(cfg: &ServerConfig) -> Result<ClientSecretBlock, String> {
+    load_client_secrets_from(&cfg.privy_dir.join("credentials.json"))
 }
 
 fn token_file_path(cfg: &ServerConfig) -> PathBuf {
     cfg.privy_dir.join("tokens.json")
 }
 
-fn load_stored_token(cfg: &ServerConfig) -> Option<StoredToken> {
-    let p = token_file_path(cfg);
-    let raw = fs::read_to_string(&p).ok()?;
+pub(crate) fn load_stored_token_from(path: &Path) -> Option<StoredToken> {
+    let raw = fs::read_to_string(path).ok()?;
     serde_json::from_str(&raw).ok()
 }
 
-fn save_stored_token(cfg: &ServerConfig, tok: &StoredToken) -> Result<(), String> {
-    let _ = fs::create_dir_all(&cfg.privy_dir);
+pub(crate) fn save_stored_token_to(path: &Path, tok: &StoredToken) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
     let json = serde_json::to_string_pretty(tok).map_err(|e| format!("序列化 token 失败: {}", e))?;
-    write_atomic(&token_file_path(cfg), &json, false)
+    write_atomic(path, &json, false)
 }
 
-pub fn clear_stored_token(cfg: &ServerConfig) {
-    let p = token_file_path(cfg);
-    if p.is_file() {
-        let _ = fs::remove_file(&p);
+pub(crate) fn clear_stored_token_at(path: &Path) {
+    if path.is_file() {
+        let _ = fs::remove_file(path);
     }
 }
 
-enum PollErr {
+fn load_stored_token(cfg: &ServerConfig) -> Option<StoredToken> {
+    load_stored_token_from(&token_file_path(cfg))
+}
+
+fn save_stored_token(cfg: &ServerConfig, tok: &StoredToken) -> Result<(), String> {
+    save_stored_token_to(&token_file_path(cfg), tok)
+}
+
+pub fn clear_stored_token(cfg: &ServerConfig) {
+    clear_stored_token_at(&token_file_path(cfg));
+}
+
+pub(crate) enum PollErr {
     Network(String),
     Auth(String),
     Other(String),
@@ -326,7 +350,7 @@ async fn exchange_code_for_token(
     })
 }
 
-async fn refresh_access_token(
+pub(crate) async fn refresh_access_token(
     client: &reqwest::Client,
     creds: &ClientSecretBlock,
     refresh_token: &str,
@@ -376,11 +400,15 @@ async fn refresh_access_token(
     })
 }
 
-async fn run_interactive_oauth(
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn run_interactive_oauth_for_scope(
     cfg: &ServerConfig,
     status: &Arc<RuntimeStatus>,
     client: &reqwest::Client,
     creds: &ClientSecretBlock,
+    scope: &str,
+    token_path: &Path,
+    log_tag: &str,
     logs: &Arc<LogBus>,
 ) -> Result<StoredToken, PollErr> {
     let state_tok = generate_token_hex().map_err(PollErr::Other)?;
@@ -388,7 +416,16 @@ async fn run_interactive_oauth(
     let redirect_uri = format!("http://localhost:{}/__oauth/callback", cfg.port);
 
     let (tx, rx) = oneshot::channel::<Result<String, String>>();
-    if let Ok(mut guard) = status.oauth_pending.lock() {
+    {
+        let mut guard = status
+            .oauth_pending
+            .lock()
+            .map_err(|_| PollErr::Other("授权状态锁异常".to_string()))?;
+        if guard.is_some() {
+            return Err(PollErr::Other(
+                "已有另一项 Google OAuth 授权正在等待浏览器回调，请先完成当前授权".to_string(),
+            ));
+        }
         *guard = Some(PendingOAuth {
             state: state_tok.clone(),
             tx,
@@ -401,17 +438,19 @@ async fn run_interactive_oauth(
         creds.auth_uri,
         enc(&creds.client_id),
         enc(&redirect_uri),
-        enc(TASKS_SCOPE),
+        enc(scope),
         enc(&code_challenge),
         enc(&state_tok)
     );
 
-    logs.info("[tasks] 已打开浏览器进行 Google Tasks 授权");
+    logs.info(format!("[{}] 已打开浏览器进行 Google OAuth 授权", log_tag));
     crate::open_url_in_browser(&auth_url, false);
 
     let code_res = tokio::time::timeout(Duration::from_secs(AUTH_WAIT_TIMEOUT_SECS), rx).await;
     if let Ok(mut guard) = status.oauth_pending.lock() {
-        *guard = None;
+        if guard.as_ref().map(|p| p.state.as_str()) == Some(state_tok.as_str()) {
+            *guard = None;
+        }
     }
 
     let code = match code_res {
@@ -422,9 +461,36 @@ async fn run_interactive_oauth(
     };
 
     let tok = exchange_code_for_token(client, creds, &code, &redirect_uri, &code_verifier).await?;
-    save_stored_token(cfg, &tok).map_err(PollErr::Other)?;
-    logs.info("[tasks] Google Tasks 授权完成，凭证已保存到 privy/tokens.json");
+    save_stored_token_to(token_path, &tok).map_err(PollErr::Other)?;
+    let tok_name = token_path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("tokens.json");
+    logs.info(format!(
+        "[{}] Google OAuth 授权完成，凭证已保存到 privy/{}",
+        log_tag, tok_name
+    ));
     Ok(tok)
+}
+
+async fn run_interactive_oauth(
+    cfg: &ServerConfig,
+    status: &Arc<RuntimeStatus>,
+    client: &reqwest::Client,
+    creds: &ClientSecretBlock,
+    logs: &Arc<LogBus>,
+) -> Result<StoredToken, PollErr> {
+    run_interactive_oauth_for_scope(
+        cfg,
+        status,
+        client,
+        creds,
+        TASKS_SCOPE,
+        &token_file_path(cfg),
+        "tasks",
+        logs,
+    )
+    .await
 }
 
 async fn fetch_upcoming_tasks(
@@ -544,7 +610,6 @@ pub fn spawn_background_monitors(
     status: Arc<RuntimeStatus>,
     logs: Arc<LogBus>,
 ) {
-    // 1. VPN 心跳监测循环（状态变化时实时通知管理窗口刷新任务栏图标颜色）
     {
         let cfg_hb = cfg.clone();
         let status_hb = status.clone();
@@ -576,7 +641,6 @@ pub fn spawn_background_monitors(
         });
     }
 
-    // 2. Google Tasks 轮询与 OAuth 自动刷新循环
     tokio::spawn(async move {
         let client = match reqwest::Client::builder()
             .timeout(Duration::from_secs(15))
@@ -586,7 +650,6 @@ pub fn spawn_background_monitors(
             Err(_) => return,
         };
 
-        // 等待首个心跳探测结果（最多 15s）
         tokio::time::sleep(Duration::from_millis(1500)).await;
         for _ in 0..75 {
             if status.vpn_has_result.load(Ordering::Relaxed) {
@@ -595,7 +658,6 @@ pub fn spawn_background_monitors(
             tokio::time::sleep(Duration::from_millis(200)).await;
         }
 
-        // 若本地已有旧 upcoming_tasks.json，先预热进内存
         let json_path = cfg.privy_dir.join("upcoming_tasks.json");
         if let Ok(raw) = fs::read_to_string(&json_path) {
             if let Ok(list) = serde_json::from_str::<Vec<UpcomingTask>>(&raw) {
@@ -615,13 +677,11 @@ pub fn spawn_background_monitors(
             if status.is_online() {
                 match load_client_secrets(&cfg) {
                     Err(_) => {
-                        // 未配置 credentials.json 时静默等待
                     }
                     Ok(creds) => {
                         let now = unix_now();
                         let mut token_opt = load_stored_token(&cfg);
 
-                        // 如果已过期且有 refresh_token，先自动刷新
                         let mut auth_err: Option<PollErr> = None;
                         let mut refreshed_this_cycle = false;
                         if let Some(ref tok) = token_opt {
@@ -637,7 +697,6 @@ pub fn spawn_background_monitors(
                             }
                         }
 
-                        // 若无可用凭证，在冷却期满后触发交互授权
                         if auth_err.is_none() && token_opt.is_none() {
                             if last_auth_attempt == 0 || (now - last_auth_attempt) >= AUTH_COOLDOWN_SECS {
                                 last_auth_attempt = now;
@@ -684,7 +743,6 @@ pub fn spawn_background_monitors(
                                 if let Ok(mut g) = status.last_tasks_sync.write() {
                                     *g = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
                                 }
-                                // 同步落盘 upcoming_tasks.json 保持向下兼容
                                 if let Ok(pretty) = serde_json::to_string_pretty(&tasks) {
                                     let _ = fs::create_dir_all(&cfg.privy_dir);
                                     let _ = write_atomic(&json_path, &pretty, false);

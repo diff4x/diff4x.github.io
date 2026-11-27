@@ -1,7 +1,6 @@
 /**
- * deferred-features.js —— 懒加载外围功能集合：
- * What's new 更新日志、庆祝彩纸、@bomb/@rebirth 数据管理、7 天备份提醒、
- * 侧栏全局书签菜单、本地到期任务提醒，以及闲时工具（拼音词库、容量监测、夜间标题闪烁）。
+ * deferred-features.js —— 懒加载外围功能集合（运行于主线程）
+ * 含 What's new、彩纸动画、@bomb/@rebirth、备份提醒、全局书签菜单、到期任务、闲时工具与 MD 浮窗。
  */
 import { ExcerptsSys } from './excerpts.js';
 import {
@@ -16,9 +15,18 @@ import {
     toggleStandaloneMediaPreview
 } from './search-preview.js';
 
+// 常量与模块运行态
+const CL_MEDIA_KIND_BY_BUCKET = { gallery: 'image', video: 'video', audio: 'audio' };
 const store = createLocalStoreProxy();
 
 let _clRenderSeq = 0;
+let _clPreviewPath = null;
+let _clOwnsPreview = false;
+let _confettiCanvas = null;
+let _confettiFire = null;
+
+
+// --- What's new 更新日志与评论动态 ---
 
 function formatLogTime(ts) {
     const d = new Date(ts);
@@ -38,11 +46,6 @@ function collectPrivatePaths() {
     }
     return privatePaths;
 }
-
-const CL_MEDIA_KIND_BY_BUCKET = { gallery: 'image', video: 'video', audio: 'audio' };
-
-let _clPreviewPath = null;
-let _clOwnsPreview = false;
 
 function hideChangelogPreview() {
     _clPreviewPath = null;
@@ -386,8 +389,7 @@ async function buildCommentsHtml(ctx) {
     return html;
 }
 
-let _confettiCanvas = null;
-let _confettiFire = null;
+// --- 更新彩纸动画 ---
 
 function getConfettiFire() {
     if (_confettiCanvas && document.body.contains(_confettiCanvas)) return _confettiFire;
@@ -458,6 +460,9 @@ export function playConfetti() {
     document.body.appendChild(script);
 }
 
+
+// --- @bomb / @rebirth 数据备份与清理 ---
+
 const PROTOCOL_OPTIONS = [
     { key: 'favList', label: '音乐收藏' },
     { key: 'marks', label: '条目标记' },
@@ -527,8 +532,16 @@ const restoreData = async (data, selections) => {
         if (data.synonyms_enabled !== undefined) store.synonyms_enabled = data.synonyms_enabled;
     }
     if (selections.includes('pdfjs') && data['pdfjs.history'] !== undefined) store['pdfjs.history'] = data['pdfjs.history'];
-    if (selections.includes('bibi') && data.BibiBiscuits) for (const [k, v] of Object.entries(data.BibiBiscuits)) localStorage.setItem(k, v);
-    if (selections.includes('txt') && data.txts) for (const [k, v] of Object.entries(data.txts)) localStorage.setItem(k, v);
+    if (selections.includes('bibi') && data.BibiBiscuits && typeof data.BibiBiscuits === 'object') {
+        for (const [k, v] of Object.entries(data.BibiBiscuits)) {
+            if (typeof k === 'string' && k.startsWith('BibiBiscuit') && typeof v === 'string') localStorage.setItem(k, v);
+        }
+    }
+    if (selections.includes('txt') && data.txts && typeof data.txts === 'object') {
+        for (const [k, v] of Object.entries(data.txts)) {
+            if (typeof k === 'string' && k.startsWith('txt.history') && typeof v === 'string') localStorage.setItem(k, v);
+        }
+    }
     if (selections.includes('excerpts') && data.excerpts_backup !== undefined && typeof ExcerptsSys !== 'undefined') {
         try {
             const db = await ExcerptsSys.init();
@@ -629,8 +642,15 @@ export function bomb(ctx) {
                 }
                 const backupData = await getSelectedData(selections);
                 const savedLocalToken = store.online_flag === '0' ? localStorage.getItem('__swamp_local_token__') : null;
+                const savedAdultVerified = localStorage.getItem('adult_verified') === 'true' || /(?:^|;\s*)adult_verified=true(?:;|$)/.test(document.cookie);
                 await doWipe();
                 await restoreData(backupData, selections);
+                if (savedAdultVerified) {
+                    try { localStorage.setItem('adult_verified', 'true'); } catch (_) { }
+                    const d = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000);
+                    const sec = location.protocol === 'https:' ? '; secure' : '';
+                    document.cookie = `adult_verified=true; expires=${d.toUTCString()}; path=/${sec}; SameSite=Lax`;
+                }
                 if (savedLocalToken) {
                     try { localStorage.setItem('__swamp_local_token__', savedLocalToken); } catch (_) { }
                 }
@@ -818,6 +838,9 @@ export function initBackupReminder(ctx) {
     }
 }
 
+
+// --- 全局书签右键菜单 ---
+
 export function showGlobalBookmarkMenu(x, y, source) {
     let absoluteX = x;
     let absoluteY = y;
@@ -948,6 +971,9 @@ export function showGlobalBookmarkMenu(x, y, source) {
     window._closeGlobalMenu = closeMenu;
     setTimeout(() => document.addEventListener('click', closeMenu), 0);
 }
+
+
+// --- 本地到期 Google Tasks 弹跳提醒 ---
 
 export function initDueTasksPingPong(ctx = {}) {
     const JSON_URL = '/_build/privy/upcoming_tasks.json';
@@ -1080,9 +1106,8 @@ export function initDueTasksPingPong(ctx = {}) {
 }
 
 
-// =========================================================================
-// 闲时外围工具：拼音词库加载、localStorage 告警、夜间催睡标题/图标闪烁
-// =========================================================================
+// --- 闲时外围工具（拼音词库、夜间标题闪烁、容量监测） ---
+
 export function initIdleUtilities(ctx = {}) {
     const { safeInterval, idleRun, docTitle } = ctx;
     const runIdle = typeof idleRun === 'function'
@@ -1091,7 +1116,6 @@ export function initIdleUtilities(ctx = {}) {
     const schedule = typeof safeInterval === 'function' ? safeInterval : setInterval;
     const baseTitle = docTitle || document.title;
 
-    // 1. 闲时加载拼音词库
     (function loadPinyinData(maxRetries = 30) {
         let attempts = 0;
         const targetUrl = new URL('/src/js/pinyinData.js', window.location.origin).href;
@@ -1125,7 +1149,6 @@ export function initIdleUtilities(ctx = {}) {
         runIdle(checkAndLoad);
     })();
 
-    // 2. 夜间催睡标题与 Favicon 闪烁
     function startFaviconBlink() {
         if (window.faviconBlinkTimer) return;
         const faviconLink = document.getElementById('favicon');
@@ -1193,7 +1216,6 @@ export function initIdleUtilities(ctx = {}) {
         window.updateTitleTimer = schedule(updateTitle, 60 * 1000);
     }, (60 - new Date().getSeconds()) * 1000 - new Date().getMilliseconds());
 
-    // 3. localStorage 容量告警
     function lsAlert() {
         runIdle(() => {
             const alertSizeB = 1024 * 1024 * 4;
@@ -1211,6 +1233,9 @@ export function initIdleUtilities(ctx = {}) {
     window.alertTimer = schedule(lsAlert, 60000);
 }
 
+
+
+// --- Markdown 浮窗阅读/编辑器 ---
 
 export function openMdViewer(opts = {}) {
     const file = (opts && opts.file) || window.readme_md || store.readme_md || '/README.md';
@@ -1267,13 +1292,11 @@ export function openMdViewer(opts = {}) {
         popup.append(header, iframe);
         stage.appendChild(popup);
 
-        // 八方向宽高 resize（支持触控板缩放倍率 window._tpZoom），默认最大化启动
         const MIN_W = 420, MIN_H = 260;
         let maximized = true;
         let savedBox = { left: initL, top: initT, width: initW, height: initH };
         const maxBtn = header.querySelector('#md-viewer-max');
 
-        // 最大化状态下禁止拖动标题栏错位，非最大化时正常拖拽并屏蔽 iframe 捕获鼠标
         header.querySelectorAll('button').forEach(btn => {
             btn.addEventListener('mousedown', (e) => e.stopPropagation());
         });

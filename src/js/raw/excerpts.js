@@ -1,7 +1,10 @@
 /**
- * excerpts.js —— "摘抄笔记本" 功能（按需动态 import）。
+ * excerpts.js —— 个人摘抄本（ExcerptsDB 持久化与浮窗管理，运行于主线程，按需懒加载）
  */
 import { makeDraggable, copyTextFallback } from './shared-utils.js';
+
+
+// --- ExcerptsDB 数据层 ---
 
 export const ExcerptsSys = {
     dbName: 'ExcerptsDB',
@@ -137,6 +140,9 @@ export const ExcerptsSys = {
         });
     }
 };
+
+// --- 摘抄本浮窗 UI ---
+
 export const ExcerptsUIManager = {
     currentBook: null,
     allBooksCache: [],

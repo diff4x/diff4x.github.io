@@ -1,9 +1,69 @@
 /**
- * touchpad.js —— 移动端"模拟鼠标/触控板"交互层。
- * 只有触屏设备(isMobile)才需要，桌面端用户完全不下载这份代码。
- * 由 index.js 在检测到触屏后动态 import 并调用 initTouchpad(ctx)，
- * ctx = { emitEvent } 用于向 #content / #side / #md-viewer-frame 等同源 iframe 转发模拟指针事件。
+ * touchpad.js —— 触屏虚拟触控板与同源 iframe 模拟指针层（运行于主线程，按需懒加载）
  */
+// 虚拟悬停样式镜像常量
+const TP_HOVER_CLASS = 'tp-hover';
+
+
+// --- :hover 样式规则镜像至 .tp-hover ---
+const TP_HOVER_RE = /:hover\b/;
+
+function tpSplitSelectors(text) {
+    const parts = [];
+    let depth = 0, quote = '', start = 0;
+    for (let i = 0; i < text.length; i++) {
+        const c = text[i];
+        if (quote) { if (c === '\\') i++; else if (c === quote) quote = ''; continue; }
+        if (c === '"' || c === "'") quote = c;
+        else if (c === '(' || c === '[') depth++;
+        else if (c === ')' || c === ']') depth--;
+        else if (c === ',' && depth === 0) { parts.push(text.slice(start, i)); start = i + 1; }
+    }
+    parts.push(text.slice(start));
+    return parts;
+}
+
+function tpMirrorHoverRules(container) {
+    let rules;
+    try { rules = container.cssRules; } catch (e) { return; }
+    if (!rules) return;
+    for (let i = rules.length - 1; i >= 0; i--) {
+        const rule = rules[i];
+        if (!rule.selectorText) {
+            if (rule.cssRules) tpMirrorHoverRules(rule);
+            continue;
+        }
+        if (!TP_HOVER_RE.test(rule.selectorText)) continue;
+        const next = rules[i + 1];
+        if (next && next.selectorText && next.selectorText.includes('.' + TP_HOVER_CLASS) &&
+            next.style.cssText === rule.style.cssText) continue;
+        const sel = tpSplitSelectors(rule.selectorText)
+            .filter(s => TP_HOVER_RE.test(s))
+            .map(s => s.replace(new RegExp(TP_HOVER_RE.source, 'g'), '.' + TP_HOVER_CLASS))
+            .join(',');
+        try { container.insertRule(`${sel}{${rule.style.cssText}}`, i + 1); } catch (e) { }
+    }
+}
+
+function tpObserveHoverStyles(targetDoc, targetWin) {
+    if (!targetDoc || targetDoc._tpHoverObserved) return;
+    targetDoc._tpHoverObserved = true;
+    const sync = () => {
+        try { Array.from(targetDoc.styleSheets).forEach(tpMirrorHoverRules); } catch (_) { }
+    };
+    let timer = null;
+    const schedule = () => { clearTimeout(timer); timer = setTimeout(sync, 80); };
+    sync();
+    if (targetDoc.head && typeof MutationObserver === 'function') {
+        new MutationObserver(schedule).observe(targetDoc.head, { childList: true, subtree: true, characterData: true });
+    }
+    targetDoc.addEventListener('load', schedule, true);
+    if (targetWin) targetWin.addEventListener('load', sync);
+}
+
+
+// --- 同源窗口模拟指针接收器 ---
+
 function attachVirtualCursor(targetWindow) {
     if (!targetWindow || targetWindow.closed || targetWindow._vcAttached) return;
     targetWindow._vcAttached = true;
@@ -11,6 +71,7 @@ function attachVirtualCursor(targetWindow) {
     let hoverChain = [];
     let selectStartRange = null;
     const doc = targetWindow.document;
+    tpObserveHoverStyles(doc, targetWindow);
 
     const getCaret = (x, y) => {
         if (doc.caretRangeFromPoint) return doc.caretRangeFromPoint(x, y);
@@ -204,6 +265,9 @@ function installVirtualCursor() {
     queued.forEach(w => { try { attachVirtualCursor(w); } catch (_) { } });
 }
 
+
+// --- 触控板面板初始化与事件路由 ---
+
 export function initTouchpad(ctx) {
     'use strict';
     const isMobile = window.matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window;
@@ -211,6 +275,7 @@ export function initTouchpad(ctx) {
     installVirtualCursor();
 
 
+    // 手势与缩放可调参数
     const TAP_MOVE_THRESHOLD = 8;
     const DOUBLE_TAP_WINDOW = 300;
     const DOUBLE_TAP_DIST = 30;
@@ -273,8 +338,8 @@ export function initTouchpad(ctx) {
 
     const cursor = { x: stage.clientWidth / 2, y: stage.clientHeight / 2 };
     let zoom = 1, panX = 0, panY = 0;
-    let currentTarget = null; // null | 'index' | HTMLIFrameElement
-    let dragLockTarget = null; // null | 'index' | HTMLIFrameElement
+    let currentTarget = null;
+    let dragLockTarget = null;
     let isSelectMode = false;
     let isScrollFollow = true;
     let cursorFeedbackTimer = null;
@@ -408,60 +473,8 @@ export function initTouchpad(ctx) {
         }
     }
 
-    const HOVER_CLASS = 'tp-hover';
-    const HOVER_RE = /:hover\b/;
-
-    function splitSelectors(text) {
-        const parts = [];
-        let depth = 0, quote = '', start = 0;
-        for (let i = 0; i < text.length; i++) {
-            const c = text[i];
-            if (quote) { if (c === '\\') i++; else if (c === quote) quote = ''; continue; }
-            if (c === '"' || c === "'") quote = c;
-            else if (c === '(' || c === '[') depth++;
-            else if (c === ')' || c === ']') depth--;
-            else if (c === ',' && depth === 0) { parts.push(text.slice(start, i)); start = i + 1; }
-        }
-        parts.push(text.slice(start));
-        return parts;
-    }
-
-    function mirrorHoverRules(container) {
-        let rules;
-        try { rules = container.cssRules; } catch (e) { return; }
-        if (!rules) return;
-        for (let i = rules.length - 1; i >= 0; i--) {
-            const rule = rules[i];
-            if (!rule.selectorText) {
-                if (rule.cssRules) mirrorHoverRules(rule);
-                continue;
-            }
-            if (!HOVER_RE.test(rule.selectorText)) continue;
-            const next = rules[i + 1];
-            if (next && next.selectorText && next.selectorText.includes('.' + HOVER_CLASS) &&
-                next.style.cssText === rule.style.cssText) continue;
-            const sel = splitSelectors(rule.selectorText)
-                .filter(s => HOVER_RE.test(s))
-                .map(s => s.replace(new RegExp(HOVER_RE.source, 'g'), '.' + HOVER_CLASS))
-                .join(',');
-            try { container.insertRule(`${sel}{${rule.style.cssText}}`, i + 1); } catch (e) { }
-        }
-    }
-
-    function syncHoverStyles() {
-        Array.from(document.styleSheets).forEach(mirrorHoverRules);
-    }
-
-    let hoverSyncTimer = null;
-    function scheduleHoverSync() {
-        clearTimeout(hoverSyncTimer);
-        hoverSyncTimer = setTimeout(syncHoverStyles, 80);
-    }
-    syncHoverStyles();
-
-    new MutationObserver(scheduleHoverSync).observe(document.head, { childList: true, subtree: true, characterData: true });
-    document.addEventListener('load', scheduleHoverSync, true);
-    window.addEventListener('load', scheduleHoverSync);
+    const HOVER_CLASS = TP_HOVER_CLASS;
+    tpObserveHoverStyles(document, window);
 
     let hoverChain = [];
     function setHoverChain(el) {

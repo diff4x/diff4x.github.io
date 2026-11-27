@@ -1,4 +1,5 @@
 #![cfg(windows)]
+//! Win32 Per-Monitor HiDPI 桌面管理窗口（常规构建/发布、打包协作、回填补丁、同义词与街景上传）。
 
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -6,9 +7,9 @@ use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
 use std::path::PathBuf;
 use std::process::{Child, Command};
-use std::sync::atomic::{AtomicIsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::Notify;
 
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, SIZE, WPARAM};
@@ -33,8 +34,9 @@ use windows_sys::Win32::UI::Shell::{DragAcceptFiles, DragFinish, DragQueryFileW,
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CallWindowProcW, CreateIconIndirect, CreateWindowExW, DefWindowProcW, DestroyIcon,
     DestroyWindow, DispatchMessageW, GetClientRect, GetCursorPos, GetMessageW, GetWindowLongPtrW,
-    GetWindowTextLengthW, GetWindowTextW, LoadCursorW, MessageBoxW, MoveWindow, PostMessageW,
-    PostQuitMessage, RegisterClassW, SendMessageW, SetWindowLongPtrW, SetWindowPos,
+    GetWindowTextLengthW, GetWindowTextW, KillTimer, LoadCursorW, MessageBoxW, MoveWindow,
+    PostMessageW, PostQuitMessage, RegisterClassW, SendMessageW, SetTimer, SetWindowLongPtrW,
+    SetWindowPos,
     SetWindowTextW, ShowWindow, TranslateMessage, BS_AUTOCHECKBOX as RAW_BS_AUTOCHECKBOX,
     BS_GROUPBOX as RAW_BS_GROUPBOX, BS_PUSHBUTTON as RAW_BS_PUSHBUTTON,
     CBS_DROPDOWNLIST as RAW_CBS_DROPDOWNLIST, CREATESTRUCTW, ES_AUTOHSCROLL as RAW_ES_AUTOHSCROLL,
@@ -43,7 +45,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     ICONINFO, ICON_BIG, ICON_SMALL, IDC_ARROW, IDYES, MB_ICONINFORMATION, MB_ICONWARNING, MB_OK,
     MB_YESNO, MINMAXINFO, MSG, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SW_HIDE, SW_SHOW, WM_APP,
     WM_CLOSE, WM_COMMAND, WM_CREATE, WM_CTLCOLORSTATIC, WM_DESTROY, WM_DROPFILES, WM_ERASEBKGND,
-    WM_GETMINMAXINFO, WM_NOTIFY, WM_SETFONT, WM_SETICON, WM_SIZE, WNDCLASSW, WS_CHILD,
+    WM_GETMINMAXINFO, WM_NOTIFY, WM_SETFONT, WM_SETICON, WM_SIZE, WM_TIMER, WNDCLASSW, WS_CHILD,
     WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_EX_CLIENTEDGE, WS_HSCROLL, WS_OVERLAPPEDWINDOW,
     WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
 };
@@ -106,6 +108,7 @@ use crate::services::log_bus::LogBus;
 use crate::services::pack_apply::{
     self, ApplyEntryInfo, BackupInfo, BackupTreeItem, DownloadTreeItem, PackFileItem,
 };
+use crate::services::street_view::{self, UpdatePhotoReq, UploadPhotoReq};
 
 pub const WM_APP_LOG: u32 = WM_APP + 1;
 pub const WM_APP_VPN: u32 = WM_APP + 2;
@@ -118,6 +121,11 @@ const WM_APP_EXIT_AND_BUILD: u32 = WM_APP + 8;
 const WM_APP_BACKUP_TREE: u32 = WM_APP + 9;
 const WM_APP_DOWNLOADS_TREE: u32 = WM_APP + 10;
 const WM_APP_DIFF_VIEWED: u32 = WM_APP + 11;
+const WM_APP_CLEAR_COMMIT: u32 = WM_APP + 12;
+const WM_APP_SV_STATUS: u32 = WM_APP + 13;
+const WM_APP_SV_PHOTO_ID: u32 = WM_APP + 14;
+const WM_APP_SV_FILE_PATH: u32 = WM_APP + 15;
+const TIMER_SAFE_CLOSE: usize = 1001;
 
 const BM_GETCHECK: u32 = 0x00F0;
 const BM_SETCHECK: u32 = 0x00F1;
@@ -133,13 +141,13 @@ const EM_SETSEL: u32 = 0x00B1;
 const EM_SCROLLCARET: u32 = 0x00B7;
 const EM_REPLACESEL: u32 = 0x00C2;
 
-// Control IDs
+// 控件 ID
 const IDC_TAB: u16 = 100;
 const IDC_LBL_LOG: u16 = 101;
 const IDC_BTN_CLEAR_LOG: u16 = 102;
 const IDC_EDIT_LOG: u16 = 103;
 
-// Tab 0: 常规
+// Tab 0 控件 ID：常规
 const IDC_GRP_OPS: u16 = 200;
 const IDC_BTN_OPEN_SITE: u16 = 201;
 const IDC_BTN_GEN: u16 = 202;
@@ -178,7 +186,7 @@ const IDC_LBL_KEEP_CAT: u16 = 245;
 const IDC_EDIT_KEEP_CAT: u16 = 246;
 const IDC_BTN_KEEP: u16 = 247;
 
-// Tab 1: 打包协作 (Pack)
+// Tab 1 控件 ID：打包协作
 const IDC_LBL_PACK_PRESET: u16 = 301;
 const IDC_CMB_PACK_PRESET: u16 = 302;
 const IDC_BTN_PRESET_ONLY: u16 = 303;
@@ -201,7 +209,7 @@ const IDC_LBL_PACK_MD_MAX: u16 = 319;
 const IDC_EDIT_PACK_MD_MAX: u16 = 320;
 const IDC_LBL_PACK_MD_UNIT: u16 = 321;
 
-// Tab 2: 回填补丁 (Apply)
+// Tab 2 控件 ID：回填补丁
 const IDC_BTN_APPLY_BROWSE: u16 = 401;
 const IDC_CHK_APPLY_BAK: u16 = 402;
 const IDC_CHK_APPLY_ENC: u16 = 403;
@@ -225,7 +233,7 @@ const IDC_LBL_DL_STATUS: u16 = 420;
 const IDC_BTN_DL_OPEN: u16 = 421;
 const IDC_BTN_DL_DEL: u16 = 422;
 
-// Tab 3: 同义词 (Synonyms)
+// Tab 3 控件 ID：同义词
 const IDC_BTN_SYN_SAVE: u16 = 501;
 const IDC_BTN_SYN_REBUILD: u16 = 502;
 const IDC_BTN_SYN_IMPORT: u16 = 503;
@@ -234,6 +242,46 @@ const IDC_LBL_SYN_CUSTOM: u16 = 505;
 const IDC_EDIT_SYN_CUSTOM: u16 = 506;
 const IDC_LBL_OOV_REPORT: u16 = 507;
 const IDC_EDIT_OOV_REPORT: u16 = 508;
+
+// Tab 4 控件 ID：街景上传
+const IDC_LBL_SV_AUTH: u16 = 601;
+const IDC_BTN_SV_AUTH: u16 = 602;
+const IDC_BTN_SV_CLEAR_TOK: u16 = 603;
+
+const IDC_GRP_SV_UPLOAD: u16 = 610;
+const IDC_LBL_SV_FILE: u16 = 611;
+const IDC_EDIT_SV_FILE: u16 = 612;
+const IDC_BTN_SV_BROWSE: u16 = 613;
+const IDC_LBL_SV_LAT: u16 = 614;
+const IDC_EDIT_SV_LAT: u16 = 615;
+const IDC_LBL_SV_LNG: u16 = 616;
+const IDC_EDIT_SV_LNG: u16 = 617;
+const IDC_LBL_SV_HEADING: u16 = 618;
+const IDC_EDIT_SV_HEADING: u16 = 619;
+const IDC_LBL_SV_PLACE: u16 = 620;
+const IDC_EDIT_SV_PLACE: u16 = 621;
+const IDC_LBL_SV_TIME: u16 = 622;
+const IDC_EDIT_SV_TIME: u16 = 623;
+const IDC_LBL_SV_TZ: u16 = 624;
+const IDC_CMB_SV_TZ: u16 = 625;
+const IDC_BTN_SV_UPLOAD: u16 = 626;
+
+const IDC_GRP_SV_UPDATE: u16 = 630;
+const IDC_LBL_SV_PID: u16 = 631;
+const IDC_EDIT_SV_PID: u16 = 632;
+const IDC_BTN_SV_UPDATE: u16 = 633;
+const IDC_LBL_SV_ULAT: u16 = 634;
+const IDC_EDIT_SV_ULAT: u16 = 635;
+const IDC_LBL_SV_ULNG: u16 = 636;
+const IDC_EDIT_SV_ULNG: u16 = 637;
+const IDC_LBL_SV_UHEADING: u16 = 638;
+const IDC_EDIT_SV_UHEADING: u16 = 639;
+const IDC_LBL_SV_UPLACE: u16 = 640;
+const IDC_EDIT_SV_UPLACE: u16 = 641;
+const IDC_LBL_SV_UTIME: u16 = 642;
+const IDC_EDIT_SV_UTIME: u16 = 643;
+const IDC_LBL_SV_UTZ: u16 = 644;
+const IDC_CMB_SV_UTZ: u16 = 645;
 
 fn to_wide(s: &str) -> Vec<u16> {
     OsStr::new(s).encode_wide().chain(Some(0)).collect()
@@ -391,7 +439,6 @@ unsafe fn build_orb_hicon(size: i32, green: bool) -> HICON {
                 let mut g = g0 + (g1 - g0) * t;
                 let mut b = b0 + (b1 - b0) * t;
                 if dist > radius - 1.2 {
-                    // 经典深色外描边
                     r *= 0.45;
                     g *= 0.45;
                     b *= 0.45;
@@ -402,7 +449,6 @@ unsafe fn build_orb_hicon(size: i32, green: bool) -> HICON {
                 bgra[idx + 2] = r as u8;
                 bgra[idx + 3] = 255;
 
-                // mask bit 0 = opaque
                 let byte_idx = y * mask_stride + (x / 8);
                 let bit_mask = !(1u8 << (7 - (x % 8)));
                 mask[byte_idx] &= bit_mask;
@@ -471,7 +517,6 @@ unsafe fn build_tristate_imagelist(dpi: u32) -> HIMAGELIST {
                 }
             }
             if mode == 2 {
-                // 按尺寸自适应比例绘制白色对勾
                 let pts = [(4, 8), (5, 9), (6, 10), (7, 9), (8, 8), (9, 7), (10, 6), (11, 5)];
                 for (ux, uy) in pts {
                     let px0 = (ux * sz) / 16;
@@ -529,7 +574,26 @@ struct TreeNodeData {
     blocked: bool,
 }
 
-/// 跨线程安全邮箱：由 Arc 托管，彻底消除后台线程访问 GuiData 裸指针的 UAF 风险，并统一托管 sim 子进程生命周期
+#[derive(Clone, Copy)]
+enum BusySlot {
+    Push,
+    Webp,
+    Keep,
+    StreetView,
+}
+
+struct SingleFlightGuard {
+    mailbox: Arc<GuiMailbox>,
+    slot: BusySlot,
+}
+
+impl Drop for SingleFlightGuard {
+    fn drop(&mut self) {
+        self.mailbox.slot_flag(self.slot).store(false, Ordering::SeqCst);
+    }
+}
+
+/// 跨线程安全邮箱：由 Arc 托管，彻底消除后台线程访问 GuiData 裸指针的 UAF 风险，并统一托管 sim 子进程与单飞防重锁
 struct GuiMailbox {
     hwnd: AtomicIsize,
     pack_result: Mutex<Option<(Vec<PackFileItem>, Value)>>,
@@ -541,6 +605,12 @@ struct GuiMailbox {
     sim_child: Mutex<Option<Child>>,
     pending_build_handoff: Mutex<Option<(PathBuf, PathBuf)>>,
     diff_viewed_rels: Mutex<Vec<String>>,
+    sv_photo_id: Mutex<Option<String>>,
+    sv_file_path: Mutex<Option<String>>,
+    push_busy: AtomicBool,
+    webp_busy: AtomicBool,
+    keep_busy: AtomicBool,
+    sv_busy: AtomicBool,
 }
 
 impl GuiMailbox {
@@ -556,6 +626,36 @@ impl GuiMailbox {
             sim_child: Mutex::new(None),
             pending_build_handoff: Mutex::new(None),
             diff_viewed_rels: Mutex::new(Vec::new()),
+            sv_photo_id: Mutex::new(None),
+            sv_file_path: Mutex::new(None),
+            push_busy: AtomicBool::new(false),
+            webp_busy: AtomicBool::new(false),
+            keep_busy: AtomicBool::new(false),
+            sv_busy: AtomicBool::new(false),
+        }
+    }
+
+    fn slot_flag(&self, slot: BusySlot) -> &AtomicBool {
+        match slot {
+            BusySlot::Push => &self.push_busy,
+            BusySlot::Webp => &self.webp_busy,
+            BusySlot::Keep => &self.keep_busy,
+            BusySlot::StreetView => &self.sv_busy,
+        }
+    }
+
+    fn try_acquire_flag(self: &Arc<Self>, slot: BusySlot) -> Option<SingleFlightGuard> {
+        let flag = self.slot_flag(slot);
+        if flag
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+        {
+            Some(SingleFlightGuard {
+                mailbox: Arc::clone(self),
+                slot,
+            })
+        } else {
+            None
         }
     }
 
@@ -611,7 +711,6 @@ struct GuiData {
     hwnd_btn_clear_log: HWND,
     hwnd_edit_log: HWND,
 
-    // Tab 0 controls
     tab0_ctrls: Vec<HWND>,
     hwnd_grp_ops: HWND,
     hwnd_btn_open_site: HWND,
@@ -651,7 +750,6 @@ struct GuiData {
     hwnd_edit_keep_cat: HWND,
     hwnd_btn_keep: HWND,
 
-    // Tab 1 (Pack) controls
     tab1_ctrls: Vec<HWND>,
     hwnd_lbl_pack_preset: HWND,
     hwnd_cmb_pack_preset: HWND,
@@ -675,7 +773,6 @@ struct GuiData {
     hwnd_tv_pack: HWND,
     hwnd_lbl_pack_status: HWND,
 
-    // Tab 2 (Apply) controls
     tab2_ctrls: Vec<HWND>,
     hwnd_btn_apply_browse: HWND,
     hwnd_chk_apply_bak: HWND,
@@ -700,7 +797,6 @@ struct GuiData {
     hwnd_lbl_apply_status: HWND,
     hwnd_lbl_backup_status: HWND,
 
-    // Tab 3 (Synonyms & OOV) controls
     tab3_ctrls: Vec<HWND>,
     hwnd_btn_syn_save: HWND,
     hwnd_btn_syn_rebuild: HWND,
@@ -711,7 +807,44 @@ struct GuiData {
     hwnd_lbl_oov_report: HWND,
     hwnd_edit_oov_report: HWND,
 
-    // Data state
+    tab4_ctrls: Vec<HWND>,
+    hwnd_lbl_sv_auth: HWND,
+    hwnd_btn_sv_auth: HWND,
+    hwnd_btn_sv_clear_tok: HWND,
+    hwnd_grp_sv_upload: HWND,
+    hwnd_lbl_sv_file: HWND,
+    hwnd_edit_sv_file: HWND,
+    hwnd_btn_sv_browse: HWND,
+    hwnd_lbl_sv_lat: HWND,
+    hwnd_edit_sv_lat: HWND,
+    hwnd_lbl_sv_lng: HWND,
+    hwnd_edit_sv_lng: HWND,
+    hwnd_lbl_sv_heading: HWND,
+    hwnd_edit_sv_heading: HWND,
+    hwnd_lbl_sv_place: HWND,
+    hwnd_edit_sv_place: HWND,
+    hwnd_lbl_sv_time: HWND,
+    hwnd_edit_sv_time: HWND,
+    hwnd_lbl_sv_tz: HWND,
+    hwnd_cmb_sv_tz: HWND,
+    hwnd_btn_sv_upload: HWND,
+    hwnd_grp_sv_update: HWND,
+    hwnd_lbl_sv_pid: HWND,
+    hwnd_edit_sv_pid: HWND,
+    hwnd_btn_sv_update: HWND,
+    hwnd_lbl_sv_ulat: HWND,
+    hwnd_edit_sv_ulat: HWND,
+    hwnd_lbl_sv_ulng: HWND,
+    hwnd_edit_sv_ulng: HWND,
+    hwnd_lbl_sv_uheading: HWND,
+    hwnd_edit_sv_uheading: HWND,
+    hwnd_lbl_sv_uplace: HWND,
+    hwnd_edit_sv_uplace: HWND,
+    hwnd_lbl_sv_utime: HWND,
+    hwnd_edit_sv_utime: HWND,
+    hwnd_lbl_sv_utz: HWND,
+    hwnd_cmb_sv_utz: HWND,
+
     last_log_id: u64,
     log_size_kb: Option<u64>,
     log_btn_red: bool,
@@ -740,6 +873,8 @@ struct GuiData {
     mailbox: Arc<GuiMailbox>,
     handoff_build: Option<(PathBuf, PathBuf)>,
     closing: bool,
+    close_started_at: Option<Instant>,
+    close_pending_handoff: Option<(PathBuf, PathBuf)>,
 }
 
 unsafe fn create_ctrl(
@@ -971,6 +1106,43 @@ pub fn run_management_window(
             hwnd_edit_syn_custom: std::ptr::null_mut(),
             hwnd_lbl_oov_report: std::ptr::null_mut(),
             hwnd_edit_oov_report: std::ptr::null_mut(),
+            tab4_ctrls: Vec::new(),
+            hwnd_lbl_sv_auth: std::ptr::null_mut(),
+            hwnd_btn_sv_auth: std::ptr::null_mut(),
+            hwnd_btn_sv_clear_tok: std::ptr::null_mut(),
+            hwnd_grp_sv_upload: std::ptr::null_mut(),
+            hwnd_lbl_sv_file: std::ptr::null_mut(),
+            hwnd_edit_sv_file: std::ptr::null_mut(),
+            hwnd_btn_sv_browse: std::ptr::null_mut(),
+            hwnd_lbl_sv_lat: std::ptr::null_mut(),
+            hwnd_edit_sv_lat: std::ptr::null_mut(),
+            hwnd_lbl_sv_lng: std::ptr::null_mut(),
+            hwnd_edit_sv_lng: std::ptr::null_mut(),
+            hwnd_lbl_sv_heading: std::ptr::null_mut(),
+            hwnd_edit_sv_heading: std::ptr::null_mut(),
+            hwnd_lbl_sv_place: std::ptr::null_mut(),
+            hwnd_edit_sv_place: std::ptr::null_mut(),
+            hwnd_lbl_sv_time: std::ptr::null_mut(),
+            hwnd_edit_sv_time: std::ptr::null_mut(),
+            hwnd_lbl_sv_tz: std::ptr::null_mut(),
+            hwnd_cmb_sv_tz: std::ptr::null_mut(),
+            hwnd_btn_sv_upload: std::ptr::null_mut(),
+            hwnd_grp_sv_update: std::ptr::null_mut(),
+            hwnd_lbl_sv_pid: std::ptr::null_mut(),
+            hwnd_edit_sv_pid: std::ptr::null_mut(),
+            hwnd_btn_sv_update: std::ptr::null_mut(),
+            hwnd_lbl_sv_ulat: std::ptr::null_mut(),
+            hwnd_edit_sv_ulat: std::ptr::null_mut(),
+            hwnd_lbl_sv_ulng: std::ptr::null_mut(),
+            hwnd_edit_sv_ulng: std::ptr::null_mut(),
+            hwnd_lbl_sv_uheading: std::ptr::null_mut(),
+            hwnd_edit_sv_uheading: std::ptr::null_mut(),
+            hwnd_lbl_sv_uplace: std::ptr::null_mut(),
+            hwnd_edit_sv_uplace: std::ptr::null_mut(),
+            hwnd_lbl_sv_utime: std::ptr::null_mut(),
+            hwnd_edit_sv_utime: std::ptr::null_mut(),
+            hwnd_lbl_sv_utz: std::ptr::null_mut(),
+            hwnd_cmb_sv_utz: std::ptr::null_mut(),
             last_log_id: 0,
             log_size_kb: None,
             log_btn_red: false,
@@ -997,6 +1169,8 @@ pub fn run_management_window(
             mailbox: Arc::new(GuiMailbox::new()),
             handoff_build: None,
             closing: false,
+            close_started_at: None,
+            close_pending_handoff: None,
         });
 
         let title_w = to_wide(&format!(
@@ -1112,6 +1286,7 @@ unsafe fn build_all_controls(g: &mut GuiData, hwnd: HWND) {
         " 打包协作 ",
         " 回填补丁 ",
         " 同义词 ",
+        " 街景上传 ",
     ]
     .iter()
     .enumerate()
@@ -1134,7 +1309,7 @@ unsafe fn build_all_controls(g: &mut GuiData, hwnd: HWND) {
         );
     }
 
-    // Bottom Live Log (always visible)
+    // --- 底部运行日志 ---
     g.hwnd_lbl_log = create_ctrl(
         "STATIC",
         "运行日志 (0 KB)",
@@ -1167,7 +1342,7 @@ unsafe fn build_all_controls(g: &mut GuiData, hwnd: HWND) {
     );
     SendMessageW(g.hwnd_edit_log, EM_SETLIMITTEXT, 512 * 1024, 0);
 
-    // ================= TAB 0: 常规 =================
+    // --- Tab 0：常规 ---
     g.hwnd_grp_ops = create_ctrl("BUTTON", "站点构建与发布", BS_GROUPBOX, 0, IDC_GRP_OPS, hwnd, hinst, f);
     g.hwnd_btn_gen_push = create_ctrl("BUTTON", "gen + push", WS_TABSTOP | BS_PUSHBUTTON, 0, IDC_BTN_GEN_PUSH, hwnd, hinst, f);
     g.hwnd_btn_push = create_ctrl("BUTTON", "push", WS_TABSTOP | BS_PUSHBUTTON, 0, IDC_BTN_PUSH, hwnd, hinst, f);
@@ -1177,7 +1352,7 @@ unsafe fn build_all_controls(g: &mut GuiData, hwnd: HWND) {
     g.hwnd_btn_sim = create_ctrl("BUTTON", "sim (9000)", WS_TABSTOP | BS_PUSHBUTTON, 0, IDC_BTN_SIM, hwnd, hinst, f);
     g.hwnd_btn_open_site = create_ctrl("BUTTON", "Open Site", WS_TABSTOP | BS_PUSHBUTTON, 0, IDC_BTN_OPEN_SITE, hwnd, hinst, f);
     g.hwnd_lbl_commit = create_ctrl("STATIC", "Commit:", 0, 0, IDC_LBL_COMMIT, hwnd, hinst, f);
-    g.hwnd_edit_commit = create_ctrl("EDIT", "update", WS_TABSTOP | ES_AUTOHSCROLL, WS_EX_CLIENTEDGE, IDC_EDIT_COMMIT, hwnd, hinst, f);
+    g.hwnd_edit_commit = create_ctrl("EDIT", "", WS_TABSTOP | ES_AUTOHSCROLL, WS_EX_CLIENTEDGE, IDC_EDIT_COMMIT, hwnd, hinst, f);
     g.hwnd_btn_reauth = create_ctrl("BUTTON", "重新授权 Tasks", WS_TABSTOP | BS_PUSHBUTTON, 0, IDC_BTN_REAUTH, hwnd, hinst, f);
 
     g.hwnd_grp_new = create_ctrl("BUTTON", "新建 HTML 页面", BS_GROUPBOX, 0, IDC_GRP_NEW, hwnd, hinst, f);
@@ -1267,7 +1442,7 @@ unsafe fn build_all_controls(g: &mut GuiData, hwnd: HWND) {
         g.hwnd_btn_keep,
     ];
 
-    // ================= TAB 1: 打包 (Pack) =================
+    // --- Tab 1：打包协作 ---
     g.hwnd_lbl_pack_preset = create_ctrl("STATIC", "预设:", 0, 0, IDC_LBL_PACK_PRESET, hwnd, hinst, f);
     g.hwnd_cmb_pack_preset = create_ctrl("COMBOBOX", "", WS_TABSTOP | CBS_DROPDOWNLIST, 0, IDC_CMB_PACK_PRESET, hwnd, hinst, f);
     g.hwnd_btn_preset_only = create_ctrl("BUTTON", "仅选预设", WS_TABSTOP | BS_PUSHBUTTON, 0, IDC_BTN_PRESET_ONLY, hwnd, hinst, f);
@@ -1325,7 +1500,7 @@ unsafe fn build_all_controls(g: &mut GuiData, hwnd: HWND) {
         g.hwnd_lbl_pack_status,
     ];
 
-    // ================= TAB 2: 回填补丁 (Apply) =================
+    // --- Tab 2：回填补丁 ---
     g.hwnd_btn_apply_browse = create_ctrl("BUTTON", "选择补丁 ZIP...", WS_TABSTOP | BS_PUSHBUTTON, 0, IDC_BTN_APPLY_BROWSE, hwnd, hinst, f);
     g.hwnd_chk_apply_bak = create_ctrl("BUTTON", "覆盖前备份", WS_TABSTOP | BS_AUTOCHECKBOX, 0, IDC_CHK_APPLY_BAK, hwnd, hinst, f);
     set_checked(g.hwnd_chk_apply_bak, true);
@@ -1444,7 +1619,7 @@ unsafe fn build_all_controls(g: &mut GuiData, hwnd: HWND) {
         g.hwnd_lbl_backup_status,
     ];
 
-    // ================= TAB 3: 同义词 (Synonyms) =================
+    // --- Tab 3：同义词 ---
     g.hwnd_btn_syn_save = create_ctrl("BUTTON", "保存到 swamp.toml", WS_TABSTOP | BS_PUSHBUTTON, 0, IDC_BTN_SYN_SAVE, hwnd, hinst, f);
     g.hwnd_btn_syn_rebuild = create_ctrl("BUTTON", "保存并重建构建", WS_TABSTOP | BS_PUSHBUTTON, 0, IDC_BTN_SYN_REBUILD, hwnd, hinst, f);
     g.hwnd_btn_syn_import = create_ctrl("BUTTON", "导入 JSON...", WS_TABSTOP | BS_PUSHBUTTON, 0, IDC_BTN_SYN_IMPORT, hwnd, hinst, f);
@@ -1485,10 +1660,132 @@ unsafe fn build_all_controls(g: &mut GuiData, hwnd: HWND) {
         g.hwnd_edit_oov_report,
     ];
 
-    // 修复窗口缩放空白与切页残影：
-    // 1) 为 4 个 BS_GROUPBOX 挂载 WM_ERASEBKGND 擦底，并配合 WS_CLIPSIBLINGS 自动裁开上层交互控件；
-    // 2) 将 GroupBox 与 SysTabControl32 依次沉底，确保绘制顺序严格为 Tab 背景 -> GroupBox -> 交互控件。
-    for grp in [g.hwnd_grp_ops, g.hwnd_grp_new, g.hwnd_grp_webp, g.hwnd_grp_keep] {
+    // --- Tab 4：街景上传 ---
+    g.hwnd_lbl_sv_auth = create_ctrl("STATIC", "授权状态: 检测中", 0, 0, IDC_LBL_SV_AUTH, hwnd, hinst, f);
+    g.hwnd_btn_sv_auth = create_ctrl("BUTTON", "登录授权", WS_TABSTOP | BS_PUSHBUTTON, 0, IDC_BTN_SV_AUTH, hwnd, hinst, f);
+    g.hwnd_btn_sv_clear_tok = create_ctrl("BUTTON", "清除令牌", WS_TABSTOP | BS_PUSHBUTTON, 0, IDC_BTN_SV_CLEAR_TOK, hwnd, hinst, f);
+
+    g.hwnd_grp_sv_upload = create_ctrl("BUTTON", "上传全景图 (支持拖入 .jpg/.jpeg 到窗口)", BS_GROUPBOX, 0, IDC_GRP_SV_UPLOAD, hwnd, hinst, f);
+    g.hwnd_lbl_sv_file = create_ctrl("STATIC", "JPEG 文件:", 0, 0, IDC_LBL_SV_FILE, hwnd, hinst, f);
+    g.hwnd_edit_sv_file = create_ctrl("EDIT", "", WS_TABSTOP | ES_AUTOHSCROLL, WS_EX_CLIENTEDGE, IDC_EDIT_SV_FILE, hwnd, hinst, f);
+    g.hwnd_btn_sv_browse = create_ctrl("BUTTON", "选择 JPEG...", WS_TABSTOP | BS_PUSHBUTTON, 0, IDC_BTN_SV_BROWSE, hwnd, hinst, f);
+    g.hwnd_lbl_sv_lat = create_ctrl("STATIC", "纬度:", 0, 0, IDC_LBL_SV_LAT, hwnd, hinst, f);
+    g.hwnd_edit_sv_lat = create_ctrl("EDIT", "", WS_TABSTOP | ES_AUTOHSCROLL, WS_EX_CLIENTEDGE, IDC_EDIT_SV_LAT, hwnd, hinst, f);
+    g.hwnd_lbl_sv_lng = create_ctrl("STATIC", "经度:", 0, 0, IDC_LBL_SV_LNG, hwnd, hinst, f);
+    g.hwnd_edit_sv_lng = create_ctrl("EDIT", "", WS_TABSTOP | ES_AUTOHSCROLL, WS_EX_CLIENTEDGE, IDC_EDIT_SV_LNG, hwnd, hinst, f);
+    g.hwnd_lbl_sv_heading = create_ctrl("STATIC", "朝向(0-360):", 0, 0, IDC_LBL_SV_HEADING, hwnd, hinst, f);
+    g.hwnd_edit_sv_heading = create_ctrl("EDIT", "", WS_TABSTOP | ES_AUTOHSCROLL, WS_EX_CLIENTEDGE, IDC_EDIT_SV_HEADING, hwnd, hinst, f);
+    g.hwnd_lbl_sv_place = create_ctrl("STATIC", "Place ID:", 0, 0, IDC_LBL_SV_PLACE, hwnd, hinst, f);
+    g.hwnd_edit_sv_place = create_ctrl("EDIT", "", WS_TABSTOP | ES_AUTOHSCROLL, WS_EX_CLIENTEDGE, IDC_EDIT_SV_PLACE, hwnd, hinst, f);
+    let now_dt = chrono::Local::now().format("%Y-%m-%d %H:%M").to_string();
+    g.hwnd_lbl_sv_time = create_ctrl("STATIC", "拍摄时间:", 0, 0, IDC_LBL_SV_TIME, hwnd, hinst, f);
+    g.hwnd_edit_sv_time = create_ctrl("EDIT", &now_dt, WS_TABSTOP | ES_AUTOHSCROLL, WS_EX_CLIENTEDGE, IDC_EDIT_SV_TIME, hwnd, hinst, f);
+    g.hwnd_lbl_sv_tz = create_ctrl("STATIC", "时区:", 0, 0, IDC_LBL_SV_TZ, hwnd, hinst, f);
+    g.hwnd_cmb_sv_tz = create_ctrl("COMBOBOX", "", WS_TABSTOP | CBS_DROPDOWNLIST | WS_VSCROLL, 0, IDC_CMB_SV_TZ, hwnd, hinst, f);
+    g.hwnd_btn_sv_upload = create_ctrl("BUTTON", "执行完整上传", WS_TABSTOP | BS_PUSHBUTTON, 0, IDC_BTN_SV_UPLOAD, hwnd, hinst, f);
+
+    g.hwnd_grp_sv_update = create_ctrl("BUTTON", "更新已有全景图元数据 (留空字段不修改)", BS_GROUPBOX, 0, IDC_GRP_SV_UPDATE, hwnd, hinst, f);
+    g.hwnd_lbl_sv_pid = create_ctrl("STATIC", "Photo ID:", 0, 0, IDC_LBL_SV_PID, hwnd, hinst, f);
+    g.hwnd_edit_sv_pid = create_ctrl("EDIT", "", WS_TABSTOP | ES_AUTOHSCROLL, WS_EX_CLIENTEDGE, IDC_EDIT_SV_PID, hwnd, hinst, fm);
+    g.hwnd_btn_sv_update = create_ctrl("BUTTON", "发送元数据更新", WS_TABSTOP | BS_PUSHBUTTON, 0, IDC_BTN_SV_UPDATE, hwnd, hinst, f);
+    g.hwnd_lbl_sv_ulat = create_ctrl("STATIC", "新纬度:", 0, 0, IDC_LBL_SV_ULAT, hwnd, hinst, f);
+    g.hwnd_edit_sv_ulat = create_ctrl("EDIT", "", WS_TABSTOP | ES_AUTOHSCROLL, WS_EX_CLIENTEDGE, IDC_EDIT_SV_ULAT, hwnd, hinst, f);
+    g.hwnd_lbl_sv_ulng = create_ctrl("STATIC", "新经度:", 0, 0, IDC_LBL_SV_ULNG, hwnd, hinst, f);
+    g.hwnd_edit_sv_ulng = create_ctrl("EDIT", "", WS_TABSTOP | ES_AUTOHSCROLL, WS_EX_CLIENTEDGE, IDC_EDIT_SV_ULNG, hwnd, hinst, f);
+    g.hwnd_lbl_sv_uheading = create_ctrl("STATIC", "新朝向:", 0, 0, IDC_LBL_SV_UHEADING, hwnd, hinst, f);
+    g.hwnd_edit_sv_uheading = create_ctrl("EDIT", "", WS_TABSTOP | ES_AUTOHSCROLL, WS_EX_CLIENTEDGE, IDC_EDIT_SV_UHEADING, hwnd, hinst, f);
+    g.hwnd_lbl_sv_uplace = create_ctrl("STATIC", "新PlaceID:", 0, 0, IDC_LBL_SV_UPLACE, hwnd, hinst, f);
+    g.hwnd_edit_sv_uplace = create_ctrl("EDIT", "", WS_TABSTOP | ES_AUTOHSCROLL, WS_EX_CLIENTEDGE, IDC_EDIT_SV_UPLACE, hwnd, hinst, f);
+    g.hwnd_lbl_sv_utime = create_ctrl("STATIC", "新拍摄时间:", 0, 0, IDC_LBL_SV_UTIME, hwnd, hinst, f);
+    g.hwnd_edit_sv_utime = create_ctrl("EDIT", "", WS_TABSTOP | ES_AUTOHSCROLL, WS_EX_CLIENTEDGE, IDC_EDIT_SV_UTIME, hwnd, hinst, f);
+    g.hwnd_lbl_sv_utz = create_ctrl("STATIC", "时区:", 0, 0, IDC_LBL_SV_UTZ, hwnd, hinst, f);
+    g.hwnd_cmb_sv_utz = create_ctrl("COMBOBOX", "", WS_TABSTOP | CBS_DROPDOWNLIST | WS_VSCROLL, 0, IDC_CMB_SV_UTZ, hwnd, hinst, f);
+
+    const TZ_LABELS: [&str; 25] = [
+        "UTC-12:00",
+        "UTC-11:00",
+        "UTC-10:00 夏威夷",
+        "UTC-09:00 阿拉斯加",
+        "UTC-08:00 太平洋",
+        "UTC-07:00 山地",
+        "UTC-06:00 中部",
+        "UTC-05:00 东部",
+        "UTC-04:00 大西洋",
+        "UTC-03:00 巴西利亚",
+        "UTC-02:00 中大西洋",
+        "UTC-01:00 亚速尔",
+        "UTC+00:00 伦敦",
+        "UTC+01:00 巴黎/柏林",
+        "UTC+02:00 雅典",
+        "UTC+03:00 莫斯科",
+        "UTC+04:00 迪拜",
+        "UTC+05:00 孟买",
+        "UTC+06:00 达卡",
+        "UTC+07:00 曼谷",
+        "UTC+08:00 北京/台北",
+        "UTC+09:00 东京/首尔",
+        "UTC+10:00 悉尼",
+        "UTC+11:00 索罗门",
+        "UTC+12:00 奥克兰",
+    ];
+    for cmb in [g.hwnd_cmb_sv_tz, g.hwnd_cmb_sv_utz] {
+        for lbl in TZ_LABELS {
+            let w = to_wide(lbl);
+            SendMessageW(cmb, CB_ADDSTRING, 0, w.as_ptr() as LPARAM);
+        }
+        SendMessageW(cmb, CB_SETCURSEL, 20, 0); // 默认 UTC+08:00
+    }
+
+    g.tab4_ctrls = vec![
+        g.hwnd_lbl_sv_auth,
+        g.hwnd_btn_sv_auth,
+        g.hwnd_btn_sv_clear_tok,
+        g.hwnd_grp_sv_upload,
+        g.hwnd_lbl_sv_file,
+        g.hwnd_edit_sv_file,
+        g.hwnd_btn_sv_browse,
+        g.hwnd_lbl_sv_lat,
+        g.hwnd_edit_sv_lat,
+        g.hwnd_lbl_sv_lng,
+        g.hwnd_edit_sv_lng,
+        g.hwnd_lbl_sv_heading,
+        g.hwnd_edit_sv_heading,
+        g.hwnd_lbl_sv_place,
+        g.hwnd_edit_sv_place,
+        g.hwnd_lbl_sv_time,
+        g.hwnd_edit_sv_time,
+        g.hwnd_lbl_sv_tz,
+        g.hwnd_cmb_sv_tz,
+        g.hwnd_btn_sv_upload,
+        g.hwnd_grp_sv_update,
+        g.hwnd_lbl_sv_pid,
+        g.hwnd_edit_sv_pid,
+        g.hwnd_btn_sv_update,
+        g.hwnd_lbl_sv_ulat,
+        g.hwnd_edit_sv_ulat,
+        g.hwnd_lbl_sv_ulng,
+        g.hwnd_edit_sv_ulng,
+        g.hwnd_lbl_sv_uheading,
+        g.hwnd_edit_sv_uheading,
+        g.hwnd_lbl_sv_uplace,
+        g.hwnd_edit_sv_uplace,
+        g.hwnd_lbl_sv_utime,
+        g.hwnd_edit_sv_utime,
+        g.hwnd_lbl_sv_utz,
+        g.hwnd_cmb_sv_utz,
+    ];
+
+    update_sv_auth_label(g);
+
+    // GroupBox 挂载擦底并与 Tab 依次沉底，确保绘制顺序严格为 Tab -> GroupBox -> 交互控件
+    for grp in [
+        g.hwnd_grp_ops,
+        g.hwnd_grp_new,
+        g.hwnd_grp_webp,
+        g.hwnd_grp_keep,
+        g.hwnd_grp_sv_upload,
+        g.hwnd_grp_sv_update,
+    ] {
         subclass_groupbox(grp);
         SetWindowPos(
             grp,
@@ -1513,12 +1810,38 @@ unsafe fn build_all_controls(g: &mut GuiData, hwnd: HWND) {
     switch_tab(g, 0);
 }
 
+unsafe fn update_sv_auth_label(g: &GuiData) {
+    let has_tok = street_view::has_stored_token(&g.state.config);
+    let cred_note = match street_view::resolve_credentials_path(&g.state.config) {
+        Some(p) => {
+            let fname = p
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("credentials.json");
+            format!("凭据: privy/{}", fname)
+        }
+        None => "缺少 privy/streetview_credentials.json 或 credentials.json".to_string(),
+    };
+    let text = if has_tok {
+        format!("Street View OAuth: 已授权 ({})", cred_note)
+    } else {
+        format!("Street View OAuth: 未授权 ({})", cred_note)
+    };
+    set_window_text(g.hwnd_lbl_sv_auth, &text);
+    set_window_text(
+        g.hwnd_btn_sv_auth,
+        if has_tok { "重新授权" } else { "登录授权" },
+    );
+    EnableWindow(g.hwnd_btn_sv_clear_tok, if has_tok { 1 } else { 0 });
+}
+
 unsafe fn switch_tab(g: &GuiData, idx: i32) {
-    let tabs: [(i32, &[HWND]); 4] = [
+    let tabs: [(i32, &[HWND]); 5] = [
         (0, &g.tab0_ctrls),
         (1, &g.tab1_ctrls),
         (2, &g.tab2_ctrls),
         (3, &g.tab3_ctrls),
+        (4, &g.tab4_ctrls),
     ];
     // 先隐藏非目标标签页，再显示目标标签页，避免切页瞬间两页控件同时可见
     for (ti, ctrls) in tabs {
@@ -1562,6 +1885,7 @@ unsafe fn apply_fonts_to_all_controls(g: &GuiData) {
         .chain(g.tab1_ctrls.iter())
         .chain(g.tab2_ctrls.iter())
         .chain(g.tab3_ctrls.iter())
+        .chain(g.tab4_ctrls.iter())
     {
         if h.is_null() {
             continue;
@@ -1571,7 +1895,8 @@ unsafe fn apply_fonts_to_all_controls(g: &GuiData) {
             || h == g.hwnd_tv_apply
             || h == g.hwnd_tv_backup
             || h == g.hwnd_edit_syn_custom
-            || h == g.hwnd_edit_oov_report;
+            || h == g.hwnd_edit_oov_report
+            || h == g.hwnd_edit_sv_pid;
         SendMessageW(h, WM_SETFONT, if use_mono { fm } else { f }, 1);
     }
 }
@@ -1602,7 +1927,7 @@ unsafe fn layout_controls(g: &GuiData, hwnd: HWND) {
     let inner_w = w - (pad + s(10)) * 2;
     let inner_h = tab_h - s(40);
 
-    // --- Tab 0 Layout ---
+    // --- Tab 0 布局 ---
     let mut y = inner_y;
     MoveWindow(g.hwnd_grp_ops, inner_x, y, inner_w, s(84), 1);
     let mut bx = inner_x + s(12);
@@ -1672,7 +1997,7 @@ unsafe fn layout_controls(g: &GuiData, hwnd: HWND) {
     MoveWindow(g.hwnd_edit_keep_cat, inner_x + s(488), ky, s(140), s(23), 1);
     MoveWindow(g.hwnd_btn_keep, inner_x + inner_w - s(124), ky - s(1), s(112), s(25), 1);
 
-    // --- Tab 1 (Pack) Layout ---
+    // --- Tab 1 布局 ---
     MoveWindow(g.hwnd_lbl_pack_preset, inner_x, inner_y + s(4), s(38), s(20), 1);
     MoveWindow(g.hwnd_cmb_pack_preset, inner_x + s(40), inner_y, s(260), s(200), 1);
     MoveWindow(g.hwnd_btn_preset_only, inner_x + s(306), inner_y, s(74), s(24), 1);
@@ -1718,7 +2043,7 @@ unsafe fn layout_controls(g: &GuiData, hwnd: HWND) {
     MoveWindow(g.hwnd_tv_pack, inner_x, tv1_top, inner_w, tv1_h, 1);
     MoveWindow(g.hwnd_lbl_pack_status, inner_x, tv1_top + tv1_h + s(4), inner_w, s(19), 1);
 
-    // --- Tab 2 (Apply) Layout ---
+    // --- Tab 2 布局 ---
     MoveWindow(g.hwnd_btn_apply_browse, inner_x, inner_y, s(118), s(25), 1);
     MoveWindow(g.hwnd_chk_apply_bak, inner_x + s(124), inner_y + s(3), s(92), s(20), 1);
     MoveWindow(g.hwnd_chk_apply_enc, inner_x + s(220), inner_y + s(3), s(136), s(20), 1);
@@ -1750,7 +2075,6 @@ unsafe fn layout_controls(g: &GuiData, hwnd: HWND) {
     let mini_btn_w = s(44);
     let mini_gap = s(4);
 
-    // Col 1: Downloads 目录树
     let dl_lbl_w = (col1_w - mini_btn_w * 2 - mini_gap * 2).max(s(60));
     MoveWindow(g.hwnd_lbl_dl_tree, col1_x, a_hdr_y + s(3), dl_lbl_w, s(18), 1);
     MoveWindow(g.hwnd_btn_dl_open, col1_x + col1_w - mini_btn_w * 2 - mini_gap, a_hdr_y, mini_btn_w, s(21), 1);
@@ -1758,12 +2082,10 @@ unsafe fn layout_controls(g: &GuiData, hwnd: HWND) {
     MoveWindow(g.hwnd_tv_downloads, col1_x, tv2_top, col1_w, tv2_h, 1);
     MoveWindow(g.hwnd_lbl_dl_status, col1_x, tv2_top + tv2_h + s(4), col1_w, s(19), 1);
 
-    // Col 2: 补丁预览树
     MoveWindow(g.hwnd_lbl_apply_tree, col2_x, a_hdr_y + s(3), col2_w, s(18), 1);
     MoveWindow(g.hwnd_tv_apply, col2_x, tv2_top, col2_w, tv2_h, 1);
     MoveWindow(g.hwnd_lbl_apply_status, col2_x, tv2_top + tv2_h + s(4), col2_w, s(19), 1);
 
-    // Col 3: backup 目录树
     let bak_lbl_w = (col3_w - mini_btn_w * 2 - mini_gap * 2).max(s(60));
     MoveWindow(g.hwnd_lbl_backup_tree, col3_x, a_hdr_y + s(3), bak_lbl_w, s(18), 1);
     MoveWindow(g.hwnd_btn_backup_open, col3_x + col3_w - mini_btn_w * 2 - mini_gap, a_hdr_y, mini_btn_w, s(21), 1);
@@ -1771,7 +2093,7 @@ unsafe fn layout_controls(g: &GuiData, hwnd: HWND) {
     MoveWindow(g.hwnd_tv_backup, col3_x, tv2_top, col3_w, tv2_h, 1);
     MoveWindow(g.hwnd_lbl_backup_status, col3_x, tv2_top + tv2_h + s(4), col3_w, s(19), 1);
 
-    // --- Tab 3 (Synonyms & OOV) Layout ---
+    // --- Tab 3 布局 ---
     MoveWindow(g.hwnd_btn_syn_save, inner_x, inner_y, s(134), s(25), 1);
     MoveWindow(g.hwnd_btn_syn_rebuild, inner_x + s(140), inner_y, s(162), s(25), 1);
     MoveWindow(g.hwnd_btn_syn_import, inner_x + s(308), inner_y, s(114), s(25), 1);
@@ -1789,6 +2111,84 @@ unsafe fn layout_controls(g: &GuiData, hwnd: HWND) {
     MoveWindow(g.hwnd_edit_syn_custom, inner_x, syn_edit_y, left_w, syn_edit_h, 1);
     MoveWindow(g.hwnd_lbl_oov_report, right_x, syn_lbl_y, right_w, s(19), 1);
     MoveWindow(g.hwnd_edit_oov_report, right_x, syn_edit_y, right_w, syn_edit_h, 1);
+
+    // --- Tab 4 布局：街景上传 ---
+    let sv_clr_w = s(86);
+    let sv_auth_w = s(92);
+    let sv_auth_lbl_w = (inner_w - sv_auth_w - sv_clr_w - s(16)).max(s(220));
+    MoveWindow(g.hwnd_lbl_sv_auth, inner_x, inner_y + s(4), sv_auth_lbl_w, s(20), 1);
+    MoveWindow(g.hwnd_btn_sv_auth, inner_x + inner_w - sv_auth_w - sv_clr_w - s(6), inner_y, sv_auth_w, s(25), 1);
+    MoveWindow(g.hwnd_btn_sv_clear_tok, inner_x + inner_w - sv_clr_w, inner_y, sv_clr_w, s(25), 1);
+
+    let sv_g1_y = inner_y + s(32);
+    let sv_g1_h = s(118);
+    MoveWindow(g.hwnd_grp_sv_upload, inner_x, sv_g1_y, inner_w, sv_g1_h, 1);
+
+    let sv_pad = s(12);
+    let sv_in_x = inner_x + sv_pad;
+    let sv_in_w = (inner_w - sv_pad * 2).max(s(500));
+
+    let sv_r1 = sv_g1_y + s(22);
+    let sv_browse_w = s(106);
+    let sv_file_lbl_w = s(68);
+    let sv_file_w = (sv_in_w - sv_file_lbl_w - sv_browse_w - s(12)).max(s(160));
+    MoveWindow(g.hwnd_lbl_sv_file, sv_in_x, sv_r1 + s(3), sv_file_lbl_w, s(20), 1);
+    MoveWindow(g.hwnd_edit_sv_file, sv_in_x + sv_file_lbl_w + s(4), sv_r1, sv_file_w, s(23), 1);
+    MoveWindow(g.hwnd_btn_sv_browse, sv_in_x + sv_in_w - sv_browse_w, sv_r1 - s(1), sv_browse_w, s(24), 1);
+
+    let sv_r2 = sv_r1 + s(30);
+    let sv_col_gap = s(8);
+    let sv_col_w = ((sv_in_w - sv_col_gap * 3) / 4).max(s(110));
+    let sv_c1 = sv_in_x;
+    let sv_c2 = sv_c1 + sv_col_w + sv_col_gap;
+    let sv_c3 = sv_c2 + sv_col_w + sv_col_gap;
+    let sv_c4 = sv_c3 + sv_col_w + sv_col_gap;
+    let sv_c4_w = (sv_in_x + sv_in_w - sv_c4).max(s(110));
+
+    MoveWindow(g.hwnd_lbl_sv_lat, sv_c1, sv_r2 + s(3), s(40), s(20), 1);
+    MoveWindow(g.hwnd_edit_sv_lat, sv_c1 + s(42), sv_r2, (sv_col_w - s(42)).max(s(60)), s(23), 1);
+    MoveWindow(g.hwnd_lbl_sv_lng, sv_c2, sv_r2 + s(3), s(40), s(20), 1);
+    MoveWindow(g.hwnd_edit_sv_lng, sv_c2 + s(42), sv_r2, (sv_col_w - s(42)).max(s(60)), s(23), 1);
+    MoveWindow(g.hwnd_lbl_sv_heading, sv_c3, sv_r2 + s(3), s(74), s(20), 1);
+    MoveWindow(g.hwnd_edit_sv_heading, sv_c3 + s(76), sv_r2, (sv_col_w - s(76)).max(s(40)), s(23), 1);
+    MoveWindow(g.hwnd_lbl_sv_place, sv_c4, sv_r2 + s(3), s(58), s(20), 1);
+    MoveWindow(g.hwnd_edit_sv_place, sv_c4 + s(60), sv_r2, (sv_c4_w - s(60)).max(s(50)), s(23), 1);
+
+    let sv_r3 = sv_r2 + s(30);
+    let sv_up_btn_w = s(126);
+    MoveWindow(g.hwnd_lbl_sv_time, sv_in_x, sv_r3 + s(3), s(64), s(20), 1);
+    MoveWindow(g.hwnd_edit_sv_time, sv_in_x + s(66), sv_r3, s(148), s(23), 1);
+    MoveWindow(g.hwnd_lbl_sv_tz, sv_in_x + s(224), sv_r3 + s(3), s(38), s(20), 1);
+    MoveWindow(g.hwnd_cmb_sv_tz, sv_in_x + s(264), sv_r3 - s(1), s(180), s(240), 1);
+    MoveWindow(g.hwnd_btn_sv_upload, sv_in_x + sv_in_w - sv_up_btn_w, sv_r3 - s(1), sv_up_btn_w, s(25), 1);
+
+    let sv_g2_y = sv_g1_y + sv_g1_h + s(10);
+    let sv_g2_h = s(118);
+    MoveWindow(g.hwnd_grp_sv_update, inner_x, sv_g2_y, inner_w, sv_g2_h, 1);
+
+    let sv_u1 = sv_g2_y + s(22);
+    let sv_upd_btn_w = s(126);
+    let sv_pid_lbl_w = s(68);
+    let sv_pid_w = (sv_in_w - sv_pid_lbl_w - sv_upd_btn_w - s(12)).max(s(160));
+    MoveWindow(g.hwnd_lbl_sv_pid, sv_in_x, sv_u1 + s(3), sv_pid_lbl_w, s(20), 1);
+    MoveWindow(g.hwnd_edit_sv_pid, sv_in_x + sv_pid_lbl_w + s(4), sv_u1, sv_pid_w, s(23), 1);
+    MoveWindow(g.hwnd_btn_sv_update, sv_in_x + sv_in_w - sv_upd_btn_w, sv_u1 - s(1), sv_upd_btn_w, s(25), 1);
+
+    let sv_u2 = sv_u1 + s(30);
+    MoveWindow(g.hwnd_lbl_sv_ulat, sv_c1, sv_u2 + s(3), s(48), s(20), 1);
+    MoveWindow(g.hwnd_edit_sv_ulat, sv_c1 + s(50), sv_u2, (sv_col_w - s(50)).max(s(50)), s(23), 1);
+    MoveWindow(g.hwnd_lbl_sv_ulng, sv_c2, sv_u2 + s(3), s(48), s(20), 1);
+    MoveWindow(g.hwnd_edit_sv_ulng, sv_c2 + s(50), sv_u2, (sv_col_w - s(50)).max(s(50)), s(23), 1);
+    MoveWindow(g.hwnd_lbl_sv_uheading, sv_c3, sv_u2 + s(3), s(48), s(20), 1);
+    MoveWindow(g.hwnd_edit_sv_uheading, sv_c3 + s(50), sv_u2, (sv_col_w - s(50)).max(s(50)), s(23), 1);
+    MoveWindow(g.hwnd_lbl_sv_uplace, sv_c4, sv_u2 + s(3), s(64), s(20), 1);
+    MoveWindow(g.hwnd_edit_sv_uplace, sv_c4 + s(66), sv_u2, (sv_c4_w - s(66)).max(s(50)), s(23), 1);
+
+    let sv_u3 = sv_u2 + s(30);
+    MoveWindow(g.hwnd_lbl_sv_utime, sv_in_x, sv_u3 + s(3), s(74), s(20), 1);
+    MoveWindow(g.hwnd_edit_sv_utime, sv_in_x + s(76), sv_u3, s(148), s(23), 1);
+    MoveWindow(g.hwnd_lbl_sv_utz, sv_in_x + s(234), sv_u3 + s(3), s(38), s(20), 1);
+    MoveWindow(g.hwnd_cmb_sv_utz, sv_in_x + s(274), sv_u3 - s(1), s(180), s(240), 1);
 
     // 缩放后原子触发全窗口及子控件重绘，确保 Tab 背景不会覆盖内容区
     RedrawWindow(
@@ -1912,9 +2312,7 @@ unsafe fn update_vpn_indicator(g: &mut GuiData, hwnd: HWND, online: bool) {
     set_window_text(hwnd, &title);
 }
 
-// =========================================================================
-// TreeView Tri-State Helper
-// =========================================================================
+// --- TreeView 三态复选框辅助 ---
 unsafe fn tv_set_state_img(tv: HWND, hitem: isize, img_idx: usize) {
     let mut tvi: TVITEMW = std::mem::zeroed();
     tvi.mask = TVIF_STATE;
@@ -2871,6 +3269,28 @@ unsafe extern "system" fn wnd_proc(
             set_window_text(g.hwnd_edit_new_title, "");
             0
         }
+        WM_APP_CLEAR_COMMIT => {
+            set_window_text(g.hwnd_edit_commit, "");
+            0
+        }
+        WM_APP_SV_STATUS => {
+            update_sv_auth_label(g);
+            0
+        }
+        WM_APP_SV_PHOTO_ID => {
+            let taken = g.mailbox.sv_photo_id.lock().ok().and_then(|mut s| s.take());
+            if let Some(pid) = taken {
+                set_window_text(g.hwnd_edit_sv_pid, &pid);
+            }
+            0
+        }
+        WM_APP_SV_FILE_PATH => {
+            let taken = g.mailbox.sv_file_path.lock().ok().and_then(|mut s| s.take());
+            if let Some(fp) = taken {
+                set_window_text(g.hwnd_edit_sv_file, &fp);
+            }
+            0
+        }
         WM_APP_BACKUP_TREE => {
             let taken = g.mailbox.backup_tree.lock().ok().and_then(|mut s| s.take());
             if let Some(items) = taken {
@@ -2909,12 +3329,12 @@ unsafe extern "system" fn wnd_proc(
                 DragQueryFileW(hdrop, 0, buf.as_mut_ptr(), len + 1);
                 let path_str = String::from_utf16_lossy(&buf[..len as usize]);
                 let p = PathBuf::from(&path_str);
-                if p.extension()
+                let ext_lower = p
+                    .extension()
                     .and_then(|s| s.to_str())
-                    .map(|s| s.eq_ignore_ascii_case("zip"))
-                    .unwrap_or(false)
-                {
-                    // 自动切换到 Tab 2 (Apply) 并加载该 ZIP
+                    .map(|s| s.to_ascii_lowercase())
+                    .unwrap_or_default();
+                if ext_lower == "zip" {
                     SendMessageW(g.hwnd_tab, TCM_SETCURSEL, 2, 0);
                     switch_tab(g, 2);
                     spawn_load_zip_file(
@@ -2923,10 +3343,18 @@ unsafe extern "system" fn wnd_proc(
                         g.mailbox.clone(),
                         p,
                     );
+                } else if ext_lower == "jpg" || ext_lower == "jpeg" {
+                    SendMessageW(g.hwnd_tab, TCM_SETCURSEL, 4, 0);
+                    switch_tab(g, 4);
+                    update_sv_auth_label(g);
+                    set_window_text(g.hwnd_edit_sv_file, &path_str);
+                    g.state
+                        .logs
+                        .info(format!("[streetview] 已选择全景图: {}", path_str));
                 } else {
                     g.state
                         .logs
-                        .warn("[apply] 仅支持拖入 .zip 文件");
+                        .warn("[drop] 仅支持拖入 .zip 补丁包或 .jpg/.jpeg 全景图");
                 }
             }
             DragFinish(hdrop);
@@ -2942,6 +3370,8 @@ unsafe extern "system" fn wnd_proc(
                     spawn_load_downloads_tree(g.mailbox.clone());
                     spawn_load_backup_tree(g.state.config.clone(), g.mailbox.clone());
                     spawn_load_backups(g.state.config.clone(), g.mailbox.clone());
+                } else if cur == 4 {
+                    update_sv_auth_label(g);
                 }
                 return 0;
             }
@@ -3077,11 +3507,19 @@ unsafe extern "system" fn wnd_proc(
             handle_command(g, hwnd, id, code);
             0
         }
+        WM_TIMER => {
+            if wparam == TIMER_SAFE_CLOSE && g.closing {
+                poll_safe_close(g, hwnd);
+                return 0;
+            }
+            DefWindowProcW(hwnd, msg, wparam, lparam)
+        }
         WM_CLOSE => {
             begin_safe_close(g, hwnd, None);
             0
         }
         WM_DESTROY => {
+            KillTimer(hwnd, TIMER_SAFE_CLOSE);
             let _ = std::fs::remove_dir_all(g.state.config.build_dir.join("temp").join("diff_preview"));
             g.mailbox.clear_hwnd();
             g.mailbox.kill_sim_child();
@@ -3090,6 +3528,63 @@ unsafe extern "system" fn wnd_proc(
         }
         _ => DefWindowProcW(hwnd, msg, wparam, lparam),
     }
+}
+
+unsafe fn finalize_safe_close(g: &mut GuiData, hwnd: HWND) {
+    KillTimer(hwnd, TIMER_SAFE_CLOSE);
+    g.close_started_at = None;
+    g.handoff_build = g.close_pending_handoff.take();
+    g.mailbox.kill_sim_child();
+    g.state.shutting_down.store(true, Ordering::SeqCst);
+    g.shutdown_notify.notify_waiters();
+    DestroyWindow(hwnd);
+}
+
+unsafe fn poll_safe_close(g: &mut GuiData, hwnd: HWND) {
+    if g.state.runtime.active_ops() == 0 {
+        finalize_safe_close(g, hwnd);
+        return;
+    }
+    let timed_out = g
+        .close_started_at
+        .map(|t| t.elapsed() >= Duration::from_secs(15))
+        .unwrap_or(true);
+    if !timed_out {
+        return;
+    }
+
+    KillTimer(hwnd, TIMER_SAFE_CLOSE);
+    g.close_started_at = None;
+
+    if g.close_pending_handoff.is_some() {
+        g.close_pending_handoff = None;
+        g.closing = false;
+        EnableWindow(hwnd, 1);
+        let vpn_lbl = match g.last_vpn_online {
+            Some(true) => "正常",
+            Some(false) => "离线",
+            None => "检测中",
+        };
+        set_window_text(
+            hwnd,
+            &format!(
+                "Swamp 本地服务 (localhost:{}) | 网络: {}",
+                g.state.config.port, vpn_lbl
+            ),
+        );
+        g.state
+            .logs
+            .error("[shutdown] 等待任务超时，已取消退出，未启动 build.bat");
+        let mw = to_wide("仍有任务未结束，已取消退出且未启动 build.bat，请稍后重试。");
+        let tw = to_wide("未启动 build.bat");
+        MessageBoxW(hwnd, mw.as_ptr(), tw.as_ptr(), MB_OK | MB_ICONWARNING);
+        return;
+    }
+
+    g.state
+        .logs
+        .warn("[shutdown] 等待后台任务超时，直接执行关闭");
+    finalize_safe_close(g, hwnd);
 }
 
 unsafe fn begin_safe_close(
@@ -3133,49 +3628,21 @@ unsafe fn begin_safe_close(
     }
 
     g.closing = true;
+    g.close_pending_handoff = handoff;
     EnableWindow(hwnd, 0);
     set_window_text(hwnd, "Swamp 本地服务 - 正在等待任务结束...");
     g.state
         .logs
         .info("[shutdown] 正在等待运行中的任务结束并关闭服务");
 
-    // 最多等待 15 秒让正在执行的原子写盘彻底收尾
-    for _ in 0..300 {
-        if g.state.runtime.active_ops() == 0 {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(50));
+    if g.state.runtime.active_ops() == 0 {
+        finalize_safe_close(g, hwnd);
+        return true;
     }
 
-    if has_handoff && g.state.runtime.active_ops() > 0 {
-        g.closing = false;
-        EnableWindow(hwnd, 1);
-        let vpn_lbl = match g.last_vpn_online {
-            Some(true) => "正常",
-            Some(false) => "离线",
-            None => "检测中",
-        };
-        set_window_text(
-            hwnd,
-            &format!(
-                "Swamp 本地服务 (localhost:{}) | 网络: {}",
-                g.state.config.port, vpn_lbl
-            ),
-        );
-        g.state
-            .logs
-            .error("[shutdown] 等待任务超时，已取消退出，未启动 build.bat");
-        let mw = to_wide("仍有任务未结束，已取消退出且未启动 build.bat，请稍后重试。");
-        let tw = to_wide("未启动 build.bat");
-        MessageBoxW(hwnd, mw.as_ptr(), tw.as_ptr(), MB_OK | MB_ICONWARNING);
-        return false;
-    }
-
-    g.handoff_build = handoff;
-    g.mailbox.kill_sim_child();
-    g.state.shutting_down.store(true, Ordering::SeqCst);
-    g.shutdown_notify.notify_waiters();
-    DestroyWindow(hwnd);
+    // 通过 WM_TIMER 每 50ms 非阻塞轮询（最多 15s），避免冻结 Win32 消息循环触发系统“未响应”
+    g.close_started_at = Some(Instant::now());
+    SetTimer(hwnd, TIMER_SAFE_CLOSE, 50, None);
     true
 }
 
@@ -3261,11 +3728,16 @@ unsafe fn handle_command(g: &mut GuiData, hwnd: HWND, id: u16, code: u16) {
                 MessageBoxW(hwnd, m.as_ptr(), t.as_ptr(), MB_OK | MB_ICONWARNING);
                 return;
             }
+            let Some(_push_guard) = g.mailbox.try_acquire_flag(BusySlot::Push) else {
+                g.state.logs.warn("[git] 已有提交推送任务正在运行，请等待完成后重试");
+                return;
+            };
             let st = g.state.clone();
             let mailbox = g.mailbox.clone();
             std::thread::spawn(move || {
                 use std::os::windows::process::CommandExt;
                 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+                let _push_guard = _push_guard;
                 let _busy = st.runtime.begin_op();
                 if run_gen_first {
                     st.logs.info("[gen+push] 步骤 1/2: 构建站点");
@@ -3275,7 +3747,7 @@ unsafe fn handle_command(g: &mut GuiData, hwnd: HWND, id: u16, code: u16) {
                     }
                     st.logs.info("[gen+push] 步骤 2/2: 执行 Git 提交与推送");
                     spawn_load_synonyms_data(st.config.clone(), mailbox.clone(), false);
-                    spawn_load_backup_tree(st.config.clone(), mailbox);
+                    spawn_load_backup_tree(st.config.clone(), mailbox.clone());
                 } else {
                     st.logs.info("[push] 开始执行 Git 提交与推送");
                 }
@@ -3295,6 +3767,18 @@ unsafe fn handle_command(g: &mut GuiData, hwnd: HWND, id: u16, code: u16) {
                     st.logs.error("[git] 缺少 .gitignore，已取消推送");
                     return;
                 }
+                let mut gi_builder = ignore::gitignore::GitignoreBuilder::new(&st.config.repo_root);
+                if let Some(err) = gi_builder.add(&st.config.gitignore_file) {
+                    st.logs.error(format!("[git] 解析 .gitignore 失败，已取消推送: {}", err));
+                    return;
+                }
+                let push_gi = match gi_builder.build() {
+                    Ok(gi) => gi,
+                    Err(e) => {
+                        st.logs.error(format!("[git] 构建 .gitignore 规则失败，已取消推送: {}", e));
+                        return;
+                    }
+                };
 
                 let add_res = Command::new("git")
                     .args(["add", "-A"])
@@ -3329,7 +3813,7 @@ unsafe fn handle_command(g: &mut GuiData, hwnd: HWND, id: u16, code: u16) {
                             .split('\0')
                             .filter(|s| !s.is_empty())
                             .map(|s| s.replace('\\', "/"))
-                            .filter(|p| pack_apply::is_private_push_path(p))
+                            .filter(|p| pack_apply::is_private_push_path_with_gitignore(p, Some(&push_gi)))
                             .collect();
                         if !violations.is_empty() {
                             let _ = Command::new("git")
@@ -3467,7 +3951,7 @@ unsafe fn handle_command(g: &mut GuiData, hwnd: HWND, id: u16, code: u16) {
                             .map(|s| s.trim_matches(|c| c == '\n' || c == '\r'))
                             .filter(|s| !s.is_empty())
                             .map(|s| s.replace('\\', "/"))
-                            .filter(|p| pack_apply::is_private_push_path(p))
+                            .filter(|p| pack_apply::is_private_push_path_with_gitignore(p, Some(&push_gi)))
                             .collect();
                         unpushed_violations.sort();
                         unpushed_violations.dedup();
@@ -3500,6 +3984,7 @@ unsafe fn handle_command(g: &mut GuiData, hwnd: HWND, id: u16, code: u16) {
                 {
                     Ok(o) if o.status.success() => {
                         st.logs.info(format!("[git] 推送成功: {}", commit_msg));
+                        mailbox.post(WM_APP_CLEAR_COMMIT, 0, 0);
                     }
                     Ok(o) => {
                         st.logs.error(format!(
@@ -3608,12 +4093,17 @@ unsafe fn handle_command(g: &mut GuiData, hwnd: HWND, id: u16, code: u16) {
             });
         }
         IDC_BTN_WEBP => {
+            let Some(_webp_guard) = g.mailbox.try_acquire_flag(BusySlot::Webp) else {
+                g.state.logs.warn("[webp] 已有批量转换任务正在运行，请等待完成后重试");
+                return;
+            };
             let max_w: Option<u32> = get_window_text_string(g.hwnd_edit_webp_w).trim().parse().ok();
             let quality: Option<u8> = get_window_text_string(g.hwnd_edit_webp_q).trim().parse().ok();
             let use_alt = is_checked(g.hwnd_chk_webp_alt);
             let update_map = is_checked(g.hwnd_chk_webp_map);
             let st = g.state.clone();
             std::thread::spawn(move || {
+                let _webp_guard = _webp_guard;
                 let _busy = st.runtime.begin_op();
                 st.logs.info("[webp] 开始批量转换 WebP");
                 match run_webp_batch(
@@ -3640,12 +4130,17 @@ unsafe fn handle_command(g: &mut GuiData, hwnd: HWND, id: u16, code: u16) {
             });
         }
         IDC_BTN_KEEP => {
+            let Some(_keep_guard) = g.mailbox.try_acquire_flag(BusySlot::Keep) else {
+                g.state.logs.warn("[keep] 已有 Keep 导入任务正在运行，请等待完成后重试");
+                return;
+            };
             let sel = SendMessageW(g.hwnd_cmb_keep_mode, CB_GETCURSEL, 0, 0) as i32;
             let mode = if sel == 1 { "merge" } else { "single" }.to_string();
             let tag_name = get_window_text_string(g.hwnd_edit_keep_tag).trim().to_string();
             let category = get_window_text_string(g.hwnd_edit_keep_cat).trim().to_string();
             let st = g.state.clone();
             std::thread::spawn(move || {
+                let _keep_guard = _keep_guard;
                 let _busy = st.runtime.begin_op();
                 st.logs.info(format!("[keep] 开始导入 Keep 笔记 ({})", mode));
                 match run_keep2html(
@@ -3666,7 +4161,7 @@ unsafe fn handle_command(g: &mut GuiData, hwnd: HWND, id: u16, code: u16) {
                 }
             });
         }
-        // --- Pack Tab Commands ---
+        // --- Tab 1 命令 ---
         IDC_CHK_PACK_MORE | IDC_BTN_PACK_REFRESH => {
             let more = is_checked(g.hwnd_chk_pack_more);
             spawn_load_pack_tree(
@@ -3798,7 +4293,7 @@ unsafe fn handle_command(g: &mut GuiData, hwnd: HWND, id: u16, code: u16) {
                 }
             });
         }
-        // --- Apply Tab Commands ---
+        // --- Tab 2 命令 ---
         IDC_BTN_APPLY_BROWSE => {
             let cfg = g.state.config.clone();
             let logs = g.state.logs.clone();
@@ -4240,6 +4735,183 @@ unsafe fn handle_command(g: &mut GuiData, hwnd: HWND, id: u16, code: u16) {
         IDC_BTN_OOV_REFRESH => {
             spawn_load_synonyms_data(g.state.config.clone(), g.mailbox.clone(), false);
             g.state.logs.info("[synonyms] 已刷新未收录词报告");
+        }
+        // --- Tab 4 命令：街景上传 ---
+        IDC_BTN_SV_AUTH => {
+            let Some(_sv_guard) = g.mailbox.try_acquire_flag(BusySlot::StreetView) else {
+                g.state.logs.warn("[streetview] 已有街景授权或上传任务正在运行，请等待完成");
+                return;
+            };
+            let st = g.state.clone();
+            let mailbox = g.mailbox.clone();
+            g.state.rt_handle.spawn(async move {
+                let _sv_guard = _sv_guard;
+                let _busy = st.runtime.begin_op();
+                match street_view::authorize_interactive(&st.config, &st.runtime, &st.logs).await {
+                    Ok(()) => mailbox.post(WM_APP_SV_STATUS, 0, 0),
+                    Err(e) => {
+                        st.logs.error(format!("[streetview] 授权失败: {}", e));
+                        mailbox.post(WM_APP_SV_STATUS, 0, 0);
+                    }
+                }
+            });
+        }
+        IDC_BTN_SV_CLEAR_TOK => {
+            street_view::clear_token(&g.state.config);
+            update_sv_auth_label(g);
+            g.state.logs.info("[streetview] 已清除本地街景授权令牌");
+        }
+        IDC_BTN_SV_BROWSE => {
+            let logs = g.state.logs.clone();
+            let mailbox = g.mailbox.clone();
+            std::thread::spawn(move || {
+                use std::os::windows::process::CommandExt;
+                const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+                let ps = r#"Add-Type -AssemblyName System.Windows.Forms; $d = New-Object System.Windows.Forms.OpenFileDialog; $d.Filter = 'JPEG 全景图 (*.jpg;*.jpeg)|*.jpg;*.jpeg'; if ($d.ShowDialog() -eq 'OK') { [Console]::OutputEncoding = [Text.Encoding]::UTF8; Write-Output $d.FileName }"#;
+                if let Ok(out) = Command::new("powershell")
+                    .args(["-NoProfile", "-STA", "-Command", ps])
+                    .creation_flags(CREATE_NO_WINDOW)
+                    .output()
+                {
+                    let chosen = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                    if !chosen.is_empty() {
+                        logs.info(format!("[streetview] 已选择全景图: {}", chosen));
+                        if let Ok(mut slot) = mailbox.sv_file_path.lock() {
+                            *slot = Some(chosen);
+                        }
+                        mailbox.post(WM_APP_SV_FILE_PATH, 0, 0);
+                    }
+                }
+            });
+        }
+        IDC_BTN_SV_UPLOAD => {
+            let file_str = get_window_text_string(g.hwnd_edit_sv_file).trim().to_string();
+            if file_str.is_empty() {
+                let m = to_wide("请先选择或拖入要上传的 JPEG 全景图。");
+                let t = to_wide("提示");
+                MessageBoxW(hwnd, m.as_ptr(), t.as_ptr(), MB_OK | MB_ICONWARNING);
+                return;
+            }
+            let lat_s = get_window_text_string(g.hwnd_edit_sv_lat).trim().to_string();
+            let lng_s = get_window_text_string(g.hwnd_edit_sv_lng).trim().to_string();
+            let (lat, lng) = match (lat_s.parse::<f64>(), lng_s.parse::<f64>()) {
+                (Ok(la), Ok(ln)) => (la, ln),
+                _ => {
+                    let m = to_wide("请填写合法的纬度与经度数字。");
+                    let t = to_wide("参数无效");
+                    MessageBoxW(hwnd, m.as_ptr(), t.as_ptr(), MB_OK | MB_ICONWARNING);
+                    return;
+                }
+            };
+            let heading_s = get_window_text_string(g.hwnd_edit_sv_heading).trim().to_string();
+            let heading = if heading_s.is_empty() {
+                None
+            } else {
+                match heading_s.parse::<f64>() {
+                    Ok(h) => Some(h),
+                    Err(_) => {
+                        let m = to_wide("相机朝向 (Heading) 需为 0-360 之间的数字。");
+                        let t = to_wide("参数无效");
+                        MessageBoxW(hwnd, m.as_ptr(), t.as_ptr(), MB_OK | MB_ICONWARNING);
+                        return;
+                    }
+                }
+            };
+            let place_id = get_window_text_string(g.hwnd_edit_sv_place).trim().to_string();
+            let date_time = get_window_text_string(g.hwnd_edit_sv_time).trim().to_string();
+            let tz_idx = SendMessageW(g.hwnd_cmb_sv_tz, CB_GETCURSEL, 0, 0) as i32;
+            let tz_hours = if (0..=24).contains(&tz_idx) { tz_idx - 12 } else { 8 };
+
+            let req = UploadPhotoReq {
+                image_path: PathBuf::from(file_str),
+                lat,
+                lng,
+                heading,
+                place_id,
+                date_time,
+                tz_hours,
+            };
+            let Some(_sv_guard) = g.mailbox.try_acquire_flag(BusySlot::StreetView) else {
+                g.state.logs.warn("[streetview] 已有街景上传或更新任务正在运行，请等待完成");
+                return;
+            };
+            let st = g.state.clone();
+            let mailbox = g.mailbox.clone();
+            g.state.rt_handle.spawn(async move {
+                let _sv_guard = _sv_guard;
+                let _busy = st.runtime.begin_op();
+                match street_view::upload_photo(&st.config, &st.logs, req).await {
+                    Ok(photo_id) => {
+                        if !photo_id.is_empty() {
+                            if let Ok(mut slot) = mailbox.sv_photo_id.lock() {
+                                *slot = Some(photo_id);
+                            }
+                            mailbox.post(WM_APP_SV_PHOTO_ID, 0, 0);
+                        }
+                        mailbox.post(WM_APP_SV_STATUS, 0, 0);
+                    }
+                    Err(e) => {
+                        st.logs.error(format!("[streetview] {}", e));
+                        mailbox.post(WM_APP_SV_STATUS, 0, 0);
+                    }
+                }
+            });
+        }
+        IDC_BTN_SV_UPDATE => {
+            let photo_id = get_window_text_string(g.hwnd_edit_sv_pid).trim().to_string();
+            if photo_id.is_empty() {
+                let m = to_wide("请先填写目标 Photo ID。");
+                let t = to_wide("提示");
+                MessageBoxW(hwnd, m.as_ptr(), t.as_ptr(), MB_OK | MB_ICONWARNING);
+                return;
+            }
+            let parse_opt_f64 = |h: HWND, label: &str| -> Result<Option<f64>, ()> {
+                let raw = get_window_text_string(h).trim().to_string();
+                if raw.is_empty() {
+                    Ok(None)
+                } else {
+                    match raw.parse::<f64>() {
+                        Ok(v) => Ok(Some(v)),
+                        Err(_) => {
+                            let m = to_wide(&format!("{} 必须为合法数字。", label));
+                            let t = to_wide("参数无效");
+                            MessageBoxW(hwnd, m.as_ptr(), t.as_ptr(), MB_OK | MB_ICONWARNING);
+                            Err(())
+                        }
+                    }
+                }
+            };
+            let Ok(lat) = parse_opt_f64(g.hwnd_edit_sv_ulat, "新纬度") else { return; };
+            let Ok(lng) = parse_opt_f64(g.hwnd_edit_sv_ulng, "新经度") else { return; };
+            let Ok(heading) = parse_opt_f64(g.hwnd_edit_sv_uheading, "新朝向") else { return; };
+            let place_id = get_window_text_string(g.hwnd_edit_sv_uplace).trim().to_string();
+            let date_time = get_window_text_string(g.hwnd_edit_sv_utime).trim().to_string();
+            let tz_idx = SendMessageW(g.hwnd_cmb_sv_utz, CB_GETCURSEL, 0, 0) as i32;
+            let tz_hours = if (0..=24).contains(&tz_idx) { tz_idx - 12 } else { 8 };
+
+            let req = UpdatePhotoReq {
+                photo_id,
+                lat,
+                lng,
+                heading,
+                place_id,
+                date_time,
+                tz_hours,
+            };
+            let Some(_sv_guard) = g.mailbox.try_acquire_flag(BusySlot::StreetView) else {
+                g.state.logs.warn("[streetview] 已有街景上传或更新任务正在运行，请等待完成");
+                return;
+            };
+            let st = g.state.clone();
+            let mailbox = g.mailbox.clone();
+            g.state.rt_handle.spawn(async move {
+                let _sv_guard = _sv_guard;
+                let _busy = st.runtime.begin_op();
+                if let Err(e) = street_view::update_photo_metadata(&st.config, &st.logs, req).await {
+                    st.logs.error(format!("[streetview] {}", e));
+                }
+                mailbox.post(WM_APP_SV_STATUS, 0, 0);
+            });
         }
         _ => {}
     }

@@ -1,6 +1,6 @@
 /**
- * index.js —— 主站轻量引导核与模块协调器
- * 职责：会话隔离 BUS、存储/IDB 代理、Wasm/Worker 引导、SW 注册与自愈、数据切片同步与懒加载路由。
+ * index.js —— 主站外框引导核与模块协调器（运行于主线程）
+ * 负责会话隔离 BUS、IDB/存储代理、Wasm/Worker 预热、SW 注册自愈与数据切片同步。
  */
 if (window.top !== window.self) {
     window.top.location.href = location.origin;
@@ -27,7 +27,7 @@ window.sharedWasm = {
     compute_lcs_diff: null
 };
 
-// 触控板虚拟光标轻量占位：桌面端零加载，移动端加载 touchpad.js 后自动回放挂接
+// 触控板虚拟光标占位：桌面端零加载，触屏加载 touchpad.js 后回放挂接
 const isTouchDevice = window.matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window;
 window.VirtualCursor = {
     _pending: new Set(),
@@ -45,7 +45,7 @@ const BUS = window.__LITE_BUS__;
 const ctxId = window.top === window.self ? 'index' : window.childId;
 const isLocalEnv = (location.hostname === 'localhost' || location.hostname === '127.0.0.1' || location.protocol === 'file:') && location.port !== '9000';
 
-// 首屏同步从 URL #fragment 吸收本地伴生服务会话令牌并立即抹掉地址栏痕迹（不进入 HTTP 请求/日志）
+// 首屏从 URL #fragment 吸收本地令牌并抹掉地址栏痕迹，同时持锁供 /__auth 探测已有主页
 (function ingestLocalApiToken() {
     if (!isLocalEnv) return;
     const m = /^#__swamp_token=([0-9a-f]{64})$/i.exec(window.location.hash || '');
@@ -54,7 +54,6 @@ const isLocalEnv = (location.hostname === 'localhost' || location.hostname === '
         try { history.replaceState(null, '', window.location.pathname + window.location.search); }
         catch (_) { window.location.hash = ''; }
     }
-    // 持有同源共享 Web Lock，供 /__auth 探测已有主页标签页，避免重复开新窗（关闭或崩溃时内核自动释放）
     try {
         if (navigator.locks && typeof navigator.locks.request === 'function') {
             navigator.locks.request('swamp_main_tab', { mode: 'shared' }, () => new Promise(() => { })).catch(() => { });
@@ -67,6 +66,7 @@ window.callLocalApi = async (method, endpoint, body = null, options = {}) => {
     return m.callLocalApi(method, endpoint, body, options);
 };
 const $ = (selector) => document.querySelector(selector);
+const encodePathSegments = (p) => String(p ?? '').split('/').map(s => (s === '' || s === '.' || s === '..') ? s : encodeURIComponent(s)).join('/');
 const idleRun = (fn) => window.requestIdleCallback ? requestIdleCallback(fn) : setTimeout(fn, 50);
 const AsyncUtils = createAsyncUtils();
 const dbProxy = createDBProxy('MainDB', 'chunks');
@@ -82,6 +82,18 @@ let searchEngine = null;
 let searchUI = null;
 let commentsMod = null;
 let commentsPromise = null;
+let lightboxRenderSeq = 0;
+
+if (iframes.content) {
+    iframes.content.addEventListener('load', () => {
+        try {
+            const href = iframes.content.contentWindow && iframes.content.contentWindow.location.href;
+            if (href && href !== 'about:blank') lightboxRenderSeq++;
+        } catch (_) {
+            lightboxRenderSeq++;
+        }
+    });
+}
 
 SiteCore.cleanupLegacyTabKeys();
 const store = SiteCore.createStore({
@@ -104,7 +116,7 @@ store.bookmarkhtml_modifing = "0";
 store.lightbox_stauts = "0";
 store.jump_from_search = "0";
 
-// 并行预热 Wasm 与搜索模块栈
+// --- Wasm、搜索栈预热与文内搜索桥接 ---
 import('../wasm/compute_intensive_task_processor.min.js').then(async (wasmModule) => {
     await wasmModule.default();
     window.sharedWasm.format_markdown = wasmModule.format_markdown;
@@ -149,7 +161,7 @@ const searchStackReady = Promise.all([
     return null;
 });
 
-// 供 txt.html 等同源阅读器接入主站搜索 UI / 预览（按当前标签页天然隔离）
+// 供 TXT / PDF / EPUB 阅读器接入主站搜索框（__DOC_SEARCH_BRIDGE__ 为别名）
 let _pendingTxtProvider = null;
 window.__TXT_SEARCH_BRIDGE__ = {
     register(provider) {
@@ -177,23 +189,60 @@ window.__TXT_SEARCH_BRIDGE__ = {
 };
 window.__DOC_SEARCH_BRIDGE__ = window.__TXT_SEARCH_BRIDGE__;
 
-// 自愈内核内联保留，确保外部模块损坏时 ?repair=1 与远端指令仍可独立工作
+// --- 自愈内核与数据看门狗 ---
+
+// 自愈逻辑内联保留，确保外部模块损坏时 ?repair=1 与远端指令仍可执行
 const executeSelfHealing = async (reason, commandId = null) => {
     console.warn(`🚧  触发站点自愈程序: ${reason}`);
+    window._isBombing = true;
     try {
+        dbProxy.close();
+        try {
+            const bookMod = await import('./book-db.js');
+            if (bookMod && bookMod.BookDB && typeof bookMod.BookDB.close === 'function') {
+                bookMod.BookDB.close();
+            }
+        } catch (_) { }
+        try {
+            if (iframes.content) iframes.content.src = 'about:blank';
+            if (iframes.side) iframes.side.src = 'about:blank';
+            const mdFrame = document.getElementById('md-viewer-frame');
+            if (mdFrame) mdFrame.src = 'about:blank';
+        } catch (_) { }
+        await new Promise(resolve => setTimeout(resolve, 120));
+
+        const tasks = [];
         if ('serviceWorker' in navigator) {
-            const regs = await navigator.serviceWorker.getRegistrations();
-            for (const r of regs) await r.unregister();
+            tasks.push(
+                navigator.serviceWorker.getRegistrations()
+                    .then(regs => Promise.all(regs.map(r => r.unregister())))
+                    .catch(() => { })
+            );
         }
         if ('caches' in window) {
-            const keys = await caches.keys();
-            for (const k of keys) await caches.delete(k);
+            tasks.push(
+                caches.keys()
+                    .then(keys => Promise.all(keys.map(k => caches.delete(k))))
+                    .catch(() => { })
+            );
         }
         if (window.indexedDB) {
-            dbProxy.close();
-            indexedDB.deleteDatabase('MainDB');
-            indexedDB.deleteDatabase('BookDB');
+            const deleteIdb = (name) => new Promise(resolve => {
+                const timer = setTimeout(resolve, 2500);
+                const done = () => { clearTimeout(timer); resolve(); };
+                try {
+                    const req = indexedDB.deleteDatabase(name);
+                    req.onsuccess = done;
+                    req.onerror = done;
+                    req.onblocked = done;
+                } catch (_) {
+                    done();
+                }
+            });
+            tasks.push(Promise.all(['MainDB', 'BookDB'].map(deleteIdb)));
         }
+        await Promise.all(tasks);
+
         sessionStorage.removeItem("sw_reload_guard");
         sessionStorage.removeItem("ss_restore_strict");
         if (commandId !== null && commandId !== undefined) {
@@ -245,7 +294,7 @@ window.addEventListener('pagehide', (e) => {
     }
 });
 
-// 懒加载子模块上下文工厂
+// --- 懒加载子模块桥接 ---
 function getAudioCtx() {
     return { store, emitEvent, adjSearchRight: adj_search_right };
 }
@@ -301,6 +350,9 @@ function getCommentsModule() {
     return commentsPromise;
 }
 
+
+// --- BUS 路由、快捷键与冷启动入口 ---
+
 BUS.addEventListener('message', async (e) => {
     const { type, payload, target, from, tabId } = e.data || {};
     if (tabId && tabId !== TAB_ID && type !== 'SEARCH_CACHE_CLEARED') return;
@@ -327,6 +379,7 @@ BUS.addEventListener('message', async (e) => {
             break;
 
         case "reload_bookmark": {
+            lightboxRenderSeq++;
             if ('caches' in window) {
                 try {
                     const keys = await caches.keys();
@@ -343,43 +396,57 @@ BUS.addEventListener('message', async (e) => {
             break;
         }
 
-        case "image":
+        case "image": {
             window.__TXT_SEARCH_BRIDGE__.unregister();
+            const seq = ++lightboxRenderSeq;
+            const targetPath = store.image_path;
             store.resource_type = "image";
             iframes.content.src = "about:blank";
             setTimeout(async () => {
+                if (seq !== lightboxRenderSeq || store.resource_type !== "image" || store.image_path !== targetPath) return;
                 const { renderLightboxFrame } = await import('./lightbox-logic.js');
-                renderLightboxFrame(iframes.content, 'image', { imageUrl: '../' + store.image_path });
+                if (seq !== lightboxRenderSeq || store.resource_type !== "image" || store.image_path !== targetPath) return;
+                renderLightboxFrame(iframes.content, 'image', { imageUrl: '../' + encodePathSegments(targetPath) });
             }, 20);
             break;
+        }
 
-        case "video":
+        case "video": {
             window.__TXT_SEARCH_BRIDGE__.unregister();
+            const seq = ++lightboxRenderSeq;
+            const targetPath = store.video_path;
             store.resource_type = "video";
             iframes.content.src = "about:blank";
             setTimeout(async () => {
+                if (seq !== lightboxRenderSeq || store.resource_type !== "video" || store.video_path !== targetPath) return;
                 const { renderLightboxFrame } = await import('./lightbox-logic.js');
-                renderLightboxFrame(iframes.content, 'video', { videoUrl: '../' + store.video_path });
+                if (seq !== lightboxRenderSeq || store.resource_type !== "video" || store.video_path !== targetPath) return;
+                renderLightboxFrame(iframes.content, 'video', { videoUrl: '../' + encodePathSegments(targetPath) });
             }, 20);
             break;
+        }
 
         case "pdf":
+            lightboxRenderSeq++;
             window.__TXT_SEARCH_BRIDGE__.unregister();
             await AsyncUtils.wait(50);
-            $("#content").src = "src/tpl/pdf.html?file=../../" + store.pdf_path;
+            $("#content").src = "src/tpl/pdf.html?file=" + encodeURIComponent("../../" + encodePathSegments(store.pdf_path));
             $("#content").focus();
             break;
 
         case "epub":
+            lightboxRenderSeq++;
             window.__TXT_SEARCH_BRIDGE__.unregister();
             await AsyncUtils.wait(50);
-            $("#content").src = "src/tpl/epub.html?book=../../" + store.epub_path;
+            $("#content").src = "src/tpl/epub.html?book=" + encodeURIComponent("../../" + encodePathSegments(store.epub_path));
             $("#content").focus();
             break;
 
         case "txt":
+            lightboxRenderSeq++;
+            window.__TXT_SEARCH_BRIDGE__.unregister();
             await AsyncUtils.wait(50);
-            $("#content").src = "src/tpl/txt.html?file=../../" + store.txt_path;
+            $("#content").src = "src/tpl/txt.html?file=" + encodeURIComponent("../../" + encodePathSegments(store.txt_path));
             $("#content").focus();
             break;
 
@@ -507,9 +574,16 @@ document.addEventListener('keydown', (e) => {
 });
 
 window.onload = async () => {
-    if (window.location.search.includes('repair=1')) {
-        executeSelfHealing("URL手动指令");
-        return;
+    const initParams = new URLSearchParams(window.location.search);
+    if (initParams.get('repair') === '1') {
+        if (confirm("检测到站点修复参数 (?repair=1)。\n\n确认清理离线缓存、历史快照与电子书提取缓存并重新加载？\n（不会删除摘抄本、已阅标记与个人收藏）")) {
+            executeSelfHealing("URL手动指令");
+            return;
+        }
+        initParams.delete('repair');
+        const nextQuery = initParams.toString();
+        const nextUrl = window.location.pathname + (nextQuery ? '?' + nextQuery : '') + window.location.hash;
+        try { history.replaceState(null, '', nextUrl); } catch (_) { }
     }
 
     setTimeout(() => {
@@ -564,6 +638,9 @@ window.onload = async () => {
         import('./touchpad.js').then(m => m.initTouchpad({ emitEvent }));
     }
 };
+
+
+// --- BUS 与 MainDB 代理 ---
 
 function emitEvent(type, payload, target = '*') {
     if (!window.__LITE_BUS__) return;
@@ -714,6 +791,9 @@ function createDBProxy(dbName, storeName) {
     };
 }
 
+
+// --- Worker 托管与数据切片同步 ---
+
 function createSearchWorker() {
     const worker = new Worker('src/js/worker.js', { type: 'module' });
     worker.onmessage = async (e) => {
@@ -743,11 +823,13 @@ function createSearchWorker() {
     worker.onerror = (err) => {
         console.error('[Worker] 运行时错误:', err);
         window._engineError = '搜索引擎线程崩溃，请刷新或修复站点';
+        if (searchEngine && typeof searchEngine.handleWorkerError === 'function') searchEngine.handleWorkerError();
         if (searchUI) searchUI.sfPaintStatus(window._currentRenderedKeyword || ($("#searchInput") && $("#searchInput").value) || '');
     };
     worker.onmessageerror = (err) => {
         console.error('[Worker] 消息反序列化失败:', err);
         window._engineError = '搜索引擎通信异常';
+        if (searchEngine && typeof searchEngine.handleWorkerError === 'function') searchEngine.handleWorkerError();
         if (searchUI) searchUI.sfPaintStatus(window._currentRenderedKeyword || ($("#searchInput") && $("#searchInput").value) || '');
     };
     if (commentsMod && commentsMod.model && commentsMod.model.index) {
@@ -821,7 +903,6 @@ async function loadScripts(concurrency) {
             emitEvent('RENDER_CATALOG', window.lite_data, 'side');
         }
 
-        // 无快照时跳过加载 snapshot.js，直接呈现书签首页
         if (!sessionStorage.getItem("ss_restore_strict")) {
             window._snapRestored = true;
             iframes.content.src = "src/tpl/bookmark.html";
@@ -1064,7 +1145,6 @@ async function finalizeDataLoad() {
                 }
             }
 
-            // 仅当发现书籍被删除时彻底清理 BookDB 对应条目（对账 + 明确删除列表双重兜底）
             try {
                 const { BookDB, normalizeBookKey } = await import('./book-db.js');
                 const validKeys = new Set();
@@ -1127,6 +1207,9 @@ function prewarmBaseFont() {
         } catch (_) { }
     })();
 }
+
+
+// --- SW 注册、灯箱与布局工具 ---
 
 function snap() {
     if ('serviceWorker' in navigator) {

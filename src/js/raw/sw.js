@@ -1,13 +1,97 @@
-importScripts('/src/js/core-list.js?v=1795699236653');
+/**
+ * sw.js —— 站点 Service Worker（离线缓存、增量更新、历史快照留档与版本防撕裂）
+ * 运行于 ServiceWorkerGlobalScope；经构建器压缩后输出至仓库根目录 /sw.js。
+ */
+importScripts('/src/js/core-list.js?v=1795784063176');
 const _scMeta = typeof FILE_MANIFEST === 'object' && FILE_MANIFEST && FILE_MANIFEST['/src/js/site-core.js'];
 importScripts('/src/js/site-core.js' + (_scMeta && _scMeta.hash ? ('?v=' + _scMeta.hash) : ''));
 
-self.SW_VERSION = '1795699236653';
+self.SW_VERSION = '1795784063176';
 self.EMERGENCY = 'repair_command_id=2';
 
+// 缓存桶与环境标识
 const CACHE_NAME_CORE = 'core-cache-' + BUILD_VERSION;
 const CACHE_NAME_MEDIA = 'media-cache';
-const MAX_HTML_SNAPSHOT_HISTORY = 10;
+const IS_LOCAL_MODE = (
+    self.location.hostname === 'localhost' ||
+    self.location.hostname === '127.0.0.1' ||
+    self.location.protocol === 'file:'
+) && self.location.port !== '9000';
+
+// 安装与缓存可调参数
+const MAX_HTML_SNAPSHOT_HISTORY = 10;   // 单篇 HTML / MD 最多保留历史快照数
+const CORE_BUNDLE_THRESHOLD = 15;       // 变更超过此文件数时走 core-bundle.json 批量解包
+const FETCH_TIMEOUT_MS = 30000;         // 单次资源拉取超时 (ms)
+
+// 关键资源清单（任一拉取失败即中止 SW 安装）
+const CRITICAL_URLS = new Set([
+    '/',
+    '/index.html',
+    '/src/js/site-core.js',
+    '/src/js/index.js',
+    '/src/js/shared-utils.js',
+    '/src/js/book-db.js',
+    '/src/js/search-engine.js',
+    '/src/js/search-preview.js',
+    '/src/js/search-ui.js',
+    '/src/js/snapshot.js',
+    '/src/js/side.js',
+    '/src/js/content.js',
+    '/src/js/data/lite_data.js',
+    '/src/js/worker.js',
+    '/src/wasm/compute_intensive_task_processor.min.js',
+    '/src/wasm/compute_intensive_task_processor_bg.wasm'
+]);
+
+// 运行态句柄
+const inFlightRequests = new Map();
+let mainDbOpenPromise = null;
+
+
+// --- 清单合成、CRC32 校验与网络辅助 ---
+
+const CRC32_TABLE = (() => {
+    const t = new Uint32Array(256);
+    for (let i = 0; i < 256; i++) {
+        let c = i;
+        for (let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+        t[i] = c >>> 0;
+    }
+    return t;
+})();
+
+function calcCrc32Hex(buf) {
+    const bytes = new Uint8Array(buf);
+    let crc = 0xFFFFFFFF;
+    for (let i = 0; i < bytes.length; i++) {
+        crc = CRC32_TABLE[(crc ^ bytes[i]) & 0xFF] ^ (crc >>> 8);
+    }
+    return ((crc ^ 0xFFFFFFFF) >>> 0).toString(16);
+}
+
+async function fetchVerifiedAsset(url, expectedHash) {
+    const reqUrl = expectedHash ? `${url}?v=${encodeURIComponent(expectedHash)}` : url;
+    let res = await fetchWithLock(new Request(reqUrl, { cache: 'no-cache' }));
+    if (!res || !res.ok) throw new Error(`HTTP ${res ? res.status : 'ERR'}`);
+    if (!expectedHash) return res;
+
+    let buf = await res.arrayBuffer();
+    if (calcCrc32Hex(buf) !== expectedHash) {
+        const retryUrl = `${url}?v=${encodeURIComponent(expectedHash)}&_r=${Date.now()}`;
+        const retryRes = await fetchWithLock(new Request(retryUrl, { cache: 'reload' }));
+        if (!retryRes || !retryRes.ok) throw new Error(`HTTP ${retryRes ? retryRes.status : 'ERR'}`);
+        buf = await retryRes.arrayBuffer();
+        if (calcCrc32Hex(buf) !== expectedHash) {
+            throw new Error(`CRC32 mismatch for ${url}`);
+        }
+        res = retryRes;
+    }
+
+    const headers = new Headers(res.headers);
+    headers.delete('content-encoding');
+    headers.set('content-length', String(buf.byteLength));
+    return new Response(buf, { status: res.status, statusText: res.statusText, headers });
+}
 
 function sortFatDataFiles(names) {
     return names.slice().sort((a, b) => {
@@ -35,12 +119,6 @@ function buildCoreListResponse(manifestObj, version, isOfflineFallback) {
         headers: { 'Content-Type': 'application/javascript; charset=utf-8' }
     });
 }
-const IS_LOCAL_MODE = (
-    self.location.hostname === 'localhost' ||
-    self.location.hostname === '127.0.0.1' ||
-    self.location.protocol === 'file:'
-) && self.location.port !== '9000';
-const inFlightRequests = new Map();
 
 const getConnectionType = () => {
     const conn = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
@@ -48,7 +126,45 @@ const getConnectionType = () => {
     return conn.effectiveType;
 };
 
-let mainDbOpenPromise = null;
+async function fetchWithLock(request, options = {}) {
+    const urlStr = typeof request === 'string' ? request : request.url;
+
+    if (inFlightRequests.has(urlStr)) {
+        const sharedResponse = await inFlightRequests.get(urlStr);
+        return sharedResponse.clone();
+    }
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => {
+        controller.abort();
+    }, FETCH_TIMEOUT_MS);
+
+    const fetchOptions = { ...options, signal: controller.signal };
+
+    const fetchPromise = fetch(request, fetchOptions)
+        .then(res => {
+            clearTimeout(timeoutId);
+            inFlightRequests.delete(urlStr);
+            return res;
+        })
+        .catch(err => {
+            clearTimeout(timeoutId);
+            inFlightRequests.delete(urlStr);
+            throw err;
+        });
+
+    inFlightRequests.set(urlStr, fetchPromise);
+    const finalResponse = await fetchPromise;
+    return finalResponse.clone();
+}
+
+async function compressText(text) {
+    const stream = new Blob([text]).stream().pipeThrough(new CompressionStream('deflate-raw'));
+    return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+
+
+// --- MainDB 连接与日志 ---
 
 function openMainDB() {
     if (mainDbOpenPromise) return mainDbOpenPromise;
@@ -81,6 +197,9 @@ const writeLog = async (msg) => {
     } catch (e) { }
 };
 
+
+// --- Service Worker 生命周期事件 ---
+
 self.addEventListener('install', event => {
     event.waitUntil((async () => {
         const newCache = await caches.open(CACHE_NAME_CORE);
@@ -106,26 +225,9 @@ self.addEventListener('install', event => {
             }
         }
 
-        const CRITICAL_URLS = new Set([
-            '/',
-            '/index.html',
-            '/src/js/site-core.js',
-            '/src/js/index.js',
-            '/src/js/shared-utils.js',
-            '/src/js/book-db.js',
-            '/src/js/search-engine.js',
-            '/src/js/search-preview.js',
-            '/src/js/search-ui.js',
-            '/src/js/snapshot.js',
-            '/src/js/side.js',
-            '/src/js/content.js',
-            '/src/js/data/lite_data.js',
-            '/src/js/worker.js',
-            '/src/wasm/compute_intensive_task_processor.min.js',
-            '/src/wasm/compute_intensive_task_processor_bg.wasm'
-        ]);
         const cachedUrls = new Set();
         const fallbackUrls = new Set();
+        const pendingLogs = [];
 
         const fetchWithConcurrency = async (urls, maxConcurrent) => {
             const results = [];
@@ -134,15 +236,13 @@ self.addEventListener('install', event => {
             for (const url of urls) {
                 const task = (async () => {
                     try {
-                        const response = await fetchWithLock(new Request(url, { cache: 'no-cache' }));
-                        if (!response || !response.ok) {
-                            throw new Error(`HTTP ${response ? response.status : 'ERR'}`);
-                        }
+                        const expectedHash = FILE_MANIFEST[url] && FILE_MANIFEST[url].hash ? String(FILE_MANIFEST[url].hash) : '';
+                        const response = await fetchVerifiedAsset(url, expectedHash);
                         if (url !== '/') {
                             if (oldManifest[url]) {
-                                await writeLog(`🔄 [SW] 更新文件: ${url}`);
+                                pendingLogs.push(`🔄 [SW] 更新文件: ${url}`);
                             } else if (isUpdate) {
-                                await writeLog(`✅ [SW] 新增文件: ${url}`);
+                                pendingLogs.push(`✅ [SW] 新增文件: ${url}`);
                             }
                         }
                         await newCache.put(url, response);
@@ -187,7 +287,6 @@ self.addEventListener('install', event => {
             });
         });
 
-        const CORE_BUNDLE_THRESHOLD = 15;
         let bundleUpdates = [];
         let standaloneUpdates = [];
         const deferredJobs = [];
@@ -216,26 +315,6 @@ self.addEventListener('install', event => {
                             const oldText = await oldRes.text();
                             const compressedData = await compressText(oldText);
 
-                            const db = await openMainDB();
-
-                            const tx = db.transaction('html_snapshots', 'readwrite');
-                            const store = tx.objectStore('html_snapshots');
-
-                            const existing = await new Promise(resolve => {
-                                const r = store.get(url);
-                                r.onsuccess = () => resolve(r.result || null);
-                                r.onerror = () => resolve(null);
-                            });
-
-                            let history = [];
-                            if (existing) {
-                                if (Array.isArray(existing.history)) {
-                                    history = existing.history.slice();
-                                } else if (typeof existing.text === 'string') {
-                                    history = [{ text: existing.text, ts: existing.ts || Date.now() }];
-                                }
-                            }
-
                             let snapTs = Date.now();
                             if (url.startsWith('/html/')) {
                                 const stampMatch = oldText.match(/id=['"]anchor['"][^>]*>\s*(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})/);
@@ -253,24 +332,42 @@ self.addEventListener('install', event => {
                                     if (Number.isFinite(parsedTs) && parsedTs > 0) snapTs = parsedTs;
                                 }
                             }
-                            const dupByTs = history.some(item => item && item.ts === snapTs);
-                            const lastSnap = history.length > 0 ? history[history.length - 1] : null;
-                            let dupByBytes = false;
-                            if (lastSnap && lastSnap.text instanceof Uint8Array && lastSnap.text.length === compressedData.length) {
-                                dupByBytes = true;
-                                for (let bi = 0; bi < compressedData.length; bi++) {
-                                    if (lastSnap.text[bi] !== compressedData[bi]) { dupByBytes = false; break; }
-                                }
-                            }
-                            if (!dupByTs && !dupByBytes) {
-                                history.push({ text: compressedData, ts: snapTs, compressed: true });
-                                if (history.length > MAX_HTML_SNAPSHOT_HISTORY) {
-                                    history = history.slice(history.length - MAX_HTML_SNAPSHOT_HISTORY);
-                                }
-                                store.put({ history }, url);
-                            }
+
+                            const db = await openMainDB();
                             await new Promise(resolve => {
+                                const tx = db.transaction('html_snapshots', 'readwrite');
+                                const store = tx.objectStore('html_snapshots');
                                 tx.oncomplete = tx.onerror = tx.onabort = () => resolve();
+
+                                const r = store.get(url);
+                                r.onsuccess = () => {
+                                    const existing = r.result || null;
+                                    let history = [];
+                                    if (existing) {
+                                        if (Array.isArray(existing.history)) {
+                                            history = existing.history.slice();
+                                        } else if (typeof existing.text === 'string') {
+                                            history = [{ text: existing.text, ts: existing.ts || Date.now() }];
+                                        }
+                                    }
+
+                                    const dupByTs = history.some(item => item && item.ts === snapTs);
+                                    const lastSnap = history.length > 0 ? history[history.length - 1] : null;
+                                    let dupByBytes = false;
+                                    if (lastSnap && lastSnap.text instanceof Uint8Array && lastSnap.text.length === compressedData.length) {
+                                        dupByBytes = true;
+                                        for (let bi = 0; bi < compressedData.length; bi++) {
+                                            if (lastSnap.text[bi] !== compressedData[bi]) { dupByBytes = false; break; }
+                                        }
+                                    }
+                                    if (!dupByTs && !dupByBytes) {
+                                        history.push({ text: compressedData, ts: snapTs, compressed: true });
+                                        if (history.length > MAX_HTML_SNAPSHOT_HISTORY) {
+                                            history = history.slice(history.length - MAX_HTML_SNAPSHOT_HISTORY);
+                                        }
+                                        store.put({ history }, url);
+                                    }
+                                };
                             });
                         }
                     } catch (e) {
@@ -350,7 +447,7 @@ self.addEventListener('install', event => {
                 }
                 await Promise.all(putPromises);
                 if (isUpdate) {
-                    await writeLog(`✅ [SW] 从大包解压并缓存了 ${putPromises.length} 个文件`);
+                    pendingLogs.push(`✅ [SW] 从大包解压并缓存了 ${putPromises.length} 个文件`);
                 }
             } catch (err) {
                 console.error("❌ [SW] Core bundle parsing failed", err);
@@ -375,18 +472,7 @@ self.addEventListener('install', event => {
             const newManifestKeys = Object.keys(FILE_MANIFEST);
             const deletedFiles = Object.keys(oldManifest).filter(url => !newManifestKeys.includes(url));
             for (const url of deletedFiles) {
-                if (url !== '/') await writeLog(`⛔ [SW] 删除文件: ${url}`);
-                if (url.startsWith('/ebook/')) {
-                    deferredJobs.push(async () => {
-                        try {
-                            const mediaCache = await caches.open(CACHE_NAME_MEDIA);
-                            await mediaCache.delete(url, { ignoreSearch: true });
-                            const enc = encodeURI(url);
-                            if (enc !== url) await mediaCache.delete(enc, { ignoreSearch: true });
-                        } catch (_) { }
-                        await deleteBookFromBookDB(url);
-                    });
-                }
+                if (url !== '/') pendingLogs.push(`⛔ [SW] 删除文件: ${url}`);
             }
         }
 
@@ -413,6 +499,11 @@ self.addEventListener('install', event => {
                 if (k.startsWith('/src/js/data/fat_data_') && k.endsWith('.json')) {
                     committedManifest[k] = FILE_MANIFEST[k];
                 }
+            }
+        }
+        if (pendingLogs.length > 0) {
+            for (const msg of pendingLogs) {
+                await writeLog(msg);
             }
         }
         const manifestSaveUrl = new URL('/sw-manifest.json', self.location.origin).href;
@@ -487,8 +578,7 @@ self.addEventListener('fetch', event => {
         return;
     }
 
-    // 线上模式：core-list.js 严格与当前激活 SW 的 BUILD_VERSION / FILE_MANIFEST 对齐，
-    // 防止新版 SW waiting 期间旧页面拉回新清单造成“旧代码 + 新数据”版本撕裂
+    // 线上模式由当前活跃 SW 合成 core-list.js，防止新版 waiting 期间旧页面拉回新清单造成版本撕裂
     if (url.pathname.endsWith('core-list.js')) {
         event.respondWith((async () => {
             if (typeof FILE_MANIFEST === 'object' && FILE_MANIFEST && Object.keys(FILE_MANIFEST).length > 0) {
@@ -549,6 +639,15 @@ self.addEventListener('fetch', event => {
         url.pathname.includes('/third/pdfjs/web/images/') ||
         url.pathname.match(/\.(woff|woff2|eot|ttf|svg)$/)
     ) {
+        if (event.request.headers.has('range')) {
+            event.respondWith(
+                fetch(event.request).catch(async () => {
+                    const cache = await caches.open(CACHE_NAME_MEDIA);
+                    return (await cache.match(event.request)) || new Response('', { status: 503 });
+                })
+            );
+            return;
+        }
         const isFontAsset = /\.(?:woff2?|eot|ttf)$/i.test(url.pathname);
         event.respondWith(
             caches.open(CACHE_NAME_MEDIA).then(async (cache) => {
@@ -593,90 +692,3 @@ self.addEventListener('fetch', event => {
         );
     }
 });
-
-async function fetchWithLock(request, options = {}) {
-    const urlStr = typeof request === 'string' ? request : request.url;
-
-    if (inFlightRequests.has(urlStr)) {
-        const sharedResponse = await inFlightRequests.get(urlStr);
-        return sharedResponse.clone();
-    }
-
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => {
-        controller.abort();
-    }, 30000);
-
-    const fetchOptions = { ...options, signal: controller.signal };
-
-    const fetchPromise = fetch(request, fetchOptions)
-        .then(res => {
-            clearTimeout(timeoutId);
-            inFlightRequests.delete(urlStr);
-            return res;
-        })
-        .catch(err => {
-            clearTimeout(timeoutId);
-            inFlightRequests.delete(urlStr);
-            throw err;
-        });
-
-    inFlightRequests.set(urlStr, fetchPromise);
-    const finalResponse = await fetchPromise;
-    return finalResponse.clone();
-}
-
-async function compressText(text) {
-    const stream = new Blob([text]).stream().pipeThrough(new CompressionStream('deflate-raw'));
-    return new Uint8Array(await new Response(stream).arrayBuffer());
-}
-
-async function deleteBookFromBookDB(rawUrl) {
-    try {
-        if (typeof indexedDB === 'undefined') return;
-        let key = String(rawUrl || '').split('#')[0].split('?')[0];
-        if (/%[0-9A-Fa-f]{2}/.test(key)) {
-            try { key = decodeURIComponent(key); } catch (_) {
-                try { key = decodeURI(key); } catch (__) { }
-            }
-        }
-        key = key.replace(/^\/+/, '');
-        if (!key) return;
-
-        if (typeof indexedDB.databases === 'function') {
-            const dbs = await indexedDB.databases();
-            if (!dbs.some(d => d && d.name === 'BookDB')) return;
-        }
-
-        const db = await new Promise((resolve) => {
-            const req = indexedDB.open('BookDB');
-            req.onsuccess = () => resolve(req.result);
-            req.onerror = () => resolve(null);
-        });
-        if (!db) return;
-        try {
-            const names = [];
-            if (db.objectStoreNames.contains('book_extracts')) names.push('book_extracts');
-            if (db.objectStoreNames.contains('search_cache')) names.push('search_cache');
-            if (names.length > 0) {
-                await new Promise((resolve) => {
-                    const tx = db.transaction(names, 'readwrite');
-                    if (names.includes('book_extracts')) tx.objectStore('book_extracts').delete(key);
-                    if (names.includes('search_cache')) {
-                        const os = tx.objectStore('search_cache');
-                        if (os.indexNames.contains('by_book')) {
-                            const curReq = os.index('by_book').openKeyCursor(IDBKeyRange.only(key));
-                            curReq.onsuccess = () => {
-                                const cur = curReq.result;
-                                if (cur) { os.delete(cur.primaryKey); cur.continue(); }
-                            };
-                        }
-                    }
-                    tx.oncomplete = tx.onerror = tx.onabort = () => resolve();
-                });
-            }
-        } finally {
-            db.close();
-        }
-    } catch (_) { }
-}

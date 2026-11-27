@@ -1,7 +1,10 @@
 /**
- * snapshot.js —— 页面状态快照捕捉与刷新恢复模块（按需懒加载）
+ * snapshot.js —— 页面现场快照捕捉与热更新恢复（运行于主线程，按需懒加载）
  */
 import { $ } from './shared-utils.js';
+
+
+// --- 现场捕捉 ---
 
 export function takeSnapshot(ctx, reload = false) {
     const { store, iframes } = ctx;
@@ -61,8 +64,11 @@ export function takeSnapshot(ctx, reload = false) {
             if (!aPath && audioEl.src) {
                 try {
                     aPath = decodeURIComponent(new URL(audioEl.src).pathname);
-                    if (aPath.includes('/audio/')) aPath = "../audio/" + aPath.split('/audio/')[1];
+                    if (aPath.includes('/audio/')) aPath = "audio/" + aPath.split('/audio/')[1];
                 } catch (e) { }
+            }
+            if (typeof aPath === 'string') {
+                aPath = aPath.replace(/^(?:\.\.\/|\.\/|\/)+/, '');
             }
             const activeBtns = Array.from(document.querySelectorAll('button'))
                 .filter(b => b.classList.contains('active2'))
@@ -88,6 +94,9 @@ export function takeSnapshot(ctx, reload = false) {
         window.location.reload();
     }
 }
+
+
+// --- 刷新恢复与脏状态清理 ---
 
 export async function restoreSnap(ctx) {
     const { store, iframes, AsyncUtils, emitEvent, adjSearchRight, openAudio, runSearch } = ctx;
@@ -225,10 +234,12 @@ export async function restoreSnap(ctx) {
 
     try {
         const a = state.audio_strict;
-        if (a) {
-            const targetPath = a.path;
-            const fileName = targetPath.split('/').pop();
-            const dir = targetPath.split(fileName)[0];
+        if (a && a.path) {
+            const normAudio = (p) => String(p || '').replace(/^(?:\.\.\/|\.\/|\/)+/, '');
+            const targetPath = normAudio(a.path);
+            const lastSlash = targetPath.lastIndexOf('/');
+            const fileName = lastSlash >= 0 ? targetPath.slice(lastSlash + 1) : targetPath;
+            const dir = lastSlash >= 0 ? targetPath.slice(0, lastSlash + 1) : 'audio/';
 
             await AsyncUtils.waitFor(() => window.lite_data && Object.keys(window.lite_data).length > 0, 15000);
 
@@ -248,11 +259,11 @@ export async function restoreSnap(ctx) {
 
             await AsyncUtils.waitFor(() =>
                 Array.from(document.querySelectorAll('#_playlist li'))
-                    .some(li => li.dataset.path === targetPath)
+                    .some(li => normAudio(li.dataset.path) === targetPath)
                 , 5000);
 
             const targetLi = Array.from(document.querySelectorAll('#_playlist li'))
-                .find(li => li.dataset.path === targetPath);
+                .find(li => normAudio(li.dataset.path) === targetPath);
             targetLi?.click();
 
             await AsyncUtils.waitFor(() => {

@@ -1,9 +1,13 @@
 /**
- * audio-player.js —— 悬浮音乐播放器模块（按需懒加载）
+ * audio-player.js —— 悬浮音乐播放器（运行于主线程，按需懒加载）
  */
-import { $, saveMediaPosition } from './shared-utils.js';
+import { $, saveMediaPosition, resumeMediaPosition, encodePathSegments } from './shared-utils.js';
 
+// 运行态标记
 let pagehideBound = false;
+
+
+// --- 路径规范与收藏读取 ---
 
 function bindPagehideSave() {
     if (pagehideBound) return;
@@ -32,6 +36,9 @@ function getCleanFavList(store) {
     const sc = window.SiteCore || (window.top && window.top.SiteCore);
     return sc ? sc.sanitizeAudioList(raw) : raw.filter(x => typeof x === 'string');
 }
+
+
+// --- 播放器渲染与入口 ---
 
 export function openAudioPlayer(_song, _level, ctx, opts = {}) {
     const { store, emitEvent, adjSearchRight } = ctx;
@@ -233,7 +240,10 @@ export function openAudioPlayer(_song, _level, ctx, opts = {}) {
         const targetLi = playlistElement.children[currentSongIndex];
         if (!targetLi) return;
         saveMediaPosition(audioPlayer);
-        audioPlayer.src = targetLi.dataset.path;
+        const rawPath = targetLi.dataset.path || '';
+        audioPlayer.dataset.path = rawPath;
+        audioPlayer.src = encodePathSegments(rawPath);
+        resumeMediaPosition(audioPlayer, rawPath);
         audioPlayer.play().catch(() => { });
         syncUIState();
         backfill();

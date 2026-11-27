@@ -1,6 +1,6 @@
 /**
- * pdf-viewer.js —— PDF.js v6.5.438 站内增强与 Wasm 书内搜索桥接模块
- * 兼容严格 CSP（script-src 'self' 'wasm-unsafe-eval'; style-src 'self'），全程零内联脚本与零内联样式属性。
+ * pdf-viewer.js —— PDF.js v6.5.438 站内增强与 Wasm 书内搜索桥接（运行于 #content iframe）
+ * 严格遵循无 'unsafe-inline' CSP，提供 BookDB 文本预提取、大纲分段与 CSS Highlight 着色。
  */
 import {
     searchHlTier,
@@ -14,9 +14,7 @@ import {
 } from './shared-utils.js';
 import { BookDB, normalizeBookKey, buildBookSearchCacheKey } from './book-db.js';
 
-// =========================================================================
-// 0. 基础环境：VirtualCursor、SiteCore、BUS 通信、安全选项双锁
-// =========================================================================
+// --- 基础环境、BUS 通信与安全选项双锁 ---
 if (window.top && window.top.VirtualCursor) {
     try { window.top.VirtualCursor.attach(window); } catch (_) { }
 }
@@ -48,7 +46,7 @@ function emitEvent(type, payload, target = '*') {
     } catch (_) { }
 }
 
-// 监听 webviewerloaded（同时挂在 document 与 parent.document，覆盖同源 iframe 派发）
+// 双监听 document 与 parent.document，确保同源 iframe 场景锁死 enableScripting
 function lockPdfSecurityOptions(evt) {
     if (evt && evt.detail && evt.detail.source && evt.detail.source !== window) return;
     const opts = window.PDFViewerApplicationOptions;
@@ -64,9 +62,7 @@ try {
 } catch (_) { }
 lockPdfSecurityOptions();
 
-// =========================================================================
-// 1. 交互增强：横向滚轮、双击切换手型/选择、反色、中击全屏、拼音、摘抄
-// =========================================================================
+// --- 交互增强（滚轮、反色、全屏、拼音、摘抄） ---
 const viewerCont = document.getElementById('viewerContainer');
 const scrollHor = document.getElementById('scrollHorizontal');
 const cursorHan = document.getElementById('cursorHandTool');
@@ -157,7 +153,6 @@ try {
     }
 } catch (_) { }
 
-// 拼音悬浮提示
 (function initPinyinTooltip() {
     const tooltip = document.createElement('div');
     tooltip.className = 'pinyin-tooltip';
@@ -187,7 +182,6 @@ try {
     });
 })();
 
-// 划词摘抄浮窗
 (function initExcerptTrigger() {
     let btn = document.getElementById('excerpt-pop-btn');
     if (btn) return;
@@ -327,9 +321,7 @@ try {
     });
 })();
 
-// =========================================================================
-// 2. CSS Custom Highlight + PDF.js v6.5.438 文本层适配
-// =========================================================================
+// --- CSS Custom Highlight 与 v6 文本层适配 ---
 const HL_SUPPORTED = !!(window.CSS && CSS.highlights && typeof Highlight !== 'undefined');
 const TIER_SIZE = 6;
 const pdfHlPools = new Array(TIER_SIZE * 3).fill(null);
@@ -368,8 +360,7 @@ function publishPdfHighlights() {
     else CSS.highlights.delete('pdf-active-hit');
 }
 
-// 兼容 PDF.js v6.5.438：TextLayerBuilder.#renderingDone 私有化，
-// 改由 pageView._textHighlighter（即 textLayer.highlighter）读取 textDivs / textContentItemsStr / enabled
+// PDF.js v6 私有化 TextLayerBuilder.#renderingDone，改读 pageView._textHighlighter
 function getRenderedTextLayerInfo(pageView) {
     if (!pageView || !pageView.textLayer) return null;
     const hl = pageView._textHighlighter || pageView.textLayer.highlighter;
@@ -379,7 +370,6 @@ function getRenderedTextLayerInfo(pageView) {
             textContentItemsStr: Array.isArray(hl.textContentItemsStr) ? hl.textContentItemsStr : []
         };
     }
-    // 兜底兼容旧结构
     const tl = pageView.textLayer;
     if (tl.renderingDone && Array.isArray(tl.textDivs) && tl.textDivs.length > 0) {
         return {
@@ -396,6 +386,7 @@ const State = {
     numPages: 0,
     title: '',
     bookKey: '',
+    fingerprint: '',
     pages: [],
     extractedCount: 0,
     extractDone: false,
@@ -481,9 +472,7 @@ BUS.addEventListener('message', (e) => {
     if (type === 'DESTROY_HIGHLIGHT') clearAllHighlights();
 });
 
-// =========================================================================
-// 3. 文本拼接、大纲解析与后台静默预提取（BookDB 持久化）
-// =========================================================================
+// --- 文本提取、大纲分段与 BookDB 缓存 ---
 function buildPageTextFromStrings(strList) {
     const items = new Array(strList.length);
     let text = '';
@@ -670,7 +659,8 @@ function startBackgroundPreExtraction(pdfDoc, docGen) {
         if (bookKey) {
             const cached = await BookDB.getExtract(bookKey);
             if (docGen !== State.docGen) return;
-            if (cached && cached.kind === 'pdf6' && cached.numPages === numPages && Array.isArray(cached.pages) && cached.pages.length === numPages) {
+            const fpMatch = !State.fingerprint || cached?.fingerprint === State.fingerprint;
+            if (cached && cached.kind === 'pdf6' && fpMatch && cached.numPages === numPages && Array.isArray(cached.pages) && cached.pages.length === numPages) {
                 State.pages = cached.pages;
                 State.extractedCount = numPages;
                 State.extractDone = true;
@@ -743,20 +733,19 @@ function startBackgroundPreExtraction(pdfDoc, docGen) {
                     if (docGen !== State.docGen) return;
                     BookDB.putExtract(bookKey, 'pdf6', {
                         kind: 'pdf6',
+                        fingerprint: State.fingerprint,
                         numPages,
                         pages: State.pages,
                         sections: State.sections,
                         groupUnit: State.groupUnit
-                    }, { numPages, groupUnit: State.groupUnit });
+                    }, { fingerprint: State.fingerprint, numPages, groupUnit: State.groupUnit });
                 }).catch(() => { });
             }
         }
     })();
 }
 
-// =========================================================================
-// 4. 文本层 Range 映射（兼容单 TextNode 与 v6 嵌套节点）与按页增量着色
-// =========================================================================
+// --- 文本层 Range 映射与按页着色 ---
 function clearPageHighlights(pageIndex) {
     const prev = State.pageRangesMap.get(pageIndex);
     if (prev && prev.length > 0) {
@@ -858,9 +847,23 @@ function computeLiveHitsForLayer(liveText, last) {
         .map(m => ({ localStart: m.start, localEnd: m.end, noise: m.noise }));
 }
 
+function pruneDisconnectedPageHighlights(skipPageIndex) {
+    for (const [pi, entries] of State.pageRangesMap.entries()) {
+        if (pi === skipPageIndex) continue;
+        if (!entries.length || !entries[0].range.startContainer.isConnected) {
+            for (const entry of entries) {
+                const pool = pdfHlPools[entry.slot];
+                if (pool) pool.delete(entry.range);
+            }
+            State.pageRangesMap.delete(pi);
+        }
+    }
+}
+
 function paintPageHighlights(pageIndex) {
     if (!HL_SUPPORTED) return;
     clearPageHighlights(pageIndex);
+    pruneDisconnectedPageHighlights(pageIndex);
 
     const last = State.lastSearch;
     if (!last) {
@@ -920,9 +923,7 @@ function paintAllRenderedPages() {
     }
 }
 
-// =========================================================================
-// 5. Wasm 宽容 + 近义搜索与分组聚合
-// =========================================================================
+// --- Wasm 书内搜索与摘要生成 ---
 async function waitForSharedWasm(timeoutMs = 5000) {
     const start = Date.now();
     while (Date.now() - start < timeoutMs) {
@@ -1048,7 +1049,7 @@ async function runPdfSearch({ keyword, specs, noise, synonymsEnabled, adsPlan, t
 
     const canCache = !!(State.bookKey && (!cacheMeta || cacheMeta.canCache !== false));
     const queryKey = canCache ? buildBookSearchCacheKey({
-        bookSig: `pdf6:${State.numPages}:${State.sections.length}`,
+        bookSig: `pdf6:${State.fingerprint || 'nofp'}:${State.numPages}:${State.sections.length}`,
         algoVer: (cacheMeta && cacheMeta.algoVer) || 11,
         synVer: (cacheMeta && cacheMeta.synVer) || '',
         keyword,
@@ -1349,9 +1350,7 @@ function getPdfSnippets(path) {
     return null;
 }
 
-// =========================================================================
-// 6. 跨页锚记定位、居中滚动与脉冲反馈
-// =========================================================================
+// --- 跨页锚记定位与脉冲反馈 ---
 function flashPulseAtRect(rect) {
     if (!rect || (rect.width === 0 && rect.height === 0)) return;
     const el = document.createElement('div');
@@ -1440,21 +1439,22 @@ function jumpToPdfHit(hitIndex) {
     if (app && app.pdfViewer) app.page = hit.pageNumber;
 }
 
-// =========================================================================
-// 7. 绑定 PDF.js v6.5.438 生命周期与主站桥接
-// =========================================================================
+// --- PDF.js 生命周期与主站桥接 ---
 function onPdfDocumentReady(pdfDoc) {
     if (!pdfDoc || pdfDoc === State.pdfDoc) return;
     State.docGen++;
     const docGen = State.docGen;
     State.pdfDoc = pdfDoc;
     State.numPages = pdfDoc.numPages || 0;
+    const rawFp = (Array.isArray(pdfDoc.fingerprints) && pdfDoc.fingerprints[0]) || pdfDoc.fingerprint || '';
+    State.fingerprint = typeof rawFp === 'string' ? rawFp : '';
     State.lastSearch = null;
     clearAllHighlights();
 
     const params = new URLSearchParams(window.location.search);
     const fileUrl = params.get('file') || '';
-    State.title = decodeURIComponent((fileUrl.split('/').pop() || document.title || 'PDF').split('#')[0]);
+    const rawLeaf = (fileUrl.split('/').pop() || document.title || 'PDF').split('#')[0];
+    try { State.title = decodeURIComponent(rawLeaf); } catch (_) { State.title = rawLeaf; }
     State.bookKey = (docGen === 1 && fileUrl) ? normalizeBookKey(fileUrl) : '';
 
     const initSections = buildFixedPageSections(State.numPages);
@@ -1483,21 +1483,33 @@ function onPdfDocumentReady(pdfDoc) {
 }
 
 window.addEventListener('pagehide', (e) => {
-    if (e.persisted) return;
     try {
         if (window.parent && window.parent.document) {
             window.parent.document.removeEventListener('fullscreenchange', syncToolbarOnParentFullscreen);
             window.parent.document.removeEventListener('webviewerloaded', lockPdfSecurityOptions);
         }
     } catch (_) { }
-    State.docGen++;
     clearAllHighlights();
     const bridge = window.top && (window.top.__DOC_SEARCH_BRIDGE__ || window.top.__TXT_SEARCH_BRIDGE__);
     if (bridge && State.provider) bridge.unregister(State.provider);
-    if (window.__LITE_BUS__) {
-        try { window.__LITE_BUS__.close(); } catch (_) { }
-        window.__LITE_BUS__ = null;
+    if (!e.persisted) {
+        State.docGen++;
+        if (window.__LITE_BUS__) {
+            try { window.__LITE_BUS__.close(); } catch (_) { }
+            window.__LITE_BUS__ = null;
+        }
     }
+});
+
+window.addEventListener('pageshow', (e) => {
+    if (!e.persisted) return;
+    try {
+        if (window.parent && window.parent.document) {
+            window.parent.document.addEventListener('fullscreenchange', syncToolbarOnParentFullscreen);
+        }
+    } catch (_) { }
+    const bridge = window.top && (window.top.__DOC_SEARCH_BRIDGE__ || window.top.__TXT_SEARCH_BRIDGE__);
+    if (bridge && State.pdfDoc && State.provider) bridge.register(State.provider);
 });
 
 async function initPdfSearchBridge() {

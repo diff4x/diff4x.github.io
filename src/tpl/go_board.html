@@ -1,6 +1,8 @@
 <!DOCTYPE html>
+<html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
+    <meta http-equiv="Content-Security-Policy" content="script-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'self';">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>go_board</title>
     <style>
@@ -170,41 +172,28 @@
     </div>
 
     <script>
+        /**
+         * go_board.html 内联逻辑 —— 19 路围棋摆谱与 localStorage 局面持久化
+         */
+
+        // 配置与 DOM 引用
+        const LOCAL_STORAGE_KEY = 'goBoardSaveData';
+        const SOUND_PATH = '../css/sound/stone2.wav';
+
         const grid = document.getElementById('interactionGrid');
         const boardContainer = document.getElementById('goBoardContainer');
         const clearBtn = document.getElementById('clearBtn');
-        const LOCAL_STORAGE_KEY = 'goBoardSaveData';
-
-        // ================= 新增：音频配置 ================= //
-        // 请将此处替换为你实际的 wav 文件路径
-        const SOUND_PATH = '../css/sound/stone2.wav'; 
         const stoneSound = new Audio(SOUND_PATH);
 
-        // 1. 初始化网格
-        for (let i = 0; i < 361; i++) {
-            const intersection = document.createElement('div');
-            intersection.classList.add('intersection');
-            intersection.dataset.state = 'none'; 
-            intersection.dataset.index = i; // 记录索引方便存储
-            grid.appendChild(intersection);
+
+        // --- 落子、提子与持久化 ---
+
+        function saveBoardState() {
+            const intersections = document.querySelectorAll('.intersection');
+            const boardState = Array.from(intersections).map(el => el.dataset.state);
+            localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(boardState));
         }
 
-        boardContainer.addEventListener('contextmenu', e => e.preventDefault());
-
-        grid.addEventListener('mousedown', (e) => {
-            const target = e.target.closest('.intersection');
-            if (!target) return;
-
-            if (e.button === 1) e.preventDefault();
-
-            switch (e.button) {
-                case 0: placeStone(target, 'black'); break;
-                case 1: removeStone(target); break;
-                case 2: placeStone(target, 'white'); break;
-            }
-        });
-
-        // 修改：在落子成功且属于玩家操作时播放声音
         function placeStone(element, color, isUserAction = true) {
             if (element.dataset.state === color) return;
             element.innerHTML = '';
@@ -212,15 +201,12 @@
             stone.classList.add('stone', color);
             element.appendChild(stone);
             element.dataset.state = color;
-            
+
             if (isUserAction) {
-                // ================= 新增：播放音效 ================= //
-                stoneSound.currentTime = 0; // 进度归零，保证连续快速点击时每次都能发出声音
+                stoneSound.currentTime = 0;
                 stoneSound.play().catch(error => {
-                    // 捕获可能由于浏览器策略（未交互前禁止发声）导致的异常
                     console.warn("音频播放受阻:", error);
                 });
-                
                 saveBoardState();
             }
         }
@@ -229,36 +215,17 @@
             if (element.dataset.state !== 'none') {
                 element.innerHTML = '';
                 element.dataset.state = 'none';
-                
                 if (isUserAction) saveBoardState();
             }
         }
 
-        clearBtn.addEventListener('click', () => {
-            const intersections = document.querySelectorAll('.intersection');
-            // 批量删除时不逐次保存，全删完后保存一次即可
-            intersections.forEach(el => removeStone(el, false));
-            saveBoardState();
-        });
-
-        // ================= LocalStorage 存储与读取逻辑 ================= //
-
-        // 获取当前棋盘的快照并保存
-        function saveBoardState() {
-            const intersections = document.querySelectorAll('.intersection');
-            const boardState = Array.from(intersections).map(el => el.dataset.state);
-            localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(boardState));
-        }
-
-        // 读取历史数据并恢复
         function loadBoardState() {
             const savedData = localStorage.getItem(LOCAL_STORAGE_KEY);
-            if (!savedData) return; // 如果没有存过数据，直接退出
+            if (!savedData) return;
 
             try {
                 const boardState = JSON.parse(savedData);
                 const intersections = document.querySelectorAll('.intersection');
-                
                 boardState.forEach((state, index) => {
                     const el = intersections[index];
                     if (state === 'black' || state === 'white') {
@@ -272,7 +239,37 @@
             }
         }
 
-        // 页面初始化完成后立刻读取数据
+
+        // --- 初始化棋盘与事件绑定 ---
+
+        for (let i = 0; i < 361; i++) {
+            const intersection = document.createElement('div');
+            intersection.classList.add('intersection');
+            intersection.dataset.state = 'none';
+            intersection.dataset.index = i;
+            grid.appendChild(intersection);
+        }
+
+        boardContainer.addEventListener('contextmenu', e => e.preventDefault());
+
+        grid.addEventListener('mousedown', (e) => {
+            const target = e.target.closest('.intersection');
+            if (!target) return;
+            if (e.button === 1) e.preventDefault();
+
+            switch (e.button) {
+                case 0: placeStone(target, 'black'); break;
+                case 1: removeStone(target); break;
+                case 2: placeStone(target, 'white'); break;
+            }
+        });
+
+        clearBtn.addEventListener('click', () => {
+            const intersections = document.querySelectorAll('.intersection');
+            intersections.forEach(el => removeStone(el, false));
+            saveBoardState();
+        });
+
         loadBoardState();
     </script>
 </body>

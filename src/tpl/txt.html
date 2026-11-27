@@ -2,7 +2,7 @@
 <html lang="zh-CN" data-ui="light">
 <head>
 <meta charset="UTF-8">
-<meta http-equiv="Content-Security-Policy" content="script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; worker-src 'self' blob:; object-src 'none'; base-uri 'self';">
+<meta http-equiv="Content-Security-Policy" content="script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; worker-src 'self' blob:; connect-src 'self'; object-src 'none'; base-uri 'self';">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <link rel="stylesheet" href="../css/font.css">
 <title>TXT Viewer</title>
@@ -659,6 +659,9 @@ select.tb-select {
 
     <script src="../third/other/encoding.min.js"></script>
     <script type="module">
+        /**
+         * txt.html 内联阅读器 —— 横向多栏滚屏、多编码识别、书签持久化与 Wasm 书内检索
+         */
         import {
             searchHighlightSupported,
             getSearchHighlight,
@@ -677,9 +680,7 @@ select.tb-select {
             try { window.top.VirtualCursor.attach(window); } catch (_) { }
         }
 
-        // =====================================================================
-        // 1. BUS 通信与标签页隔离
-        // =====================================================================
+        // --- BUS 通信与标签页隔离 ---
         const childId = 'content';
         window.childId = childId;
         if (window.__LITE_BUS__) window.__LITE_BUS__.close();
@@ -710,9 +711,7 @@ select.tb-select {
             }
         });
 
-        // =====================================================================
-        // 2. 存储与默认配置（仅亮色 / 暗色两套预设）
-        // =====================================================================
+        // --- 存储配置、常量与运行态 ---
         const PREFS_KEY = 'txt.history__prefs';
         const THEMES = {
             light: { bg: '#f7f5f0', fg: '#2c2a27' },
@@ -756,8 +755,8 @@ select.tb-select {
             rawBytes: null,
             detectedEncoding: 'utf-8',
             rawText: '',
-            chapters: [],      // [{ index, title, startOffset, endOffset, percent }]
-            chunks: [],        // [{ index, chapterIdx, startOffset, endOffset, text, el, textNode }]
+            chapters: [],
+            chunks: [],
             prefs: { ...DEFAULT_PREFS },
             history: { charOffset: 0, scrollLeft: 0, percent: 0, encoding: 'auto', bookmarks: [] },
             activeSearchToken: 0,
@@ -771,9 +770,7 @@ select.tb-select {
             return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), wait); };
         }
 
-        // =====================================================================
-        // 3. 中文多编码自动识别与解码
-        // =====================================================================
+        // --- 中文多编码识别与解码 ---
         const SIMPLIFIED_MARKERS = new Set(Array.from('的是不了人在有我他这个们中来上大为和国地到以说时要就出会可也你对生能而子那得于着下自之年过发后作里用道行所然家种事成方多经么去法学如都同现当没动面起看定天分还进好小部其些主样理心她本前开但因只从想实日军者意无力它与长把机十民第公此已工使情明性知全三又关点正业外将两高间由问很最重并物手应战向头文体政美相见被利什二等产或新己制身果加西斯月话合回特代内信表化老给世位次度门任常先海通教儿原东声提立及比员解水名真论处走义各入几口认条平系气题活尔更别打女变四神总何电数安少报才结反受目太量再感建务做接必场件计管期市直德资命山金指克许统区保至队形社便空决治展马科司五基眼书非则听白却界达光放强即像难且权思王象完设式色路记南品住告类求据程北边死张该交规万取拉格望觉术领共确传师观清今切院让识候带导争运笑飞风步改收根干造言联持组每济车亲极林服快办议往元英士证近失转夫令准布始怎呢存未远叫台单影具罗字爱击流备兵连调深商算质团红集百需价花党华城石级整府离况亚请技际约示复病息究线似官火断精满支视消越器容照须九增研写称企八功吗包片史委乎查轻易早曾除农找装广显吧阿李标谈吃图念六引历首医局突专费号另周较注语仅考落青随选列武红'));
         const TRADITIONAL_MARKERS = new Set(Array.from('這們為國時會來對個說發經過與學現動開實點業將兩間問點體產機經關從當還進種樣理無長張頭經變電數報結場計區隊達強難權設記類據領確傳觀識導爭運飛聯組濟車親極辦議證遠單影愛擊備調質團紅華級離況請際複斷滿視消器須研寫企易農裝廣顯標圖歷醫專費較註語僅考隨選'));
         const CN_PUNCT = new Set(Array.from('，。、“”！？：；（）《》【】—…、'));
@@ -865,9 +862,7 @@ select.tb-select {
             return { encoding: 'utf-8', text: clean(new TextDecoder('utf-8').decode(bytes)) };
         }
 
-        // =====================================================================
-        // 4. 章节/分段解析与 DOM 分块渲染
-        // =====================================================================
+        // --- 章节解析与 DOM 分块渲染 ---
         const CHAPTER_RE = /^(?:(?:正文\s*)?第[零一二三四五六七八九十百千万两0-9]{1,9}[章回节卷部篇集幕话](?:[\s　:：·.\-—].{0,42})?|(?:卷[零一二三四五六七八九十百千万两0-9]{1,6}|Chapter\s*\d+|CHAPTER\s*\d+|Part\s*\d+|Section\s*\d+)(?:[\s　:：·.\-—].{0,42})?|(?:楔子|序章|序言|序幕|序|引子|前言|前记|尾声|终章|后记|番外(?:\s*[一二三四五六七八九十0-9]*)?)(?:[\s　:：·.\-—].{0,32})?)$/;
 
         function parseChaptersAndBuildChunks(text) {
@@ -963,9 +958,7 @@ select.tb-select {
             renderTocList();
         }
 
-        // =====================================================================
-        // 5. 字符偏移锚定
-        // =====================================================================
+        // --- 字符偏移锚定 ---
         function getChunkAtOffset(charOffset) {
             const chunks = State.chunks;
             if (!chunks.length) return null;
@@ -1043,9 +1036,7 @@ select.tb-select {
             } catch (_) { }
         }
 
-        // =====================================================================
-        // 6. 横向无缝滚动引擎
-        // =====================================================================
+        // --- 横向无缝滚屏与键盘翻页 ---
         let scrollAnimRaf = null;
         let scrollTargetX = 0;
 
@@ -1103,6 +1094,16 @@ select.tb-select {
         }
 
         document.addEventListener('keydown', (e) => {
+            if ((e.ctrlKey || e.metaKey) && !e.altKey && (e.key === 'f' || e.key === 'F' || e.keyCode === 70)) {
+                e.preventDefault();
+                e.stopImmediatePropagation();
+                const bridge = window.top && (window.top.__DOC_SEARCH_BRIDGE__ || window.top.__TXT_SEARCH_BRIDGE__);
+                if (bridge && typeof bridge.setScope === 'function' && State.searchScope !== 'txt') {
+                    bridge.setScope('txt', { rerun: false });
+                }
+                emitEvent('quick_search', '', 'index');
+                return;
+            }
             if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA')) {
                 if (e.key === 'Escape') closeTopBarAndPopovers();
                 return;
@@ -1131,9 +1132,7 @@ select.tb-select {
             else if (e.key === 'End') { e.preventDefault(); animateHorizontalScrollTo(stage.scrollWidth); }
         });
 
-        // =====================================================================
-        // 7. 进度 HUD 与状态持久化（含书签列表）
-        // =====================================================================
+        // --- 进度 HUD 与阅读状态持久化 ---
         let hudRaf = 0;
         let lastActiveChapterIdx = -1;
 
@@ -1179,9 +1178,7 @@ select.tb-select {
             saveBookHistoryDebounced();
         }, { passive: true });
 
-        // =====================================================================
-        // 8. 书签功能（存入 txt.history_<书名>.bookmarks，随 @bomb/@rebirth 同步备份）
-        // =====================================================================
+        // --- 书签管理 ---
         function formatBmTime(ts) {
             const d = new Date(ts);
             const pad = (n) => String(n).padStart(2, '0');
@@ -1305,9 +1302,7 @@ select.tb-select {
             setTimeout(() => { btn.textContent = orig; }, 1100);
         }
 
-        // =====================================================================
-        // 9. 排版样式、顶部横条、目录与搜索作用域切换
-        // =====================================================================
+        // --- 排版控制条、目录与作用域切换 ---
         function hexLuminance(hex) {
             const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex || '');
             if (!m) return 200;
@@ -1606,9 +1601,7 @@ select.tb-select {
             });
         }
 
-        // =====================================================================
-        // 10. 拼音、摘抄与中击全屏
-        // =====================================================================
+        // --- 拼音、摘抄与中击全屏 ---
         function initSelectionTools() {
             let lastSelected = '';
 
@@ -1754,9 +1747,7 @@ select.tb-select {
             });
         }
 
-        // =====================================================================
-        // 11. 书内 Wasm 检索引擎 + CSS Custom Highlight + 章节聚合 + 预览 + 锚记跳转
-        // =====================================================================
+        // --- Wasm 书内检索、高亮与锚记跳转 ---
         let activeHitHL = null;
 
         function ensureActiveHitHighlightStyle() {
@@ -2229,9 +2220,7 @@ select.tb-select {
             bridge.register(State.provider);
         }
 
-        // =====================================================================
-        // 12. 文档装载与生命周期
-        // =====================================================================
+        // --- 文档装载与启动引导 ---
         function applyDecodedDocument(forcedEncoding, { keepOffset = false } = {}) {
             const prevOffset = keepOffset ? captureCurrentCharOffset() : (State.history.charOffset || 0);
             const { encoding, text } = decodeChineseBuffer(State.rawBytes, forcedEncoding);
@@ -2262,15 +2251,20 @@ select.tb-select {
 
         window.addEventListener('pagehide', (e) => {
             saveBookHistoryNow();
-            if (!e.persisted) {
-                try {
-                    const bridge = window.top && window.top.__TXT_SEARCH_BRIDGE__;
-                    if (bridge && State.provider) bridge.unregister(State.provider);
-                } catch (_) { }
-                if (window.__LITE_BUS__) {
-                    window.__LITE_BUS__.close();
-                    window.__LITE_BUS__ = null;
-                }
+            clearAllSearchHighlights();
+            try {
+                const bridge = window.top && window.top.__TXT_SEARCH_BRIDGE__;
+                if (bridge && State.provider) bridge.unregister(State.provider);
+            } catch (_) { }
+            if (!e.persisted && window.__LITE_BUS__) {
+                window.__LITE_BUS__.close();
+                window.__LITE_BUS__ = null;
+            }
+        });
+
+        window.addEventListener('pageshow', (e) => {
+            if (e.persisted && State.chunks.length > 0) {
+                registerWithMainSearch();
             }
         });
 
@@ -2278,7 +2272,6 @@ select.tb-select {
             const savedPrefs = readJSON(PREFS_KEY);
             if (savedPrefs && typeof savedPrefs === 'object') {
                 State.prefs = { ...DEFAULT_PREFS, ...savedPrefs };
-                // 迁移旧预设名到 light / dark
                 if (State.prefs.theme === 'parchment' || State.prefs.theme === 'paper' || State.prefs.theme === 'forest') {
                     State.prefs.theme = 'light';
                 }
@@ -2289,20 +2282,42 @@ select.tb-select {
             initFullscreenControl();
 
             const params = new URLSearchParams(window.location.search);
-            const fileUrl = params.get('file');
-            if (!fileUrl) {
+            const rawFileUrl = (params.get('file') || '').trim();
+            if (!rawFileUrl) {
                 stage.innerHTML = '<div class="txt-loading">未指定 TXT 文件路径。</div>';
                 return;
             }
-            State.fileUrl = fileUrl;
-            State.bookKey = normalizeBookKey(fileUrl);
-            State.title = decodeURIComponent(fileUrl.split('/').pop() || 'Untitled.txt');
-            State.historyKey = 'txt.history_' + State.title;
+            let safeFetchUrl = '';
+            let decodedPathname = '';
+            try {
+                if (/\\/.test(rawFileUrl) || /^\/\//.test(rawFileUrl)) throw new Error('非法路径格式');
+                const parsed = new URL(rawFileUrl, window.location.href);
+                if (parsed.origin !== window.location.origin) throw new Error('禁止跨源加载 TXT');
+                try { decodedPathname = decodeURIComponent(parsed.pathname); }
+                catch (_) { decodedPathname = parsed.pathname; }
+                const segs = decodedPathname.replace(/^\/+/, '').split('/');
+                if (segs.length < 2 || segs[0].toLowerCase() !== 'ebook' || segs.some(s => !s || s === '.' || s === '..' || s.startsWith('.'))) {
+                    throw new Error('仅允许加载 /ebook/ 目录下的 TXT 文件');
+                }
+                if (!/\.txt$/i.test(decodedPathname)) throw new Error('仅支持 .txt 文件');
+                safeFetchUrl = parsed.pathname;
+            } catch (err) {
+                const errEl = document.createElement('div');
+                errEl.className = 'txt-loading';
+                errEl.textContent = `无效的 TXT 文件路径：${err && err.message ? err.message : String(err)}`;
+                stage.replaceChildren(errEl);
+                return;
+            }
+            State.fileUrl = safeFetchUrl;
+            State.bookKey = normalizeBookKey(decodedPathname);
+            State.title = decodedPathname.split('/').pop() || 'Untitled.txt';
+            State.historyKey = 'txt.history_' + (State.bookKey || State.title);
+            const legacyHistoryKey = 'txt.history_' + State.title;
             document.title = State.title;
             $('#fileTitle').textContent = State.title;
             $('#fileTitle').title = State.title;
 
-            const savedHist = readJSON(State.historyKey);
+            const savedHist = readJSON(State.historyKey) || (State.historyKey !== legacyHistoryKey ? readJSON(legacyHistoryKey) : null);
             if (savedHist && typeof savedHist === 'object') {
                 State.history = {
                     ...State.history,
@@ -2320,7 +2335,7 @@ select.tb-select {
             updateBookmarkCountUI();
 
             try {
-                const res = await fetch(fileUrl);
+                const res = await fetch(safeFetchUrl);
                 if (!res.ok) throw new Error(`HTTP ${res.status}`);
                 State.rawBytes = await res.arrayBuffer();
                 applyDecodedDocument(State.history.encoding || 'auto', { keepOffset: false });

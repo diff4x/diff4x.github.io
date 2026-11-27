@@ -1,3 +1,5 @@
+//! HTML 实体编解码、正文抽取、新页面排他创建与 bookmark.html 原子增删移。
+
 use chrono::Local;
 use regex::{NoExpand, Regex};
 use std::fs::{self, OpenOptions};
@@ -318,12 +320,22 @@ pub fn apply_bookmark_mutation(
     title: &str,
     href: &str,
 ) -> Result<String, String> {
+    if !validate_bookmark_block(block_id) {
+        return Err(format!("非法或保留的书签区块 ID: {}", block_id));
+    }
+
     static ANCHOR_RE: OnceLock<Regex> = OnceLock::new();
+    static TRAILING_BR_RE: OnceLock<Regex> = OnceLock::new();
+    static LEADING_BR_RE: OnceLock<Regex> = OnceLock::new();
     static END_FLAG_RE: OnceLock<Regex> = OnceLock::new();
 
     let a_re = ANCHOR_RE.get_or_init(|| {
-        Regex::new(r#"(?is)[ \t]*<a\b[^>]*\bhref\s*=\s*"([^"]*)"[^>]*>.*?</a>(?:[ \t]*\r?\n?[ \t]*<br\s*/?>)?"#).unwrap()
+        Regex::new(r#"(?is)[ \t]*<a\b[^>]*\bhref\s*=\s*"([^"]*)"[^>]*>.*?</a>"#).unwrap()
     });
+    let trail_br_re = TRAILING_BR_RE
+        .get_or_init(|| Regex::new(r"(?is)^[ \t]*\r?\n?[ \t]*<br\s*/?>[ \t]*").unwrap());
+    let lead_br_re =
+        LEADING_BR_RE.get_or_init(|| Regex::new(r"(?is)(?:\r?\n)?[ \t]*<br\s*/?>[ \t]*$").unwrap());
 
     let mut cleaned = String::with_capacity(html.len());
     let mut last = 0usize;
@@ -337,6 +349,11 @@ pub fn apply_bookmark_mutation(
         if existing_href == href {
             cleaned.push_str(&html[last..m.start()]);
             let mut next_pos = m.end();
+            if let Some(bm) = trail_br_re.find(&html[next_pos..]) {
+                next_pos += bm.end();
+            } else if let Some(lm) = lead_br_re.find(&cleaned) {
+                cleaned.truncate(lm.start());
+            }
             if html[next_pos..].starts_with("\r\n") {
                 next_pos += 2;
             } else if html[next_pos..].starts_with('\n') {

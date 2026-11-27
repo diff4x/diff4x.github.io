@@ -1,7 +1,10 @@
 /**
- * lightbox-logic.js —— 图片 / 视频灯箱渲染与交互模块（零内联脚本，CSP: script-src 'none'）
+ * lightbox-logic.js —— 图片/视频灯箱渲染与交互（运行于主线程，向 about:blank iframe 挂载零内联脚本 DOM）
  */
-import { escapeHtml, saveMediaPosition } from './shared-utils.js';
+import { escapeHtml, saveMediaPosition, resumeMediaPosition } from './shared-utils.js';
+
+
+// --- 通用 iframe 交互底座 ---
 
 export function safeInlineJson(val) {
     return JSON.stringify(val)
@@ -131,6 +134,9 @@ function attachIframeCommon(win) {
 
     return { doc, $, $$, store, emitEvent, bindSwipeGestures, mountIndexJumpInput };
 }
+
+
+// --- 图片灯箱逻辑 ---
 
 function mountImageLogic(win, payload) {
     const { doc, $, $$, store, emitEvent, bindSwipeGestures, mountIndexJumpInput } = attachIframeCommon(win);
@@ -365,6 +371,9 @@ function mountImageLogic(win, payload) {
     }, 40);
 }
 
+
+// --- 视频播放与字幕偏移逻辑 ---
+
 function mountVideoLogic(win, payload) {
     const { doc, $, store, emitEvent, bindSwipeGestures, mountIndexJumpInput } = attachIframeCommon(win);
     const video = $('#video');
@@ -474,10 +483,14 @@ function mountVideoLogic(win, payload) {
     setTimeout(() => {
         if (video) {
             video.src = videoUrl;
+            resumeMediaPosition(video, path || videoUrl);
             if (isMkv && track) track.src = vttUrl;
         }
     }, 60);
 }
+
+
+// --- 静态文档模板与渲染入口 ---
 
 export function generateDoc(type, payload = {}) {
     const commonStyles = `@charset "UTF-8";@import url("../src/css/font.css");html,body,pre,textarea{font-family:'Noto Serif SC'}html{background-color:#000;touch-action:none;}body{margin:0;display:flex;justify-content:center;align-items:center;height:100vh;position:relative;overflow:hidden;touch-action:none;}.span-container{position:absolute;bottom:10px;right:10px;background:plum;z-index:999}.span-container span{margin-bottom:5px;padding:0 10px;cursor:pointer}.hide{opacity:.2!important}#f{display:none}`;

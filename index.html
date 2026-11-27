@@ -31,21 +31,44 @@
         document.cookie = `${name}=${value}; ${expires}; path=/${secureFlag}; SameSite=Lax`;
       }
       if (getCookie("adult_verified") !== "true") {
-        const ok = confirm(
-          "⚠️ 本站包含成人内容\n\n" +
-          "点击【确定】表示您已满18周岁并继续访问，点击【取消】离开本站"
-        );
-        if (ok) {
-          setCookie("adult_verified", "true", 365);
-        } else {
-          location.href = "https://www.google.com/ncr";
-          return;
-        }
+        const mountGate = () => {
+          if (document.getElementById("adult-gate-overlay")) return;
+          const overlay = document.createElement("div");
+          overlay.id = "adult-gate-overlay";
+          overlay.setAttribute("role", "dialog");
+          overlay.setAttribute("aria-modal", "true");
+          overlay.style.cssText = "position:fixed;inset:0;z-index:2147483647;background:#408fc4;display:flex;align-items:center;justify-content:center;padding:20px;font-family:system-ui,-apple-system,'Microsoft YaHei',sans-serif;";
+          overlay.innerHTML =
+            '<div style="max-width:420px;width:100%;background:#fff;color:#1f2328;border-radius:8px;padding:24px 26px;box-shadow:0 12px 36px rgba(0,0,0,.35);line-height:1.6;">' +
+            '<div style="font-size:18px;font-weight:700;margin-bottom:10px;">⚠️ 本站包含成人内容</div>' +
+            '<p style="margin:0 0 20px;font-size:14px;color:#4b5563;">继续访问即表示您已满 18 周岁并自愿浏览相关内容；未满 18 周岁请离开本站。</p>' +
+            '<div style="display:flex;gap:10px;justify-content:flex-end;">' +
+            '<button id="adult-gate-leave" type="button" style="padding:8px 14px;border:1px solid #cbd5e1;background:#f8fafc;color:#334155;border-radius:6px;cursor:pointer;font-size:13.5px;">离开本站</button>' +
+            '<button id="adult-gate-enter" type="button" style="padding:8px 16px;border:0;background:#2563eb;color:#fff;border-radius:6px;cursor:pointer;font-size:13.5px;font-weight:600;">已满 18 周岁，继续访问</button>' +
+            '</div></div>';
+          document.body.appendChild(overlay);
+          const enterBtn = document.getElementById("adult-gate-enter");
+          const leaveBtn = document.getElementById("adult-gate-leave");
+          if (enterBtn) {
+            enterBtn.focus();
+            enterBtn.onclick = () => {
+              setCookie("adult_verified", "true", 365);
+              overlay.remove();
+            };
+          }
+          if (leaveBtn) {
+            leaveBtn.onclick = () => {
+              location.href = "https://www.google.com/ncr";
+            };
+          }
+        };
+        if (document.body) mountGate();
+        else document.addEventListener("DOMContentLoaded", mountGate, { once: true });
       }
     })();
   </script>
   <link rel="icon" id="favicon" href="favicon.ico">
-  <link rel="stylesheet" type="text/css" id="css">
+  <link rel="stylesheet" type="text/css" id="css" href="src/css/index.css">
 </head>
 
 <body>
@@ -82,11 +105,7 @@
 </script>
 <!-- PARAM-END -->
   <script src="src/js/site-core.js" charset="UTF-8"></script>
-  <script id="js" type="text/javascript" charset="UTF-8"></script>
-  <script>
-    document.getElementById("js").src = "src/js/index.js";
-    document.getElementById("css").href = "src/css/index.css";
-  </script>
+  <script id="js" type="text/javascript" charset="UTF-8" src="src/js/index.js"></script>
 
 </body>
 </html>

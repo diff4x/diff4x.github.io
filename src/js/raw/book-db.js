@@ -1,32 +1,34 @@
 /**
- * book-db.js —— 只读电子书专用 IndexedDB 缓存层（BookDB）
- * 职责：
- *   1. book_extracts：持久化只读电子书解析结果（如 PDF 全文提取 + 大纲分段，重开免提取）
- *   2. search_cache：持久化书内普通搜索与组合搜索结果（TXT / PDF / EPUB 通用）
- *   3. 上限与 LRU 淘汰：按条数与总字节双上限自动淘汰最久未用条目，含 QuotaExceeded 紧急回收
- *   4. 生命周期隔离：常规站点更新不清空；仅在更新检测到书籍被删除时彻底清理该书全部条目
+ * book-db.js —— 只读电子书专用 IndexedDB 缓存层（BookDB，运行于主线程 / 阅读器 iframe）
+ * 持久化电子书提取文本与书内检索结果，按条数/字节双上限 LRU 淘汰，仅在删书时定向清理。
  */
 
+// 库名与 Schema 版本
 export const BOOK_DB_NAME = 'BookDB';
 export const BOOK_DB_VERSION = 1;
 export const BOOK_EXTRACT_STORE = 'book_extracts';
 export const BOOK_SEARCH_STORE = 'search_cache';
 export const BOOK_SCHEMA_VER = 1;
 
+// 存储上限与压缩阈值
 export const BOOK_DB_LIMITS = {
-    MAX_EXTRACT_BOOKS: 30,
-    MAX_EXTRACT_BYTES: 32 * 1024 * 1024,        // 32 MB（压缩后）
-    MAX_SINGLE_EXTRACT_BYTES: 12 * 1024 * 1024, // 单本提取上限 12 MB
-    MAX_SEARCH_ENTRIES: 600,
-    MAX_SEARCH_PER_BOOK: 80,
-    MAX_SEARCH_BYTES: 16 * 1024 * 1024,         // 16 MB（压缩后）
-    MAX_SINGLE_SEARCH_BYTES: 512 * 1024,        // 单条结果上限 512 KB
-    COMPRESS_THRESHOLD: 4096,                   // 超过 4 KB 启用 deflate-raw 压缩
-    TOUCH_THROTTLE_MS: 60 * 1000                // 1 分钟内重复命中不重复写 lastAccess
+    MAX_EXTRACT_BOOKS: 30,                       // 最多缓存提取书本数
+    MAX_EXTRACT_BYTES: 32 * 1024 * 1024,         // 提取总字节上限 (压缩后, B)
+    MAX_SINGLE_EXTRACT_BYTES: 12 * 1024 * 1024,  // 单本提取上限 (B)
+    MAX_SEARCH_ENTRIES: 600,                     // 书内搜索总条数上限
+    MAX_SEARCH_PER_BOOK: 80,                     // 单本搜索条数上限
+    MAX_SEARCH_BYTES: 16 * 1024 * 1024,          // 书内搜索总字节上限 (B)
+    MAX_SINGLE_SEARCH_BYTES: 512 * 1024,         // 单条搜索结果上限 (B)
+    COMPRESS_THRESHOLD: 4096,                    // 启用 deflate-raw 压缩阈值 (B)
+    TOUCH_THROTTLE_MS: 60 * 1000                 // 重复命中更新 lastAccess 节流 (ms)
 };
+const MEM_SEARCH_MAX = 48;                       // 内存热缓存条数上限
 
+// 内存 LRU 运行态
 const memSearchLRU = new Map();
-const MEM_SEARCH_MAX = 48;
+
+
+// --- 内存热缓存 ---
 
 function memGet(key) {
     if (!memSearchLRU.has(key)) return undefined;
@@ -50,6 +52,9 @@ function memDeleteByBook(bookKey) {
         if (k.startsWith(prefix)) memSearchLRU.delete(k);
     }
 }
+
+
+// --- 键名规范化与缓存键构造 ---
 
 function toHalfwidthLocal(str) {
     let out = '';
@@ -104,6 +109,9 @@ export function buildBookSearchCacheKey({
     return `v${algoVer}|${bookSig}|n:${Number(noise ?? 5)}|s:${synTag}|q:${normKw}`;
 }
 
+
+// --- 压缩编解码与配额判断 ---
+
 async function encodePayload(obj, forceCompress = false) {
     const json = JSON.stringify(obj);
     const encoder = typeof TextEncoder !== 'undefined' ? new TextEncoder() : null;
@@ -146,6 +154,9 @@ function isQuotaError(err) {
     if (!err) return false;
     return err.name === 'QuotaExceededError' || err.code === 22 || err.code === 1014;
 }
+
+
+// --- BookDB 主接口 ---
 
 export const BookDB = {
     _db: null,
@@ -205,9 +216,7 @@ export const BookDB = {
         this._openPromise = null;
     },
 
-    // =========================================================================
-    // 1. 书籍提取缓存（如 PDF 文本 + 大纲）
-    // =========================================================================
+    // --- 书籍提取缓存 ---
     async getExtract(rawBookKey) {
         const bookKey = normalizeBookKey(rawBookKey);
         if (!bookKey) return null;
@@ -292,7 +301,7 @@ export const BookDB = {
                 const tx = db.transaction(BOOK_EXTRACT_STORE, 'readonly');
                 const idx = tx.objectStore(BOOK_EXTRACT_STORE).index('by_lastAccess');
                 const list = [];
-                const req = idx.openCursor(null, 'next'); // 最老优先
+                const req = idx.openCursor(null, 'next');
                 req.onsuccess = () => {
                     const cur = req.result;
                     if (cur) {
@@ -332,9 +341,7 @@ export const BookDB = {
         }
     },
 
-    // =========================================================================
-    // 2. 书内搜索结果缓存（TXT / PDF / EPUB 通用）
-    // =========================================================================
+    // --- 书内搜索缓存 ---
     async getSearch(rawBookKey, queryKey) {
         const bookKey = normalizeBookKey(rawBookKey);
         if (!bookKey || !queryKey) return null;
@@ -427,7 +434,7 @@ export const BookDB = {
                 const tx = db.transaction(BOOK_SEARCH_STORE, 'readonly');
                 const idx = tx.objectStore(BOOK_SEARCH_STORE).index('by_lastAccess');
                 const list = [];
-                const req = idx.openCursor(null, 'next'); // 最老优先
+                const req = idx.openCursor(null, 'next');
                 req.onsuccess = () => {
                     const cur = req.result;
                     if (cur) {
@@ -450,7 +457,6 @@ export const BookDB = {
             let totalCount = rows.length;
             let totalBytes = rows.reduce((s, r) => s + r.byteSize, 0);
 
-            // 1. 单本书配额淘汰
             if (bookKey) {
                 const bookRows = rows.filter(r => r.bookKey === bookKey);
                 let bookCount = bookRows.length;
@@ -464,7 +470,6 @@ export const BookDB = {
                 }
             }
 
-            // 2. 全局条数与总字节 LRU 淘汰
             for (const row of rows) {
                 if (totalCount <= BOOK_DB_LIMITS.MAX_SEARCH_ENTRIES && totalBytes <= BOOK_DB_LIMITS.MAX_SEARCH_BYTES) {
                     break;
@@ -492,9 +497,7 @@ export const BookDB = {
         }
     },
 
-    // =========================================================================
-    // 3. 书籍被删除时的彻底清理
-    // =========================================================================
+    // --- 删除书籍清理与内部维护 ---
     async deleteBook(rawBookKey) {
         const bookKey = normalizeBookKey(rawBookKey);
         if (!bookKey) return { deletedExtract: false, deletedSearches: 0 };

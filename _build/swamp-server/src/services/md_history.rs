@@ -1,3 +1,5 @@
+//! 本地 Markdown 反向差异版本追踪（最新全文 + 最多 50 版反向补丁 = 共 51 版，yymmddhhmmss）。
+
 use chrono::{DateTime, Duration as ChronoDuration, Local, NaiveDateTime};
 use serde::{Deserialize, Serialize};
 use similar::{capture_diff_slices, Algorithm, DiffOp};
@@ -35,9 +37,7 @@ pub struct MdDelta {
     pub from_ver: String,
     /// 旧版完整内容的 SHA-256，用于还原一致性校验
     pub old_sha256: String,
-    /// 相对于旧版新增的行数
     pub added: usize,
-    /// 相对于旧版删除的行数
     pub deleted: usize,
     /// 反向补丁块（将 ver 文本回退为 from_ver 文本）
     pub hunks: Vec<DeltaHunk>,
@@ -694,12 +694,10 @@ pub(crate) fn selftest_coalesce_within_window() -> bool {
         head_text: "base\n".to_string(),
         deltas: Vec::new(),
     };
-    // 第一次修改：不合并进基线，形成 1 条差异
     let r1 = apply_update_to_store(&mut store, "edit1\n".to_string(), "261126100500", 60);
     if !matches!(r1, Some((_, _, _, _, false))) || store.deltas.len() != 1 {
         return false;
     }
-    // 20 秒内二次自动保存：合并进 deltas[0]，总差异数保持 1，基线仍可精准还原
     let r2 = apply_update_to_store(&mut store, "edit2\n".to_string(), "261126100520", 60);
     if !matches!(r2, Some((_, _, _, _, true))) || store.deltas.len() != 1 {
         return false;
@@ -707,7 +705,6 @@ pub(crate) fn selftest_coalesce_within_window() -> bool {
     if reconstruct_from_store(&store, "261126100000").as_deref() != Ok("base\n") {
         return false;
     }
-    // 超出 60 秒窗口后再改：新增第 2 条差异
     let r3 = apply_update_to_store(&mut store, "edit3\n".to_string(), "261126100800", 60);
     matches!(r3, Some((_, _, _, _, false)))
         && store.deltas.len() == 2
@@ -725,9 +722,7 @@ pub(crate) fn selftest_corrupt_store_preserved() -> bool {
         let _ = fs::remove_dir_all(&dir);
         return false;
     }
-    // 只读模式应报错且不改名
     let ro_err = load_store_checked(&hist, false, None).is_err() && hist.is_file();
-    // 写路径修复模式应留档为 .corrupt 并返回 Ok(None)
     let rw_ok = matches!(load_store_checked(&hist, true, None), Ok(None)) && !hist.is_file();
     let has_corrupt = fs::read_dir(&dir)
         .map(|rd| {

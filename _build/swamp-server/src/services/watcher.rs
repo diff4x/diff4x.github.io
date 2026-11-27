@@ -1,3 +1,5 @@
+//! 本地文件监听器：驱动 raw JS/CSS 300 ms 热压缩、HTML 保存广播重载与 Markdown 外部变更历史记录。
+
 use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -126,11 +128,6 @@ pub fn spawn_asset_watcher(
                                     }
                                 }
                                 if watched_assets {
-                                    if crate::builder::is_gen_in_progress() {
-                                        pending.clear();
-                                        last_event_at = None;
-                                        continue;
-                                    }
                                     let is_gen_managed_tail = p
                                         .file_name()
                                         .and_then(|s| s.to_str())
@@ -157,19 +154,29 @@ pub fn spawn_asset_watcher(
 
                 if let Some(t) = last_event_at {
                     if crate::builder::is_gen_in_progress() {
-                        pending.clear();
-                        last_event_at = None;
+                        // gen 运行期间暂缓消费但不清空队列，避免丢失 Phase 2/3 期间用户保存的改动
+                        if !pending.is_empty() {
+                            last_event_at = Some(Instant::now());
+                        }
                     } else if t.elapsed() >= Duration::from_millis(300) && !pending.is_empty() {
                         let batch: Vec<PathBuf> = pending.drain().collect();
                         last_event_at = None;
-                        for path in batch {
+                        for (idx, path) in batch.iter().enumerate() {
                             let Some(_asset_lock) = crate::builder::try_acquire_asset_lock() else {
+                                for rem in &batch[idx..] {
+                                    pending.insert(rem.clone());
+                                }
+                                last_event_at = Some(Instant::now());
                                 break;
                             };
                             if crate::builder::is_gen_in_progress() {
+                                for rem in &batch[idx..] {
+                                    pending.insert(rem.clone());
+                                }
+                                last_event_at = Some(Instant::now());
                                 break;
                             }
-                            match minify_single_asset(&cfg, &path) {
+                            match minify_single_asset(&cfg, path) {
                                 Ok(Some(label)) => {
                                     logs.info(format!("[watcher] 已压缩 -> {}", label));
                                 }

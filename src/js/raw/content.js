@@ -1,3 +1,8 @@
+/**
+ * content.js —— HTML 正文页渲染、页内搜索高亮、代码编辑、灯箱、拼音摘抄与历史 Diff
+ * 运行于 #content iframe，复用顶层 window.top.sharedWasm 与 SiteCore。
+ */
+// 抢跑劫持双语页 #zhText.value，确保草稿回填后恢复搜索高亮
 (function interceptTextarea() {
     const observer = new MutationObserver((mutations, obs) => {
         const zhText = document.getElementById('zhText');
@@ -49,6 +54,7 @@ if (window.top && window.top.VirtualCursor) {
     window.top.VirtualCursor.attach(window);
 }
 
+// 基础句柄与运行态
 const childId = 'content';
 window.childId = childId;
 const store = createStore();
@@ -74,6 +80,7 @@ let _searchMinimapResizeHandler = null;
 
 let find_content_matches_multi = null;
 
+// 页内搜索高亮样式梯度与位域解包
 const SYN_HL_BIT = 0x100;
 const SEARCH_HL_STYLE = [[0.80, '#000'], [0.65, '#111'], [0.52, '#111'], [0.42, '#333'], [0.34, '#333'], [0.28, '#333']];
 const SEARCH_SYN_HL_STYLE = [[0.55, '#000'], [0.45, '#111'], [0.38, '#111'], [0.32, '#333'], [0.26, '#333'], [0.22, '#333']];
@@ -91,6 +98,9 @@ const searchHlNameBySlot = (slot) => {
 };
 const searchHl = [];
 let wasmSupportsWeighted = false;
+
+
+// --- Wasm 初始化与搜索高亮池 ---
 
 function adaptContentKeywords(keywords) {
     if (!Array.isArray(keywords)) return [];
@@ -160,16 +170,28 @@ const wasmInitPromise = (async () => {
         return;
     }
 
+    if (window.top && window.top.sharedWasm && window.top.sharedWasm.failed) {
+        return;
+    }
+
     await new Promise((resolve) => {
+        const startAt = Date.now();
         const check = setInterval(() => {
-            if (window.top && window.top.sharedWasm && window.top.sharedWasm.ready) {
+            const sw = window.top && window.top.sharedWasm;
+            if (sw && sw.ready) {
                 clearInterval(check);
-                resolveWasm(window.top.sharedWasm);
+                resolveWasm(sw);
+                resolve();
+            } else if ((sw && sw.failed) || Date.now() - startAt > 10000) {
+                clearInterval(check);
                 resolve();
             }
         }, 20);
     });
 })();
+
+
+// --- BUS 通信与首帧样式注入 ---
 
 if (window.__LITE_BUS__) {
     window.__LITE_BUS__.close();
@@ -330,6 +352,9 @@ function createStore(defaults = {}) {
     return window.top.SiteCore.createStore(defaults);
 }
 
+
+// --- 正文渲染、顶栏与本地实时编辑监听 ---
+
 async function format() {
     return new Promise((resolve) => {
         const anchorNode = document.querySelector("#anchor");
@@ -348,13 +373,15 @@ async function format() {
 
             let outHtmlArr = [];
 
-            textNodes.forEach(node => {
-                outHtmlArr.push(format_markdown(node.nodeValue));
-            });
-            textNodes.forEach((node, i) => {
-                const fragment = document.createRange().createContextualFragment(outHtmlArr[i]);
-                node.replaceWith(fragment);
-            });
+            if (typeof format_markdown === 'function') {
+                textNodes.forEach(node => {
+                    outHtmlArr.push(format_markdown(node.nodeValue));
+                });
+                textNodes.forEach((node, i) => {
+                    const fragment = document.createRange().createContextualFragment(outHtmlArr[i]);
+                    node.replaceWith(fragment);
+                });
+            }
 
             postProcess(anchorNode);
             resolve();
@@ -393,7 +420,7 @@ async function format() {
             paragraph.replaceWith(renderP2TableEl(paragraph.textContent));
         });
 
-        const anchorText = anchor ? anchor.innerHTML : "";
+        const anchorText = anchor ? anchor.textContent : "";
         const parts = anchorText.split("-");
         if (parts.length < 2) parts.push("");
         const bar = document.createElement("div");
@@ -403,11 +430,16 @@ async function format() {
             <span id='s_nav'></span>
             <span id='diff-btn'></span>
             <span id='cm' title='0 comment' style="display:none">💬</span>
-            <span id='stamp' title='${format_date(parts[0])}'>${parts[1]} > ${document.title}</span>
+            <span id='stamp'></span>
             <div style='top:0;left:0'>
                 <div id='processBar' style='height: 3px; background: violet; width: 0%;'></div>
             </div>
         `;
+        const stampEl = bar.querySelector("#stamp");
+        if (stampEl) {
+            stampEl.title = format_date(parts[0]);
+            stampEl.textContent = `${parts.slice(1).join("-")} > ${document.title}`;
+        }
         document.body.appendChild(bar);
         const cmEl = document.getElementById("cm");
         if (cmEl) {
@@ -526,7 +558,6 @@ async function format() {
                     })();
                 };
 
-                // 重载后立即还原滚动位置并延续当前页监听态（切到其他文章自动清理）
                 try {
                     const savedScroll = JSON.parse(sessionStorage.getItem(LIVE_SCROLL_KEY) || 'null');
                     if (savedScroll && savedScroll.title === document.title && Number.isFinite(savedScroll.y)) {
@@ -577,6 +608,9 @@ async function format() {
         }
     }
 }
+
+
+// --- 页内搜索、高亮导航与摘要抽取 ---
 
 const PAGE_BLOCK_SEL = 'p,div,li,ul,ol,dl,dt,dd,table,thead,tbody,tfoot,tr,td,th,h1,h2,h3,h4,h5,h6,blockquote,pre,section,article,header,footer,figure,figcaption';
 
@@ -1123,52 +1157,72 @@ async function countMatchesEnhanced(kw) {
     };
 }
 
+
+// --- 目录大纲与图片灯箱 ---
+
 function toc() {
     const headings = $$("h1, h2, h3, h4, h5, h6");
     if (headings.length > 2) {
         toc_flag = true;
-        let tocHTML = "<div id='toc-list'><ul>";
-        let stack = [];
-        let counters = [0, 0, 0, 0, 0, 0];
+        const tocListDiv = document.createElement("div");
+        tocListDiv.id = "toc-list";
+        const rootUl = document.createElement("ul");
+        tocListDiv.appendChild(rootUl);
+
+        const ulStack = [rootUl];
+        const levelStack = [];
+        const counters = [0, 0, 0, 0, 0, 0];
 
         headings.forEach(function (heading) {
-            let id = heading.innerText.replace(/\s+/g, "_").toLowerCase();
+            const rawText = (heading.innerText || heading.textContent || "").trim();
+            const baseId = rawText.replace(/\s+/g, "_").replace(/[^\w\u4e00-\u9fff-]/g, "_").toLowerCase() || "section";
+            let id = baseId;
             let count = 1;
             while (document.getElementById(id)) {
-                id = heading.innerText.replace(/\s+/g, "_").toLowerCase() + "_" + count++;
+                id = baseId + "_" + count++;
             }
             heading.id = id;
 
-            const level = parseInt(heading.tagName[1]);
+            const level = parseInt(heading.tagName[1], 10);
             for (let i = level; i < counters.length; i++) counters[i] = 0;
             counters[level - 1]++;
 
-            let numberString = counters.slice(0, level).join(".");
+            const numberString = counters.slice(0, level).join(".");
             heading.setAttribute("data-number", numberString);
 
-            while (level <= stack.length) {
-                tocHTML += "</ul></li>";
-                stack.pop();
+            while (levelStack.length > 0 && level <= levelStack[levelStack.length - 1]) {
+                levelStack.pop();
+                ulStack.pop();
             }
 
-            tocHTML += "<li><a href='#" + heading.id + "' data='" + heading.id + "'><span class='toc_a_no'>" + numberString + "</span>&nbsp; " + heading.innerText + "</a><ul>";
-            stack.push(level);
-        });
+            const li = document.createElement("li");
+            const a = document.createElement("a");
+            a.href = "#" + encodeURIComponent(heading.id);
+            a.setAttribute("data", heading.id);
+            const noSpan = document.createElement("span");
+            noSpan.className = "toc_a_no";
+            noSpan.textContent = numberString;
+            a.append(noSpan, document.createTextNode("  " + rawText));
+            const subUl = document.createElement("ul");
+            li.append(a, subUl);
+            ulStack[ulStack.length - 1].appendChild(li);
 
-        while (stack.length > 0) {
-            tocHTML += "</ul></li>";
-            stack.pop();
-        }
+            levelStack.push(level);
+            ulStack.push(subUl);
+        });
 
         const tocDiv = document.createElement("div");
         tocDiv.id = "toc";
         tocDiv.style.display = "flex";
-        tocDiv.innerHTML = tocHTML + "</ul></div><div id='toc-toggle' class='toc-toggle'>目 录</div>";
+        const toggleDiv = document.createElement("div");
+        toggleDiv.id = "toc-toggle";
+        toggleDiv.className = "toc-toggle";
+        toggleDiv.textContent = "目 录";
+        tocDiv.append(tocListDiv, toggleDiv);
         document.body.appendChild(tocDiv);
 
-        $("#toc-toggle").addEventListener("click", function () {
-            const tocList = $("#toc-list");
-            tocList.classList.toggle("hidden");
+        toggleDiv.addEventListener("click", function () {
+            tocListDiv.classList.toggle("hidden");
         });
     }
 }
@@ -1454,6 +1508,7 @@ function lightbox() {
     });
 
     document.addEventListener('keydown', function (event) {
+        if (!$('.lightbox')) return;
         if (event.key === 'ArrowLeft') prevImage();
         else if (event.key === 'ArrowRight') nextImage();
         else if (event.key === 'Escape') closeLightbox();
@@ -1465,6 +1520,9 @@ function lightbox() {
         }
     });
 }
+
+
+// --- 代码高亮、行号与临时编辑 ---
 
 function bindCodeEditHandlers(root) {
     root.querySelectorAll('code').forEach((e) => {
@@ -1598,7 +1656,7 @@ async function code() {
     return new Promise((resolve) => {
         const highlightAll = () => {
             $$("code").forEach((e) => {
-                const lang = e.attributes.length > 0 ? e.attributes[0].name : "java";
+                const lang = getCodeLang(e);
 
                 const rawContent = e.textContent.trim();
                 e.innerHTML = highlightCode(rawContent, lang);
@@ -1618,6 +1676,7 @@ async function code() {
             document.head.appendChild(link);
             document.head.appendChild(script);
             script.onload = highlightAll;
+            script.onerror = highlightAll;
         } else {
             highlightAll();
         }
@@ -1699,6 +1758,9 @@ function enableCodeHoverHighlight(targetDocument = document) {
     });
 }
 
+
+// --- 滚动记忆、回到顶部、拼音与摘抄 ---
+
 function postion_func() {
     const positions = store.positions || {};
     var pageTitle = document.title;
@@ -1707,14 +1769,16 @@ function postion_func() {
         window.scrollTo(0, parseInt(scrollPosition));
     }
 
-    let memPositions = Object.assign({}, positions);
+    let latestScrollPos = scrollPosition;
     let dirty = false;
     let scrollTimer = null;
 
     function flushPositions() {
         if (window._isBombing || (window.top && window.top._isBombing)) return;
         if (!dirty) return;
-        store.positions = memPositions;
+        const fresh = Object.assign({}, store.positions || {});
+        fresh[document.title] = latestScrollPos;
+        store.positions = fresh;
         dirty = false;
     }
 
@@ -1726,9 +1790,7 @@ function postion_func() {
         }
 
         scrollTimer = setTimeout(function () {
-            var pageTitle = document.title;
-            var scrollPosition = window.pageYOffset;
-            memPositions[pageTitle] = scrollPosition;
+            latestScrollPos = window.pageYOffset;
             dirty = true;
 
             if ($("#gotop")) {
@@ -2025,6 +2087,9 @@ function initExcerptTrigger() {
     }, true);
 }
 
+
+// --- 启动引导与表格/代码渲染辅助 ---
+
 async function start() {
     pinyin_func();
     initExcerptTrigger();
@@ -2085,6 +2150,9 @@ function updateLineNumbers(el) {
     const lines = Array.from({ length: lineCount }, (_, i) => (i + 1).toString().padStart(2, '0'));
     el.style.setProperty('--line-numbers', '"' + lines.join('.\\A ') + '.\\A"');
 }
+
+
+// --- 历史快照 Diff 与右侧缩略图 ---
 
 async function initDiffUI() {
     const originalBtn = document.getElementById('diff-btn');
@@ -2235,7 +2303,6 @@ async function initDiffUI() {
             return;
         }
 
-        // 若搜索正处于当前页结果导航状态，立即清理高亮并通知主页面触发一次搜索 clear，避免与 diff 干扰
         const sNav = document.getElementById('s_nav');
         const isSearchNavActive =
             (sNav && sNav.innerHTML.trim() !== '') ||
@@ -2285,6 +2352,10 @@ async function initDiffUI() {
                 window._isDiffMode = true;
                 btnStart.textContent = 're-diff';
                 btnCancel.style.display = 'inline';
+            } catch (err) {
+                console.error('[Diff] 对比计算失败:', err);
+                btnStart.textContent = window._isDiffMode ? 're-diff' : 'diff';
+                alert('⚠️ 对比计算失败：' + (err && err.message ? err.message : String(err)));
             } finally {
                 window._diffBusy = false;
             }
@@ -2322,6 +2393,7 @@ function renderDiffView(oldTokens, newTokens, preTag) {
     };
 
     let codeLineIdx = 0;
+    let inCode = false;
     const emit = (html, tType) => {
         if (tType === 'code_line') {
             mergedHtml += (codeLineIdx++ > 0 ? '\n' : '') + html;
@@ -2340,12 +2412,17 @@ function renderDiffView(oldTokens, newTokens, preTag) {
         const content = token.content;
 
         if (tType === 'code_start') {
+            if (isDelete && inCode) return;
+            if (inCode) mergedHtml += '</code>\n';
             mergedHtml += content;
+            inCode = true;
             codeLineIdx = 0;
             return;
         }
         if (tType === 'code_end') {
+            if (!inCode) return;
             mergedHtml += `${content}\n`;
+            inCode = false;
             return;
         }
 
@@ -2382,6 +2459,7 @@ function renderDiffView(oldTokens, newTokens, preTag) {
         }
     });
 
+    if (inCode) mergedHtml += '</code>\n';
     preTag.innerHTML = mergedHtml;
     preTag.querySelectorAll('code').forEach(updateLineNumbers);
 }
@@ -2654,7 +2732,7 @@ function buildRenderedTokens(rawHtml) {
     });
 
     container.querySelectorAll('code').forEach(c => {
-        const lang = c.attributes.length > 0 ? c.attributes[0].name : "java";
+        const lang = getCodeLang(c);
         const newCode = renderCodeBlockEl(c.textContent.trim(), lang);
         c.replaceWith(newCode);
     });

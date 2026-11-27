@@ -1,3 +1,5 @@
+//! Google Keep Takeout 压缩包导入器：支持单篇与按标签合并导出 HTML 及 WebP/GIF 附件压缩。
+
 use chrono::{Local, TimeZone};
 use image::codecs::gif::{GifDecoder, GifEncoder, Repeat};
 use image::imageops::FilterType;
@@ -6,7 +8,7 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::fs::{self, File};
-use std::io::{self, BufReader};
+use std::io::{self, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
@@ -20,6 +22,17 @@ use crate::media::webp::encode_image_to_webp;
 use crate::security::validate_title;
 
 static IMG_SEQ: AtomicU64 = AtomicU64::new(0);
+const MAX_KEEP_ENTRY_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_KEEP_TOTAL_BYTES: u64 = 512 * 1024 * 1024;
+
+pub(crate) fn normalize_keep_html_title(title: &str, is_diary: bool) -> String {
+    let trimmed = title.trim();
+    if is_diary && !trimmed.starts_with("__") {
+        format!("__{}", trimmed)
+    } else {
+        trimmed.to_string()
+    }
+}
 
 #[derive(Deserialize, Debug, Clone)]
 pub struct KeepOptions {
@@ -127,8 +140,9 @@ fn ensure_unzipped(zip_path: &Path) -> Result<PathBuf, String> {
     let file = File::open(zip_path).map_err(|e| format!("打开 ZIP 失败: {}", e))?;
     let mut archive = ZipArchive::new(file).map_err(|e| format!("解析 ZIP 失败: {}", e))?;
 
+    let mut total_extracted: u64 = 0;
     for i in 0..archive.len() {
-        let mut entry = archive
+        let entry = archive
             .by_index(i)
             .map_err(|e| format!("读取 ZIP 条目失败: {}", e))?;
         let Some(rel_path) = entry.enclosed_name().map(|p| p.to_path_buf()) else {
@@ -143,8 +157,26 @@ fn ensure_unzipped(zip_path: &Path) -> Result<PathBuf, String> {
             }
             let mut out_file =
                 File::create(&out_path).map_err(|e| format!("创建解压文件失败: {}", e))?;
-            io::copy(&mut entry, &mut out_file)
+            let mut limited = entry.take(MAX_KEEP_ENTRY_BYTES + 1);
+            let written = io::copy(&mut limited, &mut out_file)
                 .map_err(|e| format!("写出解压文件失败: {}", e))?;
+            if written > MAX_KEEP_ENTRY_BYTES {
+                drop(out_file);
+                let _ = fs::remove_file(&out_path);
+                return Err(format!(
+                    "Keep 压缩包单个文件超过安全上限 ({} MB)，已中止解压",
+                    MAX_KEEP_ENTRY_BYTES / (1024 * 1024)
+                ));
+            }
+            total_extracted = total_extracted.saturating_add(written);
+            if total_extracted > MAX_KEEP_TOTAL_BYTES {
+                drop(out_file);
+                let _ = fs::remove_file(&out_path);
+                return Err(format!(
+                    "Keep 压缩包总解压体积超过安全上限 ({} MB)，已中止解压",
+                    MAX_KEEP_TOTAL_BYTES / (1024 * 1024)
+                ));
+            }
         }
     }
 
@@ -183,7 +215,7 @@ fn format_ts_from_usec(usec: i64) -> String {
         .to_string()
 }
 
-/// 纯 Rust 压缩单张 Keep 附件（静态图转有损 WebP；多帧 GIF 缩放后保留为纯净 GIF，零外部工具）
+/// 静态图转 WebP，多帧 GIF 缩放保留动图
 fn compress_attachment(
     img_path: &Path,
     out_dir: &Path,
@@ -216,14 +248,12 @@ fn compress_attachment(
             .map_err(|e| format!("读取 GIF 帧失败: {}", e))?;
 
         if frames.len() <= 1 {
-            // 单帧 GIF 直接转有损 WebP
             let webp_name = format!("{}.webp", stem);
             let dst = out_dir.join(&webp_name);
             encode_image_to_webp(img_path, &dst, max_width, quality)?;
             return Ok(webp_name);
         }
 
-        // 多帧动图 GIF：按 max_width 缩放并输出 .gif（浏览器及 lib.rs MEDIA_RE 原生支持）
         let gif_name = format!("{}.gif", stem);
         let dst = out_dir.join(&gif_name);
         let first_w = frames[0].buffer().width();
@@ -316,7 +346,6 @@ fn render_from_template(template: &str, title: &str, ts: &str, category: &str, b
         .into_owned()
 }
 
-/// 纯 Rust 取代 Keep2HtmlConverter.java
 pub fn run_keep2html(cfg: &ServerConfig, opts: KeepOptions) -> Result<KeepSummary, String> {
     let keep_folder = cfg.keep_takeout_zip_folder.clone().ok_or_else(|| {
         "未配置 keep_takeout_zip_folder（请在 _build/privy/local.toml 或 local.properties 中设置）"
@@ -394,17 +423,19 @@ pub fn run_keep2html(cfg: &ServerConfig, opts: KeepOptions) -> Result<KeepSummar
                 continue;
             }
 
-            let article_title = root
+            let is_diary = cat == "日记";
+            let raw_article_title = root
                 .get("title")
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
-                .trim()
-                .to_string();
+                .trim();
+            if !validate_title(raw_article_title) {
+                continue;
+            }
+            let article_title = normalize_keep_html_title(raw_article_title, is_diary);
             if !validate_title(&article_title) {
                 continue;
             }
-
-            let is_diary = cat == "日记";
             let target_img_dir = if is_diary {
                 cfg.gallery_dir.join("diary")
             } else {
@@ -498,6 +529,12 @@ pub fn run_keep2html(cfg: &ServerConfig, opts: KeepOptions) -> Result<KeepSummar
         }
         notes.sort_by_key(|(usec, _, _)| *usec);
 
+        let is_diary = category == "日记";
+        let target_img_dir = if is_diary {
+            cfg.gallery_dir.join("diary")
+        } else {
+            cfg.webp_output_dir.clone()
+        };
         let mut merged_body = String::new();
         for (_, jf, note) in notes {
             let t = note.get("title").and_then(|v| v.as_str()).unwrap_or("");
@@ -518,12 +555,17 @@ pub fn run_keep2html(cfg: &ServerConfig, opts: KeepOptions) -> Result<KeepSummar
                     let img_path = resolve_attachment_in_unzip(&canon_unzip_dir, parent_dir, fp)?;
                     let new_name = compress_attachment(
                         &img_path,
-                        &cfg.webp_output_dir,
+                        &target_img_dir,
                         cfg.webp_quality,
                         cfg.img_max_width,
                     )?;
                     processed_images += 1;
-                    c = c.replace(&format!("[[IMG{}]]", i + 1), &new_name);
+                    let replacement = if is_diary {
+                        format!("../gallery/diary/{}", new_name)
+                    } else {
+                        new_name
+                    };
+                    c = c.replace(&format!("[[IMG{}]]", i + 1), &replacement);
                 }
             }
             merged_body.push_str("# ");
@@ -532,13 +574,16 @@ pub fn run_keep2html(cfg: &ServerConfig, opts: KeepOptions) -> Result<KeepSummar
             merged_body.push_str(&c);
             merged_body.push_str("\n\n");
         }
-
+        let final_title = normalize_keep_html_title(&tag_name, is_diary);
+        if !validate_title(&final_title) {
+            return Err("合并后的页面标题包含非法字符".to_string());
+        }
         let ts = Local::now().format("%Y%m%d%H%M%S").to_string();
-        let html = render_from_template(&template, &tag_name, &ts, &category, &merged_body);
-        let out_file = cfg.html_dir.join(format!("{}.html", tag_name));
+        let html = render_from_template(&template, &final_title, &ts, &category, &merged_body);
+        let out_file = cfg.html_dir.join(format!("{}.html", final_title));
         backup_existing_html_if_needed(cfg, &out_file, &run_stamp)?;
         write_atomic(&out_file, &html, false)?;
-        generated_pages.push(format!("{}.html", tag_name));
+        generated_pages.push(format!("{}.html", final_title));
     } else {
         return Err("mode 仅支持 single 或 merge".to_string());
     }

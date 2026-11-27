@@ -8,7 +8,7 @@ use chrono::Local;
 use regex::{Captures, Regex};
 use serde::Deserialize;
 use serde_json::json;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
@@ -64,6 +64,12 @@ fn err_resp(status: StatusCode, msg: impl Into<String>) -> Response {
 fn file_sha256(path: &Path) -> Result<String, String> {
     let bytes = std::fs::read(path).map_err(|e| format!("读取文件失败: {}", e))?;
     Ok(sha256_hex(&bytes))
+}
+
+async fn file_sha256_async(path: PathBuf) -> Result<String, String> {
+    tokio::task::spawn_blocking(move || file_sha256(&path))
+        .await
+        .map_err(|e| format!("哈希计算任务异常: {}", e))?
 }
 
 #[cfg(windows)]
@@ -375,57 +381,73 @@ pub async fn post_edit(
     Json(req): Json<EditReq>,
 ) -> Response {
     let _busy = state.runtime.begin_op();
-    let title = req.title.trim();
-    if !validate_title(title) {
+    let title = req.title.trim().to_string();
+    if !validate_title(&title) {
         return err_resp(StatusCode::BAD_REQUEST, "非法页面标题");
     }
 
-    let candidate = state.config.html_dir.join(format!("{}.html", title));
-    let target = match std::fs::canonicalize(&candidate) {
-        Ok(p) if p.is_file() && p.starts_with(&state.config.html_dir) => p,
-        _ => return err_resp(StatusCode::NOT_FOUND, "目标 HTML 页面不存在"),
-    };
+    let html_dir = state.config.html_dir.clone();
+    let vscode_path = state.config.vscode_path.clone();
+    let title_bg = title.clone();
+    let res = tokio::task::spawn_blocking(move || -> Result<(String, String), (StatusCode, String)> {
+        let candidate = html_dir.join(format!("{}.html", title_bg));
+        let target = match std::fs::canonicalize(&candidate) {
+            Ok(p) if p.is_file() && p.starts_with(&html_dir) => p,
+            _ => return Err((StatusCode::NOT_FOUND, "目标 HTML 页面不存在".to_string())),
+        };
 
-    let ts = Local::now().format("%Y%m%d%H%M%S").to_string();
-    match std::fs::read(&target) {
-        Ok(raw_bytes) => {
-            let has_bom = raw_bytes.starts_with(&[0xEF, 0xBB, 0xBF]);
-            let slice = if has_bom { &raw_bytes[3..] } else { &raw_bytes[..] };
-            if let Ok(text) = std::str::from_utf8(slice) {
-                static ANCHOR_RE: OnceLock<Regex> = OnceLock::new();
-                let re = ANCHOR_RE.get_or_init(|| {
-                    Regex::new(r#"(?is)(<span\b[^>]*\bid\s*=\s*["']anchor["'][^>]*>)\s*(\d{14})-(.*?)(</span>)"#)
-                        .unwrap()
-                });
-                if re.is_match(text) {
-                    let updated = re.replace(text, |caps: &Captures| {
-                        format!("{}{}-{}{}", &caps[1], ts, &caps[3], &caps[4])
+        let ts = Local::now().format("%Y%m%d%H%M%S").to_string();
+        match std::fs::read(&target) {
+            Ok(raw_bytes) => {
+                let has_bom = raw_bytes.starts_with(&[0xEF, 0xBB, 0xBF]);
+                let slice = if has_bom { &raw_bytes[3..] } else { &raw_bytes[..] };
+                if let Ok(text) = std::str::from_utf8(slice) {
+                    static ANCHOR_RE: OnceLock<Regex> = OnceLock::new();
+                    let re = ANCHOR_RE.get_or_init(|| {
+                        Regex::new(r#"(?is)(<span\b[^>]*\bid\s*=\s*["']anchor["'][^>]*>)\s*(\d*)-(.*?)(</span>)"#)
+                            .unwrap()
                     });
-                    if let Err(e) = write_atomic(&target, updated.as_ref(), has_bom) {
-                        return err_resp(StatusCode::INTERNAL_SERVER_ERROR, e);
+                    if re.is_match(text) {
+                        let updated = re.replace(text, |caps: &Captures| {
+                            format!("{}{}-{}{}", &caps[1], ts, &caps[3], &caps[4])
+                        });
+                        if let Err(e) = write_atomic(&target, updated.as_ref(), has_bom) {
+                            return Err((StatusCode::INTERNAL_SERVER_ERROR, e));
+                        }
                     }
                 }
             }
+            Err(e) => {
+                return Err((
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("读取目标 HTML 失败: {}", e),
+                ));
+            }
         }
-        Err(e) => {
-            return err_resp(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("读取目标 HTML 失败: {}", e),
-            );
+
+        let sig = file_sha256(&target).unwrap_or_default();
+        let clean_target = strip_verbatim_prefix(&target);
+        let args = vec![clean_target.to_string_lossy().into_owned()];
+        if let Err(e) = spawn_vscode(&vscode_path, &args) {
+            return Err((StatusCode::INTERNAL_SERVER_ERROR, e));
         }
-    }
+        Ok((ts, sig))
+    })
+    .await;
 
-    let sig = file_sha256(&target).unwrap_or_default();
-    let clean_target = strip_verbatim_prefix(&target);
-    let args = vec![clean_target.to_string_lossy().into_owned()];
-    if let Err(e) = spawn_vscode(&state.config.vscode_path, &args) {
-        return err_resp(StatusCode::INTERNAL_SERVER_ERROR, e);
+    match res {
+        Ok(Ok((ts, sig))) => {
+            state
+                .logs
+                .info(format!("[api] 已打开编辑: {}.html（保存后自动刷新）", title));
+            Json(json!({ "ok": true, "timestamp": ts, "sig": sig })).into_response()
+        }
+        Ok(Err((code, msg))) => err_resp(code, msg),
+        Err(e) => err_resp(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("编辑任务异常中止: {}", e),
+        ),
     }
-
-    state
-        .logs
-        .info(format!("[api] 已打开编辑: {}.html（保存后自动刷新）", title));
-    Json(json!({ "ok": true, "timestamp": ts, "sig": sig })).into_response()
 }
 
 /// GET /__api/ops/watch-html?title=...&sig=...
@@ -434,19 +456,28 @@ pub async fn get_watch_html(
     State(state): State<Arc<AppState>>,
     Query(q): Query<WatchHtmlQuery>,
 ) -> Response {
-    let title = q.title.trim();
-    if !validate_title(title) {
+    let title = q.title.trim().to_string();
+    if !validate_title(&title) {
         return err_resp(StatusCode::BAD_REQUEST, "非法页面标题");
     }
 
-    let candidate = state.config.html_dir.join(format!("{}.html", title));
-    let target = match std::fs::canonicalize(&candidate) {
-        Ok(p) if p.is_file() && p.starts_with(&state.config.html_dir) => p,
+    let html_dir = state.config.html_dir.clone();
+    let title_bg = title.clone();
+    let target = match tokio::task::spawn_blocking(move || {
+        let candidate = html_dir.join(format!("{}.html", title_bg));
+        match std::fs::canonicalize(&candidate) {
+            Ok(p) if p.is_file() && p.starts_with(&html_dir) => Some(p),
+            _ => None,
+        }
+    })
+    .await
+    {
+        Ok(Some(p)) => p,
         _ => return err_resp(StatusCode::NOT_FOUND, "目标 HTML 页面不存在"),
     };
 
     let baseline = q.sig.trim().to_string();
-    if let Ok(cur) = file_sha256(&target) {
+    if let Ok(cur) = file_sha256_async(target.clone()).await {
         if !baseline.is_empty() && cur != baseline {
             return Json(json!({ "ok": true, "changed": true, "sig": cur })).into_response();
         }
@@ -484,7 +515,7 @@ pub async fn get_watch_html(
                 if matched {
                     // 等待 120ms 让编辑器彻底刷盘，避免读到半截内容或空保存误刷新
                     tokio::time::sleep(Duration::from_millis(120)).await;
-                    if let Ok(new_sig) = file_sha256(&target) {
+                    if let Ok(new_sig) = file_sha256_async(target.clone()).await {
                         if new_sig != baseline {
                             return Json(json!({ "ok": true, "changed": true, "sig": new_sig })).into_response();
                         }
@@ -492,10 +523,10 @@ pub async fn get_watch_html(
                 }
             }
             _ = fallback.tick() => {
-                if let Ok(new_sig) = file_sha256(&target) {
+                if let Ok(new_sig) = file_sha256_async(target.clone()).await {
                     if !baseline.is_empty() && new_sig != baseline {
                         tokio::time::sleep(Duration::from_millis(120)).await;
-                        let final_sig = file_sha256(&target).unwrap_or(new_sig);
+                        let final_sig = file_sha256_async(target.clone()).await.unwrap_or(new_sig);
                         return Json(json!({ "ok": true, "changed": true, "sig": final_sig })).into_response();
                     }
                 }

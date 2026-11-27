@@ -1,17 +1,20 @@
 /**
- * search-engine.js —— 搜索核心状态、IDB LRU 缓存、命名空间失效、ADS 语法解析、
- * 同义词展开缓存、页内/评论叠加层、摘要 RPC 与标题高亮区间匹配。
+ * search-engine.js —— 搜索核心引擎与缓存协调层（运行于主线程）
+ * 负责 IDB LRU 缓存与命名空间失效、ADS 解析、同义词展开、页内/评论叠加层及摘要 RPC。
  */
-import { $, toHalfwidth, hashText } from './shared-utils.js';
+import { $, toHalfwidth, hashText, encodePathSegments } from './shared-utils.js';
 
-export const SEARCH_ALGO_VER = 11;
-
+// 算法版本与 ADS 解析参数
+export const SEARCH_ALGO_VER = 11;           // 变更匹配/评分语义时同步递增以失效旧缓存
 const ADS_PREFIX_RE = /^[@＠][\[［【]/;
-const ADS_MAX_DEPTH = 8;
+const ADS_MAX_DEPTH = 8;                     // 组合表达式括号最大嵌套深度
 const ADS_USAGE = '@[a&!(b|c)]飞机[31]大炮[]机枪[0]';
 const SR_HARD_BREAK_RE = /[\n\r。！？；!?;]/;
 
 class AdsSyntaxError extends Error { }
+
+
+// --- 查询规范化与标题区间匹配 ---
 
 export function normalizeKeyword(kw) {
     if (!kw || typeof kw !== 'string') return '';
@@ -131,6 +134,9 @@ export function srCollectMatches(chars, keywords, noiseLevel, out) {
         }
     }
 }
+
+
+// --- 搜索结果缓存与 LRU ---
 
 function createSearchCacheLRU(db, max = 500) {
     let order = null;
@@ -381,9 +387,13 @@ function createSearchResultCache(db, lru, store, emitEvent, { memMax = 48, flush
     return { getMeta, set, remove, clear, clearMemory, bindNamespace, stripKeyPrefix };
 }
 
+
+// --- 搜索引擎实例工厂 ---
+
 export function createSearchEngine(ctx) {
     const { store, dbProxy, iframes, emitEvent, getWorker, getActiveWorker, getCommentModel } = ctx;
 
+    // 运行态缓存与请求队列
     const commentHitCache = new Map();
     const pageHitCache = new Map();
     const snippetCache = new Map();
@@ -410,6 +420,8 @@ export function createSearchEngine(ctx) {
         paintStatus: () => { },
         onScopeChange: () => { }
     };
+
+    // --- 文内搜索桥接与作用域 ---
 
     function hasTxtProvider() {
         return !!txtProvider;
@@ -495,6 +507,8 @@ export function createSearchEngine(ctx) {
         snippetCache.clear();
         termSpecsCache.clear();
     }
+
+    // --- 缓存命名空间与同义词展开 ---
 
     const searchCacheLRU = createSearchCacheLRU(dbProxy);
     const searchResultCache = createSearchResultCache(dbProxy, searchCacheLRU, store, emitEvent, {
@@ -652,6 +666,8 @@ export function createSearchEngine(ctx) {
         return buildTermSpecs(kw, (store.synonyms_enabled ?? 1) === 1, isTxtScope());
     }
 
+    // --- ADS 组合查询解析 ---
+
     function parseAdsQuery(raw) {
         const fail = (error) => ({ ok: false, error });
         const src = String(raw).trim()
@@ -781,12 +797,14 @@ export function createSearchEngine(ctx) {
         return terms;
     }
 
-    // 暴露给 content.js iframe 调用的顶层契约
+    // 顶层契约：供 content.js 等同源 iframe 直接复用解析与同义词缓存
     window.parseAdsQuery = parseAdsQuery;
     window.buildAdsPositiveTerms = buildAdsPositiveTerms;
     window.buildTermSpecs = buildTermSpecs;
     window.hasTermSpecs = hasTermSpecs;
     window.ensureTermSpecs = ensureTermSpecs;
+
+    // --- 页内与评论结果叠加层 ---
 
     function setPageHit(kw, entry) {
         const key = pageOverlayKey(kw);
@@ -1000,6 +1018,8 @@ export function createSearchEngine(ctx) {
         if (changed) uiHandlers.rerenderOverlay();
     }
 
+    // --- 摘要提取与双语页回退 ---
+
     function getContentIframe() {
         return (iframes && iframes.content) || document.getElementById('content');
     }
@@ -1171,7 +1191,7 @@ export function createSearchEngine(ctx) {
         let cached = fetchedBilingualCache.get(normPath);
         if (cached === undefined) {
             try {
-                const res = await fetch(encodeURI(normPath));
+                const res = await fetch(encodePathSegments(normPath));
                 if (!res.ok) return null;
                 const html = await res.text();
                 const doc = new DOMParser().parseFromString(html, 'text/html');
@@ -1237,7 +1257,14 @@ export function createSearchEngine(ctx) {
         if (!worker) return Promise.resolve(null);
         return new Promise((resolve) => {
             const reqId = ++_snipReqId;
-            pendingSnippets.set(reqId, (data) => resolve(data));
+            const timer = setTimeout(() => {
+                pendingSnippets.delete(reqId);
+                resolve(null);
+            }, 4000);
+            pendingSnippets.set(reqId, (data) => {
+                clearTimeout(timer);
+                resolve(data);
+            });
             worker.postMessage({
                 type: 'SNIPPETS',
                 payload: ads
@@ -1253,6 +1280,17 @@ export function createSearchEngine(ctx) {
                     }
             });
         });
+    }
+
+    function handleWorkerError() {
+        for (const cb of pendingSnippets.values()) {
+            try { cb(null); } catch (_) { }
+        }
+        pendingSnippets.clear();
+        for (const cb of pendingExpands.values()) {
+            try { cb([]); } catch (_) { }
+        }
+        pendingExpands.clear();
     }
 
     async function requestSnippets(path, keyword) {
@@ -1363,6 +1401,8 @@ export function createSearchEngine(ctx) {
         }
         return merged.map(h => [h[0], h[1], Math.min(h[2], 255) | (Math.min(h[3], 3) << 8)]);
     }
+
+    // --- 检索入口与 Worker 消息处理 ---
 
     function searchAds(kw) {
         const token = ++window._searchToken;
@@ -1707,6 +1747,7 @@ export function createSearchEngine(ctx) {
         requestSnippets,
         computeTitleMatchRanges,
         handleWorkerMessage,
+        handleWorkerError,
         registerTxtProvider,
         unregisterTxtProvider,
         getTxtProvider,

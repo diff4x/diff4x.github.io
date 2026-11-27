@@ -1,4 +1,8 @@
 @charset "UTF-8";
+/* bookmark.css —— 首页书签区块、拖拽反馈与壁纸管理面板（运行于 #content iframe） */
+
+
+/* --- 全局基础与滚动条 --- */
 
 html,
 body,
@@ -15,20 +19,20 @@ body {
     height: 100vh;
     margin: 0;
     background-color: #408fc4;
-    background-image: url(../../gallery/拍摄/260906/20260908222042.webp);
+    background-image: url(../../gallery/拍摄/260906/20260908222042.webp); /* 默认首屏背景图 */
     background-size: cover;
 }
 
 ::-webkit-scrollbar {
-    width: 4px
+    width: 4px;
 }
 
 ::-webkit-scrollbar-thumb {
-    background-color: #fff
+    background-color: #fff;
 }
 
 ::-webkit-scrollbar-track {
-    background-color: #afc6de
+    background-color: #afc6de;
 }
 
 a {
@@ -39,6 +43,10 @@ a::after {
     content: "\2197";
 }
 
+
+/* --- 书签分组区块与拖拽态 --- */
+
+/* 仅命中书签分组容器，排除壁纸背景与壁纸面板内部 div */
 div:not(#wallpaper-panel):not(#b1):not(#wallpaper-bg) {
     color: honeydew;
     padding-top: 20px;
@@ -48,7 +56,7 @@ div:not(#wallpaper-panel):not(#b1):not(#wallpaper-bg) {
     transition: background 0.2s;
 }
 
-div>a {
+div > a {
     color: darkgray;
 }
 
@@ -56,8 +64,9 @@ div#a a {
     color: cadetblue;
 }
 
-div>a:hover, div>a[data-touchpad-hover] {
-    color: #d2691e!important;
+div > a:hover,
+div > a[data-touchpad-hover] {
+    color: #d2691e !important;
 }
 
 div:not(#del).dragover {
@@ -76,6 +85,9 @@ div#del.dragover {
     color: cadetblue;
     background-color: #000;
 }
+
+
+/* --- 壁纸背景与管理浮窗 --- */
 
 #wallpaper-bg {
     position: fixed;
@@ -118,17 +130,19 @@ div#del.dragover {
     border: 1px solid #444;
     border-radius: 8px;
     padding: 12px;
-    box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
     z-index: 1000;
     display: none;
     font-size: 13px;
     font-family: sans-serif;
 }
+
 #wallpaper-panel.active {
     display: flex;
     flex-direction: column;
     gap: 8px;
 }
+
 .wp-list {
     max-height: 150px;
     overflow-y: auto;
@@ -137,6 +151,7 @@ div#del.dragover {
     padding: 4px;
     border-radius: 4px;
 }
+
 .wp-item {
     display: flex;
     align-items: center;
@@ -145,19 +160,21 @@ div#del.dragover {
     cursor: pointer;
     border-bottom: 1px solid #222;
 }
+
 .wp-item:hover {
     background: #2a2a2a;
 }
+
 .wp-preview-tooltip {
     position: fixed;
     width: 160px;
     height: 100px;
-    background-size: contain; 
-    background-repeat: no-repeat; 
+    background-size: contain;
+    background-repeat: no-repeat;
     background-color: #000;
     background-position: center;
     border: 2px solid #fff;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.6);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.6);
     pointer-events: none;
     z-index: 9999;
     display: none;

@@ -1,5 +1,10 @@
 @charset "UTF-8";
+/* content.css —— HTML 正文页排版、代码块、目录、灯箱与搜索定位（运行于 #content iframe） */
 
+
+/* --- 全局基础与滚动条 --- */
+
+/* md_viewer.html 会解析本文件中的 html/body 字体以同步主站阅读体验 */
 html,
 body,
 pre,
@@ -11,6 +16,7 @@ html {
     background-color: #cae4ff;
 }
 
+/* 初始透明防闪烁，由 content.js 渲染完成后置为 opacity: 1 */
 body {
     opacity: 0;
     transition: opacity 0.3s ease;
@@ -40,27 +46,30 @@ iframe {
     background-color: #afc6de;
 }
 
+
+/* --- 正文元素（标题、链接、图片、段落与表格） --- */
+
 h1,
 h2,
 h3,
 h4,
 h5 {
-    padding-top: .5rem !important;
-    margin-top: .5rem !important;
+    padding-top: 0.5rem !important;
+    margin-top: 0.5rem !important;
     margin-bottom: 0 !important;
     padding-bottom: 0 !important;
 }
 
-h1:after,
-h2:after,
-h3:after,
-h4:after,
-h5:after,
-h6:after {
+h1::after,
+h2::after,
+h3::after,
+h4::after,
+h5::after,
+h6::after {
     content: attr(data-number) " ";
-    margin-left: .5em;
+    margin-left: 0.5em;
     color: #00f;
-    font-size: .5em;
+    font-size: 0.5em;
     vertical-align: super;
     font-style: italic;
 }
@@ -69,7 +78,7 @@ a {
     color: blue;
 }
 
-a[target="_blank"]:after {
+a[target="_blank"]::after {
     padding-left: 0.2rem;
     content: "\2197";
 }
@@ -85,7 +94,7 @@ pre {
     width: auto;
 }
 
-pre>a {
+pre > a {
     color: red;
 }
 
@@ -93,14 +102,55 @@ pre.consumed span.lv0[data-index]::after {
     content: attr(data-index);
     color: #8d8d8d;
     font-size: small;
-    margin-left: .5em;
+    margin-left: 0.5em;
 }
 
-table, td {
+table,
+td {
     padding: 0 20px;
     border-collapse: collapse;
     border: 1px solid;
 }
+
+/* .lv0 须先于 .lv4–.lv16，确保各级缩进着色正确覆盖 */
+.lv0 {
+    max-width: 80vw;
+    display: inline-block;
+    text-indent: 2rem;
+    margin: 0;
+    vertical-align: top;
+}
+
+.lv4 {
+    padding-left: 2.2rem;
+    color: #3593ff;
+}
+
+.lv8 {
+    padding-left: 4.4rem;
+    color: #888;
+}
+
+.lv12 {
+    padding-left: 6.6rem;
+    color: #0d8400;
+}
+
+.lv16 {
+    padding-left: 8.8rem;
+    color: #d28fcf;
+}
+
+.lv0:empty,
+.lv0:has(br),
+.empty-line-fix {
+    line-height: 0.5rem;
+    display: block;
+    margin-bottom: 0.2rem;
+}
+
+
+/* --- 代码块与右上角工具条 --- */
 
 code {
     display: block;
@@ -136,7 +186,7 @@ code::before {
     overflow: hidden;
 }
 
-code:after {
+code::after {
     right: 0;
     position: absolute;
     top: 0;
@@ -154,12 +204,22 @@ code:empty::before {
     content: "\00A0";
 }
 
-code+code {
+code + code {
     margin-top: -0.5rem !important;
 }
 
-/* 代码框右上角外侧：语种标签 + 一键复制，每个代码块各一个，作为"标签页"贴在框的上沿；
-   精确的右对齐由 content.js 的 initCodeTools 按代码框实际右边缘计算 margin-left，这里的 auto 只是兜底 */
+code div,
+code p {
+    display: inline;
+    margin: 0;
+    padding: 0;
+}
+
+code span {
+    word-break: auto-phrase;
+}
+
+/* 右对齐由 content.js initCodeTools 按代码框右缘动态计算 margin-left，auto 作兜底 */
 .code-tools {
     position: relative;
     display: flex;
@@ -177,7 +237,7 @@ code+code {
     user-select: none;
 }
 
-.code-tools+code {
+.code-tools + code {
     margin-top: 0 !important;
     border-top-right-radius: 0;
 }
@@ -185,9 +245,9 @@ code+code {
 .code-lang {
     font-weight: bold;
     background-color: darkred;
-    padding: .3rem .6rem;
+    padding: 0.3rem 0.6rem;
     color: lightblue;
-    font-family: Consolas,SFMono-Regular,Menlo,monospace;
+    font-family: Consolas, SFMono-Regular, Menlo, monospace;
 }
 
 .code-lang::before {
@@ -239,52 +299,8 @@ code+code {
     content: "Copy failed";
 }
 
-code div,
-code p {
-    display: inline;
-    margin: 0;
-    padding: 0;
-}
 
-code span {
-    word-break: auto-phrase;
-}
-
-.lv0 {
-    max-width: 80vw;
-    display: inline-block;
-    text-indent: 2rem;
-    margin: 0;
-    vertical-align: top;
-}
-
-.lv4 {
-    padding-left: 2.2rem;
-    color: #3593ff;
-}
-
-.lv8 {
-    padding-left: 4.4rem;
-    color: #888;
-}
-
-.lv12 {
-    padding-left: 6.6rem;
-    color: #0d8400;
-}
-
-.lv16 {
-    padding-left: 8.8rem;
-    color: #d28fcf;
-}
-
-.lv0:empty,
-.lv0:has(br),
-.empty-line-fix {
-    line-height: 0.5rem;
-    display: block;
-    margin-bottom: 0.2rem;
-}
+/* --- 顶栏、进度条与页内导航 --- */
 
 #anchor {
     display: none;
@@ -331,6 +347,9 @@ code span {
     color: #fff;
 }
 
+
+/* --- 右侧目录 (#toc) --- */
+
 #toc {
     position: fixed;
     line-height: normal;
@@ -340,7 +359,7 @@ code span {
     transform: translateY(-50%);
     background-color: #ffffff;
     border: 1px solid #a7a7a7;
-    border-radius: .5rem;
+    border-radius: 0.5rem;
 }
 
 #toc-list {
@@ -369,7 +388,7 @@ code span {
     font-size: 0.8rem;
     text-decoration: none;
     color: gray;
-    padding: 0 .5rem;
+    padding: 0 0.5rem;
 }
 
 #toc a:hover {
@@ -391,7 +410,9 @@ code span {
     color: cornflowerblue;
 }
 
-/* 灯箱 (Lightbox) */
+
+/* --- 灯箱、悬浮提示与辅助状态 --- */
+
 .lightbox {
     display: none;
     position: fixed;
@@ -399,7 +420,7 @@ code span {
     left: 0;
     width: 100%;
     height: 100%;
-    background-color: rgba(0, 0, 0, .9);
+    background-color: rgba(0, 0, 0, 0.9);
     text-align: center;
     z-index: 100;
     touch-action: none;

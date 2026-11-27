@@ -1,4 +1,15 @@
-function attachVirtualCursor(targetWindow){if(!targetWindow||targetWindow.closed||targetWindow._vcAttached)return;targetWindow._vcAttached=true;let lastHoverEl=null;let hoverChain=[];let selectStartRange=null;const doc=targetWindow.document;const getCaret=(x,y)=>{if(doc.caretRangeFromPoint)return doc.caretRangeFromPoint(x,y);if(doc.caretPositionFromPoint){const pos=doc.caretPositionFromPoint(x,y);if(pos){const r=doc.createRange();r.setStart(pos.offsetNode,pos.offset);r.collapse(true);return r;}}
+const TP_HOVER_CLASS='tp-hover';const TP_HOVER_RE=/:hover\b/;function tpSplitSelectors(text){const parts=[];let depth=0,quote='',start=0;for(let i=0;i<text.length;i++){const c=text[i];if(quote){if(c==='\\')i++;else if(c===quote)quote='';continue;}
+if(c==='"'||c==="'")quote=c;else if(c==='('||c==='[')depth++;else if(c===')'||c===']')depth--;else if(c===','&&depth===0){parts.push(text.slice(start,i));start=i+1;}}
+parts.push(text.slice(start));return parts;}
+function tpMirrorHoverRules(container){let rules;try{rules=container.cssRules;}catch(e){return;}
+if(!rules)return;for(let i=rules.length-1;i>=0;i--){const rule=rules[i];if(!rule.selectorText){if(rule.cssRules)tpMirrorHoverRules(rule);continue;}
+if(!TP_HOVER_RE.test(rule.selectorText))continue;const next=rules[i+1];if(next&&next.selectorText&&next.selectorText.includes('.'+TP_HOVER_CLASS)&&next.style.cssText===rule.style.cssText)continue;const sel=tpSplitSelectors(rule.selectorText)
+.filter(s=>TP_HOVER_RE.test(s))
+.map(s=>s.replace(new RegExp(TP_HOVER_RE.source,'g'),'.'+TP_HOVER_CLASS))
+.join(',');try{container.insertRule(`${sel}{${rule.style.cssText}}`,i+1);}catch(e){}}}
+function tpObserveHoverStyles(targetDoc,targetWin){if(!targetDoc||targetDoc._tpHoverObserved)return;targetDoc._tpHoverObserved=true;const sync=()=>{try{Array.from(targetDoc.styleSheets).forEach(tpMirrorHoverRules);}catch(_){}};let timer=null;const schedule=()=>{clearTimeout(timer);timer=setTimeout(sync,80);};sync();if(targetDoc.head&&typeof MutationObserver==='function'){new MutationObserver(schedule).observe(targetDoc.head,{childList:true,subtree:true,characterData:true});}
+targetDoc.addEventListener('load',schedule,true);if(targetWin)targetWin.addEventListener('load',sync);}
+function attachVirtualCursor(targetWindow){if(!targetWindow||targetWindow.closed||targetWindow._vcAttached)return;targetWindow._vcAttached=true;let lastHoverEl=null;let hoverChain=[];let selectStartRange=null;const doc=targetWindow.document;tpObserveHoverStyles(doc,targetWindow);const getCaret=(x,y)=>{if(doc.caretRangeFromPoint)return doc.caretRangeFromPoint(x,y);if(doc.caretPositionFromPoint){const pos=doc.caretPositionFromPoint(x,y);if(pos){const r=doc.createRange();r.setStart(pos.offsetNode,pos.offset);r.collapse(true);return r;}}
 return null;};const getAncestors=(el)=>{const c=[];while(el){c.push(el);el=el.parentElement;}return c;};const maybeFocus=(el)=>{if((el.matches&&el.matches('input,textarea,select,[contenteditable]'))||el.tabIndex>=0)el.focus({preventScroll:true});};const setIframeHoverChain=(el)=>{const next=[];for(let n=el;n;n=n.parentElement){if(n!==doc.body&&n!==doc.documentElement)next.push(n);}
 const keep=new Set(next);hoverChain.forEach(n=>{if(!keep.has(n))n.classList.remove('tp-hover');});next.forEach(n=>n.classList.add('tp-hover'));hoverChain=next;};targetWindow.handleSimPointer=function(payload){const{op,x,y,deltaX,deltaY,buttons}=payload||{};if(op==='leave'){if(lastHoverEl){const chain=getAncestors(lastHoverEl);const oldLi=lastHoverEl.closest?lastHoverEl.closest('li, .history-row, #menu-b a, div > a'):null;if(oldLi)oldLi.removeAttribute('data-touchpad-hover');lastHoverEl.dispatchEvent(new targetWindow.MouseEvent('mouseout',{bubbles:true,relatedTarget:null}));chain.forEach(a=>a.dispatchEvent(new targetWindow.MouseEvent('mouseleave',{bubbles:false})));lastHoverEl=null;}
 setIframeHoverChain(null);return;}
@@ -62,18 +73,7 @@ function sendToFrame(frameOrId,op,x,y,extra){const frameEl=typeof frameOrId==='s
 ?(frameOrId==='content'?contentFrame:(frameOrId==='side'?sideFrame:document.getElementById(frameOrId)))
 :frameOrId;const fallbackId=typeof frameOrId==='string'?frameOrId:(frameEl&&frameEl.id)||'';const payload=Object.assign({op,x,y},extra);try{const win=getSameOriginFrameWindow(frameEl);if(win&&typeof win.handleSimPointer==='function'){win.handleSimPointer(payload);return;}}catch(_){}
 if(fallbackId==='content'||fallbackId==='side'){ctx.emitEvent('SIM_POINTER',payload,fallbackId);}}
-const HOVER_CLASS='tp-hover';const HOVER_RE=/:hover\b/;function splitSelectors(text){const parts=[];let depth=0,quote='',start=0;for(let i=0;i<text.length;i++){const c=text[i];if(quote){if(c==='\\')i++;else if(c===quote)quote='';continue;}
-if(c==='"'||c==="'")quote=c;else if(c==='('||c==='[')depth++;else if(c===')'||c===']')depth--;else if(c===','&&depth===0){parts.push(text.slice(start,i));start=i+1;}}
-parts.push(text.slice(start));return parts;}
-function mirrorHoverRules(container){let rules;try{rules=container.cssRules;}catch(e){return;}
-if(!rules)return;for(let i=rules.length-1;i>=0;i--){const rule=rules[i];if(!rule.selectorText){if(rule.cssRules)mirrorHoverRules(rule);continue;}
-if(!HOVER_RE.test(rule.selectorText))continue;const next=rules[i+1];if(next&&next.selectorText&&next.selectorText.includes('.'+HOVER_CLASS)&&next.style.cssText===rule.style.cssText)continue;const sel=splitSelectors(rule.selectorText)
-.filter(s=>HOVER_RE.test(s))
-.map(s=>s.replace(new RegExp(HOVER_RE.source,'g'),'.'+HOVER_CLASS))
-.join(',');try{container.insertRule(`${sel}{${rule.style.cssText}}`,i+1);}catch(e){}}}
-function syncHoverStyles(){Array.from(document.styleSheets).forEach(mirrorHoverRules);}
-let hoverSyncTimer=null;function scheduleHoverSync(){clearTimeout(hoverSyncTimer);hoverSyncTimer=setTimeout(syncHoverStyles,80);}
-syncHoverStyles();new MutationObserver(scheduleHoverSync).observe(document.head,{childList:true,subtree:true,characterData:true});document.addEventListener('load',scheduleHoverSync,true);window.addEventListener('load',scheduleHoverSync);let hoverChain=[];function setHoverChain(el){const next=[];for(let n=el;n;n=n.parentElement){if(n!==document.body&&n!==document.documentElement)next.push(n);}
+const HOVER_CLASS=TP_HOVER_CLASS;tpObserveHoverStyles(document,window);let hoverChain=[];function setHoverChain(el){const next=[];for(let n=el;n;n=n.parentElement){if(n!==document.body&&n!==document.documentElement)next.push(n);}
 const keep=new Set(next);hoverChain.forEach(n=>{if(!keep.has(n))n.classList.remove(HOVER_CLASS);});next.forEach(n=>n.classList.add(HOVER_CLASS));hoverChain=next;}
 let localHoverEl=null;function getAncestors(el){const chain=[];let cur=el;while(cur){chain.push(cur);cur=cur.parentElement;}
 return chain;}

@@ -1,7 +1,33 @@
 /**
- * shared-utils.js —— 主站各 ES 模块共享的基础工具集（零外部依赖）
- * 包含：弹窗拖拽、音视频进度持久化、剪贴板回退、HTML 转义、半角/哈希、CSS Custom Highlight 管理。
+ * shared-utils.js —— 主站与阅读器 ES 模块共享基础工具集（运行于主线程 / iframe）
+ * 涵盖 DOM/文本工具、音视频进度持久化、CSS Custom Highlight、文内组合检索及本地 API 客户端。
  */
+
+// 校验与存储键常量
+const FALLBACK_BLOCKED_SCHEMES = new Set([
+    'javascript', 'data', 'vbscript', 'file', 'blob', 'about',
+    'http', 'https', 'ws', 'wss', 'ftp', 'mailto', 'tel'
+]);
+export const LOCAL_TOKEN_STORAGE = '__swamp_local_token__';
+
+// 音视频播控进度参数
+const MEDIA_POS_KEY = 'media_positions';
+const MEDIA_POS_MAX = 500;           // 最多记忆条数
+const MEDIA_POS_MIN = 1;             // 低于此秒数不记录 (s)
+const MEDIA_POS_END_GAP = 2;         // 距片尾小于此值视为已播完 (s)
+
+// CSS Custom Highlight 样式梯度（按 noise 0–5 递减透明度）
+export const SYN_HL_BIT = 0x100;
+export const SEARCH_HL_STYLE = [[0.80, '#000'], [0.65, '#111'], [0.52, '#111'], [0.42, '#333'], [0.34, '#333'], [0.28, '#333']];
+export const SEARCH_SYN_HL_STYLE = [[0.55, '#000'], [0.45, '#111'], [0.38, '#111'], [0.32, '#333'], [0.26, '#333'], [0.22, '#333']];
+export const SEARCH_SYN2_HL_STYLE = [[0.38, '#000'], [0.32, '#111'], [0.27, '#111'], [0.23, '#333'], [0.19, '#333'], [0.16, '#333']];
+
+// 模块运行态
+const searchHl = [];
+let _tokenRefreshPromise = null;
+
+
+// --- DOM、文本与存储代理 ---
 
 export const $ = (selector) => document.querySelector(selector);
 export const $$ = (selector) => document.querySelectorAll(selector);
@@ -12,11 +38,6 @@ function getSiteCore() {
     } catch (_) { }
     return (typeof globalThis !== 'undefined' && globalThis.SiteCore) ? globalThis.SiteCore : null;
 }
-
-const FALLBACK_BLOCKED_SCHEMES = new Set([
-    'javascript', 'data', 'vbscript', 'file', 'blob', 'about',
-    'http', 'https', 'ws', 'wss', 'ftp', 'mailto', 'tel'
-]);
 
 export function sanitizeProtocolName(raw) {
     const sc = getSiteCore();
@@ -63,6 +84,12 @@ export function escapeHtml(str) {
     return String(str ?? '').replace(/[&<>"']/g, ch => (
         { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]
     ));
+}
+
+export function encodePathSegments(path) {
+    return String(path ?? '').split('/').map(seg => (
+        (seg === '' || seg === '.' || seg === '..') ? seg : encodeURIComponent(seg)
+    )).join('/');
 }
 
 export function toHalfwidth(str) {
@@ -155,13 +182,8 @@ export function copyTextFallback(text) {
     return Promise.resolve(false);
 }
 
-// =========================================================================
-// 音视频播控进度持久化
-// =========================================================================
-const MEDIA_POS_KEY = 'media_positions';
-const MEDIA_POS_MAX = 500;
-const MEDIA_POS_MIN = 1;
-const MEDIA_POS_END_GAP = 2;
+
+// --- 音视频播控进度持久化 ---
 
 export function mediaPosKey(src) {
     let s = String(src || '').split('#')[0].split('?')[0];
@@ -206,22 +228,39 @@ export function saveMediaPositionsIn(root) {
 }
 
 export function resumeMediaPosition(el, src) {
+    if (!el) return;
+    if (el._resumePosHandler) {
+        el.removeEventListener('loadedmetadata', el._resumePosHandler);
+        el._resumePosHandler = null;
+    }
     const saved = getMediaPosition(src);
     if (!saved) return;
-    try { el.currentTime = saved; } catch (e) { }
-    el.addEventListener('loadedmetadata', () => {
-        if (Number.isFinite(el.duration) && saved > el.duration - MEDIA_POS_END_GAP) el.currentTime = 0;
-    }, { once: true });
+    const applyPos = () => {
+        try {
+            if (Number.isFinite(el.duration) && el.duration > 0) {
+                el.currentTime = saved > el.duration - MEDIA_POS_END_GAP ? 0 : saved;
+            } else {
+                el.currentTime = saved;
+            }
+        } catch (e) { }
+    };
+    if (el.readyState >= 1) {
+        applyPos();
+    } else {
+        applyPos();
+        const onMeta = () => {
+            if (el._resumePosHandler === onMeta) el._resumePosHandler = null;
+            applyPos();
+        };
+        el._resumePosHandler = onMeta;
+        el.addEventListener('loadedmetadata', onMeta, { once: true });
+    }
 }
 
-// =========================================================================
-// CSS Custom Highlight 共享样式与池（供搜索列表高亮与摘要预览复用）
-// =========================================================================
-export const SYN_HL_BIT = 0x100;
-export const SEARCH_HL_STYLE = [[0.80, '#000'], [0.65, '#111'], [0.52, '#111'], [0.42, '#333'], [0.34, '#333'], [0.28, '#333']];
-export const SEARCH_SYN_HL_STYLE = [[0.55, '#000'], [0.45, '#111'], [0.38, '#111'], [0.32, '#333'], [0.26, '#333'], [0.22, '#333']];
-export const SEARCH_SYN2_HL_STYLE = [[0.38, '#000'], [0.32, '#111'], [0.27, '#111'], [0.23, '#333'], [0.19, '#333'], [0.16, '#333']];
 
+// --- CSS Custom Highlight 管理 ---
+
+// 解包 Wasm packed_meta 位域：bits 0..7=noise，bits 8..9=tier
 export const searchHlTier = (noise) => Math.min(((noise | 0) >> 8) & 3, 2);
 export const searchHlIsSyn = (noise) => searchHlTier(noise) > 0;
 export const searchHlBucket = (noise) => Math.min(Math.max((noise | 0) & 0xff, 0), SEARCH_HL_STYLE.length - 1);
@@ -232,8 +271,6 @@ export const searchHlNameBySlot = (slot) => {
     if (slot < tierSize * 2) return `search-syn-${slot - tierSize}`;
     return `search-syn2-${slot - tierSize * 2}`;
 };
-
-const searchHl = [];
 
 export function searchHighlightSupported() {
     if (!(window.CSS && CSS.highlights && typeof Highlight !== 'undefined')) return false;
@@ -275,9 +312,9 @@ export function publishSearchHighlights() {
     });
 }
 
-// =========================================================================
-// 文内搜索（TXT / PDF / EPUB）共享组合检索与摘要合并工具
-// =========================================================================
+
+// --- 文内搜索（TXT / PDF / EPUB）组合检索与摘要合并 ---
+
 export function adaptKeywordsForWasm(specs, weighted) {
     if (!Array.isArray(specs)) return [];
     if (weighted) return specs;
@@ -481,10 +518,8 @@ export function buildMergedGroupSnippets(groupHits, opts) {
     return { items, more: Math.max(0, windows.length - items.length) };
 }
 
-// =========================================================================
-// 本地伴生服务同源 API 客户端：#fragment 令牌吸收 + X-Swamp-Token 请求封装
-// =========================================================================
-export const LOCAL_TOKEN_STORAGE = '__swamp_local_token__';
+
+// --- 本地伴生服务 API 客户端 ---
 
 export function ingestLocalTokenFromHash(isLocalEnv) {
     if (!isLocalEnv) return false;
@@ -501,8 +536,6 @@ export function ingestLocalTokenFromHash(isLocalEnv) {
     }
     return true;
 }
-
-let _tokenRefreshPromise = null;
 
 async function requestInteractiveTokenRefresh() {
     if (_tokenRefreshPromise) return _tokenRefreshPromise;
