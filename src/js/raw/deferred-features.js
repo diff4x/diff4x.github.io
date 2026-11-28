@@ -641,7 +641,6 @@ export function bomb(ctx) {
                     savedSnapStr = sessionStorage.getItem('ss_restore_strict');
                 }
                 const backupData = await getSelectedData(selections);
-                const savedLocalToken = store.online_flag === '0' ? localStorage.getItem('__swamp_local_token__') : null;
                 const savedAdultVerified = localStorage.getItem('adult_verified') === 'true' || /(?:^|;\s*)adult_verified=true(?:;|$)/.test(document.cookie);
                 await doWipe();
                 await restoreData(backupData, selections);
@@ -650,9 +649,6 @@ export function bomb(ctx) {
                     const d = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000);
                     const sec = location.protocol === 'https:' ? '; secure' : '';
                     document.cookie = `adult_verified=true; expires=${d.toUTCString()}; path=/${sec}; SameSite=Lax`;
-                }
-                if (savedLocalToken) {
-                    try { localStorage.setItem('__swamp_local_token__', savedLocalToken); } catch (_) { }
                 }
                 if (savedSnapStr) {
                     try { sessionStorage.setItem('ss_restore_strict', savedSnapStr); } catch (_) { }

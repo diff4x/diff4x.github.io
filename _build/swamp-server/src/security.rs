@@ -1,8 +1,8 @@
-//! 本地服务安全守卫：Host 白名单、双阶段静态路径校验、API 四重鉴权与内置自检套件。
+//! 本地服务安全守卫：Host 白名单、双阶段静态路径校验、HttpOnly Cookie 五重鉴权与内置自检套件。
 
 use axum::{
     extract::{Request, State},
-    http::{header, HeaderName, HeaderValue, Method, StatusCode},
+    http::{header, HeaderMap, HeaderName, HeaderValue, Method, StatusCode},
     middleware::Next,
     response::{IntoResponse, Response},
     Json,
@@ -10,7 +10,8 @@ use axum::{
 use percent_encoding::percent_decode_str;
 use serde_json::json;
 use std::sync::atomic::AtomicBool;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 use subtle::ConstantTimeEq;
 
 use crate::config::ServerConfig;
@@ -18,6 +19,11 @@ use crate::services::log_bus::LogBus;
 use crate::services::tasks::RuntimeStatus;
 
 pub const CSP_HEADER_VALUE: &str = "script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' https://giscus.app; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; frame-ancestors 'self';";
+pub const SESSION_COOKIE_NAME: &str = "swamp_session";
+pub const CLIENT_HEADER_NAME: &str = "x-swamp-client";
+pub const CLIENT_HEADER_VALUE: &str = "1";
+const AUTH_CODE_TTL: Duration = Duration::from_secs(60);
+const MAX_AUTH_CODES: usize = 16;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RunMode {
@@ -25,10 +31,58 @@ pub enum RunMode {
     Sim,
 }
 
+/// 一次性短时引导码池：用于 Open Site / --open 换取 HttpOnly 会话 Cookie，单次消费且 60s 过期
+pub struct AuthCodeStore {
+    entries: Mutex<Vec<(String, Instant)>>,
+}
+
+impl AuthCodeStore {
+    pub fn new() -> Self {
+        Self {
+            entries: Mutex::new(Vec::new()),
+        }
+    }
+
+    pub fn issue(&self) -> Result<String, String> {
+        let code = generate_token_hex()?;
+        let now = Instant::now();
+        let mut guard = self.entries.lock().unwrap_or_else(|e| e.into_inner());
+        guard.retain(|(_, ts)| now.saturating_duration_since(*ts) < AUTH_CODE_TTL);
+        while guard.len() >= MAX_AUTH_CODES {
+            guard.remove(0);
+        }
+        guard.push((code.clone(), now));
+        Ok(code)
+    }
+
+    pub fn consume(&self, raw_code: &str) -> bool {
+        let candidate = raw_code.trim().to_ascii_lowercase();
+        if candidate.len() != 64 || !candidate.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return false;
+        }
+        let now = Instant::now();
+        let mut guard = self.entries.lock().unwrap_or_else(|e| e.into_inner());
+        guard.retain(|(_, ts)| now.saturating_duration_since(*ts) < AUTH_CODE_TTL);
+        let mut hit_idx: Option<usize> = None;
+        for (idx, (stored, _)) in guard.iter().enumerate() {
+            if bool::from(stored.as_bytes().ct_eq(candidate.as_bytes())) && hit_idx.is_none() {
+                hit_idx = Some(idx);
+            }
+        }
+        if let Some(idx) = hit_idx {
+            guard.swap_remove(idx);
+            true
+        } else {
+            false
+        }
+    }
+}
+
 pub struct AppState {
     pub mode: RunMode,
     pub config: ServerConfig,
     pub token: String,
+    pub auth_codes: AuthCodeStore,
     pub allowed_origins: Vec<String>,
     pub allowed_hosts: Vec<String>,
     pub verbose: bool,
@@ -39,6 +93,46 @@ pub struct AppState {
     pub shutting_down: AtomicBool,
     pub sim_gitignore: Option<ignore::gitignore::Gitignore>,
     pub rt_handle: tokio::runtime::Handle,
+}
+
+impl AppState {
+    pub fn issue_auth_code(&self) -> Result<String, String> {
+        self.auth_codes.issue()
+    }
+
+    pub fn consume_auth_code(&self, code: &str) -> bool {
+        self.auth_codes.consume(code)
+    }
+}
+
+pub fn build_session_cookie_header(token: &str) -> String {
+    format!(
+        "{}={}; Path=/; HttpOnly; SameSite=Strict",
+        SESSION_COOKIE_NAME, token
+    )
+}
+
+pub fn extract_cookie_value<'a>(cookie_header: &'a str, name: &str) -> Option<&'a str> {
+    for part in cookie_header.split(';') {
+        let trimmed = part.trim();
+        if let Some((k, v)) = trimmed.split_once('=') {
+            if k.trim() == name {
+                return Some(v.trim());
+            }
+        }
+    }
+    None
+}
+
+fn extract_session_cookie_from_headers(headers: &HeaderMap) -> Option<String> {
+    for hv in headers.get_all(header::COOKIE) {
+        if let Ok(raw) = hv.to_str() {
+            if let Some(val) = extract_cookie_value(raw, SESSION_COOKIE_NAME) {
+                return Some(val.to_string());
+            }
+        }
+    }
+    None
 }
 
 pub fn generate_token_hex() -> Result<String, String> {
@@ -385,7 +479,8 @@ pub async fn host_guard_middleware(
 pub fn verify_api_auth(
     origin: Option<&str>,
     sec_fetch_site: Option<&str>,
-    token: Option<&str>,
+    client_hdr: Option<&str>,
+    session_token: Option<&str>,
     is_safe_method: bool,
     allowed_origins: &[String],
     expected_token: &str,
@@ -407,10 +502,20 @@ pub fn verify_api_auth(
         }
     }
 
-    let provided = match token {
+    let client_ok = client_hdr
+        .map(|v| v.trim() == CLIENT_HEADER_VALUE)
+        .unwrap_or(false);
+    if !client_ok {
+        return Err((StatusCode::FORBIDDEN, "缺少或非法的 X-Swamp-Client 请求头"));
+    }
+
+    let provided = match session_token {
         Some(t) => t.trim(),
         None => {
-            return Err((StatusCode::UNAUTHORIZED, "缺少 X-Swamp-Token 会话令牌"));
+            return Err((
+                StatusCode::UNAUTHORIZED,
+                "缺少本地会话 Cookie，请通过 Swamp 管理窗口点击 Open Site 或允许桌面续签弹窗",
+            ));
         }
     };
 
@@ -418,14 +523,14 @@ pub fn verify_api_auth(
     if !eq {
         return Err((
             StatusCode::UNAUTHORIZED,
-            "会话令牌无效或服务已重启，请通过 Swamp 管理窗口点击 Open Site 重新打开",
+            "本地会话已失效（服务可能已重启），请通过 Swamp 管理窗口点击 Open Site 或允许桌面续签弹窗",
         ));
     }
 
     Ok(())
 }
 
-/// `/__api/*` 四重鉴权中间件：Origin 白名单 + Sec-Fetch-Site + 常量时间 Token 比对
+/// `/__api/*` 五重鉴权中间件：Origin 白名单 + Sec-Fetch-Site + X-Swamp-Client + HttpOnly 会话 Cookie 常量时间比对
 pub async fn api_auth_middleware(
     State(state): State<Arc<AppState>>,
     req: Request,
@@ -435,12 +540,14 @@ pub async fn api_auth_middleware(
     let is_safe_method = *req.method() == Method::GET || *req.method() == Method::HEAD;
     let origin = headers.get(header::ORIGIN).and_then(|v| v.to_str().ok());
     let sfs = headers.get("sec-fetch-site").and_then(|v| v.to_str().ok());
-    let token = headers.get("x-swamp-token").and_then(|v| v.to_str().ok());
+    let client_hdr = headers.get(CLIENT_HEADER_NAME).and_then(|v| v.to_str().ok());
+    let session_token = extract_session_cookie_from_headers(headers);
 
     if let Err((status, msg)) = verify_api_auth(
         origin,
         sfs,
-        token,
+        client_hdr,
+        session_token.as_deref(),
         is_safe_method,
         &state.allowed_origins,
         &state.token,
@@ -483,7 +590,12 @@ pub fn run_selftest_with_logger(logs: Option<&LogBus>) -> Result<(), String> {
     check("serve-tasks-allowed", validate_static_request_path("/_build/privy/upcoming_tasks.json", RunMode::Serve).is_some());
     check("serve-block-local-props", validate_static_request_path("/_build/privy/local.properties", RunMode::Serve).is_none());
     check("serve-block-proto-key", validate_static_request_path("/_build/privy/tokens.json", RunMode::Serve).is_none());
-    check("serve-block-temp", validate_static_request_path("/_build/temp/backup/build_hashes.txt", RunMode::Serve).is_none());
+    check(
+        "serve-block-temp",
+        validate_static_request_path("/_build/temp/build_hashes.txt", RunMode::Serve).is_none()
+            && validate_static_request_path("/_build/temp/backup/swamp_panic.log", RunMode::Serve)
+                .is_none(),
+    );
     check("serve-block-8dot3", validate_static_request_path("/_BUILD~1/privy/local.toml", RunMode::Serve).is_none());
     check("serve-block-trailing-dot", validate_static_request_path("/_build/privy/txn.txt.", RunMode::Serve).is_none());
     check("serve-block-trailing-space", validate_static_request_path("/_build/privy/txn.txt%20", RunMode::Serve).is_none());
@@ -712,6 +824,7 @@ const d = obj.return / 2;"#;
         verify_api_auth(
             Some("http://localhost:8000"),
             Some("same-origin"),
+            Some("1"),
             Some("deadbeef"),
             false,
             &origs,
@@ -724,6 +837,7 @@ const d = obj.return / 2;"#;
         verify_api_auth(
             Some("https://evil.example"),
             Some("same-origin"),
+            Some("1"),
             Some("deadbeef"),
             false,
             &origs,
@@ -736,12 +850,54 @@ const d = obj.return / 2;"#;
         verify_api_auth(
             Some("http://localhost:8000"),
             Some("same-origin"),
+            Some("1"),
             Some("wrong"),
             false,
             &origs,
             "deadbeef",
         )
         .is_err(),
+    );
+    check(
+        "api-auth-reject-missing-client-hdr",
+        verify_api_auth(
+            Some("http://localhost:8000"),
+            Some("same-origin"),
+            None,
+            Some("deadbeef"),
+            false,
+            &origs,
+            "deadbeef",
+        )
+        .is_err()
+            && verify_api_auth(
+                Some("http://localhost:8000"),
+                Some("same-origin"),
+                Some("0"),
+                Some("deadbeef"),
+                false,
+                &origs,
+                "deadbeef",
+            )
+            .is_err(),
+    );
+    check(
+        "auth-cookie-parser",
+        extract_cookie_value(
+            "adult_verified=true; fake_swamp_session=bad; swamp_session=abc123; extra=a=b",
+            SESSION_COOKIE_NAME,
+        ) == Some("abc123")
+            && extract_cookie_value("adult_verified=true; fake_swamp_session=bad", SESSION_COOKIE_NAME)
+                .is_none(),
+    );
+    let tmp_codes = AuthCodeStore::new();
+    let issued_code = tmp_codes.issue().ok();
+    check(
+        "auth-bootstrap-code-single-use",
+        issued_code
+            .as_deref()
+            .map(|c| tmp_codes.consume(c) && !tmp_codes.consume(c) && !tmp_codes.consume("not-a-valid-code"))
+            .unwrap_or(false),
     );
 
     // --- 补丁分级、推送隐私、PKCE、隔离断言与 Markdown 历史自检 ---

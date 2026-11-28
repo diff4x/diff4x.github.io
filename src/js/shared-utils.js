@@ -67,24 +67,19 @@ const items=[];for(const win of selected){const{text,s,e,unitKey,hit}=win;const 
 :(s>0&&(!snapToNewline||text[s-1]!=='\n')?'…':'');const suf=e<text.length&&(!snapToNewline||text[e]!=='\n')?'…':'';const body=text.slice(s,e).replace(snapToNewline?/[\t\r]/g:/[\t\r\n]/g,' ');const t=pre+body+suf;const shift=pre.length;const h=[];const unitHits=byUnit.get(unitKey)||[hit];for(const item of unitHits){if(item.localEnd<=s)continue;if(item.localStart>=e)break;const rs=Math.max(s,item.localStart)-s+shift;const re=Math.min(e,item.localEnd)-s+shift;if(re>rs)h.push([rs,re,item.noise]);}
 items.push({t,h});}
 return{items,more:Math.max(0,windows.length-items.length)};}
-export function ingestLocalTokenFromHash(isLocalEnv){if(!isLocalEnv)return false;const h=window.location.hash||'';const m=/^#__swamp_token=([0-9a-f]{64})$/i.exec(h);if(!m)return false;try{localStorage.setItem(LOCAL_TOKEN_STORAGE,m[1].toLowerCase());}catch(_){}
-try{history.replaceState(null,'',window.location.pathname+window.location.search);}catch(_){window.location.hash='';}
+export function ingestLocalTokenFromHash(isLocalEnv){if(!isLocalEnv)return false;try{localStorage.removeItem(LOCAL_TOKEN_STORAGE);}catch(_){}
+const h=window.location.hash||'';if(!/^#__swamp_token=[0-9a-f]{64}$/i.test(h))return false;try{history.replaceState(null,'',window.location.pathname+window.location.search);}catch(_){window.location.hash='';}
 return true;}
-async function requestInteractiveTokenRefresh(){if(_tokenRefreshPromise)return _tokenRefreshPromise;_tokenRefreshPromise=(async()=>{try{const res=await fetch('/__auth/refresh',{method:'POST',credentials:'same-origin',cache:'no-store',headers:{'Content-Type':'application/json'},body:'{}'
-});const data=await res.json().catch(()=>({}));if(res.ok&&data.ok&&typeof data.token==='string'&&/^[0-9a-f]{64}$/i.test(data.token)){const tok=data.token.toLowerCase();try{localStorage.setItem(LOCAL_TOKEN_STORAGE,tok);}catch(_){}
-return tok;}
-return'';}catch(_){return'';}finally{_tokenRefreshPromise=null;}})();return _tokenRefreshPromise;}
+async function requestInteractiveSessionRefresh(){if(_tokenRefreshPromise)return _tokenRefreshPromise;_tokenRefreshPromise=(async()=>{try{const res=await fetch('/__auth/refresh',{method:'POST',credentials:'same-origin',cache:'no-store',headers:{'Content-Type':'application/json','X-Swamp-Client':'1'
+},body:'{}'
+});const data=await res.json().catch(()=>({}));return!!(res.ok&&data.ok);}catch(_){return false;}finally{_tokenRefreshPromise=null;}})();return _tokenRefreshPromise;}
 export async function callLocalApi(method,endpoint,body=null,options={}){const upperMethod=String(method||'GET').toUpperCase();const canInteractiveRefresh=(options&&options.interactive!==undefined)
 ?!!options.interactive
-:(upperMethod!=='GET'&&upperMethod!=='HEAD');let token=(localStorage.getItem(LOCAL_TOKEN_STORAGE)||'').trim();if(!token&&canInteractiveRefresh){token=await requestInteractiveTokenRefresh();}
-if(!token){throw new Error('缺少本地会话令牌，请通过 Swamp 管理窗口点击 Open Site 或允许桌面续签弹窗');}
-const doFetch=async(tok)=>{const opts={method:upperMethod,credentials:'same-origin',cache:'no-store',headers:{'X-Swamp-Token':tok
+:(upperMethod!=='GET'&&upperMethod!=='HEAD');const doFetch=async()=>{const opts={method:upperMethod,credentials:'same-origin',cache:'no-store',headers:{'X-Swamp-Client':'1'
 }};if(options&&options.signal){opts.signal=options.signal;}
 if(upperMethod!=='GET'&&upperMethod!=='HEAD'){opts.headers['Content-Type']='application/json';opts.body=JSON.stringify(body??{});}
-const res=await fetch(endpoint,opts);const data=await res.json().catch(()=>({}));return{res,data};};let{res,data}=await doFetch(token);if(res.status===401&&canInteractiveRefresh){const latest=(localStorage.getItem(LOCAL_TOKEN_STORAGE)||'').trim();const nextToken=(latest&&latest!==token)
-?latest
-:await requestInteractiveTokenRefresh();if(nextToken){({res,data}=await doFetch(nextToken));}}
+const res=await fetch(endpoint,opts);const data=await res.json().catch(()=>({}));return{res,data};};let{res,data}=await doFetch();if(res.status===401&&canInteractiveRefresh){const refreshed=await requestInteractiveSessionRefresh();if(refreshed){({res,data}=await doFetch());}}
 if(!res.ok||data.ok===false){const msg=res.status===401
-?'本地会话令牌已失效（服务可能已重启），请通过 Swamp 管理窗口点击 Open Site 或允许桌面续签弹窗'
+?'本地会话已失效（服务可能已重启），请通过 Swamp 管理窗口点击 Open Site 或允许桌面续签弹窗'
 :(data.error||`HTTP ${res.status}`);const err=new Error(msg);err.status=res.status;throw err;}
 return data;}

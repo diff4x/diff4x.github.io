@@ -45,12 +45,11 @@ const BUS = window.__LITE_BUS__;
 const ctxId = window.top === window.self ? 'index' : window.childId;
 const isLocalEnv = (location.hostname === 'localhost' || location.hostname === '127.0.0.1' || location.protocol === 'file:') && location.port !== '9000';
 
-// 首屏从 URL #fragment 吸收本地令牌并抹掉地址栏痕迹，同时持锁供 /__auth 探测已有主页
-(function ingestLocalApiToken() {
+// 本地模式清理历史遗留明文令牌并持锁供 /__auth 探测已有主页（会话凭证现由 HttpOnly Cookie 承载）
+(function initLocalSessionLock() {
     if (!isLocalEnv) return;
-    const m = /^#__swamp_token=([0-9a-f]{64})$/i.exec(window.location.hash || '');
-    if (m) {
-        try { localStorage.setItem('__swamp_local_token__', m[1].toLowerCase()); } catch (_) { }
+    try { localStorage.removeItem('__swamp_local_token__'); } catch (_) { }
+    if (/^#__swamp_token=[0-9a-f]{64}$/i.test(window.location.hash || '')) {
         try { history.replaceState(null, '', window.location.pathname + window.location.search); }
         catch (_) { window.location.hash = ''; }
     }

@@ -137,6 +137,7 @@ pub struct ServerConfig {
     pub swamp_toml_path: PathBuf,
     pub discussion_id_mapper: PathBuf,
     pub legacy_cmt_mapper: PathBuf,
+    pub build_hashes_file: PathBuf,
     pub oov_report_file: PathBuf,
     pub synonyms_sha_file: PathBuf,
     pub cilin_file: PathBuf,
@@ -144,6 +145,7 @@ pub struct ServerConfig {
     pub legacy_synonyms_custom_file: PathBuf,
     pub gitignore_file: PathBuf,
     pub privy_dir: PathBuf,
+    pub temp_dir: PathBuf,
     pub backup_dir: PathBuf,
 
     pub github_page: String,
@@ -564,8 +566,9 @@ impl ServerConfig {
             swamp_toml_path: main_toml_path,
             discussion_id_mapper: repo_root.join("src").join("discussion_id_mapper.json"),
             legacy_cmt_mapper: repo_root.join("src").join("cmt_mapper.json"),
-            oov_report_file: backup_dir.join("oov_report.txt"),
-            synonyms_sha_file: backup_dir.join("synonyms.sha256"),
+            build_hashes_file: temp_dir.join("build_hashes.txt"),
+            oov_report_file: temp_dir.join("oov_report.txt"),
+            synonyms_sha_file: temp_dir.join("synonyms.sha256"),
             cilin_file: build_dir
                 .join("swamp-server")
                 .join("assets")
@@ -578,6 +581,7 @@ impl ServerConfig {
             legacy_synonyms_custom_file: build_dir.join("synonyms").join("synonyms_custom.json"),
             gitignore_file: repo_root.join(".gitignore"),
             privy_dir,
+            temp_dir,
             backup_dir,
             repo_root,
             build_dir,

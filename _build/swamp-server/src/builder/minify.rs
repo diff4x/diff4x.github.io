@@ -685,7 +685,7 @@ pub struct IncrementalLedger {
 
 impl IncrementalLedger {
     pub fn load(cfg: &ServerConfig) -> Self {
-        let ledger_path = cfg.backup_dir.join("build_hashes.txt");
+        let ledger_path = cfg.build_hashes_file.clone();
         let mut old_hashes = BTreeMap::new();
         if let Ok(text) = fs::read_to_string(&ledger_path) {
             for line in text.lines() {

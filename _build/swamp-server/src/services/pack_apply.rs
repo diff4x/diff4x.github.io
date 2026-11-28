@@ -74,10 +74,17 @@ pub struct PackFileItem {
     pub size: u64,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PackMode {
+    ZipOnly,
+    MdOnly,
+    ZipAndMd,
+}
+
 #[derive(Serialize, Clone, Debug)]
 pub struct PackZipResult {
-    pub file_name: String,
-    pub full_path: String,
+    pub zip_name: Option<String>,
+    pub zip_path: Option<String>,
     pub packed_count: usize,
     pub skipped_count: usize,
     pub zip_size: u64,
@@ -729,76 +736,88 @@ pub fn render_markdown_bundle_parts(
 
 #[allow(dead_code)]
 pub fn create_pack_zip(cfg: &ServerConfig, rel_paths: &[String]) -> Result<PackZipResult, String> {
-    create_pack_zip_with_options(cfg, rel_paths, false, 200)
+    create_pack_zip_with_options(cfg, rel_paths, PackMode::ZipOnly, 200)
 }
 
 pub fn create_pack_zip_with_options(
     cfg: &ServerConfig,
     rel_paths: &[String],
-    stitch_md: bool,
+    mode: PackMode,
     max_md_kb: usize,
 ) -> Result<PackZipResult, String> {
     if rel_paths.is_empty() {
         return Err("请至少勾选一个文件".to_string());
     }
-    fs::create_dir_all(&cfg.backup_dir).map_err(|e| format!("创建 backup 目录失败: {}", e))?;
-
-    let stamp = Local::now().format("%Y%m%d_%H%M%S").to_string();
-    let file_name = format!("ai_pack_{}.zip", stamp);
-    let zip_path = cfg.backup_dir.join(&file_name);
+    let out_dir = resolve_downloads_dir()
+        .ok_or_else(|| "未找到系统下载目录 (Downloads)，无法输出打包文件".to_string())?;
 
     let mut sorted: Vec<String> = rel_paths.to_vec();
     sorted.sort();
     sorted.dedup();
 
-    let mut packed_count = 0usize;
     let mut skipped_count = 0usize;
-    let mut packed_entries: Vec<(String, Vec<u8>)> = Vec::new();
-
-    {
-        let file = File::create(&zip_path).map_err(|e| format!("创建 ZIP 失败: {}", e))?;
-        let mut writer = ZipWriter::new(file);
-        let opts = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
-
-        for rel in &sorted {
-            let Some((clean_rel, full)) = resolve_safe_target(&cfg.repo_root, rel) else {
-                skipped_count += 1;
-                continue;
-            };
-            if is_hard_private_rel(&clean_rel) || !full.is_file() {
-                skipped_count += 1;
-                continue;
-            }
-            let bytes = fs::read(&full).map_err(|e| format!("读取 {} 失败: {}", clean_rel, e))?;
-            writer
-                .start_file(&clean_rel, opts)
-                .map_err(|e| format!("写入 ZIP 条目失败: {}", e))?;
-            writer
-                .write_all(&bytes)
-                .map_err(|e| format!("写出 ZIP 数据失败: {}", e))?;
-            if stitch_md {
-                packed_entries.push((clean_rel, bytes));
-            }
-            packed_count += 1;
+    let mut entries: Vec<(String, Vec<u8>)> = Vec::new();
+    for rel in &sorted {
+        let Some((clean_rel, full)) = resolve_safe_target(&cfg.repo_root, rel) else {
+            skipped_count += 1;
+            continue;
+        };
+        if is_hard_private_rel(&clean_rel) || !full.is_file() {
+            skipped_count += 1;
+            continue;
         }
-        writer.finish().map_err(|e| format!("关闭 ZIP 失败: {}", e))?;
+        let bytes = fs::read(&full).map_err(|e| format!("读取 {} 失败: {}", clean_rel, e))?;
+        entries.push((clean_rel, bytes));
     }
 
+    let packed_count = entries.len();
     if packed_count == 0 {
-        let _ = fs::remove_file(&zip_path);
         return Err("没有可打包的有效文件".to_string());
+    }
+
+    let stamp = Local::now().format("%Y%m%d_%H%M%S").to_string();
+    let write_zip = matches!(mode, PackMode::ZipOnly | PackMode::ZipAndMd);
+    let write_md = matches!(mode, PackMode::MdOnly | PackMode::ZipAndMd);
+
+    let mut zip_name_out: Option<String> = None;
+    let mut zip_path_out: Option<String> = None;
+    let mut zip_size = 0u64;
+
+    if write_zip {
+        let file_name = format!("ai_pack_{}.zip", stamp);
+        let zip_path = out_dir.join(&file_name);
+        {
+            let file = File::create(&zip_path).map_err(|e| format!("创建 ZIP 失败: {}", e))?;
+            let mut writer = ZipWriter::new(file);
+            let opts = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+            for (clean_rel, bytes) in &entries {
+                writer
+                    .start_file(clean_rel, opts)
+                    .map_err(|e| format!("写入 ZIP 条目失败: {}", e))?;
+                writer
+                    .write_all(bytes)
+                    .map_err(|e| format!("写出 ZIP 数据失败: {}", e))?;
+            }
+            writer.finish().map_err(|e| format!("关闭 ZIP 失败: {}", e))?;
+        }
+        zip_size = fs::metadata(&zip_path).map(|m| m.len()).unwrap_or(0);
+        zip_path_out = Some(strip_verbatim_prefix(&zip_path).to_string_lossy().into_owned());
+        zip_name_out = Some(file_name);
     }
 
     let mut md_dir_out: Option<String> = None;
     let mut md_files: Vec<String> = Vec::new();
     let mut md_skipped_binary = 0usize;
 
-    if stitch_md {
+    if write_md {
+        let source_label = zip_name_out
+            .clone()
+            .unwrap_or_else(|| format!("ai_pack_{}_md", stamp));
         let max_bytes = max_md_kb.clamp(10, 51200) * 1024;
-        let (parts, bin_cnt) = render_markdown_bundle_parts(&file_name, &packed_entries, max_bytes);
+        let (parts, bin_cnt) = render_markdown_bundle_parts(&source_label, &entries, max_bytes);
         md_skipped_binary = bin_cnt;
 
-        let md_dir = cfg.backup_dir.join(format!("ai_pack_{}_md", stamp));
+        let md_dir = out_dir.join(format!("ai_pack_{}_md", stamp));
         fs::create_dir_all(&md_dir).map_err(|e| format!("创建 MD 拼接输出目录失败: {}", e))?;
         for (idx, part_content) in parts.iter().enumerate() {
             let md_name = format!("markdown_part{}.md", idx + 1);
@@ -808,10 +827,9 @@ pub fn create_pack_zip_with_options(
         md_dir_out = Some(strip_verbatim_prefix(&md_dir).to_string_lossy().into_owned());
     }
 
-    let zip_size = fs::metadata(&zip_path).map(|m| m.len()).unwrap_or(0);
     Ok(PackZipResult {
-        file_name,
-        full_path: strip_verbatim_prefix(&zip_path).to_string_lossy().into_owned(),
+        zip_name: zip_name_out,
+        zip_path: zip_path_out,
         packed_count,
         skipped_count,
         zip_size,

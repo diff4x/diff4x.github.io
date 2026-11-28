@@ -39,8 +39,9 @@ use crate::gui::{run_management_window, WM_APP_LOG, WM_APP_VPN};
 use crate::media::keep2html::{run_keep2html, KeepOptions};
 use crate::media::webp::{run_webp_batch, WebpOptions};
 use crate::security::{
-    api_auth_middleware, build_allowed_hosts, build_allowed_origins, generate_token_hex,
-    host_guard_middleware, run_selftest, security_headers_middleware, AppState, RunMode,
+    api_auth_middleware, build_allowed_hosts, build_allowed_origins, build_session_cookie_header,
+    generate_token_hex, host_guard_middleware, run_selftest, security_headers_middleware, AppState,
+    AuthCodeStore, RunMode, CLIENT_HEADER_NAME, CLIENT_HEADER_VALUE,
 };
 use crate::services::log_bus::LogBus;
 use crate::services::tasks::{spawn_background_monitors, RuntimeStatus};
@@ -413,10 +414,28 @@ fn auth_refresh_gate() -> &'static AsyncMutex<RefreshGateState> {
     })
 }
 
-/// 轻量会话同步页：把 #__swamp_token 写入同源 localStorage；
+#[derive(Deserialize)]
+struct AuthQuery {
+    code: Option<String>,
+}
+
+fn session_cookie_json_ok(token: &str) -> Response {
+    let mut resp = Json(json!({ "ok": true })).into_response();
+    let headers = resp.headers_mut();
+    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    if let Ok(cookie_val) = HeaderValue::from_str(&build_session_cookie_header(token)) {
+        headers.insert(header::SET_COOKIE, cookie_val);
+    }
+    resp
+}
+
+/// 轻量会话同步页：校验并消费一次性 ?code=... 引导码，下发 HttpOnly; SameSite=Strict 会话 Cookie；
 /// 通过 Web Locks API 检测是否已有打开的主页标签页，有则秒关过渡页不重复开窗，无则跳转首页。
-async fn auth_handoff() -> Response {
-    const AUTH_HTML: &str = r#"<!doctype html>
+async fn auth_handoff(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<AuthQuery>,
+) -> Response {
+    const AUTH_OK_HTML: &str = r#"<!doctype html>
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
@@ -424,14 +443,11 @@ async fn auth_handoff() -> Response {
   <style>body{font-family:system-ui,-apple-system,"Microsoft YaHei",sans-serif;background:#f8fafc;color:#334155;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;font-size:15px}a{color:#2563eb}</style>
 </head>
 <body>
-  <div id="msg">正在同步本地会话令牌...</div>
+  <div id="msg">正在同步本地会话...</div>
   <script>
     (async function () {
-      var m = /^#__swamp_token=([0-9a-f]{64})$/i.exec(location.hash || '');
-      if (m) {
-        try { localStorage.setItem('__swamp_local_token__', m[1].toLowerCase()); } catch (_) {}
-        try { history.replaceState(null, '', '/__auth'); } catch (_) { location.hash = ''; }
-      }
+      try { localStorage.removeItem('__swamp_local_token__'); } catch (_) {}
+      try { history.replaceState(null, '', '/__auth'); } catch (_) {}
       var hasExisting = false;
       try {
         if (navigator.locks && typeof navigator.locks.query === 'function') {
@@ -442,11 +458,11 @@ async fn auth_handoff() -> Response {
         }
       } catch (_) {}
       if (hasExisting) {
-        document.getElementById('msg').textContent = '会话令牌已同步，正在关闭此页面...';
+        document.getElementById('msg').textContent = '本地会话已同步，正在关闭此页面...';
         try { window.close(); } catch (_) {}
         setTimeout(function () { try { window.close(); } catch (_) {} }, 80);
         setTimeout(function () {
-          document.getElementById('msg').innerHTML = '会话令牌已同步，切回原标签页即可继续使用（<a href="/">或打开主页</a>）。';
+          document.getElementById('msg').innerHTML = '本地会话已同步，切回原标签页即可继续使用（<a href="/">或打开主页</a>）。';
         }, 320);
       } else {
         location.replace('/');
@@ -456,12 +472,43 @@ async fn auth_handoff() -> Response {
 </body>
 </html>"#;
 
-    let mut resp = Html(AUTH_HTML.to_string()).into_response();
+    const AUTH_ERR_HTML: &str = r#"<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>Swamp 本地会话无效</title>
+  <style>body{font-family:system-ui,-apple-system,"Microsoft YaHei",sans-serif;background:#f8fafc;color:#334155;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;font-size:15px}a{color:#2563eb}</style>
+</head>
+<body>
+  <div>一次性授权链接已使用或已过期，请在 Swamp 管理窗口重新点击 <b>Open Site</b>（<a href="/">返回主页</a>）。</div>
+</body>
+</html>"#;
+
+    let code_ok = q
+        .code
+        .as_deref()
+        .map(|c| state.consume_auth_code(c))
+        .unwrap_or(false);
+
+    if !code_ok {
+        let mut resp = (StatusCode::FORBIDDEN, Html(AUTH_ERR_HTML.to_string())).into_response();
+        let headers = resp.headers_mut();
+        headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+        headers.insert(
+            HeaderName::from_static("content-security-policy"),
+            HeaderValue::from_static(
+                "default-src 'none'; style-src 'unsafe-inline'; object-src 'none'; base-uri 'self'; frame-ancestors 'none';",
+            ),
+        );
+        return resp;
+    }
+
+    let mut resp = Html(AUTH_OK_HTML.to_string()).into_response();
     let headers = resp.headers_mut();
-    headers.insert(
-        header::CACHE_CONTROL,
-        HeaderValue::from_static("no-store"),
-    );
+    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    if let Ok(cookie_val) = HeaderValue::from_str(&build_session_cookie_header(&state.token)) {
+        headers.insert(header::SET_COOKIE, cookie_val);
+    }
     headers.insert(
         HeaderName::from_static("content-security-policy"),
         HeaderValue::from_static(
@@ -471,8 +518,8 @@ async fn auth_handoff() -> Response {
     resp
 }
 
-/// 401 自动续签兜底端点：严格校核同源 Origin + Sec-Fetch-Site + JSON Content-Type，
-/// 单飞弹出本机 Win32 物理确认框（拒绝后 10s 冷却防轰炸），确认后下发当前会话令牌。
+/// 401 自动续签兜底端点：严格校核同源 Origin + Sec-Fetch-Site + X-Swamp-Client + JSON Content-Type，
+/// 单飞弹出本机 Win32 物理确认框（拒绝后 10s 冷却防轰炸），确认后仅通过 Set-Cookie 下发 HttpOnly 会话 Cookie。
 async fn api_auth_refresh(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -486,7 +533,7 @@ async fn api_auth_refresh(
     if !origin_ok {
         return (
             StatusCode::FORBIDDEN,
-            Json(json!({ "ok": false, "error": "禁止未授权 Origin 请求令牌续签" })),
+            Json(json!({ "ok": false, "error": "禁止未授权 Origin 请求会话续签" })),
         )
             .into_response();
     }
@@ -499,6 +546,19 @@ async fn api_auth_refresh(
             )
                 .into_response();
         }
+    }
+
+    let client_ok = headers
+        .get(CLIENT_HEADER_NAME)
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.trim() == CLIENT_HEADER_VALUE)
+        .unwrap_or(false);
+    if !client_ok {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({ "ok": false, "error": "缺少或非法的 X-Swamp-Client 请求头" })),
+        )
+            .into_response();
     }
 
     let is_json = headers
@@ -523,7 +583,7 @@ async fn api_auth_refresh(
     };
     if let Some(approved_at) = gate.last_approved_at {
         if approved_at.elapsed() < Duration::from_secs(3) {
-            return Json(json!({ "ok": true, "token": state.token })).into_response();
+            return session_cookie_json_ok(&state.token);
         }
     }
     if let Some(denied_at) = gate.last_denied_at {
@@ -549,11 +609,11 @@ async fn api_auth_refresh(
             const MB_TOPMOST: u32 = 0x0004_0000;
 
             let msg = format!(
-                "本地页面 (localhost:{}) 请求更新会话令牌。\n\n如为本人正在执行保存或编辑操作，请选择“是”放行；否则选择“否”。",
+                "本地页面 (localhost:{}) 请求更新本地会话授权。\n\n如为本人正在执行保存或编辑操作，请选择“是”放行；否则选择“否”。",
                 port
             );
             let mw: Vec<u16> = OsStr::new(&msg).encode_wide().chain(Some(0)).collect();
-            let tw: Vec<u16> = OsStr::new("更新会话令牌确认")
+            let tw: Vec<u16> = OsStr::new("更新本地会话确认")
                 .encode_wide()
                 .chain(Some(0))
                 .collect();
@@ -572,11 +632,11 @@ async fn api_auth_refresh(
         if allowed {
             gate.last_approved_at = Some(Instant::now());
             gate.last_denied_at = None;
-            state.logs.info("[auth] 已放行本地页面的令牌更新请求");
-            return Json(json!({ "ok": true, "token": state.token })).into_response();
+            state.logs.info("[auth] 已放行本地页面的会话续签请求");
+            return session_cookie_json_ok(&state.token);
         } else {
             gate.last_denied_at = Some(Instant::now());
-            state.logs.warn("[auth] 已拒绝本地页面的令牌更新请求");
+            state.logs.warn("[auth] 已拒绝本地页面的会话续签请求");
             return (
                 StatusCode::FORBIDDEN,
                 Json(json!({ "ok": false, "error": "已拒绝本地会话续签请求" })),
@@ -590,7 +650,7 @@ async fn api_auth_refresh(
         gate.last_denied_at = Some(Instant::now());
         (
             StatusCode::FORBIDDEN,
-            Json(json!({ "ok": false, "error": "请重新启动服务并打开带令牌的首页" })),
+            Json(json!({ "ok": false, "error": "请重新启动服务并通过 Open Site 打开首页" })),
         )
             .into_response()
     }
@@ -881,6 +941,29 @@ fn main() {
     }
 }
 
+/// 一次性静默迁移：将旧版留在 _build/temp/backup/ 下的三个构建状态文件挪至 _build/temp/
+fn migrate_legacy_temp_files(cfg: &ServerConfig, logs: &LogBus) {
+    let pairs = [
+        ("build_hashes.txt", &cfg.build_hashes_file),
+        ("oov_report.txt", &cfg.oov_report_file),
+        ("synonyms.sha256", &cfg.synonyms_sha_file),
+    ];
+    for (name, dest) in pairs {
+        let old = cfg.backup_dir.join(name);
+        if !old.is_file() || dest.exists() {
+            continue;
+        }
+        if let Some(parent) = dest.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let moved = std::fs::rename(&old, dest).is_ok()
+            || (std::fs::copy(&old, dest).is_ok() && std::fs::remove_file(&old).is_ok());
+        if moved {
+            logs.info(format!("[startup] 已迁移 {} -> _build/temp/{}", name, name));
+        }
+    }
+}
+
 fn run_server_mode(cfg: ServerConfig, mode: RunMode, open_browser: bool) {
     let is_sim = mode == RunMode::Sim;
 
@@ -940,6 +1023,7 @@ fn run_server_mode(cfg: ServerConfig, mode: RunMode, open_browser: bool) {
         mode,
         config: cfg.clone(),
         token: token.clone(),
+        auth_codes: AuthCodeStore::new(),
         allowed_origins,
         allowed_hosts,
         verbose,
@@ -986,6 +1070,7 @@ fn run_server_mode(cfg: ServerConfig, mode: RunMode, open_browser: bool) {
             }
 
             if !is_sim {
+                migrate_legacy_temp_files(&cfg_bg, &logs_bg);
                 match crate::builder::minify::sync_raw_assets_on_startup(&cfg_bg) {
                     Ok(n) if n > 0 => {
                         logs_bg.info(format!("[startup] 启动时同步压缩了 {} 个前端文件", n));
@@ -1066,7 +1151,10 @@ fn run_server_mode(cfg: ServerConfig, mode: RunMode, open_browser: bool) {
 
     if open_browser {
         let url = match mode {
-            RunMode::Serve => format!("http://localhost:{}/__auth#__swamp_token={}", port, token),
+            RunMode::Serve => match state.issue_auth_code() {
+                Ok(code) => format!("http://localhost:{}/__auth?code={}", port, code),
+                Err(_) => format!("http://localhost:{}", port),
+            },
             RunMode::Sim => format!("http://localhost:{}", port),
         };
         open_url_in_browser(&url, is_sim);

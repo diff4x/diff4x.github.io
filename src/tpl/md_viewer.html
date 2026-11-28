@@ -1798,12 +1798,17 @@ html,body{height:auto;overflow:visible}#panes,.pv-wrap{display:block}.pv{overflo
     });
   }
 
+  const isBinarySnap = v => ArrayBuffer.isView(v) || Object.prototype.toString.call(v) === '[object ArrayBuffer]';
+  const toLocalU8 = v => ArrayBuffer.isView(v)
+    ? new Uint8Array(v.buffer, v.byteOffset, v.byteLength)
+    : new Uint8Array(v);
+
   async function decompressSnapshot(item) {
     if (!item) return '';
     if (typeof item._plain === 'string') return item._plain;
     let text = '';
-    if (item.compressed && item.text instanceof Uint8Array) {
-      const stream = new Blob([item.text]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
+    if (item.compressed && isBinarySnap(item.text)) {
+      const stream = new Blob([toLocalU8(item.text)]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
       text = await new Response(stream).text();
     } else {
       text = String(item.text ?? '');
@@ -1812,11 +1817,19 @@ html,body{height:auto;overflow:visible}#panes,.pv-wrap{display:block}.pv{overflo
     return text;
   }
 
+  function parseCoreCacheVer(name) {
+    const m = /^core-cache-(\d{13,15})$/.exec(name || '');
+    return m ? Number(m[1]) : 0;
+  }
+
   async function readLatestSwCachedMd(tryKeys) {
     if (!('caches' in window)) return null;
     try {
       const keys = await caches.keys();
-      const coreName = keys.filter(n => n.startsWith('core-cache-')).sort().pop();
+      const coreNames = keys
+        .filter(n => n.startsWith('core-cache-'))
+        .sort((a, b) => (parseCoreCacheVer(a) - parseCoreCacheVer(b)) || (a < b ? -1 : a > b ? 1 : 0));
+      const coreName = coreNames.pop();
       if (!coreName) return null;
       const cache = await caches.open(coreName);
       let res = null;
@@ -1825,14 +1838,65 @@ html,body{height:auto;overflow:visible}#panes,.pv-wrap{display:block}.pv{overflo
         const hit = await cache.match(url, { ignoreSearch: true });
         if (hit && hit.ok) { res = hit; break; }
       }
+      if (!res) {
+        const lowerSet = new Set(tryKeys.map(k => (k.startsWith('/') ? k : '/' + k).toLowerCase()));
+        const reqs = await cache.keys();
+        for (const req of reqs) {
+          try {
+            const p = new URL(req.url).pathname;
+            let dp = p;
+            try { dp = decodeURIComponent(p); } catch (_) { }
+            if (lowerSet.has(p.toLowerCase()) || lowerSet.has(dp.toLowerCase())) {
+              const hit = await cache.match(req);
+              if (hit && hit.ok) { res = hit; break; }
+            }
+          } catch (_) { }
+        }
+      }
       if (!res) return null;
       const text = normLF(await res.text()).replace(/^\uFEFF/, '');
-      const m = /^core-cache-(\d{13,15})$/.exec(coreName);
-      const ts = m ? Number(m[1]) : 0;
-      return { text, ts };
+      return { text, ts: parseCoreCacheVer(coreName) };
     } catch (_) {
       return null;
     }
+  }
+
+  function readSnapshotRecordInSingleTx(idb, tryKeys) {
+    return new Promise((resolve) => {
+      if (!idb || !idb.objectStoreNames.contains('html_snapshots')) { resolve(null); return; }
+      try {
+        const tx = idb.transaction('html_snapshots', 'readonly');
+        const st = tx.objectStore('html_snapshots');
+        const lowerSet = new Set(tryKeys.map(k => String(k).toLowerCase()));
+        const keysReq = st.getAllKeys();
+        keysReq.onsuccess = () => {
+          const allKeys = Array.isArray(keysReq.result) ? keysReq.result : [];
+          let hitKey = null;
+          for (const tk of tryKeys) {
+            if (allKeys.includes(tk)) { hitKey = tk; break; }
+          }
+          if (hitKey === null) {
+            for (const ak of allKeys) {
+              const s = String(ak);
+              let ds = s;
+              try { ds = decodeURI(s); } catch (_) { }
+              if (lowerSet.has(s.toLowerCase()) || lowerSet.has(ds.toLowerCase())) {
+                hitKey = ak;
+                break;
+              }
+            }
+          }
+          if (hitKey === null) { resolve(null); return; }
+          const getReq = st.get(hitKey);
+          getReq.onsuccess = () => resolve(getReq.result || null);
+          getReq.onerror = () => resolve(null);
+        };
+        keysReq.onerror = () => resolve(null);
+        tx.onabort = () => resolve(null);
+      } catch (_) {
+        resolve(null);
+      }
+    });
   }
 
   async function loadMdSnapshots() {
@@ -1849,27 +1913,15 @@ html,body{height:auto;overflow:visible}#panes,.pv-wrap{display:block}.pv{overflo
     let idb = null;
     try {
       idb = await openMainDbReadonly();
-      if (idb && idb.objectStoreNames.contains('html_snapshots')) {
-        const tx = idb.transaction('html_snapshots', 'readonly');
-        const st = tx.objectStore('html_snapshots');
-        let rec = null;
-        for (const k of tryKeys) {
-          const hit = await new Promise(resolve => {
-            const r = st.get(k);
-            r.onsuccess = () => resolve(r.result || null);
-            r.onerror = () => resolve(null);
-          });
-          if (hit) { rec = hit; break; }
+      const rec = await readSnapshotRecordInSingleTx(idb, tryKeys);
+      if (rec) {
+        let list = [];
+        if (Array.isArray(rec.history)) {
+          list = rec.history.filter(it => it && (typeof it.text === 'string' || isBinarySnap(it.text)));
+        } else if (typeof rec.text === 'string' || isBinarySnap(rec.text)) {
+          list = [{ text: rec.text, ts: rec.ts || 0, compressed: rec.compressed }];
         }
-        if (rec) {
-          let list = [];
-          if (Array.isArray(rec.history)) {
-            list = rec.history.filter(it => it && (typeof it.text === 'string' || it.text instanceof Uint8Array));
-          } else if (typeof rec.text === 'string' || rec.text instanceof Uint8Array) {
-            list = [{ text: rec.text, ts: rec.ts || 0, compressed: rec.compressed }];
-          }
-          diffSnapshots = list.slice().sort((a, b) => (b.ts || 0) - (a.ts || 0));
-        }
+        diffSnapshots = list.slice().sort((a, b) => (b.ts || 0) - (a.ts || 0));
       }
     } catch (e) {
       console.warn('[MD Diff] 历史快照读取失败:', e);
@@ -1877,11 +1929,10 @@ html,body{height:auto;overflow:visible}#panes,.pv-wrap{display:block}.pv{overflo
       if (idb) { try { idb.close(); } catch (_) { } }
     }
 
-    // 本地模式下额外读取最新 core-cache-* 缓存版：若与硬盘当前版及最新历史快照均不同，则作为最新 SW 版本供对比
+    // 本地模式下读取最新 core-cache-* 缓存版作为最新 SW 版本（仅在已与最新历史快照完全相同时去重，不因与硬盘相同而隐藏）
     if (isEditable) {
       const swLatest = await readLatestSwCachedMd(tryKeys);
       if (swLatest && swLatest.text) {
-        const diskNorm = normLF(diskText).replace(/^\uFEFF/, '');
         let sameAsNewestHist = false;
         if (diffSnapshots.length > 0) {
           try {
@@ -1889,7 +1940,7 @@ html,body{height:auto;overflow:visible}#panes,.pv-wrap{display:block}.pv{overflo
             sameAsNewestHist = newestHistText === swLatest.text;
           } catch (_) { }
         }
-        if (swLatest.text !== diskNorm && !sameAsNewestHist) {
+        if (!sameAsNewestHist) {
           swCacheSnap = swLatest;
         }
       }
@@ -1914,14 +1965,14 @@ html,body{height:auto;overflow:visible}#panes,.pv-wrap{display:block}.pv{overflo
         const tStr = formatSnapTime(swCacheSnap.ts);
         versions.push({
           val: 'sw_head',
-          label: `v${totalSnaps + 1} · ${tStr} (SW)`,
-          title: `最近一次构建的 SW 缓存版 (${tStr})`
+          label: `v${totalSnaps + 1} · ${tStr} (SW 当前)`,
+          title: `当前 SW 缓存中的最新版本 (${tStr})`
         });
       }
       for (let i = 0; i < totalSnaps; i++) {
         const vNum = totalSnaps - i;
         const tStr = formatSnapTime(diffSnapshots[i].ts);
-        versions.push({ val: String(i), label: `v${vNum} · ${tStr}`, title: tStr });
+        versions.push({ val: String(i), label: `v${vNum} · ${tStr} (SW)`, title: `SW 历史快照 (${tStr})` });
       }
       return versions;
     }
@@ -3008,7 +3059,13 @@ html,body{height:auto;overflow:visible}#panes,.pv-wrap{display:block}.pv{overflo
     diffBar.hidden = false;
     diffToggleBtn.classList.add('active');
     const defTo = versions[0].val;
-    const defFrom = versions[1].val;
+    let defFrom = versions[1].val;
+    if (isEditable && defTo === 'current' && defFrom === 'sw_head' && swCacheSnap && versions.length >= 3) {
+      const diskNorm = normLF(diskText).replace(/^\uFEFF/, '');
+      if (swCacheSnap.text === diskNorm) {
+        defFrom = versions[2].val;
+      }
+    }
     syncVersionSelects(defTo, defFrom);
     runDiff({ preserveScroll: false });
   }
@@ -3038,6 +3095,15 @@ html,body{height:auto;overflow:visible}#panes,.pv-wrap{display:block}.pv{overflo
     if (diffActive) { exitDiff(); return; }
     if (isEditable) {
       statusEl.textContent = '正在刷新硬盘版与 SW 快照...';
+      try {
+        if ('serviceWorker' in navigator) {
+          const reg = await navigator.serviceWorker.getRegistration();
+          if (reg) {
+            await reg.update().catch(() => { });
+            if (reg.waiting) reg.waiting.postMessage({ type: 'SKIP_WAITING' });
+          }
+        }
+      } catch (_) { }
       try {
         const freshText = await fetchMd();
         const diskChanged = normLF(freshText) !== normLF(diskText);

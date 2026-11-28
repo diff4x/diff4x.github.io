@@ -2,11 +2,11 @@
  * sw.js —— 站点 Service Worker（离线缓存、增量更新、历史快照留档与版本防撕裂）
  * 运行于 ServiceWorkerGlobalScope；经构建器压缩后输出至仓库根目录 /sw.js。
  */
-importScripts('/src/js/core-list.js?v=1795829468843');
+importScripts('/src/js/core-list.js?v=1795846567191');
 const _scMeta = typeof FILE_MANIFEST === 'object' && FILE_MANIFEST && FILE_MANIFEST['/src/js/site-core.js'];
 importScripts('/src/js/site-core.js' + (_scMeta && _scMeta.hash ? ('?v=' + _scMeta.hash) : ''));
 
-self.SW_VERSION = '1795829468843';
+self.SW_VERSION = '1795846567191';
 self.EMERGENCY = 'repair_command_id=2';
 
 // 缓存桶与环境标识
@@ -204,9 +204,13 @@ self.addEventListener('install', event => {
     event.waitUntil((async () => {
         const newCache = await caches.open(CACHE_NAME_CORE);
         const cacheNames = await caches.keys();
+        const parseCoreVer = (name) => {
+            const m = /^core-cache-(\d{13,15})$/.exec(name || '');
+            return m ? Number(m[1]) : 0;
+        };
         let lastCacheName = cacheNames
             .filter(n => n.startsWith('core-cache-') && n !== CACHE_NAME_CORE)
-            .sort()
+            .sort((a, b) => (parseCoreVer(a) - parseCoreVer(b)) || (a < b ? -1 : a > b ? 1 : 0))
             .pop();
         if (!lastCacheName && cacheNames.includes(CACHE_NAME_CORE)) {
             lastCacheName = CACHE_NAME_CORE;
@@ -306,18 +310,24 @@ self.addEventListener('install', event => {
                 }
             }
 
-            if (oldMeta && oldMeta.hash !== meta.hash && (url.startsWith('/html/') || url.toLowerCase().endsWith('.md'))) {
-                deferredJobs.push(async () => {
-                    try {
-                        const lastCache = await caches.open(lastCacheName);
-                        const oldRes = await lastCache.match(url);
-                        if (oldRes) {
-                            const oldText = await oldRes.text();
-                            const compressedData = await compressText(oldText);
+            if (lastCacheName && oldMeta && oldMeta.hash !== meta.hash && (url.startsWith('/html/') || url.toLowerCase().endsWith('.md'))) {
+                let preReadOldText = null;
+                try {
+                    const lastCache = await caches.open(lastCacheName);
+                    const oldRes = await lastCache.match(url, { ignoreSearch: true });
+                    if (oldRes) preReadOldText = await oldRes.text();
+                } catch (_) { }
+
+                if (typeof preReadOldText === 'string' && preReadOldText.length > 0) {
+                    const capturedOldText = preReadOldText;
+                    const capturedCacheName = lastCacheName;
+                    deferredJobs.push(async () => {
+                        try {
+                            const compressedData = await compressText(capturedOldText);
 
                             let snapTs = Date.now();
                             if (url.startsWith('/html/')) {
-                                const stampMatch = oldText.match(/id=['"]anchor['"][^>]*>\s*(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})/);
+                                const stampMatch = capturedOldText.match(/id=['"]anchor['"][^>]*>\s*(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})/);
                                 if (stampMatch) {
                                     const parsedTs = new Date(
                                         Number(stampMatch[1]), Number(stampMatch[2]) - 1, Number(stampMatch[3]),
@@ -326,11 +336,8 @@ self.addEventListener('install', event => {
                                     if (Number.isFinite(parsedTs) && parsedTs > 0) snapTs = parsedTs;
                                 }
                             } else {
-                                const cacheVerMatch = /^core-cache-(\d{13,15})$/.exec(lastCacheName || '');
-                                if (cacheVerMatch) {
-                                    const parsedTs = Number(cacheVerMatch[1]);
-                                    if (Number.isFinite(parsedTs) && parsedTs > 0) snapTs = parsedTs;
-                                }
+                                const parsedTs = parseCoreVer(capturedCacheName);
+                                if (Number.isFinite(parsedTs) && parsedTs > 0) snapTs = parsedTs;
                             }
 
                             const db = await openMainDB();
@@ -351,7 +358,6 @@ self.addEventListener('install', event => {
                                         }
                                     }
 
-                                    const dupByTs = history.some(item => item && item.ts === snapTs);
                                     const lastSnap = history.length > 0 ? history[history.length - 1] : null;
                                     let dupByBytes = false;
                                     if (lastSnap && lastSnap.text instanceof Uint8Array && lastSnap.text.length === compressedData.length) {
@@ -360,8 +366,10 @@ self.addEventListener('install', event => {
                                             if (lastSnap.text[bi] !== compressedData[bi]) { dupByBytes = false; break; }
                                         }
                                     }
-                                    if (!dupByTs && !dupByBytes) {
-                                        history.push({ text: compressedData, ts: snapTs, compressed: true });
+                                    if (!dupByBytes) {
+                                        let finalTs = snapTs;
+                                        while (history.some(item => item && item.ts === finalTs)) finalTs++;
+                                        history.push({ text: compressedData, ts: finalTs, compressed: true });
                                         if (history.length > MAX_HTML_SNAPSHOT_HISTORY) {
                                             history = history.slice(history.length - MAX_HTML_SNAPSHOT_HISTORY);
                                         }
@@ -369,11 +377,11 @@ self.addEventListener('install', event => {
                                     }
                                 };
                             });
+                        } catch (e) {
+                            console.warn(`[SW] 快照生成失败: ${url}`, e);
                         }
-                    } catch (e) {
-                        console.warn(`[SW] 快照生成失败: ${url}`);
-                    }
-                });
+                    });
+                }
             }
 
             if (oldMeta && oldMeta.hash === meta.hash) {

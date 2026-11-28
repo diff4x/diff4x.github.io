@@ -212,10 +212,11 @@ const IDC_LBL_PRESET_NAME: u16 = 314;
 const IDC_EDIT_PRESET_NAME: u16 = 315;
 const IDC_BTN_PRESET_SAVE: u16 = 316;
 const IDC_BTN_PRESET_DEL: u16 = 317;
-const IDC_CHK_PACK_MD: u16 = 318;
+const IDC_CMB_PACK_MODE: u16 = 318;
 const IDC_LBL_PACK_MD_MAX: u16 = 319;
 const IDC_EDIT_PACK_MD_MAX: u16 = 320;
 const IDC_LBL_PACK_MD_UNIT: u16 = 321;
+const IDC_LBL_PACK_MODE: u16 = 322;
 
 // Tab 2 控件 ID：回填补丁
 const IDC_BTN_APPLY_BROWSE: u16 = 401;
@@ -774,7 +775,8 @@ struct GuiData {
     hwnd_edit_preset_name: HWND,
     hwnd_btn_preset_save: HWND,
     hwnd_btn_preset_del: HWND,
-    hwnd_chk_pack_md: HWND,
+    hwnd_lbl_pack_mode: HWND,
+    hwnd_cmb_pack_mode: HWND,
     hwnd_lbl_pack_md_max: HWND,
     hwnd_edit_pack_md_max: HWND,
     hwnd_lbl_pack_md_unit: HWND,
@@ -1077,7 +1079,8 @@ pub fn run_management_window(
             hwnd_edit_preset_name: std::ptr::null_mut(),
             hwnd_btn_preset_save: std::ptr::null_mut(),
             hwnd_btn_preset_del: std::ptr::null_mut(),
-            hwnd_chk_pack_md: std::ptr::null_mut(),
+            hwnd_lbl_pack_mode: std::ptr::null_mut(),
+            hwnd_cmb_pack_mode: std::ptr::null_mut(),
             hwnd_lbl_pack_md_max: std::ptr::null_mut(),
             hwnd_edit_pack_md_max: std::ptr::null_mut(),
             hwnd_lbl_pack_md_unit: std::ptr::null_mut(),
@@ -1479,7 +1482,13 @@ unsafe fn build_all_controls(g: &mut GuiData, hwnd: HWND) {
     g.hwnd_edit_preset_name = create_ctrl("EDIT", "", WS_TABSTOP | ES_AUTOHSCROLL, WS_EX_CLIENTEDGE, IDC_EDIT_PRESET_NAME, hwnd, hinst, f);
     g.hwnd_btn_preset_save = create_ctrl("BUTTON", "保存当前为预设", WS_TABSTOP | BS_PUSHBUTTON, 0, IDC_BTN_PRESET_SAVE, hwnd, hinst, f);
     g.hwnd_btn_preset_del = create_ctrl("BUTTON", "删除预设", WS_TABSTOP | BS_PUSHBUTTON, 0, IDC_BTN_PRESET_DEL, hwnd, hinst, f);
-    g.hwnd_chk_pack_md = create_ctrl("BUTTON", "同时生成 MD", WS_TABSTOP | BS_AUTOCHECKBOX, 0, IDC_CHK_PACK_MD, hwnd, hinst, f);
+    g.hwnd_lbl_pack_mode = create_ctrl("STATIC", "输出:", 0, 0, IDC_LBL_PACK_MODE, hwnd, hinst, f);
+    g.hwnd_cmb_pack_mode = create_ctrl("COMBOBOX", "", WS_TABSTOP | CBS_DROPDOWNLIST, 0, IDC_CMB_PACK_MODE, hwnd, hinst, f);
+    for item in ["仅 ZIP", "仅 MD", "ZIP + MD"] {
+        let w = to_wide(item);
+        SendMessageW(g.hwnd_cmb_pack_mode, CB_ADDSTRING, 0, w.as_ptr() as LPARAM);
+    }
+    SendMessageW(g.hwnd_cmb_pack_mode, CB_SETCURSEL, 0, 0);
     g.hwnd_lbl_pack_md_max = create_ctrl("STATIC", "单文件上限:", 0, 0, IDC_LBL_PACK_MD_MAX, hwnd, hinst, f);
     g.hwnd_edit_pack_md_max = create_ctrl("EDIT", "200", WS_TABSTOP | ES_AUTOHSCROLL, WS_EX_CLIENTEDGE, IDC_EDIT_PACK_MD_MAX, hwnd, hinst, f);
     EnableWindow(g.hwnd_edit_pack_md_max, 0);
@@ -1497,7 +1506,8 @@ unsafe fn build_all_controls(g: &mut GuiData, hwnd: HWND) {
         g.hwnd_edit_preset_name,
         g.hwnd_btn_preset_save,
         g.hwnd_btn_preset_del,
-        g.hwnd_chk_pack_md,
+        g.hwnd_lbl_pack_mode,
+        g.hwnd_cmb_pack_mode,
         g.hwnd_lbl_pack_md_max,
         g.hwnd_edit_pack_md_max,
         g.hwnd_lbl_pack_md_unit,
@@ -2019,11 +2029,12 @@ unsafe fn layout_controls(g: &GuiData, hwnd: HWND) {
     MoveWindow(g.hwnd_lbl_preset_name, inner_x, p_row2 + s(4), s(52), s(20), 1);
     let psave_w = s(112);
     let pdel_w = s(68);
-    let md_chk_w = s(96);
+    let mode_lbl_w = s(36);
+    let mode_cmb_w = s(86);
     let md_lbl_w = s(74);
     let md_edit_w = s(52);
     let md_unit_w = s(24);
-    let md_group_w = md_chk_w + md_lbl_w + md_edit_w + md_unit_w + s(14);
+    let md_group_w = mode_lbl_w + mode_cmb_w + md_lbl_w + md_edit_w + md_unit_w + s(20);
     let pname_w = (inner_w - s(54) - psave_w - pdel_w - md_group_w - s(24))
         .max(s(120))
         .min(s(300));
@@ -2032,10 +2043,11 @@ unsafe fn layout_controls(g: &GuiData, hwnd: HWND) {
     MoveWindow(g.hwnd_btn_preset_del, inner_x + s(54) + pname_w + psave_w + s(12), p_row2 - s(1), pdel_w, s(24), 1);
 
     let md_x = inner_x + inner_w - md_group_w;
-    MoveWindow(g.hwnd_chk_pack_md, md_x, p_row2 + s(2), md_chk_w, s(20), 1);
-    MoveWindow(g.hwnd_lbl_pack_md_max, md_x + md_chk_w + s(4), p_row2 + s(4), md_lbl_w, s(20), 1);
-    MoveWindow(g.hwnd_edit_pack_md_max, md_x + md_chk_w + md_lbl_w + s(6), p_row2, md_edit_w, s(23), 1);
-    MoveWindow(g.hwnd_lbl_pack_md_unit, md_x + md_chk_w + md_lbl_w + md_edit_w + s(10), p_row2 + s(4), md_unit_w, s(20), 1);
+    MoveWindow(g.hwnd_lbl_pack_mode, md_x, p_row2 + s(4), mode_lbl_w, s(20), 1);
+    MoveWindow(g.hwnd_cmb_pack_mode, md_x + mode_lbl_w + s(2), p_row2 - s(1), mode_cmb_w, s(120), 1);
+    MoveWindow(g.hwnd_lbl_pack_md_max, md_x + mode_lbl_w + mode_cmb_w + s(8), p_row2 + s(4), md_lbl_w, s(20), 1);
+    MoveWindow(g.hwnd_edit_pack_md_max, md_x + mode_lbl_w + mode_cmb_w + md_lbl_w + s(10), p_row2, md_edit_w, s(23), 1);
+    MoveWindow(g.hwnd_lbl_pack_md_unit, md_x + mode_lbl_w + mode_cmb_w + md_lbl_w + md_edit_w + s(14), p_row2 + s(4), md_unit_w, s(20), 1);
 
     let p_row3 = p_row2 + s(30);
     MoveWindow(g.hwnd_lbl_pack_filter, inner_x, p_row3 + s(4), s(38), s(20), 1);
@@ -2856,9 +2868,6 @@ unsafe fn rebuild_backup_tree(g: &mut GuiData) {
             format!("[空目录] {}", fname)
         } else {
             let tag = match item.rel.as_str() {
-                "build_hashes.txt" => "[账本] ",
-                "synonyms.sha256" => "[同义词哈希] ",
-                "oov_report.txt" => "[新词报告] ",
                 "swamp_panic.log" => "[崩溃日志] ",
                 _ => "",
             };
@@ -3815,6 +3824,18 @@ unsafe fn handle_command(g: &mut GuiData, hwnd: HWND, id: u16, code: u16) {
         }
         return;
     }
+    if id == IDC_CMB_PACK_MODE && code == CBN_SELCHANGE {
+        let sel = SendMessageW(g.hwnd_cmb_pack_mode, CB_GETCURSEL, 0, 0) as i32;
+        let need_md = sel == 1 || sel == 2;
+        EnableWindow(g.hwnd_edit_pack_md_max, if need_md { 1 } else { 0 });
+        let btn_lbl = match sel {
+            1 => "生成 MD",
+            2 => "打包 ZIP + MD",
+            _ => "打包 ZIP",
+        };
+        set_window_text(g.hwnd_btn_pack_zip, btn_lbl);
+        return;
+    }
 
     match id {
         IDC_BTN_CLEAR_LOG => {
@@ -3823,11 +3844,16 @@ unsafe fn handle_command(g: &mut GuiData, hwnd: HWND, id: u16, code: u16) {
             update_log_header_and_button(g);
         }
         IDC_BTN_OPEN_SITE => {
-            let url = format!(
-                "http://localhost:{}/__auth#__swamp_token={}",
-                g.state.config.port, g.state.token
-            );
-            crate::open_url_in_browser(&url, false);
+            match g.state.issue_auth_code() {
+                Ok(code) => {
+                    let url = format!(
+                        "http://localhost:{}/__auth?code={}",
+                        g.state.config.port, code
+                    );
+                    crate::open_url_in_browser(&url, false);
+                }
+                Err(e) => g.state.logs.error(format!("[auth] 生成一次性授权码失败: {}", e)),
+            }
         }
         IDC_BTN_GEN => {
             let st = g.state.clone();
@@ -4352,14 +4378,6 @@ unsafe fn handle_command(g: &mut GuiData, hwnd: HWND, id: u16, code: u16) {
                 rebuild_pack_tree(g);
             }
         }
-        IDC_CHK_PACK_MD => {
-            let on = is_checked(g.hwnd_chk_pack_md);
-            EnableWindow(g.hwnd_edit_pack_md_max, if on { 1 } else { 0 });
-            set_window_text(
-                g.hwnd_btn_pack_zip,
-                if on { "打包 ZIP 并生成 MD" } else { "打包 ZIP" },
-            );
-        }
         IDC_BTN_PACK_ZIP => {
             let paths: Vec<String> = g.pack_checked.iter().cloned().collect();
             if paths.is_empty() {
@@ -4368,8 +4386,14 @@ unsafe fn handle_command(g: &mut GuiData, hwnd: HWND, id: u16, code: u16) {
                 MessageBoxW(hwnd, m.as_ptr(), t.as_ptr(), MB_OK | MB_ICONINFORMATION);
                 return;
             }
-            let stitch_md = is_checked(g.hwnd_chk_pack_md);
-            let max_md_kb: usize = if stitch_md {
+            let mode_sel = SendMessageW(g.hwnd_cmb_pack_mode, CB_GETCURSEL, 0, 0) as i32;
+            let mode = match mode_sel {
+                1 => pack_apply::PackMode::MdOnly,
+                2 => pack_apply::PackMode::ZipAndMd,
+                _ => pack_apply::PackMode::ZipOnly,
+            };
+            let need_md = matches!(mode, pack_apply::PackMode::MdOnly | pack_apply::PackMode::ZipAndMd);
+            let max_md_kb: usize = if need_md {
                 let raw_kb = get_window_text_string(g.hwnd_edit_pack_md_max)
                     .trim()
                     .to_string();
@@ -4390,16 +4414,18 @@ unsafe fn handle_command(g: &mut GuiData, hwnd: HWND, id: u16, code: u16) {
             std::thread::spawn(move || {
                 let _busy = st.runtime.begin_op();
                 match pack_apply::create_pack_zip_with_options(
-                    &st.config, &paths, stitch_md, max_md_kb,
+                    &st.config, &paths, mode, max_md_kb,
                 ) {
                     Ok(res) => {
-                        st.logs.info(format!(
-                            "[pack] 打包完成: {} ({} 个文件, {})",
-                            res.file_name,
-                            res.packed_count,
-                            format_bytes(res.zip_size)
-                        ));
-                        spawn_load_backup_tree(st.config.clone(), mailbox);
+                        if let (Some(ref zname), Some(ref zpath)) = (&res.zip_name, &res.zip_path) {
+                            st.logs.info(format!(
+                                "[pack] 打包完成: {} ({} 个文件, {}) -> {}",
+                                zname,
+                                res.packed_count,
+                                format_bytes(res.zip_size),
+                                zpath
+                            ));
+                        }
                         if let Some(ref md_dir) = res.md_dir {
                             let bin_note = if res.md_skipped_binary > 0 {
                                 format!("，跳过二进制 {} 个", res.md_skipped_binary)
@@ -4407,13 +4433,15 @@ unsafe fn handle_command(g: &mut GuiData, hwnd: HWND, id: u16, code: u16) {
                                 String::new()
                             };
                             st.logs.info(format!(
-                                "[pack] 已生成 {} 份 Markdown（上限 {} KB{}）-> {}",
+                                "[pack] 已生成 {} 份 Markdown（{} 个文件，上限 {} KB{}）-> {}",
                                 res.md_files.len(),
+                                res.packed_count,
                                 max_md_kb,
                                 bin_note,
                                 md_dir
                             ));
                         }
+                        spawn_load_downloads_tree(mailbox);
                     }
                     Err(e) => st.logs.error(format!("[pack] 打包失败: {}", e)),
                 }

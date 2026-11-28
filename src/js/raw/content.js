@@ -2165,14 +2165,16 @@ async function initDiffUI() {
         return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
     }
 
+    const isBinarySnap = v => ArrayBuffer.isView(v) || Object.prototype.toString.call(v) === '[object ArrayBuffer]';
+
     function normalizeSnapshotHistory(rec) {
         if (!rec) return [];
         let list = [];
         if (Array.isArray(rec.history)) {
             list = rec.history.filter(item =>
-                item && (typeof item.text === 'string' || item.text instanceof Uint8Array)
+                item && (typeof item.text === 'string' || isBinarySnap(item.text))
             );
-        } else if (typeof rec.text === 'string' || rec.text instanceof Uint8Array) {
+        } else if (typeof rec.text === 'string' || isBinarySnap(rec.text)) {
             list = [{ text: rec.text, ts: rec.ts || 0, compressed: rec.compressed }];
         }
         return list.slice().sort((a, b) => (b.ts || 0) - (a.ts || 0));
@@ -2184,27 +2186,49 @@ async function initDiffUI() {
         const decodedPath = decodeURI(rawPath);
         const fileName = decodedPath.split('/').pop();
 
-        const tryKeys = [
+        const tryKeys = Array.from(new Set([
             decodedPath, rawPath,
             decodedPath.startsWith('/') ? decodedPath.substring(1) : '/' + decodedPath,
             '/html/' + fileName, 'html/' + fileName
-        ];
+        ]));
 
         const idb = await window.top.SiteCore.openMainDB();
 
         if (idb.objectStoreNames.contains('html_snapshots')) {
-            const tx = idb.transaction('html_snapshots', 'readonly');
-            const store = tx.objectStore('html_snapshots');
-
-            let record = null;
-            for (const k of tryKeys) {
-                const res = await new Promise(resolve => {
-                    const r = store.get(k);
-                    r.onsuccess = () => resolve(r.result);
-                    r.onerror = () => resolve(null);
-                });
-                if (res) { record = res; break; }
-            }
+            const record = await new Promise(resolve => {
+                try {
+                    const tx = idb.transaction('html_snapshots', 'readonly');
+                    const store = tx.objectStore('html_snapshots');
+                    const lowerSet = new Set(tryKeys.map(k => String(k).toLowerCase()));
+                    const keysReq = store.getAllKeys();
+                    keysReq.onsuccess = () => {
+                        const allKeys = Array.isArray(keysReq.result) ? keysReq.result : [];
+                        let hitKey = null;
+                        for (const tk of tryKeys) {
+                            if (allKeys.includes(tk)) { hitKey = tk; break; }
+                        }
+                        if (hitKey === null) {
+                            for (const ak of allKeys) {
+                                const s = String(ak);
+                                let ds = s;
+                                try { ds = decodeURI(s); } catch (_) { }
+                                if (lowerSet.has(s.toLowerCase()) || lowerSet.has(ds.toLowerCase())) {
+                                    hitKey = ak;
+                                    break;
+                                }
+                            }
+                        }
+                        if (hitKey === null) { resolve(null); return; }
+                        const r = store.get(hitKey);
+                        r.onsuccess = () => resolve(r.result || null);
+                        r.onerror = () => resolve(null);
+                    };
+                    keysReq.onerror = () => resolve(null);
+                    tx.onabort = () => resolve(null);
+                } catch (_) {
+                    resolve(null);
+                }
+            });
             historyList = normalizeSnapshotHistory(record);
         }
         idb.close();
@@ -2793,7 +2817,10 @@ function buildRenderedTokens(rawHtml) {
     return tokens;
 }
 async function decompressText(buffer) {
-    const stream = new Blob([buffer]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
+    const bytes = ArrayBuffer.isView(buffer)
+        ? new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength)
+        : new Uint8Array(buffer);
+    const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
     return await new Response(stream).text();
 }
 async function getTokensForSource(value, historyList) {
@@ -2805,8 +2832,9 @@ async function getTokensForSource(value, historyList) {
     const item = historyList[Number(value)];
     if (!item) return [];
 
+    const isBin = ArrayBuffer.isView(item.text) || Object.prototype.toString.call(item.text) === '[object ArrayBuffer]';
     let rawText = "";
-    if (item.compressed && item.text instanceof Uint8Array) {
+    if (item.compressed && isBin) {
         rawText = await decompressText(item.text);
     } else {
         rawText = item.text;
