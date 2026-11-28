@@ -170,6 +170,16 @@ const IDC_LBL_COMMIT: u16 = 208;
 const IDC_EDIT_COMMIT: u16 = 209;
 const IDC_BTN_REAUTH: u16 = 210;
 const IDC_BTN_PULL_UPSTREAM: u16 = 211;
+const IDC_LBL_PORT: u16 = 212;
+const IDC_EDIT_PORT: u16 = 213;
+const IDC_LBL_SIM_PORT: u16 = 214;
+const IDC_EDIT_SIM_PORT: u16 = 215;
+const IDC_BTN_SAVE_PORTS: u16 = 216;
+const IDC_LBL_VERSION: u16 = 250;
+const IDC_EDIT_VERSION: u16 = 251;
+const IDC_BTN_SAVE_VERSION: u16 = 252;
+const IDC_BTN_TAG_DRY: u16 = 253;
+const IDC_BTN_TAG_PUSH: u16 = 254;
 
 const IDC_GRP_NEW: u16 = 220;
 const IDC_LBL_NEW_TITLE: u16 = 221;
@@ -707,6 +717,15 @@ impl GuiMailbox {
     }
 }
 
+pub enum WindowExitAction {
+    Close,
+    RunBuildBat {
+        crate_dir: PathBuf,
+        build_bat: PathBuf,
+    },
+    RestartSelf,
+}
+
 struct GuiData {
     state: Arc<AppState>,
     shutdown_notify: Arc<Notify>,
@@ -745,6 +764,16 @@ struct GuiData {
     hwnd_lbl_commit: HWND,
     hwnd_edit_commit: HWND,
     hwnd_btn_reauth: HWND,
+    hwnd_lbl_port: HWND,
+    hwnd_edit_port: HWND,
+    hwnd_lbl_sim_port: HWND,
+    hwnd_edit_sim_port: HWND,
+    hwnd_btn_save_ports: HWND,
+    hwnd_lbl_version: HWND,
+    hwnd_edit_version: HWND,
+    hwnd_btn_save_version: HWND,
+    hwnd_btn_tag_dry: HWND,
+    hwnd_btn_tag_push: HWND,
 
     hwnd_grp_new: HWND,
     hwnd_lbl_new_title: HWND,
@@ -894,10 +923,10 @@ struct GuiData {
     downloads_nodes: HashMap<isize, TreeNodeData>,
 
     mailbox: Arc<GuiMailbox>,
-    handoff_build: Option<(PathBuf, PathBuf)>,
+    exit_action: WindowExitAction,
     closing: bool,
     close_started_at: Option<Instant>,
-    close_pending_handoff: Option<(PathBuf, PathBuf)>,
+    close_pending_action: WindowExitAction,
     msg_taskbar_created: u32,
 }
 
@@ -978,7 +1007,7 @@ unsafe fn subclass_groupbox(hwnd: HWND) {
 pub fn run_management_window(
     state: Arc<AppState>,
     shutdown_notify: Arc<Notify>,
-) -> Option<(PathBuf, PathBuf)> {
+) -> WindowExitAction {
     unsafe {
         enable_dpi_awareness();
         let dpi = query_dpi(std::ptr::null_mut());
@@ -1054,6 +1083,16 @@ pub fn run_management_window(
             hwnd_lbl_commit: std::ptr::null_mut(),
             hwnd_edit_commit: std::ptr::null_mut(),
             hwnd_btn_reauth: std::ptr::null_mut(),
+            hwnd_lbl_port: std::ptr::null_mut(),
+            hwnd_edit_port: std::ptr::null_mut(),
+            hwnd_lbl_sim_port: std::ptr::null_mut(),
+            hwnd_edit_sim_port: std::ptr::null_mut(),
+            hwnd_btn_save_ports: std::ptr::null_mut(),
+            hwnd_lbl_version: std::ptr::null_mut(),
+            hwnd_edit_version: std::ptr::null_mut(),
+            hwnd_btn_save_version: std::ptr::null_mut(),
+            hwnd_btn_tag_dry: std::ptr::null_mut(),
+            hwnd_btn_tag_push: std::ptr::null_mut(),
             hwnd_grp_new: std::ptr::null_mut(),
             hwnd_lbl_new_title: std::ptr::null_mut(),
             hwnd_edit_new_title: std::ptr::null_mut(),
@@ -1193,16 +1232,16 @@ pub fn run_management_window(
             downloads_checked: HashSet::new(),
             downloads_nodes: HashMap::new(),
             mailbox: Arc::new(GuiMailbox::new()),
-            handoff_build: None,
+            exit_action: WindowExitAction::Close,
             closing: false,
             close_started_at: None,
-            close_pending_handoff: None,
+            close_pending_action: WindowExitAction::Close,
             msg_taskbar_created: 0,
         });
 
         let title_w = to_wide(&format!(
-            "Swamp 本地服务 (localhost:{}) | 网络: 检测中",
-            state.config.port
+            "Swamp v{} | 网络: 检测中",
+            env!("CARGO_PKG_VERSION")
         ));
 
         let gui_ptr = Box::into_raw(gui);
@@ -1214,7 +1253,7 @@ pub fn run_management_window(
             sc(120, dpi),
             sc(80, dpi),
             sc(960, dpi),
-            sc(700, dpi),
+            sc(730, dpi),
             std::ptr::null_mut(),
             std::ptr::null_mut(),
             hinst,
@@ -1223,7 +1262,7 @@ pub fn run_management_window(
 
         if hwnd.is_null() {
             drop(Box::from_raw(gui_ptr));
-            return None;
+            return WindowExitAction::Close;
         }
 
         state.logs.set_notify_hwnd(hwnd as isize);
@@ -1246,7 +1285,7 @@ pub fn run_management_window(
         state.runtime.set_ui_hwnd(0);
 
         let mut box_gui = Box::from_raw(gui_ptr);
-        let handoff_build = box_gui.handoff_build.take();
+        let exit_action = std::mem::replace(&mut box_gui.exit_action, WindowExitAction::Close);
         if !box_gui.font_ui.is_null() {
             windows_sys::Win32::Graphics::Gdi::DeleteObject(box_gui.font_ui);
         }
@@ -1289,7 +1328,7 @@ pub fn run_management_window(
         if box_gui.himl_downloads != 0 {
             ImageList_Destroy(box_gui.himl_downloads);
         }
-        handoff_build
+        exit_action
     }
 }
 
@@ -1377,11 +1416,52 @@ unsafe fn build_all_controls(g: &mut GuiData, hwnd: HWND) {
     g.hwnd_btn_gen = create_ctrl("BUTTON", "gen", WS_TABSTOP | BS_PUSHBUTTON, 0, IDC_BTN_GEN, hwnd, hinst, f);
     g.hwnd_btn_root = create_ctrl("BUTTON", "root/", WS_TABSTOP | BS_PUSHBUTTON, 0, IDC_BTN_ROOT, hwnd, hinst, f);
     g.hwnd_btn_selfcheck = create_ctrl("BUTTON", "selfcheck", WS_TABSTOP | BS_PUSHBUTTON, 0, IDC_BTN_SELFCHECK, hwnd, hinst, f);
-    g.hwnd_btn_sim = create_ctrl("BUTTON", "sim (9000)", WS_TABSTOP | BS_PUSHBUTTON, 0, IDC_BTN_SIM, hwnd, hinst, f);
-    g.hwnd_btn_open_site = create_ctrl("BUTTON", "Open Site", WS_TABSTOP | BS_PUSHBUTTON, 0, IDC_BTN_OPEN_SITE, hwnd, hinst, f);
+    let sim_btn_label = format!("sim ({})", g.state.current_sim_port());
+    g.hwnd_btn_sim = create_ctrl("BUTTON", &sim_btn_label, WS_TABSTOP | BS_PUSHBUTTON, 0, IDC_BTN_SIM, hwnd, hinst, f);
+    let open_site_label = format!("Open Site ({})", g.state.config.port);
+    g.hwnd_btn_open_site = create_ctrl("BUTTON", &open_site_label, WS_TABSTOP | BS_PUSHBUTTON, 0, IDC_BTN_OPEN_SITE, hwnd, hinst, f);
     g.hwnd_lbl_commit = create_ctrl("STATIC", "Commit:", 0, 0, IDC_LBL_COMMIT, hwnd, hinst, f);
     g.hwnd_edit_commit = create_ctrl("EDIT", "", WS_TABSTOP | ES_AUTOHSCROLL, WS_EX_CLIENTEDGE, IDC_EDIT_COMMIT, hwnd, hinst, f);
     g.hwnd_btn_reauth = create_ctrl("BUTTON", "重新授权 Tasks", WS_TABSTOP | BS_PUSHBUTTON, 0, IDC_BTN_REAUTH, hwnd, hinst, f);
+    g.hwnd_lbl_port = create_ctrl("STATIC", "本地端口:", 0, 0, IDC_LBL_PORT, hwnd, hinst, f);
+    g.hwnd_edit_port = create_ctrl(
+        "EDIT",
+        &g.state.config.port.to_string(),
+        WS_TABSTOP | ES_AUTOHSCROLL,
+        WS_EX_CLIENTEDGE,
+        IDC_EDIT_PORT,
+        hwnd,
+        hinst,
+        f,
+    );
+    g.hwnd_lbl_sim_port = create_ctrl("STATIC", "仿真端口:", 0, 0, IDC_LBL_SIM_PORT, hwnd, hinst, f);
+    g.hwnd_edit_sim_port = create_ctrl(
+        "EDIT",
+        &g.state.current_sim_port().to_string(),
+        WS_TABSTOP | ES_AUTOHSCROLL,
+        WS_EX_CLIENTEDGE,
+        IDC_EDIT_SIM_PORT,
+        hwnd,
+        hinst,
+        f,
+    );
+    g.hwnd_btn_save_ports = create_ctrl("BUTTON", "保存端口", WS_TABSTOP | BS_PUSHBUTTON, 0, IDC_BTN_SAVE_PORTS, hwnd, hinst, f);
+    let init_cargo_ver = crate::services::upstream_sync::read_local_cargo_version(&g.state.config)
+        .unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_string());
+    g.hwnd_lbl_version = create_ctrl("STATIC", "版本:", 0, 0, IDC_LBL_VERSION, hwnd, hinst, f);
+    g.hwnd_edit_version = create_ctrl(
+        "EDIT",
+        &init_cargo_ver,
+        WS_TABSTOP | ES_AUTOHSCROLL,
+        WS_EX_CLIENTEDGE,
+        IDC_EDIT_VERSION,
+        hwnd,
+        hinst,
+        f,
+    );
+    g.hwnd_btn_save_version = create_ctrl("BUTTON", "保存版本", WS_TABSTOP | BS_PUSHBUTTON, 0, IDC_BTN_SAVE_VERSION, hwnd, hinst, f);
+    g.hwnd_btn_tag_dry = create_ctrl("BUTTON", "tag 预检", WS_TABSTOP | BS_PUSHBUTTON, 0, IDC_BTN_TAG_DRY, hwnd, hinst, f);
+    g.hwnd_btn_tag_push = create_ctrl("BUTTON", "发版 tag", WS_TABSTOP | BS_PUSHBUTTON, 0, IDC_BTN_TAG_PUSH, hwnd, hinst, f);
 
     g.hwnd_grp_new = create_ctrl("BUTTON", "新建 HTML 页面", BS_GROUPBOX, 0, IDC_GRP_NEW, hwnd, hinst, f);
     g.hwnd_lbl_new_title = create_ctrl("STATIC", "标题:", 0, 0, IDC_LBL_NEW_TITLE, hwnd, hinst, f);
@@ -1446,6 +1526,16 @@ unsafe fn build_all_controls(g: &mut GuiData, hwnd: HWND) {
         g.hwnd_lbl_commit,
         g.hwnd_edit_commit,
         g.hwnd_btn_reauth,
+        g.hwnd_lbl_port,
+        g.hwnd_edit_port,
+        g.hwnd_lbl_sim_port,
+        g.hwnd_edit_sim_port,
+        g.hwnd_btn_save_ports,
+        g.hwnd_lbl_version,
+        g.hwnd_edit_version,
+        g.hwnd_btn_save_version,
+        g.hwnd_btn_tag_dry,
+        g.hwnd_btn_tag_push,
         g.hwnd_grp_new,
         g.hwnd_lbl_new_title,
         g.hwnd_edit_new_title,
@@ -1944,7 +2034,7 @@ unsafe fn layout_controls(g: &GuiData, hwnd: HWND) {
     let mut rc: RECT = std::mem::zeroed();
     GetClientRect(hwnd, &mut rc);
     let w = (rc.right - rc.left).max(s(780));
-    let h = (rc.bottom - rc.top).max(s(540));
+    let h = (rc.bottom - rc.top).max(s(570));
 
     let pad = s(10);
     let log_h = s(185);
@@ -1955,7 +2045,7 @@ unsafe fn layout_controls(g: &GuiData, hwnd: HWND) {
     MoveWindow(g.hwnd_btn_clear_log, w - pad - s(78), log_hdr_y, s(78), s(22), 1);
     MoveWindow(g.hwnd_edit_log, pad, log_top, w - pad * 2, log_h, 1);
 
-    let tab_h = (log_hdr_y - pad - s(6)).max(s(270));
+    let tab_h = (log_hdr_y - pad - s(6)).max(s(300));
     MoveWindow(g.hwnd_tab, pad, pad, w - pad * 2, tab_h, 1);
 
     let inner_x = pad + s(10);
@@ -1965,12 +2055,12 @@ unsafe fn layout_controls(g: &GuiData, hwnd: HWND) {
 
     // --- Tab 0 布局 ---
     let mut y = inner_y;
-    MoveWindow(g.hwnd_grp_ops, inner_x, y, inner_w, s(84), 1);
+    MoveWindow(g.hwnd_grp_ops, inner_x, y, inner_w, s(114), 1);
     let mut bx = inner_x + s(12);
     let by1 = y + s(22);
     let ops_btn_width = |h: HWND| -> Option<i32> {
         if h == g.hwnd_btn_open_site {
-            Some(86)
+            Some(124)
         } else if h == g.hwnd_btn_gen {
             Some(64)
         } else if h == g.hwnd_btn_gen_push {
@@ -2003,7 +2093,20 @@ unsafe fn layout_controls(g: &GuiData, hwnd: HWND) {
     MoveWindow(g.hwnd_edit_commit, inner_x + s(108), by2, commit_w, s(23), 1);
     MoveWindow(g.hwnd_btn_reauth, inner_x + inner_w - s(12) - reauth_w, by2 - s(1), reauth_w, s(24), 1);
 
-    y += s(90);
+    let by3 = y + s(83);
+    MoveWindow(g.hwnd_lbl_port, inner_x + s(12), by3 + s(3), s(60), s(20), 1);
+    MoveWindow(g.hwnd_edit_port, inner_x + s(74), by3, s(54), s(23), 1);
+    MoveWindow(g.hwnd_lbl_sim_port, inner_x + s(138), by3 + s(3), s(60), s(20), 1);
+    MoveWindow(g.hwnd_edit_sim_port, inner_x + s(200), by3, s(54), s(23), 1);
+    MoveWindow(g.hwnd_btn_save_ports, inner_x + s(260), by3 - s(1), s(72), s(24), 1);
+
+    MoveWindow(g.hwnd_lbl_version, inner_x + s(350), by3 + s(3), s(36), s(20), 1);
+    MoveWindow(g.hwnd_edit_version, inner_x + s(388), by3, s(74), s(23), 1);
+    MoveWindow(g.hwnd_btn_save_version, inner_x + s(468), by3 - s(1), s(72), s(24), 1);
+    MoveWindow(g.hwnd_btn_tag_dry, inner_x + s(550), by3 - s(1), s(82), s(24), 1);
+    MoveWindow(g.hwnd_btn_tag_push, inner_x + s(638), by3 - s(1), s(82), s(24), 1);
+
+    y += s(120);
     MoveWindow(g.hwnd_grp_new, inner_x, y, inner_w, s(56), 1);
     let ny = y + s(22);
     MoveWindow(g.hwnd_lbl_new_title, inner_x + s(12), ny + s(3), s(38), s(20), 1);
@@ -2354,7 +2457,11 @@ unsafe fn build_tray_nid(g: &GuiData, hwnd: HWND) -> NOTIFYICONDATAW {
         None => (g.icon_red_small, "检测中"),
     };
     nid.hIcon = icon;
-    let tip = format!("Swamp (localhost:{}) | 网络: {}", g.state.config.port, label);
+    let tip = format!(
+        "Swamp v{} | 网络: {}",
+        env!("CARGO_PKG_VERSION"),
+        label
+    );
     fill_utf16_buf(&mut nid.szTip, &tip);
     nid
 }
@@ -2412,7 +2519,7 @@ unsafe fn show_tray_menu(g: &mut GuiData, hwnd: HWND) {
         if g.state.runtime.active_ops() > 0 {
             restore_from_tray(hwnd);
         }
-        begin_safe_close(g, hwnd, None);
+        begin_safe_close(g, hwnd, WindowExitAction::Close);
     }
 }
 
@@ -2429,8 +2536,9 @@ unsafe fn update_vpn_indicator(g: &mut GuiData, hwnd: HWND, online: bool) {
     SendMessageW(hwnd, WM_SETICON, ICON_BIG as WPARAM, big as LPARAM);
     SendMessageW(hwnd, WM_SETICON, ICON_SMALL as WPARAM, small as LPARAM);
     let title = format!(
-        "Swamp 本地服务 (localhost:{}) | 网络: {}",
-        g.state.config.port, label
+        "Swamp v{} | 网络: {}",
+        env!("CARGO_PKG_VERSION"),
+        label
     );
     set_window_text(hwnd, &title);
     modify_tray_icon(g, hwnd);
@@ -3212,7 +3320,7 @@ unsafe extern "system" fn wnd_proc(
         WM_GETMINMAXINFO => {
             let mmi = &mut *(lparam as *mut MINMAXINFO);
             mmi.ptMinTrackSize.x = sc(860, g.dpi);
-            mmi.ptMinTrackSize.y = sc(580, g.dpi);
+            mmi.ptMinTrackSize.y = sc(610, g.dpi);
             0
         }
         WM_DPICHANGED => {
@@ -3439,8 +3547,15 @@ unsafe extern "system" fn wnd_proc(
                 .lock()
                 .ok()
                 .and_then(|mut s| s.take());
-            if handoff.is_some() {
-                begin_safe_close(g, hwnd, handoff);
+            if let Some((crate_dir, build_bat)) = handoff {
+                begin_safe_close(
+                    g,
+                    hwnd,
+                    WindowExitAction::RunBuildBat {
+                        crate_dir,
+                        build_bat,
+                    },
+                );
             }
             0
         }
@@ -3940,7 +4055,7 @@ unsafe fn show_upstream_commit_prompt(
 unsafe fn finalize_safe_close(g: &mut GuiData, hwnd: HWND) {
     KillTimer(hwnd, TIMER_SAFE_CLOSE);
     g.close_started_at = None;
-    g.handoff_build = g.close_pending_handoff.take();
+    g.exit_action = std::mem::replace(&mut g.close_pending_action, WindowExitAction::Close);
     g.mailbox.kill_sim_child();
     g.state.shutting_down.store(true, Ordering::SeqCst);
     g.shutdown_notify.notify_waiters();
@@ -3963,8 +4078,9 @@ unsafe fn poll_safe_close(g: &mut GuiData, hwnd: HWND) {
     KillTimer(hwnd, TIMER_SAFE_CLOSE);
     g.close_started_at = None;
 
-    if g.close_pending_handoff.is_some() {
-        g.close_pending_handoff = None;
+    if !matches!(g.close_pending_action, WindowExitAction::Close) {
+        let was_restart = matches!(g.close_pending_action, WindowExitAction::RestartSelf);
+        g.close_pending_action = WindowExitAction::Close;
         g.closing = false;
         EnableWindow(hwnd, 1);
         let vpn_lbl = match g.last_vpn_online {
@@ -3975,16 +4091,26 @@ unsafe fn poll_safe_close(g: &mut GuiData, hwnd: HWND) {
         set_window_text(
             hwnd,
             &format!(
-                "Swamp 本地服务 (localhost:{}) | 网络: {}",
-                g.state.config.port, vpn_lbl
+                "Swamp v{} | 网络: {}",
+                env!("CARGO_PKG_VERSION"),
+                vpn_lbl
             ),
         );
-        g.state
-            .logs
-            .error("[shutdown] 等待任务超时，已取消退出，未启动 build.bat");
-        let mw = to_wide("仍有任务未结束，已取消退出且未启动 build.bat，请稍后重试。");
-        let tw = to_wide("未启动 build.bat");
-        MessageBoxW(hwnd, mw.as_ptr(), tw.as_ptr(), MB_OK | MB_ICONWARNING);
+        if was_restart {
+            g.state
+                .logs
+                .error("[shutdown] 等待任务超时，已取消自动重启，请稍后手动重启");
+            let mw = to_wide("仍有任务未结束，已取消自动重启，请稍后重试。");
+            let tw = to_wide("未重启 swamp.exe");
+            MessageBoxW(hwnd, mw.as_ptr(), tw.as_ptr(), MB_OK | MB_ICONWARNING);
+        } else {
+            g.state
+                .logs
+                .error("[shutdown] 等待任务超时，已取消退出，未启动 build.bat");
+            let mw = to_wide("仍有任务未结束，已取消退出且未启动 build.bat，请稍后重试。");
+            let tw = to_wide("未启动 build.bat");
+            MessageBoxW(hwnd, mw.as_ptr(), tw.as_ptr(), MB_OK | MB_ICONWARNING);
+        }
         return;
     }
 
@@ -3997,24 +4123,26 @@ unsafe fn poll_safe_close(g: &mut GuiData, hwnd: HWND) {
 unsafe fn begin_safe_close(
     g: &mut GuiData,
     hwnd: HWND,
-    handoff: Option<(PathBuf, PathBuf)>,
+    action: WindowExitAction,
 ) -> bool {
     if g.closing {
         return false;
     }
-    let has_handoff = handoff.is_some();
     let active = g.state.runtime.active_ops();
     if active > 0 {
-        let prompt = if has_handoff {
-            format!(
+        let prompt = match action {
+            WindowExitAction::RunBuildBat { .. } => format!(
                 "仍有 {} 个任务正在运行。\n\n选择“是”等待任务完成后退出并启动 build.bat；\n选择“否”取消退出。",
                 active
-            )
-        } else {
-            format!(
+            ),
+            WindowExitAction::RestartSelf => format!(
+                "仍有 {} 个任务正在运行。\n\n选择“是”等待任务完成后重启 swamp.exe；\n选择“否”取消重启。",
+                active
+            ),
+            WindowExitAction::Close => format!(
                 "仍有 {} 个任务正在运行。\n\n选择“是”等待任务完成后退出；\n选择“否”取消关闭。",
                 active
-            )
+            ),
         };
         let msg_w = to_wide(&prompt);
         let title_w = to_wide("退出确认");
@@ -4025,19 +4153,23 @@ unsafe fn begin_safe_close(
             MB_YESNO | MB_ICONWARNING,
         );
         if ans != IDYES {
-            if has_handoff {
-                g.state
-                    .logs
-                    .warn("[apply] 已取消退出，未启动 build.bat");
+            match action {
+                WindowExitAction::RunBuildBat { .. } => {
+                    g.state.logs.warn("[apply] 已取消退出，未启动 build.bat");
+                }
+                WindowExitAction::RestartSelf => {
+                    g.state.logs.warn("[config] 已取消自动重启");
+                }
+                WindowExitAction::Close => {}
             }
             return false;
         }
     }
 
     g.closing = true;
-    g.close_pending_handoff = handoff;
+    g.close_pending_action = action;
     EnableWindow(hwnd, 0);
-    set_window_text(hwnd, "Swamp 本地服务 - 正在等待任务结束...");
+    set_window_text(hwnd, &format!("Swamp v{} - 正在等待任务结束...", env!("CARGO_PKG_VERSION")));
     g.state
         .logs
         .info("[shutdown] 正在等待运行中的任务结束并关闭服务");
@@ -4133,7 +4265,8 @@ unsafe fn handle_command(g: &mut GuiData, hwnd: HWND, id: u16, code: u16) {
             std::thread::spawn(move || {
                 let _busy = st.runtime.begin_op();
                 st.logs.info("[gen] 开始构建站点");
-                match crate::builder::run_gen_with_logger(&st.config, Some(&st.logs)) {
+                let eff_cfg = st.effective_config();
+                match crate::builder::run_gen_with_logger(&eff_cfg, Some(&st.logs)) {
                     Ok(()) => {
                         st.logs.info("[gen] 构建完成");
                         spawn_load_synonyms_data(st.config.clone(), mailbox.clone(), false);
@@ -4165,7 +4298,8 @@ unsafe fn handle_command(g: &mut GuiData, hwnd: HWND, id: u16, code: u16) {
                 let _busy = st.runtime.begin_op();
                 if run_gen_first {
                     st.logs.info("[gen+push] 步骤 1/2: 构建站点");
-                    if let Err(e) = crate::builder::run_gen_with_logger(&st.config, Some(&st.logs)) {
+                    let eff_cfg = st.effective_config();
+                    if let Err(e) = crate::builder::run_gen_with_logger(&eff_cfg, Some(&st.logs)) {
                         st.logs.error(format!("[gen+push] 构建失败，已取消推送: {}", e));
                         return;
                     }
@@ -4287,7 +4421,7 @@ unsafe fn handle_command(g: &mut GuiData, hwnd: HWND, id: u16, code: u16) {
                             &staged_paths,
                             Some(&st.logs),
                         ) {
-                            Ok(crate::services::upstream_sync::UpstreamSyncPlan::Skip(_))
+                            Ok(crate::services::upstream_sync::UpstreamSyncPlan::Skip)
                             | Ok(crate::services::upstream_sync::UpstreamSyncPlan::NoSkeletonDiff) => {}
                             Ok(crate::services::upstream_sync::UpstreamSyncPlan::Ready(plan)) => {
                                 let upstream_msg = if plan.has_user_changes {
@@ -4555,18 +4689,208 @@ unsafe fn handle_command(g: &mut GuiData, hwnd: HWND, id: u16, code: u16) {
                     Ok(crate::services::upstream_sync::PullUpstreamOutcome::Conflicts {
                         remote,
                         branch,
+                        upstream_commit,
                         conflict_files,
-                        ..
+                        protected_user_files,
                     }) => {
                         st.logs.error(format!(
-                            "[upstream] 合并 {}/{} 存在 {} 个骨架代码冲突，请用 VS Code 解决后执行 git commit:\n  {}",
+                            "[upstream] 合并 {}/{} ({}) 存在 {} 个骨架代码冲突（已保护 {} 个用户独占文件），请用 VS Code 解决后执行 git commit:\n  {}",
                             remote,
                             branch,
+                            &upstream_commit[..upstream_commit.len().min(8)],
                             conflict_files.len(),
+                            protected_user_files.len(),
                             conflict_files.join("\n  ")
                         ));
                     }
                     Err(e) => st.logs.error(format!("[upstream] 拉取失败: {}", e)),
+                }
+            });
+        }
+        IDC_BTN_SAVE_PORTS => {
+            let raw_port = get_window_text_string(g.hwnd_edit_port).trim().to_string();
+            let raw_sim = get_window_text_string(g.hwnd_edit_sim_port).trim().to_string();
+            let new_port = raw_port.parse::<u16>().ok().filter(|&p| p > 0);
+            let new_sim = raw_sim.parse::<u16>().ok().filter(|&p| p > 0);
+            let (Some(np), Some(ns)) = (new_port, new_sim) else {
+                let m = to_wide("请输入有效的端口号（1–65535）。");
+                let t = to_wide("端口校验失败");
+                MessageBoxW(hwnd, m.as_ptr(), t.as_ptr(), MB_OK | MB_ICONWARNING);
+                return;
+            };
+            if np == ns {
+                let m = to_wide(&format!("本地端口与仿真端口不能相同 ({})。", np));
+                let t = to_wide("端口校验失败");
+                MessageBoxW(hwnd, m.as_ptr(), t.as_ptr(), MB_OK | MB_ICONWARNING);
+                return;
+            }
+            match crate::config::save_server_ports(&g.state.config, np, ns) {
+                Ok(saved_to) => {
+                    let prev_sim = g.state.current_sim_port();
+                    let local_changed = np != g.state.config.port;
+                    let sim_changed = ns != prev_sim;
+                    g.state.set_live_sim_port(ns);
+                    set_window_text(g.hwnd_btn_sim, &format!("sim ({})", ns));
+                    let mut note = format!("[config] 端口已保存至 {} (本地={}, 仿真={})", saved_to, np, ns);
+                    if sim_changed {
+                        note.push_str("；sim 按钮已更新，请执行一次 gen 同步前端仿真端口识别");
+                    }
+                    if local_changed {
+                        note.push_str("；本地端口将在重启 swamp.exe 后生效");
+                    }
+                    g.state.logs.info(note);
+
+                    let prompt = match (local_changed, sim_changed) {
+                        (true, true) => format!(
+                            "端口已保存至 {} (本地={}, 仿真={})。\n\n本地端口需重启生效；仿真端口还需执行一次 gen 同步前端。\n\n是否立即重启 swamp.exe？",
+                            saved_to, np, ns
+                        ),
+                        (true, false) => format!(
+                            "端口已保存至 {} (本地={}, 仿真={})。\n\n本地端口变更需重启 swamp.exe 生效。\n\n是否立即重启 swamp.exe？",
+                            saved_to, np, ns
+                        ),
+                        (false, true) => format!(
+                            "端口已保存至 {} (本地={}, 仿真={})。\n\nsim 按钮已更新（提示：需执行一次 gen 同步前端仿真端口）。\n\n是否立即重启 swamp.exe？",
+                            saved_to, np, ns
+                        ),
+                        (false, false) => format!(
+                            "端口已保存至 {} (本地={}, 仿真={})。\n\n是否立即重启 swamp.exe？",
+                            saved_to, np, ns
+                        ),
+                    };
+                    let msg_w = to_wide(&prompt);
+                    let title_w = to_wide("端口已保存");
+                    if MessageBoxW(
+                        hwnd,
+                        msg_w.as_ptr(),
+                        title_w.as_ptr(),
+                        MB_YESNO | MB_ICONQUESTION_OR_INFO,
+                    ) == IDYES
+                    {
+                        g.state.logs.info("[config] 正在重启 swamp.exe 以应用端口配置...");
+                        begin_safe_close(g, hwnd, WindowExitAction::RestartSelf);
+                    }
+                }
+                Err(e) => {
+                    g.state.logs.error(format!("[config] 保存端口失败: {}", e));
+                    let m = to_wide(&format!("保存端口失败：\n{}", e));
+                    let t = to_wide("保存失败");
+                    MessageBoxW(hwnd, m.as_ptr(), t.as_ptr(), MB_OK | MB_ICONWARNING);
+                }
+            }
+        }
+        IDC_BTN_SAVE_VERSION => {
+            let raw_ver = get_window_text_string(g.hwnd_edit_version).trim().to_string();
+            let prev_ver = crate::services::upstream_sync::read_local_cargo_version(&g.state.config)
+                .unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_string());
+            match crate::services::upstream_sync::save_local_cargo_version(&g.state.config, &raw_ver) {
+                Ok(ver) => {
+                    set_window_text(g.hwnd_edit_version, &ver);
+                    g.state.logs.info(format!(
+                        "[version] 已将 _build/swamp-server/Cargo.toml 版本更新为 {}（下一步：编译 swamp.exe -> push -> tag 预检 / 发版 tag）",
+                        ver
+                    ));
+                    let crate_dir = strip_verbatim_prefix(&g.state.config.build_dir.join("swamp-server"));
+                    let build_bat = crate_dir.join("build.bat");
+                    if build_bat.is_file() {
+                        let changed_note = if ver != prev_ver {
+                            format!("版本号已从 {} 更新为 {}（已写入 _build/swamp-server/Cargo.toml）。", prev_ver, ver)
+                        } else {
+                            format!("版本号 {} 已校验并保存至 _build/swamp-server/Cargo.toml。", ver)
+                        };
+                        let prompt = format!(
+                            "{}\n\n是否立即退出并启动 build.bat 重编 swamp.exe（同时更新 Cargo.lock）？\n（选“否”可继续编辑其他文件后再手动编译）",
+                            changed_note
+                        );
+                        let msg_w = to_wide(&prompt);
+                        let title_w = to_wide("版本号已保存");
+                        if MessageBoxW(
+                            hwnd,
+                            msg_w.as_ptr(),
+                            title_w.as_ptr(),
+                            MB_YESNO | MB_ICONQUESTION_OR_INFO,
+                        ) == IDYES
+                        {
+                            begin_safe_close(
+                                g,
+                                hwnd,
+                                WindowExitAction::RunBuildBat {
+                                    crate_dir,
+                                    build_bat,
+                                },
+                            );
+                        }
+                    }
+                }
+                Err(e) => {
+                    g.state.logs.error(format!("[version] 保存版本号失败: {}", e));
+                    let m = to_wide(&format!("保存版本号失败：\n{}", e));
+                    let t = to_wide("版本校验失败");
+                    MessageBoxW(hwnd, m.as_ptr(), t.as_ptr(), MB_OK | MB_ICONWARNING);
+                }
+            }
+        }
+        IDC_BTN_TAG_DRY | IDC_BTN_TAG_PUSH => {
+            let dry_run = id == IDC_BTN_TAG_DRY;
+            let raw_ver = get_window_text_string(g.hwnd_edit_version).trim().to_string();
+            let ver_override = if raw_ver.is_empty() {
+                None
+            } else {
+                Some(raw_ver)
+            };
+
+            if !dry_run {
+                let target_tag = match ver_override.as_deref() {
+                    Some(v) => match crate::services::upstream_sync::normalize_release_tag(v) {
+                        Ok((t, _)) => t,
+                        Err(e) => {
+                            let m = to_wide(&e);
+                            let t = to_wide("版本号无效");
+                            MessageBoxW(hwnd, m.as_ptr(), t.as_ptr(), MB_OK | MB_ICONWARNING);
+                            return;
+                        }
+                    },
+                    None => {
+                        let fallback = crate::services::upstream_sync::read_local_cargo_version(&g.state.config)
+                            .unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_string());
+                        format!("v{}", fallback)
+                    }
+                };
+                let prompt = format!(
+                    "确定要对上游骨架仓 ({}/{}) 打发版标签 {} 并推送吗？\n\n推送后将自动触发 GitHub Actions 编译并发布 Release。\n（建议先点击「tag 预检」确认版本与分支无误）",
+                    g.state.config.upstream.remote,
+                    g.state.config.upstream.branch,
+                    target_tag
+                );
+                let msg_w = to_wide(&prompt);
+                let title_w = to_wide("确认发版打标");
+                if MessageBoxW(
+                    hwnd,
+                    msg_w.as_ptr(),
+                    title_w.as_ptr(),
+                    MB_YESNO | MB_ICONWARNING,
+                ) != IDYES
+                {
+                    return;
+                }
+            }
+
+            let Some(_push_guard) = g.mailbox.try_acquire_flag(BusySlot::Push) else {
+                g.state.logs.warn("[tag] 已有 Git 同步任务正在运行，请等待完成后重试");
+                return;
+            };
+            let st = g.state.clone();
+            std::thread::spawn(move || {
+                let _push_guard = _push_guard;
+                let _busy = st.runtime.begin_op();
+                match crate::services::upstream_sync::tag_upstream_release(
+                    &st.config,
+                    ver_override.as_deref(),
+                    dry_run,
+                    Some(&st.logs),
+                ) {
+                    Ok(_) => {}
+                    Err(e) => st.logs.error(format!("[tag] 失败: {}", e)),
                 }
             });
         }
@@ -4581,7 +4905,7 @@ unsafe fn handle_command(g: &mut GuiData, hwnd: HWND, id: u16, code: u16) {
                     return;
                 };
                 mailbox.kill_sim_child();
-                let sim_port = st.config.sim_port;
+                let sim_port = st.current_sim_port();
                 if sim_port == st.config.port {
                     st.logs.error(format!(
                         "[sim] 仿真端口 sim_port={} 与主服务端口冲突，请修改 _build/swamp.toml 后重试",
@@ -5270,7 +5594,8 @@ unsafe fn handle_command(g: &mut GuiData, hwnd: HWND, id: u16, code: u16) {
             std::thread::spawn(move || {
                 let _busy = st.runtime.begin_op();
                 st.logs.info("[synonyms] 开始重建 synonyms.js 与未收录词报告并执行构建");
-                match crate::builder::run_gen_with_options(&st.config, Some(&st.logs), true) {
+                let eff_cfg = st.effective_config();
+                match crate::builder::run_gen_with_options(&eff_cfg, Some(&st.logs), true) {
                     Ok(()) => {
                         st.logs.info("[synonyms] 重建与构建完成");
                         spawn_load_synonyms_data(st.config.clone(), mailbox.clone(), false);

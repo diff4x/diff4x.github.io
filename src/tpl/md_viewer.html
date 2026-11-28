@@ -295,7 +295,8 @@ html,body{height:auto;overflow:visible}#panes,.pv-wrap{display:block}.pv{overflo
     catch { return localStorage.getItem(k); }
   };
 
-  const isLocalHost = (location.hostname === 'localhost' || location.hostname === '127.0.0.1' || location.protocol === 'file:') && location.port !== '9000';
+  const simPortStr = String((window.top && window.top.sim_port) || '9000');
+  const isLocalHost = (location.hostname === 'localhost' || location.hostname === '127.0.0.1' || location.protocol === 'file:') && location.port !== simPortStr;
   const isEditable = readStore('online_flag') !== undefined ? (readStore('online_flag') === '0') : isLocalHost;
   if (!isEditable) document.body.classList.add('readonly');
 

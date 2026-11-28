@@ -342,7 +342,7 @@ pub fn resolve_safe_target(repo_root: &Path, raw_entry: &str) -> Option<(String,
 pub fn load_presets_json(cfg: &ServerConfig) -> Value {
     let (skip_re, presets) = crate::config::read_pack_presets(cfg);
     json!({
-        "version": 2,
+        "version": 1,
         "skipApplyDocRegex": skip_re,
         "presets": presets
     })

@@ -9,7 +9,7 @@ use axum::{
 };
 use percent_encoding::percent_decode_str;
 use serde_json::json;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use subtle::ConstantTimeEq;
@@ -81,6 +81,7 @@ impl AuthCodeStore {
 pub struct AppState {
     pub mode: RunMode,
     pub config: ServerConfig,
+    pub live_sim_port: AtomicU16,
     pub token: String,
     pub auth_codes: AuthCodeStore,
     pub allowed_origins: Vec<String>,
@@ -96,6 +97,23 @@ pub struct AppState {
 }
 
 impl AppState {
+    pub fn current_sim_port(&self) -> u16 {
+        let p = self.live_sim_port.load(Ordering::Relaxed);
+        if p > 0 { p } else { self.config.sim_port }
+    }
+
+    pub fn set_live_sim_port(&self, sim_port: u16) {
+        if sim_port > 0 {
+            self.live_sim_port.store(sim_port, Ordering::Relaxed);
+        }
+    }
+
+    pub fn effective_config(&self) -> ServerConfig {
+        let mut c = self.config.clone();
+        c.sim_port = self.current_sim_port();
+        c
+    }
+
     pub fn issue_auth_code(&self) -> Result<String, String> {
         self.auth_codes.issue()
     }
@@ -1222,13 +1240,18 @@ const d = obj.return / 2;"#;
                 .unwrap_or(false),
     );
 
-    let sw_tpl = "importScripts('/src/js/core-list.js?v=__SW_BUILD_VERSION__');\nself.SW_VERSION = '__SW_BUILD_VERSION__';\n";
-    let sw_rendered = crate::builder::minify::render_sw_source(sw_tpl, "1795999999999");
+    let sw_tpl = "importScripts('/src/js/core-list.js?v=__SW_BUILD_VERSION__');\nself.SW_VERSION = '__SW_BUILD_VERSION__';\nconst IS_LOCAL_MODE = self.location.port !== '__SW_SIM_PORT__';\n";
+    let sw_rendered = crate::builder::minify::render_sw_source(sw_tpl, "1795999999999", 9123);
     check(
         "sw-template-version-render",
         sw_rendered.contains("core-list.js?v=1795999999999")
             && sw_rendered.contains("self.SW_VERSION = '1795999999999';")
             && !sw_rendered.contains("__SW_BUILD_VERSION__"),
+    );
+    check(
+        "sw-template-sim-port-render",
+        sw_rendered.contains("self.location.port !== '9123'")
+            && !sw_rendered.contains("__SW_SIM_PORT__"),
     );
 
     let idx_sample = "<!DOCTYPE html>\n<html lang=\"zh-CN\" data-adult-gate=\"1\">\n<head><title>Old</title></head>\n<body>\n<!-- PARAM-BEGIN -->\n<script></script>\n<!-- PARAM-END -->\n</body></html>";
@@ -1278,6 +1301,7 @@ const d = obj.return / 2;"#;
             && crate::services::upstream_sync::is_skeleton_path("_build/swamp-server/src/main.rs")
             && crate::services::upstream_sync::is_skeleton_path("_build/swamp-server/assets/cilin.txt")
             && crate::services::upstream_sync::is_skeleton_path("src/js/raw/index.js")
+            && crate::services::upstream_sync::is_skeleton_path("src/js/pinyinData.js")
             && crate::services::upstream_sync::is_skeleton_path("src/css/sound/stone2.wav")
             && crate::services::upstream_sync::is_skeleton_path("src/tpl/md_viewer.html")
             && crate::services::upstream_sync::is_skeleton_path(".github/workflows/release.yml")
@@ -1309,6 +1333,7 @@ const d = obj.return / 2;"#;
             && crate::services::upstream_sync::is_generated_artifact_path("src/js/data/lite_data.js")
             && crate::services::upstream_sync::is_generated_artifact_path("src/js/raw/core-list.js")
             && crate::services::upstream_sync::is_generated_artifact_path("_build/swamp.exe")
+            && !crate::services::upstream_sync::is_generated_artifact_path("src/js/pinyinData.js")
             && !crate::services::upstream_sync::is_generated_artifact_path("src/js/raw/index.js")
             && !crate::services::upstream_sync::is_generated_artifact_path("src/css/raw/index.css"),
     );
@@ -1321,6 +1346,120 @@ const d = obj.return / 2;"#;
             && clean_idx.contains("const github_page = \"\";")
             && clean_idx.contains("const site_repo = \"\";")
             && !clean_idx.contains("alice"),
+    );
+
+    check(
+        "release-version-validation",
+        crate::services::release_pack::validate_release_version("v1.0.0")
+            && crate::services::release_pack::validate_release_version("1.0.0-rc.1")
+            && !crate::services::release_pack::validate_release_version("")
+            && !crate::services::release_pack::validate_release_version("-v1")
+            && !crate::services::release_pack::validate_release_version("../evil")
+            && !crate::services::release_pack::validate_release_version("v1/2"),
+    );
+    check(
+        "release-win64-vs-upgrade-filter",
+        crate::services::release_pack::is_release_win64_skeleton_path("_build/swamp-server/assets/cilin.txt")
+            && crate::services::release_pack::is_release_win64_skeleton_path("src/js/raw/index.js")
+            && crate::services::release_pack::is_release_win64_skeleton_path("src/js/pinyinData.js")
+            && !crate::services::release_pack::is_release_win64_skeleton_path("_build/swamp-server/src/main.rs")
+            && !crate::services::release_pack::is_release_win64_skeleton_path(".github/workflows/release.yml")
+            && !crate::services::release_pack::is_release_win64_skeleton_path("_build/swamp.toml")
+            && !crate::services::release_pack::is_release_upgrade_path("_build/swamp-server/assets/cilin.txt")
+            && !crate::services::release_pack::is_release_upgrade_path("_build/swamp.exe")
+            && crate::services::release_pack::is_release_upgrade_path("_build/core.toml")
+            && crate::services::release_pack::is_release_upgrade_path("src/js/pinyinData.js")
+            && crate::services::release_pack::is_release_upgrade_path("src/tpl/md_viewer.html")
+            && crate::services::release_pack::is_release_upgrade_path("src/wasm/compute_intensive_task_processor_bg.wasm"),
+    );
+    let sample_upgrade_paths = [
+        "README.md",
+        "index.html",
+        "_build/core.toml",
+        "_build/local.toml.example",
+        "src/js/raw/index.js",
+        "src/css/raw/bookmark.css",
+        "src/tpl/md_viewer.html",
+        "src/wasm/compute_intensive_task_processor.min.js",
+    ];
+    check(
+        "release-upgrade-zip-apply-compatible",
+        sample_upgrade_paths.iter().all(|p| {
+            crate::services::release_pack::is_release_upgrade_path(p)
+                && !crate::services::pack_apply::is_hard_private_rel(p)
+                && !crate::services::upstream_sync::is_user_owned_path(p)
+        }),
+    );
+
+    let port_sample_a = "[site]\ntitle = \"Demo\"\n\n[server]\nport = 8000\nsim_port = 9000\nlog_level = \"error\"\n";
+    let port_upd_a = crate::config::update_toml_server_ports_text(port_sample_a, 8080, 9090);
+    let port_sample_b = "[site]\ntitle = \"Demo\"\n\n# === SYNONYMS-CUSTOM-BEGIN ===\n[synonyms]\ncustom_json = '{}'\n# === SYNONYMS-CUSTOM-END ===\n";
+    let port_upd_b = crate::config::update_toml_server_ports_text(port_sample_b, 8123, 9123);
+    check(
+        "config-save-server-ports",
+        port_upd_a
+            .as_deref()
+            .map(|s| s.contains("port = 8080") && s.contains("sim_port = 9090") && s.contains("log_level = \"error\""))
+            .unwrap_or(false)
+            && port_upd_b
+                .as_deref()
+                .map(|s| s.contains("[server]\nport = 8123\nsim_port = 9123"))
+                .unwrap_or(false)
+            && crate::config::update_toml_server_ports_text(port_sample_a, 8080, 8080).is_err()
+            && crate::config::update_toml_server_ports_text(port_sample_a, 0, 9000).is_err(),
+    );
+    check(
+        "upstream-third-party-licenses-whitelisted",
+        crate::services::upstream_sync::is_skeleton_path("LICENSE")
+            && crate::services::upstream_sync::is_skeleton_path("THIRD_PARTY_LICENSES.md")
+            && crate::services::release_pack::is_release_win64_skeleton_path("LICENSE")
+            && crate::services::release_pack::is_release_win64_skeleton_path("THIRD_PARTY_LICENSES.md")
+            && crate::services::release_pack::is_release_upgrade_path("LICENSE")
+            && crate::services::release_pack::is_release_upgrade_path("THIRD_PARTY_LICENSES.md"),
+    );
+
+    check(
+        "upstream-release-tag-validation",
+        crate::services::upstream_sync::normalize_release_tag("1.0.1")
+            == Ok(("v1.0.1".to_string(), "1.0.1".to_string()))
+            && crate::services::upstream_sync::normalize_release_tag("v1.2.3-rc.1")
+                == Ok(("v1.2.3-rc.1".to_string(), "1.2.3-rc.1".to_string()))
+            && crate::services::upstream_sync::normalize_release_tag("").is_err()
+            && crate::services::upstream_sync::normalize_release_tag("v1").is_err()
+            && crate::services::upstream_sync::normalize_release_tag("abc").is_err()
+            && crate::services::upstream_sync::normalize_release_tag("v../1.0").is_err()
+            && crate::services::upstream_sync::normalize_release_tag("-v1.0.0").is_err()
+            && crate::services::upstream_sync::is_github_pages_remote_url(
+                "https://github.com/alice/alice.github.io.git",
+            )
+            && crate::services::upstream_sync::is_github_pages_remote_url(
+                "git@github.com:alice/alice.github.io.git",
+            )
+            && !crate::services::upstream_sync::is_github_pages_remote_url(
+                "https://github.com/alice/swamp.git",
+            ),
+    );
+    let sample_cargo = "\u{FEFF}[package]\nname = \"swamp\"\nversion = \"1.0.2\"\nedition = \"2021\"\n\n[dependencies]\nserde = \"1\"\n";
+    check(
+        "upstream-cargo-version-extract",
+        crate::services::upstream_sync::extract_cargo_package_version(sample_cargo).as_deref()
+            == Some("1.0.2")
+            && crate::services::upstream_sync::extract_cargo_package_version("[dependencies]\nserde = \"1\"").is_none(),
+    );
+
+    let cargo_sample_u = "[package]\nname = \"swamp\"\nversion = \"1.0.0\"\nedition = \"2021\"\n\n[dependencies]\nfoo = { version = \"1.0.0\" }\n";
+    let cargo_upd_ok = crate::services::upstream_sync::update_cargo_toml_version_text(cargo_sample_u, "v1.0.1");
+    check(
+        "upstream-cargo-version-update",
+        cargo_upd_ok
+            .as_ref()
+            .map(|(txt, ver)| {
+                ver == "1.0.1"
+                    && txt.contains("version = \"1.0.1\"")
+                    && txt.contains("foo = { version = \"1.0.0\" }")
+            })
+            .unwrap_or(false)
+            && crate::services::upstream_sync::update_cargo_toml_version_text(cargo_sample_u, "badver").is_err(),
     );
 
     if fails > 0 {

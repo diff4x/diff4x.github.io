@@ -1,9 +1,9 @@
 [package]
 name = "swamp"
-version = "3.1.0"
+version = "1.0.0"
 edition = "2021"
-description = "Single-crate native companion (swamp.exe) & browser Wasm engine (compute_intensive_task_processor) for diff4x.github.io"
-repository = "https://github.com/diff4x/diff4x.github.io"
+description = "Single-crate native companion (swamp.exe) & browser Wasm engine (compute_intensive_task_processor) for Swamp"
+repository = "https://github.com/diff4x/swamp"
 license = "MIT"
 
 [lib]

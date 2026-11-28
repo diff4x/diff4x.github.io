@@ -7,7 +7,7 @@ return out;}
 export function normalizeBookKey(rawPath){if(!rawPath||typeof rawPath!=='string')return'';let s=rawPath.split('#')[0].split('?')[0].trim();if(!s||/^(?:blob:|data:|javascript:)/i.test(s))return'';if(/^https?:\/\//i.test(s)){try{const u=new URL(s);if(typeof location!=='undefined'&&u.origin!==location.origin)return'';s=u.pathname;}catch(_){return'';}}
 if(/%[0-9A-Fa-f]{2}/.test(s)){try{s=decodeURIComponent(s);}catch(_){try{s=decodeURI(s);}catch(__){}}}
 s=s.replace(/\\/g,'/').replace(/^(?:\.\.\/|\.\/|\/)+/,'');return s;}
-export function buildBookSearchCacheKey({bookSig='',algoVer=11,synVer='',keyword='',noise=5,useSyn=false,adsPlan=null
+export function buildBookSearchCacheKey({bookSig='',algoVer=1,synVer='',keyword='',noise=5,useSyn=false,adsPlan=null
 }={}){const norm=(s)=>toHalfwidthLocal(s).trim().toLowerCase().replace(/\s+/g,' ');if(adsPlan&&Array.isArray(adsPlan.terms)&&adsPlan.terms.length>0&&adsPlan.expr){const anyLike=adsPlan.terms.some(t=>t&&t.like);const synTag=anyLike?(synVer||'1'):'0';const canonTerms=adsPlan.terms.map(t=>[norm(t.text),Number(t.noise??5),t.like?1:0]);return`v${algoVer}|${bookSig}|ads|s:${synTag}|p:${JSON.stringify({t:canonTerms,e:adsPlan.expr})}`;}
 const normKw=norm(keyword);const synTag=useSyn?(synVer||'1'):'0';return`v${algoVer}|${bookSig}|n:${Number(noise??5)}|s:${synTag}|q:${normKw}`;}
 async function encodePayload(obj,forceCompress=false){const json=JSON.stringify(obj);const encoder=typeof TextEncoder!=='undefined'?new TextEncoder():null;const rawBytes=encoder?encoder.encode(json):null;const rawLen=rawBytes?rawBytes.byteLength:json.length*2;if(typeof CompressionStream==='function'&&(forceCompress||rawLen>=BOOK_DB_LIMITS.COMPRESS_THRESHOLD)

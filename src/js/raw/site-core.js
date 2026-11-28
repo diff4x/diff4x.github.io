@@ -7,7 +7,7 @@
 
     // IndexedDB 契约
     const MAINDB_NAME = 'MainDB';
-    const MAINDB_VERSION = 3;
+    const MAINDB_VERSION = 1;
 
     // 每标签页隔离键（路由至 sessionStorage，其余键走 localStorage）
     const TAB_SCOPED_KEYS = new Set([
@@ -94,12 +94,24 @@
         if (!db.objectStoreNames.contains('html_snapshots')) db.createObjectStore('html_snapshots');
     }
 
-    function openMainDB(onBlocked) {
+    function openMainDB(onBlocked, _retried) {
         return new Promise((resolve, reject) => {
             const req = indexedDB.open(MAINDB_NAME, MAINDB_VERSION);
             req.onupgradeneeded = (e) => ensureMainDBSchema(e.target.result);
             req.onsuccess = (e) => resolve(e.target.result);
-            req.onerror = (e) => reject(e.target.error || req.error);
+            req.onerror = (e) => {
+                const err = (e && e.target && e.target.error) || req.error;
+                // 若浏览器中残留更高历史版本的 MainDB，自动重建为 v1（MainDB 仅存可重建缓存与日志）
+                if (!_retried && err && err.name === 'VersionError') {
+                    const delReq = indexedDB.deleteDatabase(MAINDB_NAME);
+                    delReq.onsuccess = delReq.onerror = () => {
+                        openMainDB(onBlocked, true).then(resolve, reject);
+                    };
+                    if (typeof onBlocked === 'function') delReq.onblocked = onBlocked;
+                    return;
+                }
+                reject(err);
+            };
             if (typeof onBlocked === 'function') req.onblocked = onBlocked;
         });
     }

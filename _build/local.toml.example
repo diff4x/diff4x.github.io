@@ -10,6 +10,7 @@ img_input_dir = ""
 webp_output_dir2 = ""
 keep_takeout_zip_folder = ""
 # port = 8000
+# sim_port = 9000
 # log_level = "error"
 
 # 如需在本机临时覆盖默认心跳地址或 WebP 参数，可取消注释：

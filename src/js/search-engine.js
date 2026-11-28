@@ -1,4 +1,4 @@
-import{$,toHalfwidth,hashText,encodePathSegments}from'./shared-utils.js';export const SEARCH_ALGO_VER=11;const ADS_PREFIX_RE=/^[@＠][\[［【]/;const ADS_MAX_DEPTH=8;const ADS_USAGE='@[a&!(b|c)]飞机[31]大炮[]机枪[0]';const SR_HARD_BREAK_RE=/[\n\r。！？；!?;]/;class AdsSyntaxError extends Error{}
+import{$,toHalfwidth,hashText,encodePathSegments}from'./shared-utils.js';export const SEARCH_ALGO_VER=1;const ADS_PREFIX_RE=/^[@＠][\[［【]/;const ADS_MAX_DEPTH=8;const ADS_USAGE='@[a&!(b|c)]飞机[31]大炮[]机枪[0]';const SR_HARD_BREAK_RE=/[\n\r。！？；!?;]/;class AdsSyntaxError extends Error{}
 export function normalizeKeyword(kw){if(!kw||typeof kw!=='string')return'';return toHalfwidth(kw).trim().toLowerCase().replace(/\s+/g,' ');}
 export function isActionCommand(kw){return typeof kw==='string'&&/^@(bomb|rebirth)$/.test(kw.trim());}
 export function isAdsQuery(kw){return typeof kw==='string'&&ADS_PREFIX_RE.test(kw.trimStart());}

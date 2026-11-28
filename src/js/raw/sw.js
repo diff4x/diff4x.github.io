@@ -7,7 +7,7 @@ const _scMeta = typeof FILE_MANIFEST === 'object' && FILE_MANIFEST && FILE_MANIF
 importScripts('/src/js/site-core.js' + (_scMeta && _scMeta.hash ? ('?v=' + _scMeta.hash) : ''));
 
 self.SW_VERSION = '__SW_BUILD_VERSION__';
-self.EMERGENCY = 'repair_command_id=2';
+self.EMERGENCY = 'repair_command_id=1';
 
 // 缓存桶与环境标识
 const CACHE_NAME_CORE = 'core-cache-' + BUILD_VERSION;
@@ -16,7 +16,7 @@ const IS_LOCAL_MODE = (
     self.location.hostname === 'localhost' ||
     self.location.hostname === '127.0.0.1' ||
     self.location.protocol === 'file:'
-) && self.location.port !== '9000';
+) && self.location.port !== '__SW_SIM_PORT__';
 
 // 安装与缓存可调参数
 const MAX_HTML_SNAPSHOT_HISTORY = 10;   // 单篇 HTML / MD 最多保留历史快照数

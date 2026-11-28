@@ -913,7 +913,7 @@
 				const canCache = !!(loadState.complete && State.bookKey && (!cacheMeta || cacheMeta.canCache !== false));
 				const queryKey = canCache ? buildBookSearchCacheKey({
 					bookSig: `epub:${State.items.length}:${State.totalChars}:${State.sections.length}`,
-					algoVer: (cacheMeta && cacheMeta.algoVer) || 11,
+					algoVer: (cacheMeta && cacheMeta.algoVer) || 1,
 					synVer: (cacheMeta && cacheMeta.synVer) || '',
 					keyword,
 					noise,

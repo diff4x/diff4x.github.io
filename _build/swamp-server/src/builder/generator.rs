@@ -427,7 +427,7 @@ fn prepare_index_html_injection(
             .replace('\u{2029}', "\\u2029")
     };
     let script_block = format!(
-        "<script>\n  const github_page = {};\n  const site_repo = {};\n  const data_repo = {};\n  const data_repo_id = {};\n  const data_category_id = {};\n  const update_interval = {};\n  const update_interval_local = {};\n  const readme_md = {};\n</script>",
+        "<script>\n  const github_page = {};\n  const site_repo = {};\n  const data_repo = {};\n  const data_repo_id = {};\n  const data_category_id = {};\n  const update_interval = {};\n  const update_interval_local = {};\n  const readme_md = {};\n  const sim_port = {};\n</script>",
         js_str(&cfg.github_page),
         js_str(&cfg.site_repo),
         js_str(&cfg.data_repo),
@@ -435,7 +435,8 @@ fn prepare_index_html_injection(
         js_str(&cfg.data_category_id),
         cfg.update_interval_ms,
         cfg.update_interval_local_ms,
-        js_str(&normalize_web_path(&cfg.readme_md))
+        js_str(&normalize_web_path(&cfg.readme_md)),
+        js_str(&cfg.sim_port.to_string())
     );
 
     Ok(render_index_html_meta(

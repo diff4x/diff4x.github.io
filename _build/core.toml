@@ -102,8 +102,11 @@ presets_json = '''
   {
     "name": "all",
     "paths": [
+      ".github/workflows/release.yml",
       ".gitignore",
+      "LICENSE",
       "README.md",
+      "THIRD_PARTY_LICENSES.md",
       "_build/core.toml",
       "_build/local.toml.example",
       "_build/swamp-server/.cargo/config.toml",
@@ -129,6 +132,7 @@ presets_json = '''
       "_build/swamp-server/src/services/log_bus.rs",
       "_build/swamp-server/src/services/mod.rs",
       "_build/swamp-server/src/services/pack_apply.rs",
+      "_build/swamp-server/src/services/release_pack.rs",
       "_build/swamp-server/src/services/street_view.rs",
       "_build/swamp-server/src/services/tasks.rs",
       "_build/swamp-server/src/services/upstream_sync.rs",

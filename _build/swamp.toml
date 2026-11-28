@@ -25,6 +25,10 @@ remote = "swamp"
 branch = "main"
 auto_push = true
 
+[server]
+port = 8000
+sim_port = 9000
+
 # === SYNONYMS-CUSTOM-BEGIN ===
 [synonyms]
 custom_json = '''

@@ -1050,7 +1050,7 @@ async function runPdfSearch({ keyword, specs, noise, synonymsEnabled, adsPlan, t
     const canCache = !!(State.bookKey && (!cacheMeta || cacheMeta.canCache !== false));
     const queryKey = canCache ? buildBookSearchCacheKey({
         bookSig: `pdf6:${State.fingerprint || 'nofp'}:${State.numPages}:${State.sections.length}`,
-        algoVer: (cacheMeta && cacheMeta.algoVer) || 11,
+        algoVer: (cacheMeta && cacheMeta.algoVer) || 1,
         synVer: (cacheMeta && cacheMeta.synVer) || '',
         keyword,
         noise,
