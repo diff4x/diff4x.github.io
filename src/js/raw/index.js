@@ -106,10 +106,13 @@ const store = SiteCore.createStore({
     },
     readonlyKeys: ['SearchCache']
 });
-store.github_page = github_page;
+store.github_page = (typeof github_page !== "undefined" && github_page) ? github_page : "";
+store.site_repo = (typeof site_repo !== "undefined" && site_repo) ? site_repo : "";
+window.site_repo = store.site_repo;
 store.readme_md = (typeof readme_md !== "undefined" && readme_md) ? readme_md : "/README.md";
 window.readme_md = store.readme_md;
-store.protocol_name = github_page.split(".")[0];
+const _protoPrefix = (store.github_page || "").split(".")[0];
+if (_protoPrefix) store.protocol_name = _protoPrefix;
 store.online_flag = isLocalEnv ? "0" : "1";
 store.bookmarkhtml_modifing = "0";
 store.lightbox_stauts = "0";

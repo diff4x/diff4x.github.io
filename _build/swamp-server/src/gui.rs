@@ -29,7 +29,7 @@ use windows_sys::Win32::UI::Controls::{
     TVI_ROOT, TVM_DELETEITEM, TVM_EXPAND, TVM_GETITEMW, TVM_GETNEXTITEM, TVM_HITTEST,
     TVM_INSERTITEMW, TVM_SETIMAGELIST, TVM_SETITEMW, TVN_KEYDOWN, TVSIL_STATE,
 };
-use windows_sys::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::{EnableWindow, SetFocus};
 use windows_sys::Win32::UI::Shell::{
     DragAcceptFiles, DragFinish, DragQueryFileW, Shell_NotifyIconW, HDROP, NIF_ICON, NIF_MESSAGE,
     NIF_TIP, NIM_ADD, NIM_DELETE, NIM_MODIFY, NOTIFYICONDATAW,
@@ -37,7 +37,8 @@ use windows_sys::Win32::UI::Shell::{
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CallWindowProcW, CreateIconIndirect, CreatePopupMenu, CreateWindowExW,
     DefWindowProcW, DestroyIcon, DestroyMenu, DestroyWindow, DispatchMessageW, GetClientRect,
-    GetCursorPos, GetMessageW, GetWindowLongPtrW, GetWindowTextLengthW, GetWindowTextW, IsIconic,
+    GetCursorPos, GetMessageW, GetWindowLongPtrW, GetWindowRect, GetWindowTextLengthW,
+    GetWindowTextW, IsDialogMessageW, IsIconic,
     KillTimer, LoadCursorW, MessageBoxW, MoveWindow, PostMessageW, PostQuitMessage, RegisterClassW,
     RegisterWindowMessageW, SendMessageW, SetForegroundWindow, SetTimer, SetWindowLongPtrW,
     SetWindowPos, SetWindowTextW, ShowWindow, TrackPopupMenu, TranslateMessage,
@@ -131,6 +132,7 @@ const WM_APP_SV_STATUS: u32 = WM_APP + 13;
 const WM_APP_SV_PHOTO_ID: u32 = WM_APP + 14;
 const WM_APP_SV_FILE_PATH: u32 = WM_APP + 15;
 const WM_APP_TRAY: u32 = WM_APP + 16;
+const WM_APP_PROMPT_UPSTREAM_MSG: u32 = WM_APP + 17;
 const TIMER_SAFE_CLOSE: usize = 1001;
 const TRAY_ICON_ID: u32 = 1;
 const IDM_TRAY_EXIT: u16 = 9001;
@@ -167,6 +169,7 @@ const IDC_BTN_ROOT: u16 = 207;
 const IDC_LBL_COMMIT: u16 = 208;
 const IDC_EDIT_COMMIT: u16 = 209;
 const IDC_BTN_REAUTH: u16 = 210;
+const IDC_BTN_PULL_UPSTREAM: u16 = 211;
 
 const IDC_GRP_NEW: u16 = 220;
 const IDC_LBL_NEW_TITLE: u16 = 221;
@@ -613,6 +616,7 @@ struct GuiMailbox {
     syn_data: Mutex<Option<(Option<String>, String)>>,
     sim_child: Mutex<Option<Child>>,
     pending_build_handoff: Mutex<Option<(PathBuf, PathBuf)>>,
+    upstream_msg_prompt: Mutex<Option<UpstreamMsgPromptReq>>,
     diff_viewed_rels: Mutex<Vec<String>>,
     sv_photo_id: Mutex<Option<String>>,
     sv_file_path: Mutex<Option<String>>,
@@ -620,6 +624,13 @@ struct GuiMailbox {
     webp_busy: AtomicBool,
     keep_busy: AtomicBool,
     sv_busy: AtomicBool,
+}
+
+struct UpstreamMsgPromptReq {
+    remote_label: String,
+    default_msg: String,
+    skeleton_files: Vec<String>,
+    reply_tx: std::sync::mpsc::SyncSender<Option<String>>,
 }
 
 impl GuiMailbox {
@@ -634,6 +645,7 @@ impl GuiMailbox {
             syn_data: Mutex::new(None),
             sim_child: Mutex::new(None),
             pending_build_handoff: Mutex::new(None),
+            upstream_msg_prompt: Mutex::new(None),
             diff_viewed_rels: Mutex::new(Vec::new()),
             sv_photo_id: Mutex::new(None),
             sv_file_path: Mutex::new(None),
@@ -726,6 +738,7 @@ struct GuiData {
     hwnd_btn_gen: HWND,
     hwnd_btn_gen_push: HWND,
     hwnd_btn_push: HWND,
+    hwnd_btn_pull_upstream: HWND,
     hwnd_btn_sim: HWND,
     hwnd_btn_selfcheck: HWND,
     hwnd_btn_root: HWND,
@@ -1034,6 +1047,7 @@ pub fn run_management_window(
             hwnd_btn_gen: std::ptr::null_mut(),
             hwnd_btn_gen_push: std::ptr::null_mut(),
             hwnd_btn_push: std::ptr::null_mut(),
+            hwnd_btn_pull_upstream: std::ptr::null_mut(),
             hwnd_btn_sim: std::ptr::null_mut(),
             hwnd_btn_selfcheck: std::ptr::null_mut(),
             hwnd_btn_root: std::ptr::null_mut(),
@@ -1359,6 +1373,7 @@ unsafe fn build_all_controls(g: &mut GuiData, hwnd: HWND) {
     g.hwnd_grp_ops = create_ctrl("BUTTON", "站点构建与发布", BS_GROUPBOX, 0, IDC_GRP_OPS, hwnd, hinst, f);
     g.hwnd_btn_gen_push = create_ctrl("BUTTON", "gen + push", WS_TABSTOP | BS_PUSHBUTTON, 0, IDC_BTN_GEN_PUSH, hwnd, hinst, f);
     g.hwnd_btn_push = create_ctrl("BUTTON", "push", WS_TABSTOP | BS_PUSHBUTTON, 0, IDC_BTN_PUSH, hwnd, hinst, f);
+    g.hwnd_btn_pull_upstream = create_ctrl("BUTTON", "拉取上游", WS_TABSTOP | BS_PUSHBUTTON, 0, IDC_BTN_PULL_UPSTREAM, hwnd, hinst, f);
     g.hwnd_btn_gen = create_ctrl("BUTTON", "gen", WS_TABSTOP | BS_PUSHBUTTON, 0, IDC_BTN_GEN, hwnd, hinst, f);
     g.hwnd_btn_root = create_ctrl("BUTTON", "root/", WS_TABSTOP | BS_PUSHBUTTON, 0, IDC_BTN_ROOT, hwnd, hinst, f);
     g.hwnd_btn_selfcheck = create_ctrl("BUTTON", "selfcheck", WS_TABSTOP | BS_PUSHBUTTON, 0, IDC_BTN_SELFCHECK, hwnd, hinst, f);
@@ -1422,6 +1437,7 @@ unsafe fn build_all_controls(g: &mut GuiData, hwnd: HWND) {
         g.hwnd_grp_ops,
         g.hwnd_btn_gen_push,
         g.hwnd_btn_push,
+        g.hwnd_btn_pull_upstream,
         g.hwnd_btn_gen,
         g.hwnd_btn_root,
         g.hwnd_btn_selfcheck,
@@ -1961,6 +1977,8 @@ unsafe fn layout_controls(g: &GuiData, hwnd: HWND) {
             Some(94)
         } else if h == g.hwnd_btn_push {
             Some(64)
+        } else if h == g.hwnd_btn_pull_upstream {
+            Some(86)
         } else if h == g.hwnd_btn_sim {
             Some(96)
         } else if h == g.hwnd_btn_selfcheck {
@@ -3426,6 +3444,20 @@ unsafe extern "system" fn wnd_proc(
             }
             0
         }
+        WM_APP_PROMPT_UPSTREAM_MSG => {
+            let req_opt = g
+                .mailbox
+                .upstream_msg_prompt
+                .lock()
+                .ok()
+                .and_then(|mut s| s.take());
+            if let Some(req) = req_opt {
+                restore_from_tray(hwnd);
+                let ans = show_upstream_commit_prompt(hwnd, g.dpi, g.font_ui, g.font_mono, &req);
+                let _ = req.reply_tx.send(ans);
+            }
+            0
+        }
         WM_APP_TRAY => {
             let ev = (lparam & 0xFFFF) as u32;
             match ev {
@@ -3662,6 +3694,246 @@ unsafe extern "system" fn wnd_proc(
             }
             DefWindowProcW(hwnd, msg, wparam, lparam)
         }
+    }
+}
+
+
+struct UpstreamPromptDlgState {
+    hwnd_edit: HWND,
+    done: bool,
+    accepted: bool,
+    result: String,
+}
+
+unsafe extern "system" fn upstream_prompt_wndproc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    const ID_OK: u16 = 1;
+    const ID_CANCEL: u16 = 2;
+    let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut UpstreamPromptDlgState;
+    match msg {
+        WM_COMMAND => {
+            if !ptr.is_null() {
+                let st = &mut *ptr;
+                let id = (wparam & 0xFFFF) as u16;
+                if id == ID_OK {
+                    let txt = get_window_text_string(st.hwnd_edit).trim().to_string();
+                    if txt.is_empty() {
+                        let m = to_wide("请输入要推送到上游骨架仓的公开 Commit 说明。");
+                        let t = to_wide("提示");
+                        MessageBoxW(hwnd, m.as_ptr(), t.as_ptr(), MB_OK | MB_ICONWARNING);
+                        return 0;
+                    }
+                    st.result = txt;
+                    st.accepted = true;
+                    st.done = true;
+                    return 0;
+                } else if id == ID_CANCEL {
+                    st.accepted = false;
+                    st.done = true;
+                    return 0;
+                }
+            }
+            0
+        }
+        WM_CLOSE => {
+            if !ptr.is_null() {
+                let st = &mut *ptr;
+                st.accepted = false;
+                st.done = true;
+            }
+            0
+        }
+        _ => DefWindowProcW(hwnd, msg, wparam, lparam),
+    }
+}
+
+unsafe fn show_upstream_commit_prompt(
+    owner: HWND,
+    dpi: u32,
+    font_ui: HFONT,
+    font_mono: HFONT,
+    req: &UpstreamMsgPromptReq,
+) -> Option<String> {
+    const WS_POPUP: u32 = 0x8000_0000;
+    const WS_CAPTION: u32 = 0x00C0_0000;
+    const WS_SYSMENU: u32 = 0x0008_0000;
+    const WS_DLGFRAME: u32 = 0x0040_0000;
+    const BS_DEFPUSHBUTTON: u32 = 0x0001;
+    const ID_OK: u16 = 1;
+    const ID_CANCEL: u16 = 2;
+    const ID_EDIT: u16 = 101;
+    const ID_LIST: u16 = 102;
+
+    static REGISTERED: AtomicBool = AtomicBool::new(false);
+    let hinst = GetModuleHandleW(std::ptr::null());
+    let cls_w = to_wide("SwampUpstreamPromptDlg");
+    if !REGISTERED.swap(true, Ordering::SeqCst) {
+        let wc = WNDCLASSW {
+            style: 0,
+            lpfnWndProc: Some(upstream_prompt_wndproc),
+            cbClsExtra: 0,
+            cbWndExtra: 0,
+            hInstance: hinst,
+            hIcon: std::ptr::null_mut(),
+            hCursor: LoadCursorW(std::ptr::null_mut(), IDC_ARROW),
+            hbrBackground: GetSysColorBrush(COLOR_3DFACE),
+            lpszMenuName: std::ptr::null(),
+            lpszClassName: cls_w.as_ptr(),
+        };
+        RegisterClassW(&wc);
+    }
+
+    let s = |v: i32| sc(v, dpi);
+    let dlg_w = s(560);
+    let dlg_h = s(310);
+    let mut orc: RECT = std::mem::zeroed();
+    GetWindowRect(owner, &mut orc);
+    let dx = orc.left + ((orc.right - orc.left - dlg_w) / 2).max(0);
+    let dy = orc.top + ((orc.bottom - orc.top - dlg_h) / 2).max(0);
+
+    let title_w = to_wide(&format!("公开 Commit 说明确认 ({})", req.remote_label));
+    let dlg = CreateWindowExW(
+        0,
+        cls_w.as_ptr(),
+        title_w.as_ptr(),
+        WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_DLGFRAME | WS_VISIBLE,
+        dx,
+        dy,
+        dlg_w,
+        dlg_h,
+        owner,
+        std::ptr::null_mut(),
+        hinst,
+        std::ptr::null(),
+    );
+    if dlg.is_null() {
+        return None;
+    }
+
+    let mut crc: RECT = std::mem::zeroed();
+    GetClientRect(dlg, &mut crc);
+    let cw = crc.right - crc.left;
+    let ch = crc.bottom - crc.top;
+    let pad = s(12);
+
+    let tip = format!(
+        "本次提交同时改动了个人内容与 {} 个骨架文件。请确认或微调推送到 {} 的公开 Commit 说明（避免泄露个人描述）：",
+        req.skeleton_files.len(),
+        req.remote_label
+    );
+    let lbl1 = create_ctrl("STATIC", &tip, WS_VISIBLE, 0, 100, dlg, hinst, font_ui);
+    MoveWindow(lbl1, pad, pad, cw - pad * 2, s(36), 1);
+
+    let mut preview_lines: Vec<String> = req
+        .skeleton_files
+        .iter()
+        .take(30)
+        .map(|f| format!("• {}", f))
+        .collect();
+    if req.skeleton_files.len() > 30 {
+        preview_lines.push(format!("... 其余 {} 个文件", req.skeleton_files.len() - 30));
+    }
+    let list_text = preview_lines.join("\r\n");
+    let list_edit = create_ctrl(
+        "EDIT",
+        &list_text,
+        WS_VISIBLE | WS_VSCROLL | ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL,
+        WS_EX_CLIENTEDGE,
+        ID_LIST,
+        dlg,
+        hinst,
+        font_mono,
+    );
+    MoveWindow(list_edit, pad, pad + s(40), cw - pad * 2, s(126), 1);
+
+    let lbl2 = create_ctrl(
+        "STATIC",
+        "上游公开 Commit 说明:",
+        WS_VISIBLE,
+        0,
+        103,
+        dlg,
+        hinst,
+        font_ui,
+    );
+    MoveWindow(lbl2, pad, pad + s(174), cw - pad * 2, s(18), 1);
+
+    let input_edit = create_ctrl(
+        "EDIT",
+        &req.default_msg,
+        WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
+        WS_EX_CLIENTEDGE,
+        ID_EDIT,
+        dlg,
+        hinst,
+        font_ui,
+    );
+    MoveWindow(input_edit, pad, pad + s(196), cw - pad * 2, s(24), 1);
+
+    let btn_w = s(112);
+    let btn_h = s(26);
+    let btn_y = ch - pad - btn_h;
+    let btn_cancel = create_ctrl(
+        "BUTTON",
+        "取消本次推送",
+        WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+        0,
+        ID_CANCEL,
+        dlg,
+        hinst,
+        font_ui,
+    );
+    let btn_ok = create_ctrl(
+        "BUTTON",
+        "确认同步并推送",
+        WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON,
+        0,
+        ID_OK,
+        dlg,
+        hinst,
+        font_ui,
+    );
+    MoveWindow(btn_cancel, cw - pad - btn_w, btn_y, btn_w, btn_h, 1);
+    MoveWindow(btn_ok, cw - pad - btn_w * 2 - s(8), btn_y, btn_w, btn_h, 1);
+
+    let mut state = Box::new(UpstreamPromptDlgState {
+        hwnd_edit: input_edit,
+        done: false,
+        accepted: false,
+        result: String::new(),
+    });
+    SetWindowLongPtrW(dlg, GWLP_USERDATA, state.as_mut() as *mut _ as isize);
+
+    EnableWindow(owner, 0);
+    ShowWindow(dlg, SW_SHOW);
+    SetForegroundWindow(dlg);
+    SetFocus(input_edit);
+    SendMessageW(input_edit, EM_SETSEL, 0, -1);
+
+    let mut msg: MSG = std::mem::zeroed();
+    while !state.done {
+        let r = GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0);
+        if r <= 0 {
+            break;
+        }
+        if IsDialogMessageW(dlg, &msg) == 0 {
+            TranslateMessage(&msg);
+            DispatchMessageW(&msg);
+        }
+    }
+
+    EnableWindow(owner, 1);
+    DestroyWindow(dlg);
+    SetForegroundWindow(owner);
+
+    if state.accepted {
+        Some(state.result)
+    } else {
+        None
     }
 }
 
@@ -3958,14 +4230,18 @@ unsafe fn handle_command(g: &mut GuiData, hwnd: HWND, id: u16, code: u16) {
                     .current_dir(&root)
                     .creation_flags(CREATE_NO_WINDOW)
                     .output();
-                match staged_out {
+                let staged_paths: Vec<String> = match staged_out {
                     Ok(o) if o.status.success() => {
                         let staged_str = String::from_utf8_lossy(&o.stdout);
-                        let violations: Vec<String> = staged_str
+                        let all_staged: Vec<String> = staged_str
                             .split('\0')
                             .filter(|s| !s.is_empty())
                             .map(|s| s.replace('\\', "/"))
+                            .collect();
+                        let violations: Vec<String> = all_staged
+                            .iter()
                             .filter(|p| pack_apply::is_private_push_path_with_gitignore(p, Some(&push_gi)))
+                            .cloned()
                             .collect();
                         if !violations.is_empty() {
                             let _ = Command::new("git")
@@ -3979,6 +4255,7 @@ unsafe fn handle_command(g: &mut GuiData, hwnd: HWND, id: u16, code: u16) {
                             ));
                             return;
                         }
+                        all_staged
                     }
                     Ok(o) => {
                         st.logs.error(format!(
@@ -3991,7 +4268,7 @@ unsafe fn handle_command(g: &mut GuiData, hwnd: HWND, id: u16, code: u16) {
                         st.logs.error(format!("[git] 启动暂存区隐私检查失败，已取消推送: {}", e));
                         return;
                     }
-                }
+                };
 
                 let diff_res = Command::new("git")
                     .args(["diff", "--cached", "--quiet"])
@@ -4003,23 +4280,108 @@ unsafe fn handle_command(g: &mut GuiData, hwnd: HWND, id: u16, code: u16) {
                         st.logs.info("[git] 暂存区无改动，跳过 commit，继续推送检查");
                     }
                     Ok(s) if s.code() == Some(1) => {
-                        let cmt_res = Command::new("git")
-                            .args(["commit", "-m", &commit_msg])
-                            .current_dir(&root)
-                            .creation_flags(CREATE_NO_WINDOW)
-                            .output();
-                        match cmt_res {
-                            Ok(o) if o.status.success() => {}
-                            Ok(o) => {
-                                let out_s = String::from_utf8_lossy(&o.stdout).trim().to_string();
-                                let err_s = String::from_utf8_lossy(&o.stderr).trim().to_string();
-                                st.logs
-                                    .error(format!("[git] git commit 失败: {} {}", out_s, err_s));
-                                return;
+                        // 双仓骨架自动分流：若命中骨架白名单且启用 auto_push，先同步推送骨架仓再写入双父本地提交
+                        let mut upstream_parent: Option<String> = None;
+                        match crate::services::upstream_sync::prepare_upstream_sync(
+                            &st.config,
+                            &staged_paths,
+                            Some(&st.logs),
+                        ) {
+                            Ok(crate::services::upstream_sync::UpstreamSyncPlan::Skip(_))
+                            | Ok(crate::services::upstream_sync::UpstreamSyncPlan::NoSkeletonDiff) => {}
+                            Ok(crate::services::upstream_sync::UpstreamSyncPlan::Ready(plan)) => {
+                                let upstream_msg = if plan.has_user_changes {
+                                    let (tx, rx) = std::sync::mpsc::sync_channel::<Option<String>>(1);
+                                    if let Ok(mut slot) = mailbox.upstream_msg_prompt.lock() {
+                                        *slot = Some(UpstreamMsgPromptReq {
+                                            remote_label: format!("{}/{}", plan.remote, plan.branch),
+                                            default_msg: commit_msg.clone(),
+                                            skeleton_files: plan.changed_skeleton_files.clone(),
+                                            reply_tx: tx,
+                                        });
+                                    }
+                                    mailbox.post(WM_APP_PROMPT_UPSTREAM_MSG, 0, 0);
+                                    match rx.recv() {
+                                        Ok(Some(m)) => m,
+                                        _ => {
+                                            let _ = Command::new("git")
+                                                .arg("reset")
+                                                .current_dir(&root)
+                                                .creation_flags(CREATE_NO_WINDOW)
+                                                .status();
+                                            st.logs.warn("[upstream] 已取消骨架同步，撤销暂存并中止本次推送");
+                                            return;
+                                        }
+                                    }
+                                } else {
+                                    commit_msg.clone()
+                                };
+
+                                match crate::services::upstream_sync::push_upstream_commit(
+                                    &st.config,
+                                    &plan,
+                                    &upstream_msg,
+                                    Some(&st.logs),
+                                ) {
+                                    Ok(sha) => upstream_parent = Some(sha),
+                                    Err(e) => {
+                                        let _ = Command::new("git")
+                                            .arg("reset")
+                                            .current_dir(&root)
+                                            .creation_flags(CREATE_NO_WINDOW)
+                                            .status();
+                                        st.logs.error(format!(
+                                            "[upstream] 推送骨架失败，已撤销暂存并中止本次推送: {}",
+                                            e
+                                        ));
+                                        return;
+                                    }
+                                }
                             }
                             Err(e) => {
-                                st.logs.error(format!("[git] 启动 git commit 失败: {}", e));
+                                let _ = Command::new("git")
+                                    .arg("reset")
+                                    .current_dir(&root)
+                                    .creation_flags(CREATE_NO_WINDOW)
+                                    .status();
+                                st.logs.error(format!(
+                                    "[upstream] {}（已撤销暂存并中止本次推送）",
+                                    e
+                                ));
                                 return;
+                            }
+                        }
+
+                        if let Some(ref up_sha) = upstream_parent {
+                            if let Err(e) =
+                                crate::services::upstream_sync::commit_local_staged_with_second_parent(
+                                    &root,
+                                    &commit_msg,
+                                    up_sha,
+                                )
+                            {
+                                st.logs.error(format!("[git] 写入本地双父提交失败: {}", e));
+                                return;
+                            }
+                        } else {
+                            let cmt_res = Command::new("git")
+                                .args(["commit", "-m", &commit_msg])
+                                .current_dir(&root)
+                                .creation_flags(CREATE_NO_WINDOW)
+                                .output();
+                            match cmt_res {
+                                Ok(o) if o.status.success() => {}
+                                Ok(o) => {
+                                    let out_s = String::from_utf8_lossy(&o.stdout).trim().to_string();
+                                    let err_s = String::from_utf8_lossy(&o.stderr).trim().to_string();
+                                    st.logs
+                                        .error(format!("[git] git commit 失败: {} {}", out_s, err_s));
+                                    return;
+                                }
+                                Err(e) => {
+                                    st.logs.error(format!("[git] 启动 git commit 失败: {}", e));
+                                    return;
+                                }
                             }
                         }
                     }
@@ -4147,6 +4509,64 @@ unsafe fn handle_command(g: &mut GuiData, hwnd: HWND, id: u16, code: u16) {
                     Err(e) => {
                         st.logs.error(format!("[git] 启动 git push 失败: {}", e));
                     }
+                }
+            });
+        }
+        IDC_BTN_PULL_UPSTREAM => {
+            let Some(_push_guard) = g.mailbox.try_acquire_flag(BusySlot::Push) else {
+                g.state.logs.warn("[upstream] 已有 Git 同步任务正在运行，请等待完成后重试");
+                return;
+            };
+            let st = g.state.clone();
+            let mailbox = g.mailbox.clone();
+            std::thread::spawn(move || {
+                let _push_guard = _push_guard;
+                let _busy = st.runtime.begin_op();
+                match crate::services::upstream_sync::pull_upstream(&st.config, Some(&st.logs)) {
+                    Ok(crate::services::upstream_sync::PullUpstreamOutcome::UpToDate { .. }) => {}
+                    Ok(crate::services::upstream_sync::PullUpstreamOutcome::Merged {
+                        remote,
+                        branch,
+                        upstream_commit,
+                        merged_files,
+                        protected_user_files,
+                        need_exe,
+                        need_wasm,
+                        need_gen,
+                    }) => {
+                        st.logs.info(format!(
+                            "[upstream] 已合并 {}/{} ({}): 更新 {} 个骨架文件，保护 {} 个用户文件",
+                            remote,
+                            branch,
+                            &upstream_commit[..upstream_commit.len().min(8)],
+                            merged_files.len(),
+                            protected_user_files.len()
+                        ));
+                        if need_wasm {
+                            st.logs.warn("[upstream] 提示: 本次更新涉及 lib.rs，请运行 build.bat 选 [2]/[3] 重编 Wasm 后执行 gen");
+                        } else if need_exe {
+                            st.logs.warn("[upstream] 提示: 本次更新涉及 Rust 源码，请运行 build.bat 选 [1] 重编 swamp.exe");
+                        }
+                        if need_gen {
+                            st.logs.info("[upstream] 提示: 本次更新涉及前端或核心配置，请点击 gen 刷新构建产物");
+                        }
+                        spawn_load_pack_tree(st.config.clone(), st.logs.clone(), mailbox, false);
+                    }
+                    Ok(crate::services::upstream_sync::PullUpstreamOutcome::Conflicts {
+                        remote,
+                        branch,
+                        conflict_files,
+                        ..
+                    }) => {
+                        st.logs.error(format!(
+                            "[upstream] 合并 {}/{} 存在 {} 个骨架代码冲突，请用 VS Code 解决后执行 git commit:\n  {}",
+                            remote,
+                            branch,
+                            conflict_files.len(),
+                            conflict_files.join("\n  ")
+                        ));
+                    }
+                    Err(e) => st.logs.error(format!("[upstream] 拉取失败: {}", e)),
                 }
             });
         }
@@ -4773,7 +5193,12 @@ unsafe fn handle_command(g: &mut GuiData, hwnd: HWND, id: u16, code: u16) {
             }
             match crate::config::save_pack_presets(&g.state.config, &g.pack_skip_regex, &g.pack_presets) {
                 Ok(()) => {
-                    g.state.logs.info(format!("[pack] 已保存预设「{}」至 swamp.toml", name));
+                    let target_cfg = if g.state.config.core_toml_path.is_file() {
+                        "core.toml"
+                    } else {
+                        "swamp.toml"
+                    };
+                    g.state.logs.info(format!("[pack] 已保存预设「{}」至 {}", name, target_cfg));
                     let more = is_checked(g.hwnd_chk_pack_more);
                     spawn_load_pack_tree(
                         g.state.config.clone(),

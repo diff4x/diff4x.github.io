@@ -1,0 +1,184 @@
+# _build/core.toml —— 骨架公共默认配置（入库，随骨架自动同步升级）
+# 站点个性化设置（标题、域名、Giscus、私有目录排除、同义词、上游同步）请写在 _build/swamp.toml
+# 本机私有路径与凭据请写在 _build/privy/local.toml（参考 _build/local.toml.example，永不入库）
+
+[site]
+title = "Digital Swamp"
+github_page = ""
+site_repo = ""
+adult_gate = false
+readme_md = "/README.md"
+update_interval_ms = 10000
+update_interval_local_ms = 2000
+
+[server]
+port = 8000
+sim_port = 9000
+log_level = "error"
+watch_assets = true
+
+[build]
+slice_size_kb = 300
+exclude_html_regex = ["^_[^_].*"]
+prune_missing_images = false
+prune_max_lines = 30
+private_prefix_check = true
+allow_empty_gitignore = false
+
+[build.media_exclude]
+gallery = ["img"]
+video = []
+audio = []
+ebook = []
+
+# Glob 声明式预缓存规则
+[build.precache]
+include = [
+  "/",
+  "/index.html",
+  "/README.md",
+  "/src/tpl/*.html",
+  "/src/css/*.css",
+  "/src/css/icon/*",
+  "/src/css/sound/*",
+  "/src/js/*.js",
+  "/src/discussion_id_mapper.json",
+  "/src/wasm/compute_intensive_task_processor.min.js",
+  "/src/wasm/compute_intensive_task_processor_bg.wasm",
+  "/src/third/bibi/and/jo.js",
+  "/src/third/bibi/extensions/*.js",
+  "/src/third/bibi/extensions/extractor/*.js",
+  "/src/third/bibi/presets/default.js",
+  "/src/third/bibi/resources/scripts/bibi.js",
+  "/src/third/bibi/resources/scripts/polyfills/*.js",
+  "/src/third/bibi/resources/styles/bibi.css",
+  "/src/third/bibi/wardrobe/everyday/bibi.dress.css",
+  "/src/third/pdfjs/build/*.mjs",
+  "/src/third/pdfjs/web/viewer.css",
+  "/src/third/pdfjs/web/viewer.mjs",
+  "/src/third/pdfjs/web/locale/locale.json",
+  "/src/third/pdfjs/web/locale/en-US/viewer.ftl",
+  "/src/third/pdfjs/web/locale/zh-CN/*.ftl",
+  "/src/third/photo-sphere-viewer/photo-sphere-viewer.min.js",
+  "/src/third/photo-sphere-viewer/three.min.js",
+  "/src/third/prism/prism.css",
+  "/src/third/prism/prism.js",
+  "/src/third/other/encoding.min.js",
+  "/src/third/other/confetti.browser.min.js",
+  "/src/third/markdown/highlight.min.js",
+  "/src/third/markdown/marked.min.js",
+  "/src/third/markdown/purify.min.js"
+]
+exclude = [
+  "/src/tpl/bilingual.html",
+  "/src/tpl/new.html",
+  "/src/js/core-list.js",
+  "/src/js/sw.js",
+  "/src/third/markdown/codemirror/**"
+]
+
+[media]
+webp_quality = 80
+img_max_width = 800
+webp_output_dir = "../gallery/img"
+
+[tray]
+heartbeat_url = "https://www.google.com"
+heartbeat_interval_sec = 10
+tasks_poll_interval_sec = 300
+due_within_days = 7
+
+[upstream]
+# 下游站点默认仅拉取不自动反向推送；骨架维护者在个人 _build/swamp.toml 中覆写为 remote = "swamp" + auto_push = true
+remote = "upstream"
+branch = "main"
+auto_push = false
+
+# === PACK-PRESETS-BEGIN ===
+[pack]
+skip_apply_doc_regex = "^(APPLY_AND_VERIFY|UPGRADE_.*|PATCH_NOTES|README_PATCH)\\.md$"
+presets_json = '''
+[
+  {
+    "name": "all",
+    "paths": [
+      ".gitignore",
+      "README.md",
+      "_build/core.toml",
+      "_build/local.toml.example",
+      "_build/swamp-server/.cargo/config.toml",
+      "_build/swamp-server/Cargo.lock",
+      "_build/swamp-server/Cargo.toml",
+      "_build/swamp-server/build.bat",
+      "_build/swamp-server/src/api_files.rs",
+      "_build/swamp-server/src/api_ops.rs",
+      "_build/swamp-server/src/builder/generator.rs",
+      "_build/swamp-server/src/builder/html_utils.rs",
+      "_build/swamp-server/src/builder/minify.rs",
+      "_build/swamp-server/src/builder/mod.rs",
+      "_build/swamp-server/src/builder/synonyms.rs",
+      "_build/swamp-server/src/builder/synonyms_tpl.js",
+      "_build/swamp-server/src/config.rs",
+      "_build/swamp-server/src/gui.rs",
+      "_build/swamp-server/src/lib.rs",
+      "_build/swamp-server/src/main.rs",
+      "_build/swamp-server/src/media/keep2html.rs",
+      "_build/swamp-server/src/media/mod.rs",
+      "_build/swamp-server/src/media/webp.rs",
+      "_build/swamp-server/src/security.rs",
+      "_build/swamp-server/src/services/log_bus.rs",
+      "_build/swamp-server/src/services/mod.rs",
+      "_build/swamp-server/src/services/pack_apply.rs",
+      "_build/swamp-server/src/services/street_view.rs",
+      "_build/swamp-server/src/services/tasks.rs",
+      "_build/swamp-server/src/services/upstream_sync.rs",
+      "_build/swamp-server/src/services/watcher.rs",
+      "_build/swamp-server/src/static_fs.rs",
+      "_build/swamp.toml",
+      "index.html",
+      "src/css/font/font.css",
+      "src/css/raw/bilingual.css",
+      "src/css/raw/bookmark.css",
+      "src/css/raw/content.css",
+      "src/css/raw/index.css",
+      "src/css/raw/pdf-viewer.css",
+      "src/css/raw/side.css",
+      "src/css/sound/stone2.wav",
+      "src/js/raw/audio-player.js",
+      "src/js/raw/bilingual.js",
+      "src/js/raw/book-db.js",
+      "src/js/raw/bookmark.js",
+      "src/js/raw/comments.js",
+      "src/js/raw/content.js",
+      "src/js/raw/deferred-features.js",
+      "src/js/raw/excerpts.js",
+      "src/js/raw/index.js",
+      "src/js/raw/lightbox-logic.js",
+      "src/js/raw/pdf-viewer.js",
+      "src/js/raw/search-engine.js",
+      "src/js/raw/search-preview.js",
+      "src/js/raw/search-ui.js",
+      "src/js/raw/shared-utils.js",
+      "src/js/raw/side.js",
+      "src/js/raw/site-core.js",
+      "src/js/raw/snapshot.js",
+      "src/js/raw/sw.js",
+      "src/js/raw/touchpad.js",
+      "src/js/raw/txn_parser.js",
+      "src/js/raw/worker.js",
+      "src/tpl/bilingual.html",
+      "src/tpl/bookmark.html",
+      "src/tpl/epub.html",
+      "src/tpl/go_board.html",
+      "src/tpl/md_viewer.html",
+      "src/tpl/new.html",
+      "src/tpl/pano.html",
+      "src/tpl/pdf.html",
+      "src/tpl/side.html",
+      "src/tpl/txn_parser.html",
+      "src/tpl/txt.html"
+    ]
+  }
+]
+'''
+# === PACK-PRESETS-END ===

@@ -49,7 +49,9 @@ const DEFAULT_HIDDEN_DIRS: &[&str] = &[
 const ALWAYS_SHOW_FILES: &[&str] = &[
     "src/third/pdfjs/web/viewer.mjs",
     "src/third/bibi/presets/default.js",
+    "_build/core.toml",
     "_build/swamp.toml",
+    "_build/local.toml.example",
     "_build/swamp-server/build.bat",
 ];
 
@@ -179,10 +181,14 @@ pub fn is_hard_private_rel(rel: &str) -> bool {
     false
 }
 
-/// 判定路径是否属于推送前隐私防线拦截名单（暂存区与 @{u}..HEAD 未推送提交共用）
+/// 判定路径是否属于推送前隐私防线的通用底线（个人自定义私密目录由 `.gitignore` 并集机制拦截）
 pub fn is_private_push_path(rel: &str) -> bool {
     let norm = rel.replace('\\', "/");
     let low = norm.trim_start_matches('/').to_ascii_lowercase();
+    // cilin.txt 为公开只读基础词林（仅禁止 AI 打包/补丁覆写，不属私密推送禁区）
+    if low == "_build/swamp-server/assets/cilin.txt" {
+        return false;
+    }
     is_hard_private_rel(&low)
         || low.starts_with("html/__")
         || low.starts_with("src/js/data/shadow")
@@ -190,18 +196,6 @@ pub fn is_private_push_path(rel: &str) -> bool {
         || low.starts_with("_build/temp/")
         || low == "gallery/diary"
         || low.starts_with("gallery/diary/")
-        || low == "gallery/playboy"
-        || low.starts_with("gallery/playboy/")
-        || low == "miyuki"
-        || low.starts_with("miyuki/")
-        || low == "spongebob squarepants"
-        || low.starts_with("spongebob squarepants/")
-        || low == "vtt"
-        || low.starts_with("vtt/")
-        || low == "big"
-        || low.starts_with("big/")
-        || low == "playboy collection - 1377 issues"
-        || low.starts_with("playboy collection - 1377 issues/")
 }
 
 /// 推送前隐私判定并集：硬编码底线 + 仓库 `.gitignore` 规则，避免后续新增忽略目录逃逸推送门禁
@@ -246,7 +240,7 @@ pub fn is_build_or_exec_rel(rel: &str) -> bool {
     ) {
         return true;
     }
-    if low == "_build/swamp.toml" || low.starts_with(".github/") {
+    if low == "_build/swamp.toml" || low == "_build/core.toml" || low.starts_with(".github/") {
         return true;
     }
     let ext = Path::new(fname)

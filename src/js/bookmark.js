@@ -128,11 +128,11 @@ store.bookmarkhtml_linksHash=getALinksHash();const links=Array.from(document.que
 .map(a=>{if(a.id==='katrain-link'){return{text:a.textContent.trim(),href:'#katrain',target:'_blank',action:'katrain'};}
 return{text:a.textContent.trim(),href:a.href,target:a.target||'_blank'
 };});store.bookmark_links=links;if(store.online_flag==="0"){setupDragAndDrop();}
-loadFaviconsWhenIdle();initWallpaperModule();const githubApi='https://api.github.com/repos/diff4x/diff4x.github.io';const CACHE_TIME=60*1000;let cache=null;let pendingRequest=null;document.querySelector('#copyright')?.addEventListener('mouseenter',async function(){if(cache&&Date.now()-cache.time<CACHE_TIME){this.title=cache.title;return;}
+loadFaviconsWhenIdle();initWallpaperModule();const resolveSiteRepo=()=>{const explicit=String((window.top&&window.top.site_repo)||store.site_repo||'').trim();if(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(explicit))return explicit;const gp=String(store.github_page||'').trim().toLowerCase();const m=/^([a-z0-9](?:[a-z0-9-]*[a-z0-9])?)\.github\.io$/.exec(gp);if(m&&m[1]!=='example'&&m[1]!=='username')return`${m[1]}/${gp}`;return'';};const siteRepoSlug=resolveSiteRepo();if(siteRepoSlug){const githubApi=`https://api.github.com/repos/${siteRepoSlug}`;const CACHE_TIME=60*1000;let cache=null;let pendingRequest=null;document.querySelector('#copyright')?.addEventListener('mouseenter',async function(){if(cache&&Date.now()-cache.time<CACHE_TIME){this.title=cache.title;return;}
 if(pendingRequest){this.title=await pendingRequest;return;}
 pendingRequest=fetch(githubApi)
 .then(res=>{if(!res.ok)throw new Error(`HTTP ${res.status}`);return res.json();})
-.then(data=>{const sizeMB=data.size/1024;const title=`线上仓库体积：${sizeMB.toFixed(2)} MB`;cache={title,time:Date.now()
-};return title;})
-.finally(()=>{pendingRequest=null;});try{this.title=await pendingRequest;}catch(err){console.error(err);}});createCalendar();document.addEventListener('click',(e)=>{if(e.button!==0||e.ctrlKey||e.metaKey||e.shiftKey||e.altKey)return;const a=e.target.closest&&e.target.closest('a');if(!a||!/\bREADME\b/i.test((a.textContent||'').trim()))return;e.preventDefault();let hash='';try{const u=new URL(a.href,location.href);hash=decodeURIComponent((u.hash||'').slice(1));}catch(_){}
+.then(data=>{const sizeMB=data.size/1024;const title=`线上仓库体积：${sizeMB.toFixed(2)} MB`;cache={title,time:Date.now()};return title;})
+.finally(()=>{pendingRequest=null;});try{this.title=await pendingRequest;}catch(err){console.error(err);}});}
+createCalendar();document.addEventListener('click',(e)=>{if(e.button!==0||e.ctrlKey||e.metaKey||e.shiftKey||e.altKey)return;const a=e.target.closest&&e.target.closest('a');if(!a||!/\bREADME\b/i.test((a.textContent||'').trim()))return;e.preventDefault();let hash='';try{const u=new URL(a.href,location.href);hash=decodeURIComponent((u.hash||'').slice(1));}catch(_){}
 emitEvent("OPEN_MD_VIEWER",{hash},"index");});});document.addEventListener('keydown',(e)=>{if(e.key==='\\'){emitEvent("quick_search","","index");}});

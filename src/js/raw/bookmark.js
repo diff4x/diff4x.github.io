@@ -670,45 +670,51 @@ window.addEventListener('DOMContentLoaded', () => {
     loadFaviconsWhenIdle();
     initWallpaperModule();
 
-    const githubApi = 'https://api.github.com/repos/diff4x/diff4x.github.io';
-    const CACHE_TIME = 60 * 1000;
-    let cache = null;
-    let pendingRequest = null;
-    document.querySelector('#copyright')?.addEventListener('mouseenter', async function () {
-    if (cache && Date.now() - cache.time < CACHE_TIME) {
-        this.title = cache.title;
-        return;
-    }
-    if (pendingRequest) {
-        this.title = await pendingRequest;
-        return;
-    }
-    pendingRequest = fetch(githubApi)
-        .then(res => {
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return res.json();
-        })
-        .then(data => {
-        const sizeMB = data.size / 1024;
-        const title = `线上仓库体积：${sizeMB.toFixed(2)} MB`;
+    const resolveSiteRepo = () => {
+        const explicit = String((window.top && window.top.site_repo) || store.site_repo || '').trim();
+        if (/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(explicit)) return explicit;
+        const gp = String(store.github_page || '').trim().toLowerCase();
+        const m = /^([a-z0-9](?:[a-z0-9-]*[a-z0-9])?)\.github\.io$/.exec(gp);
+        if (m && m[1] !== 'example' && m[1] !== 'username') return `${m[1]}/${gp}`;
+        return '';
+    };
+    const siteRepoSlug = resolveSiteRepo();
+    if (siteRepoSlug) {
+        const githubApi = `https://api.github.com/repos/${siteRepoSlug}`;
+        const CACHE_TIME = 60 * 1000;
+        let cache = null;
+        let pendingRequest = null;
+        document.querySelector('#copyright')?.addEventListener('mouseenter', async function () {
+            if (cache && Date.now() - cache.time < CACHE_TIME) {
+                this.title = cache.title;
+                return;
+            }
+            if (pendingRequest) {
+                this.title = await pendingRequest;
+                return;
+            }
+            pendingRequest = fetch(githubApi)
+                .then(res => {
+                    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                    return res.json();
+                })
+                .then(data => {
+                    const sizeMB = data.size / 1024;
+                    const title = `线上仓库体积：${sizeMB.toFixed(2)} MB`;
+                    cache = { title, time: Date.now() };
+                    return title;
+                })
+                .finally(() => {
+                    pendingRequest = null;
+                });
 
-        cache = {
-            title,
-            time: Date.now()
-        };
-
-        return title;
-        })
-        .finally(() => {
-        pendingRequest = null;
+            try {
+                this.title = await pendingRequest;
+            } catch (err) {
+                console.error(err);
+            }
         });
-
-    try {
-        this.title = await pendingRequest;
-    } catch (err) {
-        console.error(err);
     }
-    });
     
     createCalendar();
 

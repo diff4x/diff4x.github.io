@@ -112,8 +112,8 @@ pub fn run_gen_with_options(
     let mut ledger = minify::IncrementalLedger::load(cfg);
 
     minify::build_phase1_assets(cfg, &mut ledger, logs)?;
-    let _new_ver = generator::run_with_options(cfg, logs, force_synonyms)?;
-    minify::build_phase3_tail(cfg, &mut ledger, logs)?;
+    let active_ver = generator::run_with_options(cfg, logs, force_synonyms)?;
+    minify::build_phase3_tail(cfg, &mut ledger, active_ver.as_deref(), logs)?;
 
     ledger.save()?;
     log_info(

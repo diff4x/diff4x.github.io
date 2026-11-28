@@ -18,7 +18,7 @@ use walkdir::WalkDir;
 use std::os::windows::process::CommandExt;
 
 use crate::api_files::{write_atomic, write_bytes_atomic};
-use crate::builder::html_utils::{extract_anchor_text, extract_body_text, extract_title};
+use crate::builder::html_utils::{escape_html, extract_anchor_text, extract_body_text, extract_title};
 use crate::builder::{log_info, log_warn, synonyms};
 use crate::config::{normalize_web_path, strip_verbatim_prefix, ServerConfig};
 use crate::services::log_bus::LogBus;
@@ -287,7 +287,7 @@ pub fn run_with_options(
     write_atomic(&cfg.discussion_id_mapper, &cmt_json, false)?;
     commit_staging_to_data_dir(&staging_dir, &cfg.data_dir)?;
 
-    let new_build_version = match prepared_manifest {
+    let active_build_version = match prepared_manifest {
         PreparedManifest::Updated {
             version,
             core_list_js,
@@ -297,15 +297,9 @@ pub fn run_with_options(
                 fs::create_dir_all(parent).map_err(|e| format!("创建目录失败: {}", e))?;
             }
             write_atomic(&core_list_path, &core_list_js, false)?;
-            update_sw_version(cfg, &version)?;
             Some(version)
         }
-        PreparedManifest::Unchanged { old_version } => {
-            if let Some(ref ver) = old_version {
-                ensure_sw_version_aligned(cfg, ver)?;
-            }
-            None
-        }
+        PreparedManifest::Unchanged { old_version } => old_version,
     };
 
     if !html_outcome.pending_rewrites.is_empty() {
@@ -332,7 +326,7 @@ pub fn run_with_options(
 
     generate_idle_image_list(cfg, &html_outcome.image_set, &html_outcome.used_images);
 
-    Ok(new_build_version)
+    Ok(active_build_version)
 }
 
 fn init_lite_tree() -> Value {
@@ -345,6 +339,68 @@ fn init_lite_tree() -> Value {
     })
 }
 
+/// 向 index.html 注入站点标题、成人门禁开关（data-adult-gate）与 PARAM 参数块
+pub(crate) fn render_index_html_meta(
+    html: &str,
+    site_title: &str,
+    adult_gate: bool,
+    script_block: &str,
+) -> Option<String> {
+    static HTML_OPEN_RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+    static ADULT_ATTR_RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+    static TITLE_RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+
+    let begin_tag = "<!-- PARAM-BEGIN -->";
+    let end_tag = "<!-- PARAM-END -->";
+    let begin = html.find(begin_tag)?;
+    let end = html.find(end_tag)?;
+    if end <= begin {
+        return None;
+    }
+
+    let before = &html[..begin + begin_tag.len()];
+    let after = &html[end..];
+    let mut updated = format!("{}\n{}\n{}", before, script_block, after);
+
+    let gate_val = if adult_gate { "1" } else { "0" };
+    let html_re = HTML_OPEN_RE.get_or_init(|| Regex::new(r"(?i)<html\b[^>]*>").unwrap());
+    let attr_re = ADULT_ATTR_RE
+        .get_or_init(|| Regex::new(r#"(?i)\bdata-adult-gate\s*=\s*["'][^"']*["']"#).unwrap());
+    if let Some(m) = html_re.find(&updated) {
+        let open_tag = m.as_str();
+        let new_tag = if attr_re.is_match(open_tag) {
+            attr_re
+                .replace(open_tag, format!("data-adult-gate=\"{}\"", gate_val))
+                .into_owned()
+        } else {
+            format!(
+                "{} data-adult-gate=\"{}\">",
+                &open_tag[..open_tag.len() - 1],
+                gate_val
+            )
+        };
+        if new_tag != open_tag {
+            updated.replace_range(m.start()..m.end(), &new_tag);
+        }
+    }
+
+    if !site_title.trim().is_empty() {
+        let title_re = TITLE_RE.get_or_init(|| Regex::new(r"(?is)<title>.*?</title>").unwrap());
+        let new_title = format!("<title>{}</title>", escape_html(site_title.trim()));
+        if let Some(m) = title_re.find(&updated) {
+            if m.as_str() != new_title {
+                updated.replace_range(m.start()..m.end(), &new_title);
+            }
+        }
+    }
+
+    if updated != html {
+        Some(updated)
+    } else {
+        None
+    }
+}
+
 fn prepare_index_html_injection(
     cfg: &ServerConfig,
     logs: Option<&LogBus>,
@@ -354,18 +410,12 @@ fn prepare_index_html_injection(
     }
     let html = fs::read_to_string(&cfg.index_html)
         .map_err(|e| format!("读取 index.html 失败: {}", e))?;
-    let begin_tag = "<!-- PARAM-BEGIN -->";
-    let end_tag = "<!-- PARAM-END -->";
-
-    let Some(begin) = html.find(begin_tag) else {
+    if !html.contains("<!-- PARAM-BEGIN -->") {
         log_warn(logs, "[gen] index.html 缺少 PARAM-BEGIN 标记，跳过参数注入");
         return Ok(None);
-    };
-    let Some(end) = html.find(end_tag) else {
+    }
+    if !html.contains("<!-- PARAM-END -->") {
         log_warn(logs, "[gen] index.html 缺少 PARAM-END 标记，跳过参数注入");
-        return Ok(None);
-    };
-    if end <= begin {
         return Ok(None);
     }
 
@@ -377,8 +427,9 @@ fn prepare_index_html_injection(
             .replace('\u{2029}', "\\u2029")
     };
     let script_block = format!(
-        "<script>\n  const github_page = {};\n  const data_repo = {};\n  const data_repo_id = {};\n  const data_category_id = {};\n  const update_interval = {};\n  const update_interval_local = {};\n  const readme_md = {};\n</script>",
+        "<script>\n  const github_page = {};\n  const site_repo = {};\n  const data_repo = {};\n  const data_repo_id = {};\n  const data_category_id = {};\n  const update_interval = {};\n  const update_interval_local = {};\n  const readme_md = {};\n</script>",
         js_str(&cfg.github_page),
+        js_str(&cfg.site_repo),
         js_str(&cfg.data_repo),
         js_str(&cfg.data_repo_id),
         js_str(&cfg.data_category_id),
@@ -387,14 +438,12 @@ fn prepare_index_html_injection(
         js_str(&normalize_web_path(&cfg.readme_md))
     );
 
-    let before = &html[..begin + begin_tag.len()];
-    let after = &html[end..];
-    let updated = format!("{}\n{}\n{}", before, script_block, after);
-    if updated != html {
-        Ok(Some(updated))
-    } else {
-        Ok(None)
-    }
+    Ok(render_index_html_meta(
+        &html,
+        &cfg.site_title,
+        cfg.adult_gate,
+        &script_block,
+    ))
 }
 
 fn load_gitignore_rules(cfg: &ServerConfig) -> Result<IgnoreRules, String> {
@@ -1862,55 +1911,6 @@ fn commit_staging_to_data_dir(staging_dir: &Path, data_dir: &Path) -> Result<(),
         }
     }
     Ok(())
-}
-
-fn ensure_sw_version_aligned(cfg: &ServerConfig, expected_version: &str) -> Result<(), String> {
-    let sw_path = cfg.js_raw_dir.join("sw.js");
-    if !sw_path.is_file() {
-        return Ok(());
-    }
-    let raw = fs::read_to_string(&sw_path)
-        .map_err(|e| format!("读取 raw/sw.js 失败: {}", e))?;
-    let expected_ver_line = format!("self.SW_VERSION = '{}';", expected_version);
-    let expected_imp_line = format!("importScripts('/src/js/core-list.js?v={}');", expected_version);
-    if !raw.contains(&expected_ver_line) || !raw.contains(&expected_imp_line) {
-        update_sw_version(cfg, expected_version)?;
-    }
-    Ok(())
-}
-
-fn update_sw_version(cfg: &ServerConfig, build_version: &str) -> Result<(), String> {
-    let sw_path = cfg.js_raw_dir.join("sw.js");
-    if !sw_path.is_file() {
-        return Err(format!("找不到 {}, 无法写入 SW 版本号", sw_path.display()));
-    }
-    let raw = fs::read_to_string(&sw_path)
-        .map_err(|e| format!("读取 raw/sw.js 失败: {}", e))?;
-    let use_crlf = raw.contains("\r\n");
-    let mut found_ver = false;
-    let mut out_lines: Vec<String> = Vec::new();
-
-    for line in raw.lines() {
-        let trimmed = line.trim();
-        if trimmed.starts_with("self.SW_VERSION") {
-            out_lines.push(format!("self.SW_VERSION = '{}';", build_version));
-            found_ver = true;
-        } else if trimmed.starts_with("importScripts") && trimmed.contains("core-list.js") {
-            out_lines.push(format!(
-                "importScripts('/src/js/core-list.js?v={}');",
-                build_version
-            ));
-        } else {
-            out_lines.push(line.trim_end_matches('\r').to_string());
-        }
-    }
-    if !found_ver {
-        out_lines.insert(0, format!("self.SW_VERSION = '{}';", build_version));
-    }
-    let sep = if use_crlf { "\r\n" } else { "\n" };
-    let mut final_str = out_lines.join(sep);
-    final_str.push_str(sep);
-    write_atomic(&sw_path, &final_str, false)
 }
 
 fn json_inner_escaped(s: &str) -> String {

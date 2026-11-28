@@ -80,6 +80,8 @@ enum SubCommand {
         input: PathBuf,
         output: PathBuf,
     },
+    InitUpstream,
+    PullUpstream,
     SelfTest,
 }
 
@@ -123,6 +125,8 @@ fn print_usage() {
            synonyms                      重建 synonyms.js、未收录词报告并执行构建\n\
            bookmark <blk> <ttl> <href>   更新 src/tpl/bookmark.html 中的书签\n\
            minify <in> <out>             压缩单个 JS 或 CSS 文件\n\
+           init-upstream                 首次初始化上游骨架仓并建立本地双父锚点\n\
+           pull-upstream                 拉取上游骨架更新或已合并 PR（保护用户独占文件）\n\
            --selftest                    运行内置自检\n\
          \n\
          选项:\n\
@@ -239,6 +243,8 @@ fn parse_cli_args() -> Result<CliArgs, String> {
                 output: PathBuf::from(&positionals[2]),
             }
         }
+        Some("init-upstream") => SubCommand::InitUpstream,
+        Some("pull-upstream") => SubCommand::PullUpstream,
         Some(other) => return Err(format!("未知子命令: {}（使用 --help 查看用法）", other)),
     };
 
@@ -926,6 +932,68 @@ fn main() {
                 }
                 Err(e) => {
                     eprintln!("[swamp keep2html] 失败: {}", e);
+                    std::process::exit(1);
+                }
+            }
+            return;
+        }
+        SubCommand::InitUpstream => {
+            match services::upstream_sync::init_upstream(&cfg, None) {
+                Ok(s) => {
+                    println!(
+                        "[swamp init-upstream] 成功: 远端 {}/{} = {}, 本地锚点 = {}, 骨架文件 {} 个",
+                        s.remote, s.branch, s.upstream_commit, s.anchor_commit, s.skeleton_count
+                    );
+                }
+                Err(e) => {
+                    eprintln!("[swamp init-upstream] 失败: {}", e);
+                    std::process::exit(1);
+                }
+            }
+            return;
+        }
+        SubCommand::PullUpstream => {
+            match services::upstream_sync::pull_upstream(&cfg, None) {
+                Ok(services::upstream_sync::PullUpstreamOutcome::UpToDate { remote, branch }) => {
+                    println!("[swamp pull-upstream] 已与 {}/{} 保持最新", remote, branch);
+                }
+                Ok(services::upstream_sync::PullUpstreamOutcome::Merged {
+                    remote,
+                    branch,
+                    merged_files,
+                    protected_user_files,
+                    need_exe,
+                    need_wasm,
+                    need_gen,
+                    ..
+                }) => {
+                    println!(
+                        "[swamp pull-upstream] 合并完成 ({}/{}): 更新 {} 个文件，保护 {} 个用户文件",
+                        remote,
+                        branch,
+                        merged_files.len(),
+                        protected_user_files.len()
+                    );
+                    if need_wasm {
+                        println!("  -> 涉及 lib.rs，请运行 build.bat 选 [2] 或 [3] 重编 Wasm 后执行 gen");
+                    } else if need_exe {
+                        println!("  -> 涉及 Rust 源码，请运行 build.bat 选 [1] 重编 swamp.exe");
+                    }
+                    if need_gen {
+                        println!("  -> 涉及前端/配置，请运行 swamp gen 刷新构建产物");
+                    }
+                }
+                Ok(services::upstream_sync::PullUpstreamOutcome::Conflicts {
+                    conflict_files, ..
+                }) => {
+                    eprintln!(
+                        "[swamp pull-upstream] 合并存在骨架代码冲突，请手动解决后 git commit:\n  {}",
+                        conflict_files.join("\n  ")
+                    );
+                    std::process::exit(2);
+                }
+                Err(e) => {
+                    eprintln!("[swamp pull-upstream] 失败: {}", e);
                     std::process::exit(1);
                 }
             }

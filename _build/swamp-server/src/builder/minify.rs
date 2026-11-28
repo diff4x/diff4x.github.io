@@ -902,9 +902,103 @@ pub fn build_phase1_assets(
     Ok(())
 }
 
+pub const SW_BUILD_VERSION_PLACEHOLDER: &str = "__SW_BUILD_VERSION__";
+
+/// 在内存中将 raw/sw.js 模板中的版本占位符（或旧版字面版本号）替换为当前构建版本，永不回写源码文件
+pub(crate) fn render_sw_source(raw: &str, build_version: &str) -> String {
+    let clean = raw.strip_prefix('\u{FEFF}').unwrap_or(raw);
+    if clean.contains(SW_BUILD_VERSION_PLACEHOLDER) {
+        return clean.replace(SW_BUILD_VERSION_PLACEHOLDER, build_version);
+    }
+    let use_crlf = clean.contains("\r\n");
+    let mut found_ver = false;
+    let mut out_lines: Vec<String> = Vec::new();
+    for line in clean.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("self.SW_VERSION") {
+            out_lines.push(format!("self.SW_VERSION = '{}';", build_version));
+            found_ver = true;
+        } else if trimmed.starts_with("importScripts") && trimmed.contains("core-list.js") {
+            out_lines.push(format!(
+                "importScripts('/src/js/core-list.js?v={}');",
+                build_version
+            ));
+        } else {
+            out_lines.push(line.trim_end_matches('\r').to_string());
+        }
+    }
+    if !found_ver {
+        out_lines.insert(0, format!("self.SW_VERSION = '{}';", build_version));
+    }
+    let sep = if use_crlf { "\r\n" } else { "\n" };
+    let mut s = out_lines.join(sep);
+    s.push_str(sep);
+    s
+}
+
+fn read_current_build_version(cfg: &ServerConfig) -> Option<String> {
+    for candidate in [
+        cfg.js_raw_dir.join("core-list.js"),
+        cfg.js_out_dir.join("core-list.js"),
+    ] {
+        if let Ok(text) = fs::read_to_string(&candidate) {
+            for pat in ["BUILD_VERSION='", "BUILD_VERSION = '", "BUILD_VERSION=\""] {
+                if let Some(pos) = text.find(pat) {
+                    let rest = &text[pos + pat.len()..];
+                    let ver: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+                    if !ver.is_empty() {
+                        return Some(ver);
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+fn minify_sw_with_version(
+    cfg: &ServerConfig,
+    build_version: Option<&str>,
+    ledger: Option<&mut IncrementalLedger>,
+    logs: Option<&LogBus>,
+) -> Result<bool, String> {
+    let raw_sw = cfg.js_raw_dir.join("sw.js");
+    if !raw_sw.is_file() {
+        return Ok(false);
+    }
+    let raw_bytes =
+        fs::read(&raw_sw).map_err(|e| format!("读取 {} 失败: {}", raw_sw.display(), e))?;
+    let raw_text = String::from_utf8(raw_bytes)
+        .map_err(|e| format!("{} 非 UTF-8 编码: {}", raw_sw.display(), e))?;
+    let resolved_ver = build_version
+        .map(|s| s.to_string())
+        .or_else(|| read_current_build_version(cfg))
+        .unwrap_or_else(|| "0".to_string());
+    let rendered = render_sw_source(&raw_text, &resolved_ver);
+    let out_path = cfg.repo_root.join("sw.js");
+    let raw_hash = sha256_hex(rendered.as_bytes());
+
+    if let Some(ref led) = ledger {
+        if let Some(out_hash) = led.is_up_to_date("sw.js", &raw_hash, &out_path) {
+            let _ = out_hash;
+            return Ok(false);
+        }
+    }
+
+    let minified = minify_js(&rendered).map_err(|e| format!("JS 压缩失败 (sw.js): {}", e))?;
+    let out_hash = sha256_hex(minified.as_bytes());
+    write_atomic(&out_path, &minified, false)?;
+    if let Some(led) = ledger {
+        led.record("sw.js".to_string(), &raw_hash, &out_hash);
+    }
+    log_info(logs, "[minify] 更新 sw.js");
+    Ok(true)
+}
+
 pub fn build_phase3_tail(
     cfg: &ServerConfig,
     ledger: &mut IncrementalLedger,
+    active_build_version: Option<&str>,
     logs: Option<&LogBus>,
 ) -> Result<(), String> {
     let mut jobs = Vec::new();
@@ -919,17 +1013,14 @@ pub fn build_phase3_tail(
         });
     }
 
-    let raw_sw = cfg.js_raw_dir.join("sw.js");
-    if raw_sw.is_file() {
-        jobs.push(MinifyJob {
-            key: "sw.js".to_string(),
-            src_path: raw_sw,
-            out_path: cfg.repo_root.join("sw.js"),
-            is_css: false,
-        });
+    let (mut built, mut skipped) = run_jobs(jobs, ledger, logs)?;
+    if cfg.js_raw_dir.join("sw.js").is_file() {
+        if minify_sw_with_version(cfg, active_build_version, Some(ledger), logs)? {
+            built += 1;
+        } else {
+            skipped += 1;
+        }
     }
-
-    let (built, skipped) = run_jobs(jobs, ledger, logs)?;
     log_info(
         logs,
         format!(
@@ -962,17 +1053,11 @@ pub fn minify_single_asset(cfg: &ServerConfig, changed_path: &Path) -> Result<Op
         if !name.to_ascii_lowercase().ends_with(".js") || name == "core-list.js" || name == "synonyms.js" {
             return Ok(None);
         }
-        let target = if name == "sw.js" {
-            cfg.repo_root.join("sw.js")
-        } else {
-            cfg.js_out_dir.join(name)
-        };
-        let lbl = if name == "sw.js" {
-            "sw.js".to_string()
-        } else {
-            format!("src/js/{}", name)
-        };
-        (target, false, lbl)
+        if name == "sw.js" {
+            minify_sw_with_version(cfg, None, None, None)?;
+            return Ok(Some("sw.js".to_string()));
+        }
+        (cfg.js_out_dir.join(name), false, format!("src/js/{}", name))
     } else if canonical.starts_with(&css_raw) {
         let name = canonical
             .file_name()
@@ -1024,23 +1109,13 @@ pub fn sync_raw_assets_on_startup(cfg: &ServerConfig) -> Result<usize, String> {
         entries.sort();
         for p in entries {
             let name = p.file_name().unwrap().to_string_lossy().to_string();
-            if matches!(name.as_str(), "core-list.js" | "synonyms.js") {
+            if matches!(name.as_str(), "core-list.js" | "synonyms.js" | "sw.js") {
                 continue;
             }
-            let out_path = if name == "sw.js" {
-                cfg.repo_root.join("sw.js")
-            } else {
-                cfg.js_out_dir.join(&name)
-            };
-            let key = if name == "sw.js" {
-                "sw.js".to_string()
-            } else {
-                format!("js/{}", name)
-            };
             jobs.push(MinifyJob {
-                key,
+                key: format!("js/{}", name),
                 src_path: p,
-                out_path,
+                out_path: cfg.js_out_dir.join(&name),
                 is_css: false,
             });
         }
@@ -1082,7 +1157,10 @@ pub fn sync_raw_assets_on_startup(cfg: &ServerConfig) -> Result<usize, String> {
         });
     }
 
-    let (built, _skipped) = run_jobs(jobs, &mut ledger, None)?;
+    let (mut built, _skipped) = run_jobs(jobs, &mut ledger, None)?;
+    if minify_sw_with_version(cfg, None, Some(&mut ledger), None)? {
+        built += 1;
+    }
     if built > 0 {
         ledger.save()?;
     }

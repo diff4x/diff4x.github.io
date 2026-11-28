@@ -301,11 +301,7 @@ pub fn validate_decoded_static_path(decoded: &str, mode: RunMode) -> Option<Vec<
             if lower_joined.starts_with("html/__") && lower_joined.ends_with(".html") {
                 return None;
             }
-            if lower_joined == "gallery/diary"
-                || lower_joined.starts_with("gallery/diary/")
-                || lower_joined == "gallery/playboy"
-                || lower_joined.starts_with("gallery/playboy/")
-            {
+            if lower_joined == "gallery/diary" || lower_joined.starts_with("gallery/diary/") {
                 return None;
             }
         }
@@ -620,7 +616,12 @@ pub fn run_selftest_with_logger(logs: Option<&LogBus>) -> Result<(), String> {
     check("bm-reject-js", !validate_http_url("javascript:alert(1)"));
     check("bm-allow-https", validate_http_url("https://example.com/a?b=1"));
 
-    check("serve-block-swamp-toml", validate_static_request_path("/_build/swamp.toml", RunMode::Serve).is_none());
+    check(
+        "serve-block-swamp-toml",
+        validate_static_request_path("/_build/swamp.toml", RunMode::Serve).is_none()
+            && validate_static_request_path("/_build/core.toml", RunMode::Serve).is_none()
+            && validate_static_request_path("/_build/local.toml.example", RunMode::Serve).is_none(),
+    );
     check("serve-block-local-toml", validate_static_request_path("/_build/privy/local.toml", RunMode::Serve).is_none());
 
     // --- 构建器压缩、HTML 抽取与书签操作自检 ---
@@ -809,6 +810,7 @@ const d = obj.return / 2;"#;
     check(
         "pack-classify-build-exec",
         crate::services::pack_apply::is_build_or_exec_rel("_build/swamp-server/build.bat")
+            && crate::services::pack_apply::is_build_or_exec_rel("_build/core.toml")
             && crate::services::pack_apply::is_build_or_exec_rel("_build/swamp.toml")
             && crate::services::pack_apply::is_build_or_exec_rel(".gitignore")
             && !crate::services::pack_apply::is_build_or_exec_rel("src/js/raw/index.js"),
@@ -1005,20 +1007,33 @@ const d = obj.return / 2;"#;
         validate_static_request_path("/gallery/diary/a.webp", RunMode::Sim).is_none(),
     );
     check(
-        "sim-block-gallery-playboy",
-        validate_static_request_path("/gallery/playboy/01.jpg", RunMode::Sim).is_none(),
+        "sim-block-html-private-prefix",
+        validate_static_request_path("/html/__secret.html", RunMode::Sim).is_none(),
     );
     check(
         "pack-block-vscode",
         crate::services::pack_apply::is_hard_private_rel(".vscode/tasks.json")
             && crate::services::pack_apply::is_hard_private_rel(".vscode"),
     );
+    let mut custom_priv_gi_b = ignore::gitignore::GitignoreBuilder::new(".");
+    let _ = custom_priv_gi_b.add_line(None, "gallery/private_album/");
+    let _ = custom_priv_gi_b.add_line(None, "private_videos/");
+    let custom_priv_gi = custom_priv_gi_b.build().ok();
     check(
-        "push-privacy-gallery-dirs",
+        "push-privacy-generic-and-gitignore",
         crate::services::pack_apply::is_private_push_path("gallery/diary/1.webp")
-            && crate::services::pack_apply::is_private_push_path("gallery/playboy/1.jpg")
-            && crate::services::pack_apply::is_private_push_path("MIYUKI/a.mkv")
-            && !crate::services::pack_apply::is_private_push_path("gallery/img/1.webp"),
+            && crate::services::pack_apply::is_private_push_path_with_gitignore(
+                "gallery/private_album/01.jpg",
+                custom_priv_gi.as_ref(),
+            )
+            && crate::services::pack_apply::is_private_push_path_with_gitignore(
+                "private_videos/a.mkv",
+                custom_priv_gi.as_ref(),
+            )
+            && !crate::services::pack_apply::is_private_push_path_with_gitignore(
+                "gallery/img/1.webp",
+                custom_priv_gi.as_ref(),
+            ),
     );
     check(
         "pack-exclude-raw-core-list",
@@ -1205,6 +1220,107 @@ const d = obj.return / 2;"#;
                         && !h.contains("<br>")
                 })
                 .unwrap_or(false),
+    );
+
+    let sw_tpl = "importScripts('/src/js/core-list.js?v=__SW_BUILD_VERSION__');\nself.SW_VERSION = '__SW_BUILD_VERSION__';\n";
+    let sw_rendered = crate::builder::minify::render_sw_source(sw_tpl, "1795999999999");
+    check(
+        "sw-template-version-render",
+        sw_rendered.contains("core-list.js?v=1795999999999")
+            && sw_rendered.contains("self.SW_VERSION = '1795999999999';")
+            && !sw_rendered.contains("__SW_BUILD_VERSION__"),
+    );
+
+    let idx_sample = "<!DOCTYPE html>\n<html lang=\"zh-CN\" data-adult-gate=\"1\">\n<head><title>Old</title></head>\n<body>\n<!-- PARAM-BEGIN -->\n<script></script>\n<!-- PARAM-END -->\n</body></html>";
+    let idx_rendered = crate::builder::generator::render_index_html_meta(
+        idx_sample,
+        "My <Demo> Site",
+        false,
+        "<script>\n  const site_repo = \"alice/alice.github.io\";\n</script>",
+    );
+    check(
+        "index-site-meta-injection",
+        idx_rendered
+            .as_deref()
+            .map(|h| {
+                h.contains("data-adult-gate=\"0\"")
+                    && h.contains("<title>My &lt;Demo&gt; Site</title>")
+                    && h.contains("const site_repo = \"alice/alice.github.io\";")
+            })
+            .unwrap_or(false),
+    );
+
+    check(
+        "config-three-tier-merge",
+        crate::config::selftest_three_tier_merge(),
+    );
+    check(
+        "config-upstream-ref-validation",
+        crate::config::is_valid_git_ref_name("swamp")
+            && crate::config::is_valid_git_ref_name("upstream")
+            && crate::config::is_valid_git_ref_name("main")
+            && crate::config::is_valid_git_ref_name("feat/sync-v2")
+            && !crate::config::is_valid_git_ref_name("")
+            && !crate::config::is_valid_git_ref_name("-u")
+            && !crate::config::is_valid_git_ref_name("--upload-pack=calc")
+            && !crate::config::is_valid_git_ref_name("a..b")
+            && !crate::config::is_valid_git_ref_name("bad ref")
+            && !crate::config::is_valid_git_ref_name("refs@{0}")
+            && !crate::config::is_valid_git_ref_name("branch.lock"),
+    );
+
+    check(
+        "upstream-skeleton-whitelist",
+        crate::services::upstream_sync::is_skeleton_path("README.md")
+            && crate::services::upstream_sync::is_skeleton_path("index.html")
+            && crate::services::upstream_sync::is_skeleton_path("_build/core.toml")
+            && crate::services::upstream_sync::is_skeleton_path("_build/local.toml.example")
+            && crate::services::upstream_sync::is_skeleton_path("_build/swamp-server/src/main.rs")
+            && crate::services::upstream_sync::is_skeleton_path("_build/swamp-server/assets/cilin.txt")
+            && crate::services::upstream_sync::is_skeleton_path("src/js/raw/index.js")
+            && crate::services::upstream_sync::is_skeleton_path("src/css/sound/stone2.wav")
+            && crate::services::upstream_sync::is_skeleton_path("src/tpl/md_viewer.html")
+            && crate::services::upstream_sync::is_skeleton_path(".github/workflows/release.yml")
+            && !crate::services::upstream_sync::is_skeleton_path("src/js/raw/core-list.js")
+            && !crate::services::upstream_sync::is_skeleton_path("src/tpl/bookmark.html")
+            && !crate::services::upstream_sync::is_skeleton_path("_build/swamp.toml")
+            && !crate::services::upstream_sync::is_skeleton_path("_build/privy/local.toml")
+            && !crate::services::upstream_sync::is_skeleton_path("_build/swamp-server/target/debug/swamp.exe")
+            && !crate::services::upstream_sync::is_skeleton_path("html/note.html")
+            && !crate::services::upstream_sync::is_skeleton_path("html/__secret.html")
+            && !crate::services::upstream_sync::is_skeleton_path("sw.js"),
+    );
+    check(
+        "upstream-user-owned-protection",
+        crate::services::upstream_sync::is_user_owned_path("_build/swamp.toml")
+            && crate::services::upstream_sync::is_user_owned_path("src/tpl/bookmark.html")
+            && crate::services::upstream_sync::is_user_owned_path(".gitignore")
+            && crate::services::upstream_sync::is_user_owned_path("src/discussion_id_mapper.json")
+            && crate::services::upstream_sync::is_user_owned_path("html/note.html")
+            && crate::services::upstream_sync::is_user_owned_path("gallery/img/1.webp")
+            && !crate::services::upstream_sync::is_user_owned_path("_build/core.toml")
+            && !crate::services::upstream_sync::is_user_owned_path("README.md"),
+    );
+    check(
+        "upstream-artifact-classification",
+        crate::services::upstream_sync::is_generated_artifact_path("sw.js")
+            && crate::services::upstream_sync::is_generated_artifact_path("src/js/index.js")
+            && crate::services::upstream_sync::is_generated_artifact_path("src/css/index.css")
+            && crate::services::upstream_sync::is_generated_artifact_path("src/js/data/lite_data.js")
+            && crate::services::upstream_sync::is_generated_artifact_path("src/js/raw/core-list.js")
+            && crate::services::upstream_sync::is_generated_artifact_path("_build/swamp.exe")
+            && !crate::services::upstream_sync::is_generated_artifact_path("src/js/raw/index.js")
+            && !crate::services::upstream_sync::is_generated_artifact_path("src/css/raw/index.css"),
+    );
+    let dirty_idx = "<!DOCTYPE html>\n<html lang=\"zh-CN\" data-adult-gate=\"1\">\n<head><title>Personal Site</title></head>\n<body>\n<!-- PARAM-BEGIN -->\n<script>\n  const github_page = \"alice.github.io\";\n  const site_repo = \"alice/alice.github.io\";\n  const data_repo = \"alice/comments\";\n</script>\n<!-- PARAM-END -->\n</body></html>";
+    let clean_idx = crate::services::upstream_sync::sanitize_index_html_for_upstream(dirty_idx);
+    check(
+        "upstream-index-sanitize",
+        clean_idx.contains("data-adult-gate=\"0\"")
+            && clean_idx.contains("<title>Digital Swamp</title>")
+            && clean_idx.contains("const github_page = \"\";")
+            && clean_idx.contains("const site_repo = \"\";")
+            && !clean_idx.contains("alice"),
     );
 
     if fails > 0 {

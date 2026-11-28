@@ -1,5 +1,5 @@
 @charset "UTF-8";
-/* bookmark.css —— 首页书签区块、拖拽反馈与壁纸管理面板（运行于 #content iframe） */
+/* bookmark.css —— 首页书签区块、站点简介、拖拽反馈与壁纸管理面板（运行于 #content iframe） */
 
 
 /* --- 全局基础与滚动条 --- */
@@ -19,8 +19,8 @@ body {
     height: 100vh;
     margin: 0;
     background-color: #408fc4;
-    background-image: url(../../gallery/拍摄/260906/20260908222042.webp); /* 默认首屏背景图 */
     background-size: cover;
+    background-position: center;
 }
 
 ::-webkit-scrollbar {
@@ -41,6 +41,38 @@ a {
 
 a::after {
     content: "\2197";
+}
+
+
+/* --- 站点简介抬头（可选，置于书签页顶部） --- */
+
+#site-intro {
+    margin: 18px 0 4px 40px;
+    padding: 10px 14px;
+    max-width: 520px;
+    background: rgba(0, 0, 0, 0.42);
+    border-left: 3px solid cadetblue;
+    border-radius: 4px;
+    color: #e6edf3;
+    line-height: 1.55;
+}
+
+#site-intro h1 {
+    margin: 0 0 4px;
+    font-size: 16px;
+    font-weight: 600;
+    color: #fff;
+}
+
+#site-intro p {
+    margin: 2px 0 0;
+    font-size: 12.5px;
+    color: #d0d7de;
+}
+
+#site-intro .intro-credit {
+    font-size: 11.5px;
+    color: #9fb3c8;
 }
 
 

@@ -1,0 +1,21 @@
+# _build/local.toml.example —— 本机私有路径与可选覆盖配置示例
+# 使用方法：复制本文件为 _build/privy/local.toml，并按本机实际目录填写。
+# _build/privy/ 受 .gitignore 保护，永不入库，也不会被补丁回填或骨架升级覆盖。
+# 出于安全边界限制，以下 5 项外部程序/目录路径仅从本机 privy/local.toml 读取。
+
+[local]
+vscode_path = "code"
+katrain_dir = ""
+img_input_dir = ""
+webp_output_dir2 = ""
+keep_takeout_zip_folder = ""
+# port = 8000
+# log_level = "error"
+
+# 如需在本机临时覆盖默认心跳地址或 WebP 参数，可取消注释：
+# [tray]
+# heartbeat_url = "https://www.google.com"
+#
+# [media]
+# webp_quality = 80
+# img_max_width = 800

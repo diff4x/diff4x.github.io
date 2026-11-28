@@ -1,8 +1,6 @@
-# [diff4x's digital swamp](https://github.com/diff4x/diff4x.github.io)
+# [Swamp](https://github.com/diff4x/swamp)
 
-> 本人觉得有趣的、有启发性的、阴暗的东西，以及各类总结、备忘、导航
->
-> 基建：初代 by diff4x | 进化 by Gemini & Claude & ChatGPT & Grok
+> 零后端纯静态个人知识库与多媒体离线阅读引擎（Rust 单体桌面伴生端 + 浏览器 Wasm 检索引擎 + Service Worker 离线防撕裂）
 ---
 
 # 💡 查阅（访客）
@@ -152,15 +150,16 @@
 
 - 状态与日志：窗口标题显示服务地址和网络心跳（绿 / 红球图标同步到任务栏和系统托盘）。底部是运行日志，最新的在上，落盘到 `_build/temp/swamp_runtime.log`；重启后用带时间戳的虚线衔接，超过阈值会自动瘦身，体积超过 100 KB 时 `清空日志` 按钮变红。点击窗口右上角 `X` 会隐藏到系统托盘继续运行，左键单击托盘图标重新打开窗口，右键托盘图标选 `Exit` 才会真正退出（退出前等待写盘和构建收尾，并回收 `sim (9000)` 子进程）。
 - 会话令牌：启动时在内存里生成 64 位随机令牌。点 `Open Site`，服务端签发单次使用、60 秒过期的引导码打开 `/__auth?code=...`，核销后直接下发 `HttpOnly; SameSite=Strict` 会话 Cookie（前端 JS 与 `localStorage` 均无法读取明文令牌），随后清掉地址栏参数；如果主页已经开着，过渡页同步完即自动关闭。重编译重启时，令牌自动交给新进程，已有会话 Cookie 无感续用。会话失效时，站内的写操作会弹出桌面确认框，确认后重新下发 `HttpOnly` Cookie。
-- 两层配置，不要混写：
+- 三层配置，不要混写（优先级：`privy/local.toml` > `swamp.toml` > `core.toml`）：
 
-  | 配置文件 | 入库 | 内容 |
-  | :--- | :---: | :--- |
-  | `_build/swamp.toml` | 是 | 站点域名、Giscus ID、端口、预缓存 Glob 规则、WebP 默认参数、Pack 预设、`[synonyms]` 同义词规则 |
-  | `_build/privy/local.toml` | 否 | `vscode_path`、`katrain_dir`、`img_input_dir`、`webp_output_dir2`、`keep_takeout_zip_folder` |
-  | `_build/privy/` 下的其他文件 | 否 | `credentials.json`、`tokens.json`（Tasks）；`streetview_credentials.json`、`streetview_tokens.json`（街景）；`upcoming_tasks.json`；`txn.txt` |
+  | 配置文件 | 入库 | 归属 | 内容 |
+  | :--- | :---: | :---: | :--- |
+  | `_build/core.toml` | 是 | 骨架层 | 端口/构建/WebP/心跳默认值、预缓存 Glob 规则、`[upstream]` 默认值、Pack 预设（随骨架自动同步升级） |
+  | `_build/swamp.toml` | 是 | 用户层 | 站点标题/域名/仓库与成人门禁开关、Giscus ID、`[build.media_exclude]`、`[upstream]` 同步覆写、`[synonyms]` 同义词规则（升级骨架时不覆盖） |
+  | `_build/privy/local.toml` | 否 | 本机私有 | `vscode_path`、`katrain_dir`、`img_input_dir`、`webp_output_dir2`、`keep_takeout_zip_folder`（可参考 `_build/local.toml.example` 创建） |
+  | `_build/privy/` 下的其他文件 | 否 | 本机私有 | `credentials.json`、`tokens.json`（Tasks）；`streetview_credentials.json`、`streetview_tokens.json`（街景）；`upcoming_tasks.json`；`txn.txt` |
 
-  `local.toml` 里的 5 项都涉及启动进程或搬动目录，只读本机私有配置，不会回退去读 `swamp.toml`。
+  `local.toml` 里的 5 项都涉及启动进程或搬动目录，只读本机私有配置，不会回退去读 `core.toml` 或 `swamp.toml`。
 
 ## 2.2 写内容
 
@@ -212,7 +211,7 @@ HTML 笔记是站里的主要内容。
 
    写入正式目录之前，会在临时目录对全部公网产物做一遍隐私隔离检查。发现私有独占片段就立即中止，正式目录不会被改动。
 2. 线上仿真（`sim (9000)`）：用隐身窗口在 9000 端口模拟线上环境。它会关闭 `/__api`、`_build`、`shadow*`、`html/__*.html` 和所有 `.gitignore` 忽略的路径，用来逐项核对线上的 404 表现、SW 离线缓存和功能交互。
-3. 安全提交推送（`gen + push` 或 `push`）：填写 Commit 说明后推送。推送前连续做四项检查：复核磁盘上的公网产物 → 校验 `.gitignore` → 扫描暂存区 → 扫描所有未推送的提交历史（含合并提交）。任何一项命中私有路径，立刻 `git reset` 撤回并取消推送。
+3. 安全提交推送（`gen + push` 或 `push`）：填写 Commit 说明后推送。推送前连续做四项检查：复核磁盘上的公网产物 → 校验 `.gitignore` → 扫描暂存区 → 扫描所有未推送的提交历史（含合并提交）。任何一项命中私有路径，立刻 `git reset` 撤回并取消推送。若 `[upstream].auto_push = true` 且本次改动命中骨架白名单，程序会自动用临时索引隔离出脱敏后的纯骨架树推送到上游骨架仓（混合提交时会弹出公开 Commit 说明确认框），并以双父提交锚定本地 `HEAD`；若上游存在未拉取的新 PR，会自动熔断并提示先点 `拉取上游`。
 
 ## 2.4 调教近义词（「同义词」页）
 
@@ -317,12 +316,14 @@ HTML 笔记是站里的主要内容。
 | `swamp webp [maxW] [quality] [--alt-dir] [--update-mapping]` | 批量转 WebP，文件名复制到剪贴板 |
 | `swamp keep2html [single\|merge] [tag] [category]` | 转换 Google Keep Takeout 压缩包 |
 | `swamp synonyms` | 强制重建 `synonyms.js` 和未收录词报告，并执行 `gen` |
-| `swamp --selftest` | 运行 90 项内置的安全与构建自检 |
+| `swamp init-upstream` | 首次初始化上游骨架仓（孤儿历史 + 样板种子）并在本地建立双父锚点 |
+| `swamp pull-upstream` | 拉取上游骨架更新或已合并 PR，自动保护用户独占文件不被覆盖 |
+| `swamp --selftest` | 运行 98 项内置的安全与构建自检 |
 
 ## 2.6 出问题时先看这里
 
 - OAuth 过期或要换账号：Tasks 在「常规」页点 `重新授权 Tasks`；街景在「街景上传」页点 `清除令牌`，再重新 `登录授权`。
-- 怀疑构建或安全规则出了问题：点 `selfcheck` 运行 90 项自检；原生端异常崩溃时，看 `_build/temp/backup/swamp_panic.log`。
+- 怀疑构建或安全规则出了问题：点 `selfcheck` 运行 98 项自检；原生端异常崩溃时，看 `_build/temp/backup/swamp_panic.log`。
 - 浏览器缓存卡死或异常：访问 `?repair=1` 并确认弹窗，会重置 SW、Cache、`MainDB` 和 `BookDB`，不删除摘抄本、已阅标记和个人收藏。
 - 补丁回填后出了问题：见 3.2.5。
 
@@ -405,7 +406,7 @@ HTML 笔记是站里的主要内容。
 1. 服务只绑定 `127.0.0.1`，并校验 Host 白名单。
 2. `/__api/*` 要过五重鉴权：Origin、`Sec-Fetch-Site`、`X-Swamp-Client: 1`、常量时间比较的 `HttpOnly` 会话 Cookie，以及 32 MB 体积上限。
 3. 补丁回填：硬性禁止写入 `.git`、`.vscode`、`privy` 等路径；高危的构建文件必须在 VS Code Diff 里看过，才会解锁自动编译。
-4. 自动编译交接：等 `active_ops == 0` → 停掉 sim → `server_handle.join()` → 用 `SWAMP_HANDOFF_TOKEN` 把令牌交给 `build.bat`（它在独立 `setlocal` 子过程中同时清空 `SWAMP_HANDOFF_TOKEN` 与 `_SWAMP_HANDOFF_TOKEN` 后再调 `cargo` / `wasm-pack`）→ 跑完 90 项 `--selftest` 后覆盖 `swamp.exe` → 新进程接收令牌，旧标签页无感续用。
+4. 自动编译交接：等 `active_ops == 0` → 停掉 sim → `server_handle.join()` → 用 `SWAMP_HANDOFF_TOKEN` 把令牌交给 `build.bat`（它在独立 `setlocal` 子过程中同时清空 `SWAMP_HANDOFF_TOKEN` 与 `_SWAMP_HANDOFF_TOKEN` 后再调 `cargo` / `wasm-pack`）→ 跑完 98 项 `--selftest` 后覆盖 `swamp.exe` → 新进程接收令牌，旧标签页无感续用。
 
 补充：Tasks 和控制台的「街景上传」页共用 `/__oauth/callback`（PKCE S256，先验证 `state` 再消费，`oauth_pending` 防止并发冲突）。凭据可以共用，令牌分存在 `tokens.json` 和 `streetview_tokens.json`，从而把只读的任务权限和街景的发布权限分开。
 
@@ -444,7 +445,7 @@ HTML 笔记是站里的主要内容。
 
 `build.bat`（位于 `_build/swamp-server/`）的三个选项：
 
-- `[1]` 编译 `swamp.exe`：改了非 `lib.rs` 的 Rust 源码后运行。先对新产物跑完 90 项 `--selftest`，全部通过后，才带重试地覆盖 `_build/swamp.exe`，并交接令牌重启。
+- `[1]` 编译 `swamp.exe`：改了非 `lib.rs` 的 Rust 源码后运行。先对新产物跑完 98 项 `--selftest`，全部通过后，才带重试地覆盖 `_build/swamp.exe`，并交接令牌重启。
 - `[2]` 编译 Wasm（`src\wasm`）：改了 `src/lib.rs` 后运行。经 `wasm-stage` 完成 `wasm-pack` 和 `wasm-opt`，复制 `.wasm` 并压缩胶水脚本；完成后必须跑一次 `gen`。
 - `[3]` 全部编译：依次执行 `[1]` 和 `[2]`，并启动新版管理窗。
 
@@ -465,7 +466,7 @@ AI 的补丁只能修改源码区；产物区由 `gen` 或 `build.bat` 生成，
 路径约定：`src/js/`、`src/css/`、`src/tpl/`、`src/wasm/` 在仓库根目录；Rust 源码（`src/*.rs`、`src/builder/`、`src/services/`、`src/media/` 等）在 `_build/swamp-server/` 下。
 
 - 源码区（允许修改）：
-  - `index.html`（`PARAM-BEGIN..END` 之间除外）、`README.md`、`.gitignore`、`_build/swamp.toml`；
+  - `index.html`（`PARAM-BEGIN..END` 之间除外）、`README.md`、`.gitignore`、`_build/core.toml`、`_build/swamp.toml`、`_build/local.toml.example`；
   - `_build/swamp-server/{Cargo.toml, Cargo.lock, build.bat, .cargo/config.toml, src/**}`；
   - `html/*.html`；
   - `src/js/raw/*.js`（不含 `src/js/raw/core-list.js`）、`src/css/raw/*.css`、`src/css/font/font.css`；
@@ -488,7 +489,7 @@ AI 的补丁只能修改源码区；产物区由 `gen` 或 `build.bat` 生成，
    - 私有内容的词频永远不进入 `synonyms.js`。
 2. 本机信任：入库的配置不能决定执行什么
    - 涉及启动外部进程或搬动目录的 5 项路径（`vscode_path`、`katrain_dir`、`img_input_dir`、`webp_output_dir2`、`keep_takeout_zip_folder`），只认不入库的 `_build/privy/local.toml`。
-   - 入库的 `swamp.toml` 在写回前必须通过 `SwampToml` 预校验，输出目录限定在仓库内。
+   - 入库的 `core.toml` / `swamp.toml` 在写回前必须通过 `SwampToml` 预校验，输出目录限定在仓库内。
 3. 同源与路径安全
    - 街景已收口到桌面控制台，全站默认 CSP 不再有外部工具脚本的特例，也没有外部 CDN。
    - 静态服务只做一次 URL 解码，并在 `canonicalize` 后的真实路径上再复核；不做二次解码，以免误杀文件名里的字面 `%`。
@@ -502,7 +503,7 @@ AI 的补丁只能修改源码区；产物区由 `gen` 或 `build.bat` 生成，
 5. 单一事实源与门禁
    - `MainDB` 的 Schema、20 个隔离键、`createStore` 只在 `site-core.js` 里定义。
    - 环境分支只认 `store.online_flag`（没有 `localStorage` 的 `sw.js` 除外）。
-   - 任何要替换 `_build/swamp.exe` 的改动，都必须通过 90 项 `--selftest`。
+   - 任何要替换 `_build/swamp.exe` 的改动，都必须通过 98 项 `--selftest`。
 6. 历史契约与锚点不可变
    - `store.lightbox_stauts`、`store.bookmarkhtml_modifing`、`MainDB.html_snapshots`、`__TXT_SEARCH_BRIDGE__`、`<span id="anchor">`、`<a id="end_flag">`、`_f`、`_uncategorized`，都是跨文件的契约，禁止单点“顺手纠错”或改名。
    - 所有构建产物（含 `src/js/raw/core-list.js`）都由 `gen` 独占生成，禁止手改。
@@ -549,7 +550,7 @@ AI 的补丁只能修改源码区；产物区由 `gen` 或 `build.bat` 生成，
 
 打包给 AI（「打包协作」页）：
 
-- 在三态目录树里勾选要发给 AI 的源码；预设可增删改（存在 `swamp.toml`），也可以点 `选中 Git 改动`。
+- 在三态目录树里勾选要发给 AI 的源码；预设可增删改（优先存于 `core.toml`，缺失时回退 `swamp.toml`），也可以点 `选中 Git 改动`。
 - 私有区和构建产物（含 `raw/core-list.js`）自动排除。
 - 输出统一写入系统下载目录（`Downloads`），支持三种模式：`仅 ZIP`（默认）、`仅 MD`、`ZIP + MD`；生成 MD 时按单文件 KB 上限分卷（默认 200 KB）。
 
@@ -562,7 +563,7 @@ AI 的补丁只能修改源码区；产物区由 `gen` 或 `build.bat` 生成，
 回填的门禁和防误操作：
 
 - `_build/privy/`、`.git/`、`.vscode/` 等禁区，硬性禁止回填。
-- 涉及 `.cargo`、`Cargo.*`、`*.rs`、`build.bat`、`swamp.toml`、`.gitignore`、`rust-toolchain*` 或脚本后缀的条目，默认不勾选，并标为 `[构建配置·未查看]`；补丁包内含大小写冲突的重复条目会直接拒绝加载。必须逐个双击看完 Diff，标记变成 `[已查看]`，才会解锁“回填后退出并运行 `build.bat`”。
+- 涉及 `.cargo`、`Cargo.*`、`*.rs`、`build.bat`、`core.toml`、`swamp.toml`、`.gitignore`、`rust-toolchain*` 或脚本后缀的条目，默认不勾选，并标为 `[构建配置·未查看]`；补丁包内含大小写冲突的重复条目会直接拒绝加载。必须逐个双击看完 Diff，标记变成 `[已查看]`，才会解锁“回填后退出并运行 `build.bat`”。
 - 默认勾选 `覆盖前备份`：自动生成 `_manifest.json`，中途报错时同样保留，可在顶部 `回滚快照` 下拉里一键还原。
 - 默认勾选 `规范 bat/ps1 编码`：`.bat` / `.cmd` 转为 UTF-8 无 BOM + CRLF，`.ps1` 转为 UTF-8 带 BOM + CRLF。
 
@@ -574,7 +575,7 @@ AI 的补丁只能修改源码区；产物区由 `gen` 或 `build.bat` 生成，
 
 目标：新会话中，AI 仅凭本文档加一部分相关源码，就能判断站点怎么运行、问题大概在哪里，并交付不引入回归的补丁。
 
-基线：单 Crate 双目标的 Rust 工程 `_build/swamp-server`（`v3.1.0`）+ 纯静态前端（11 个视图模板，没有外部工具脚本 CDN）+ 90 项 `--selftest` 自检。
+基线：单 Crate 双目标的 Rust 工程 `_build/swamp-server`（`v3.1.0`）+ 纯静态前端（11 个视图模板，没有外部工具脚本 CDN）+ 98 项 `--selftest` 自检。
 
 读法：
 
@@ -613,7 +614,7 @@ AI 的补丁只能修改源码区；产物区由 `gen` 或 `build.bat` 生成，
 | 监听与入口 | `127.0.0.1:8000` + Win32 5 标签页窗 | `127.0.0.1:9000`（隐身 Chrome，无窗） | `https://<github_page>` |
 | 控制面 `/__api/*` | 挂载（5 重鉴权 + 32 MB 限体） | 不挂载 | 不存在 |
 | `_build/**` 静态访问 | 默认拒绝；白名单只放行 `privy/txn.txt` 和 `privy/upcoming_tasks.json` | 整个目录拒绝 | 不入库 |
-| 私有内容访问 | 可读可搜（`html/__*.html`、`shadow*`、私有图库） | 强制拒绝（硬拦 `shadow*`、`html/__*`、`gallery/{diary,playboy}`，并联动 `.gitignore` 返回 404） | 不入库（目录标 `🔒`，切片占位 `"localOnly"`） |
+| 私有内容访问 | 可读可搜（`html/__*.html`、`shadow*`、私有图库） | 强制拒绝（硬拦 `shadow*`、`html/__*`、`gallery/diary`，并联动 `.gitignore` 返回 404） | 不入库（目录标 `🔒`，切片占位 `"localOnly"`） |
 | SW `fetch` 策略 | Network-Only（`no-store`），断网回退缓存；放行 `/__api`、`/__auth*`、`/__oauth` | Cache-First；活跃 SW 实时合成 `core-list.js` | 同 Sim |
 | 站内写能力 | HTML `edit` 热重载、双语固化、书签拖拽、MD 编辑保存、KaTrain、`txn_parser` 跳行 | 全部关闭（双语页移除 `contenteditable`） | 全部关闭 |
 | MD Diff 历史源 | SW 快照 `MainDB.html_snapshots`（最多 10 版）+ SW 当前缓存版 + 硬盘当前版（及未固化草稿） | SW 快照 `MainDB.html_snapshots`（最多 10 版，`vN`） | 同 Sim |
@@ -641,14 +642,14 @@ AI 的补丁只能修改源码区；产物区由 `gen` 或 `build.bat` 生成，
 | 本地编辑热重载、书签拖拽、摘抄、评论 | `src/api_ops.rs`（`post_edit`、`get_watch_html`）、`src/js/raw/{bookmark,excerpts,comments}.js` | `#anchor` 和 `#end_flag` 是硬锚点契约 | 改 Rust：`exe`；改 JS：`gen` |
 | 触屏虚拟触控板 | `src/js/raw/touchpad.js`、`src/css/raw/index.css` | 依赖 `index.html` 的 `width=1024`，以及各 iframe 顶部的 `VirtualCursor.attach(window)` | `gen` |
 | 全量构建、压缩器、隐私隔离检查 | `_build/swamp-server/src/builder/{mod,generator,minify,html_utils}.rs` | 任何新的公网产物，都要纳入 `assert_no_private_leak` 和 `verify_public_outputs_clean` | `exe` + `gen` |
-| 控制台 GUI、打包与回填、Git 推送、街景与 Tasks | `_build/swamp-server/src/{gui,main,security,static_fs}.rs`、`src/services/{pack_apply,tasks,street_view,watcher,log_bus}.rs` | 新增 API 或安全规则，要同步补充 `security.rs` 里的 `--selftest` | `exe` |
+| 控制台 GUI、打包与回填、Git 双仓同步、街景与 Tasks | `_build/swamp-server/src/{gui,main,security,static_fs}.rs`、`src/services/{pack_apply,upstream_sync,tasks,street_view,watcher,log_bus}.rs` | 新增 API 或安全规则，要同步补充 `security.rs` 里的 `--selftest` | `exe` |
 | 独立工具页与媒体批处理 | `src/tpl/{go_board,txn_parser}.html`、`src/js/raw/txn_parser.js`、`src/media/{webp,keep2html}.rs` | `go_board` 的静态资源在 `swamp.toml` 里预缓存；`keep2html` 的“日记”强制 `__` 前缀 | 改 Rust：`exe`；改前端：`gen` |
 
 ### 3.3.4 编译目标与第三方库
 
 单 Crate 双目标编译（Windows）：
 
-- 原生端（`--bin swamp`）：`cargo build --profile release-exe`，参数为 `opt-level="s"`、`lto=true`、`codegen-units=1`、`strip=true`、`panic="unwind"`（崩溃日志写到 `_build/temp/backup/swamp_panic.log`）。`build.bat` 固定把 `CARGO_TARGET_DIR` 指到同步盘之外的 `%LOCALAPPDATA%\swamp-cargo-target`，并且先通过全部 90 项 `--selftest`，再带重试地替换 `_build/swamp.exe`。
+- 原生端（`--bin swamp`）：`cargo build --profile release-exe`，参数为 `opt-level="s"`、`lto=true`、`codegen-units=1`、`strip=true`、`panic="unwind"`（崩溃日志写到 `_build/temp/backup/swamp_panic.log`）。`build.bat` 固定把 `CARGO_TARGET_DIR` 指到同步盘之外的 `%LOCALAPPDATA%\swamp-cargo-target`，并且先通过全部 98 项 `--selftest`，再带重试地替换 `_build/swamp.exe`。
 - Wasm 端（`--lib`，`compute_intensive_task_processor`，`cdylib`）：`wasm-pack build --target web`，`.cargo/config.toml` 开启 `+simd128`，`release` 配置为 `opt-level="z"`、`panic="abort"`，再跑 `wasm-opt -Oz`。先在 `%LOCALAPPDATA%\swamp-cargo-target\wasm-stage` 暂存（避开网盘抢锁），再复制 `.wasm`，并用 `swamp.exe minify` 压缩胶水 JS。
 
 同源第三方库及其定制：
@@ -742,8 +743,8 @@ AI 的补丁只能修改源码区；产物区由 `gen` 或 `build.bat` 生成，
    - 扫描媒体目录：`canonicalize` + `visited_dirs` 防环，禁用 `_f`、`__proto__`、`constructor`、`prototype`，并联动 `git check-ignore`。
    - 在 `_build/temp/staging_data_<pid>_<ms>`（由 RAII 的 `StagingDirGuard` 管理）写出 `lite_data.js`、`fat_data_*.json`、`shadow*`、`core-bundle.json`；`synonyms.js` 只在内存暂存、不落盘；只有 `(path, hash, source)` 发生变化，才推进 `BUILD_VERSION`。
    - Aho-Corasick 全覆盖检查：独立从磁盘读取公开 HTML 和 `README.md` 作为排除集；私有页去掉 `#anchor` 后的正文（连续短行自动合并）切成 24 字、步长 12 的重叠窗口，编入同一个自动机，线性扫描全部公网产物（含 `lite_data.js` 与已清理历史已删私有记录的 `discussion_id_mapper.json`，仅放行活跃私有页已知的文件名、标题和时间戳）；命中即中止，正式目录不做任何改动。
-   - 原子提交：先写 `synonyms.js`、`index.html`、`discussion_id_mapper.json`，再逐文件 `write_bytes_atomic` 提交 `src/js/data/` 并删除废弃切片，最后写 `raw/core-list.js`、`raw/sw.js`、`idle-list.txt`。
-4. Phase 3 与推送四重门禁：压缩 `raw/core-list.js` 和 `raw/sw.js`，落盘账本。独立的 `push` 依次执行：
+   - 原子提交：先写 `synonyms.js`、`index.html`（同步注入 `<title>`、`data-adult-gate` 与 `PARAM`）、`discussion_id_mapper.json`，再逐文件 `write_bytes_atomic` 提交 `src/js/data/` 并删除废弃切片，最后写 `raw/core-list.js` 与 `idle-list.txt`（`src/js/raw/sw.js` 保持只读模板，不再被 `gen` 改写）。
+4. Phase 3 与推送四重门禁：压缩 `raw/core-list.js`，并在内存将 `src/js/raw/sw.js` 的 `__SW_BUILD_VERSION__` 替换为当前构建版本后压缩输出根目录 `/sw.js`，落盘账本。独立的 `push` 依次执行：
    1. `verify_public_outputs_clean`；
    2. 校验 `.gitignore`；
    3. `git add -A` 后扫描暂存区，以 `is_private_push_path` 硬编码底线与 `.gitignore` 规则的并集判定，任一命中即 `git reset` 并中止；
@@ -780,7 +781,7 @@ AI 的补丁只能修改源码区；产物区由 `gen` 或 `build.bat` 生成，
 
 - 三级补丁防线：
   - 硬禁止：`.git/`、`.vscode/`、`_build/{privy,temp,secrets,backup}/`、`target/`、`html/__*`、`shadow*`、`cilin.txt`、`protocol.key`、`{,streetview_}{credentials,tokens}.json`，以及路径穿越、8.3 短文件名、设备名。
-  - 构建与脚本类（`.cargo`、`Cargo.*`、`*.rs`、`build.bat`、`rust-toolchain*`、`swamp.toml`、`.github/*`、`.git*`、脚本后缀）：标 `[构建配置·未查看]`，默认不勾选；同时拒绝含重复或大小写冲突条目的 ZIP；必须双击在 VS Code 里用 `--diff` 看完（`.code-workspace` 自动追 `.txt`），才解锁自动编译。
+  - 构建与脚本类（`.cargo`、`Cargo.*`、`*.rs`、`build.bat`、`rust-toolchain*`、`core.toml`、`swamp.toml`、`.github/*`、`.git*`、脚本后缀）：标 `[构建配置·未查看]`，默认不勾选；同时拒绝含重复或大小写冲突条目的 ZIP；必须双击在 VS Code 里用 `--diff` 看完（`.code-workspace` 自动追 `.txt`），才解锁自动编译。
 - 两遍写盘与交接：
   - Pass 1 做全量校验，单文件上限 64 MB，总量上限 256 MB。
   - Pass 2 在 RAII 的 `ManifestGuard` 保护下备份并写盘，可选地规范 `.bat` / `.cmd`（UTF-8 无 BOM + CRLF）和 `.ps1`（UTF-8 带 BOM + CRLF）。
@@ -808,4 +809,4 @@ AI 的补丁只能修改源码区；产物区由 `gen` 或 `build.bat` 生成，
 - 信任边界：
   - 完全信任的来源只有本机私有配置，见 3.2.2 第 2 条；兼容旧的 `local.properties`。
   - 受限来源：`swamp.toml`（`webp_output_dir` 限制在仓库内，`heartbeat_url` 限制为 `http(s)://`，写回前必须通过 `toml::from_str::<SwampToml>`）、AI 补丁 `.zip`、Keep `.zip`、外部浏览器页面。
-  - 纵深防线：全站没有外部工具脚本 CDN，也没有 `eval`；拉起 VS Code 时，直接启动 `Code.exe` 失败后才会回退，回退路径会拦截全部 cmd 元字符；90 项 `--selftest` 是编译发布的硬门禁。
+  - 纵深防线：全站没有外部工具脚本 CDN，也没有 `eval`；拉起 VS Code 时，直接启动 `Code.exe` 失败后才会回退，回退路径会拦截全部 cmd 元字符；98 项 `--selftest` 是编译发布的硬门禁。

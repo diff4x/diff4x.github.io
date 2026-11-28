@@ -1,4 +1,4 @@
-//! 两层分级配置加载（入库 swamp.toml + 本机私有 privy/local.toml）与标记块 TOML 预校验原子写回。
+//! 三层分级配置加载（骨架 core.toml -> 站点 swamp.toml -> 本机私有 privy/local.toml）与标记块 TOML 预校验原子写回。
 
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -22,6 +22,8 @@ struct SwampToml {
     #[serde(default)]
     local: LocalToml,
     #[serde(default)]
+    upstream: UpstreamToml,
+    #[serde(default)]
     pack: PackToml,
     #[serde(default)]
     synonyms: SynonymsToml,
@@ -40,7 +42,10 @@ struct SynonymsToml {
 
 #[derive(Deserialize, Default, Debug)]
 struct SiteToml {
+    title: Option<String>,
     github_page: Option<String>,
+    site_repo: Option<String>,
+    adult_gate: Option<bool>,
     readme_md: Option<String>,
     update_interval_ms: Option<u64>,
     update_interval_local_ms: Option<u64>,
@@ -105,6 +110,20 @@ struct TrayToml {
 }
 
 #[derive(Deserialize, Default, Debug)]
+struct UpstreamToml {
+    remote: Option<String>,
+    branch: Option<String>,
+    auto_push: Option<bool>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UpstreamConfig {
+    pub remote: String,
+    pub branch: String,
+    pub auto_push: bool,
+}
+
+#[derive(Deserialize, Default, Debug)]
 struct LocalToml {
     vscode_path: Option<String>,
     katrain_dir: Option<String>,
@@ -113,6 +132,187 @@ struct LocalToml {
     keep_takeout_zip_folder: Option<String>,
     port: Option<u16>,
     log_level: Option<String>,
+}
+
+/// 校验 Git remote / branch 名称合法性，拒绝空串、前导 `-` 选项注入与非法 ref 字符
+pub fn is_valid_git_ref_name(s: &str) -> bool {
+    let t = s.trim();
+    if t.is_empty() || t.len() > 128 {
+        return false;
+    }
+    if t.starts_with('-') || t.starts_with('/') || t.ends_with('/') || t.ends_with('.') {
+        return false;
+    }
+    if t.contains("..") || t.contains("//") || t.contains("@{") || t.ends_with(".lock") {
+        return false;
+    }
+    for b in t.bytes() {
+        if b <= 0x20 || b == 0x7f || matches!(b, b'~' | b'^' | b':' | b'?' | b'*' | b'[' | b'\\') {
+            return false;
+        }
+    }
+    true
+}
+
+impl SwampToml {
+    /// 合并两层入库配置：overlay（swamp.toml）中显式设置的字段覆盖 base（core.toml）
+    fn merge_with(base: Self, overlay: Self) -> Self {
+        Self {
+            site: SiteToml {
+                title: overlay.site.title.or(base.site.title),
+                github_page: overlay.site.github_page.or(base.site.github_page),
+                site_repo: overlay.site.site_repo.or(base.site.site_repo),
+                adult_gate: overlay.site.adult_gate.or(base.site.adult_gate),
+                readme_md: overlay.site.readme_md.or(base.site.readme_md),
+                update_interval_ms: overlay.site.update_interval_ms.or(base.site.update_interval_ms),
+                update_interval_local_ms: overlay
+                    .site
+                    .update_interval_local_ms
+                    .or(base.site.update_interval_local_ms),
+            },
+            giscus: GiscusToml {
+                repo: overlay.giscus.repo.or(base.giscus.repo),
+                repo_id: overlay.giscus.repo_id.or(base.giscus.repo_id),
+                category_id: overlay.giscus.category_id.or(base.giscus.category_id),
+            },
+            server: ServerToml {
+                port: overlay.server.port.or(base.server.port),
+                sim_port: overlay.server.sim_port.or(base.server.sim_port),
+                log_level: overlay.server.log_level.or(base.server.log_level),
+                watch_assets: overlay.server.watch_assets.or(base.server.watch_assets),
+            },
+            build: BuildToml {
+                slice_size_kb: overlay.build.slice_size_kb.or(base.build.slice_size_kb),
+                exclude_html_regex: overlay.build.exclude_html_regex.or(base.build.exclude_html_regex),
+                prune_missing_images: overlay
+                    .build
+                    .prune_missing_images
+                    .or(base.build.prune_missing_images),
+                prune_max_lines: overlay.build.prune_max_lines.or(base.build.prune_max_lines),
+                private_prefix_check: overlay
+                    .build
+                    .private_prefix_check
+                    .or(base.build.private_prefix_check),
+                allow_empty_gitignore: overlay
+                    .build
+                    .allow_empty_gitignore
+                    .or(base.build.allow_empty_gitignore),
+                media_exclude: MediaExcludeToml {
+                    gallery: overlay
+                        .build
+                        .media_exclude
+                        .gallery
+                        .or(base.build.media_exclude.gallery),
+                    video: overlay
+                        .build
+                        .media_exclude
+                        .video
+                        .or(base.build.media_exclude.video),
+                    audio: overlay
+                        .build
+                        .media_exclude
+                        .audio
+                        .or(base.build.media_exclude.audio),
+                    ebook: overlay
+                        .build
+                        .media_exclude
+                        .ebook
+                        .or(base.build.media_exclude.ebook),
+                },
+                precache: PrecacheToml {
+                    include: overlay.build.precache.include.or(base.build.precache.include),
+                    exclude: overlay.build.precache.exclude.or(base.build.precache.exclude),
+                },
+            },
+            media: MediaToml {
+                webp_quality: overlay.media.webp_quality.or(base.media.webp_quality),
+                img_max_width: overlay.media.img_max_width.or(base.media.img_max_width),
+                webp_output_dir: overlay.media.webp_output_dir.or(base.media.webp_output_dir),
+            },
+            tray: TrayToml {
+                heartbeat_url: overlay.tray.heartbeat_url.or(base.tray.heartbeat_url),
+                heartbeat_interval_sec: overlay
+                    .tray
+                    .heartbeat_interval_sec
+                    .or(base.tray.heartbeat_interval_sec),
+                tasks_poll_interval_sec: overlay
+                    .tray
+                    .tasks_poll_interval_sec
+                    .or(base.tray.tasks_poll_interval_sec),
+                due_within_days: overlay.tray.due_within_days.or(base.tray.due_within_days),
+            },
+            local: LocalToml {
+                vscode_path: overlay.local.vscode_path.or(base.local.vscode_path),
+                katrain_dir: overlay.local.katrain_dir.or(base.local.katrain_dir),
+                img_input_dir: overlay.local.img_input_dir.or(base.local.img_input_dir),
+                webp_output_dir2: overlay.local.webp_output_dir2.or(base.local.webp_output_dir2),
+                keep_takeout_zip_folder: overlay
+                    .local
+                    .keep_takeout_zip_folder
+                    .or(base.local.keep_takeout_zip_folder),
+                port: overlay.local.port.or(base.local.port),
+                log_level: overlay.local.log_level.or(base.local.log_level),
+            },
+            upstream: UpstreamToml {
+                remote: overlay.upstream.remote.or(base.upstream.remote),
+                branch: overlay.upstream.branch.or(base.upstream.branch),
+                auto_push: overlay.upstream.auto_push.or(base.upstream.auto_push),
+            },
+            pack: PackToml {
+                skip_apply_doc_regex: overlay
+                    .pack
+                    .skip_apply_doc_regex
+                    .or(base.pack.skip_apply_doc_regex),
+                presets_json: overlay.pack.presets_json.or(base.pack.presets_json),
+            },
+            synonyms: SynonymsToml {
+                custom_json: overlay.synonyms.custom_json.or(base.synonyms.custom_json),
+            },
+        }
+    }
+}
+
+/// 供自检验证三层配置合并语义（core.toml 基座 + swamp.toml 覆写）
+pub(crate) fn selftest_three_tier_merge() -> bool {
+    let core_raw = r#"
+[site]
+title = "Digital Swamp"
+adult_gate = false
+
+[build.precache]
+include = ["/", "/index.html"]
+
+[upstream]
+remote = "upstream"
+branch = "main"
+auto_push = false
+"#;
+    let site_raw = r#"
+[site]
+title = "My Site"
+adult_gate = true
+
+[giscus]
+repo = "me/comments"
+
+[upstream]
+remote = "swamp"
+auto_push = true
+"#;
+    let Ok(core_t) = toml::from_str::<SwampToml>(core_raw) else {
+        return false;
+    };
+    let Ok(site_t) = toml::from_str::<SwampToml>(site_raw) else {
+        return false;
+    };
+    let merged = SwampToml::merge_with(core_t, site_t);
+    merged.site.title.as_deref() == Some("My Site")
+        && merged.site.adult_gate == Some(true)
+        && merged.giscus.repo.as_deref() == Some("me/comments")
+        && merged.build.precache.include.as_ref().map(|v| v.len()) == Some(2)
+        && merged.upstream.remote.as_deref() == Some("swamp")
+        && merged.upstream.branch.as_deref() == Some("main")
+        && merged.upstream.auto_push == Some(true)
 }
 
 #[derive(Clone, Debug)]
@@ -134,6 +334,7 @@ pub struct ServerConfig {
     pub index_html: PathBuf,
     pub bookmark_html: PathBuf,
     pub template_html: PathBuf,
+    pub core_toml_path: PathBuf,
     pub swamp_toml_path: PathBuf,
     pub discussion_id_mapper: PathBuf,
     pub legacy_cmt_mapper: PathBuf,
@@ -148,7 +349,10 @@ pub struct ServerConfig {
     pub temp_dir: PathBuf,
     pub backup_dir: PathBuf,
 
+    pub site_title: String,
     pub github_page: String,
+    pub site_repo: String,
+    pub adult_gate: bool,
     pub readme_md: String,
     pub data_repo: String,
     pub data_repo_id: String,
@@ -187,6 +391,7 @@ pub struct ServerConfig {
     pub watch_assets: bool,
     pub vscode_path: String,
     pub katrain_dir: String,
+    pub upstream: UpstreamConfig,
 }
 
 impl ServerConfig {
@@ -200,8 +405,18 @@ impl ServerConfig {
         let build_dir = fs::canonicalize(repo_root.join("_build"))
             .map_err(|e| format!("无法定位 _build 目录: {}", e))?;
 
+        let core_toml_path = build_dir.join("core.toml");
+        let core_toml: SwampToml = if core_toml_path.is_file() {
+            let raw = fs::read_to_string(&core_toml_path)
+                .map_err(|e| format!("读取 core.toml 失败: {}", e))?;
+            let clean = raw.strip_prefix('\u{FEFF}').unwrap_or(&raw);
+            toml::from_str(clean).map_err(|e| format!("解析 core.toml 失败: {}", e))?
+        } else {
+            SwampToml::default()
+        };
+
         let main_toml_path = build_dir.join("swamp.toml");
-        let main_toml: SwampToml = if main_toml_path.is_file() {
+        let site_toml: SwampToml = if main_toml_path.is_file() {
             let raw = fs::read_to_string(&main_toml_path)
                 .map_err(|e| format!("读取 swamp.toml 失败: {}", e))?;
             let clean = raw.strip_prefix('\u{FEFF}').unwrap_or(&raw);
@@ -209,6 +424,8 @@ impl ServerConfig {
         } else {
             SwampToml::default()
         };
+
+        let main_toml = SwampToml::merge_with(core_toml, site_toml);
 
         let privy_dir = build_dir.join("privy");
         let local_toml_path = if privy_dir.join("local.toml").is_file() {
@@ -413,11 +630,27 @@ impl ServerConfig {
             .unwrap_or(7)
             .max(1);
 
+        let site_title = main_toml
+            .site
+            .title
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "Digital Swamp".to_string());
+
         let github_page = main_toml
             .site
             .github_page
             .or_else(|| pick_legacy("github_page"))
-            .unwrap_or_else(|| "diff4x.github.io".to_string());
+            .map(|s| s.trim().to_string())
+            .unwrap_or_default();
+
+        let site_repo = main_toml
+            .site
+            .site_repo
+            .map(|s| s.trim().to_string())
+            .unwrap_or_default();
+
+        let adult_gate = main_toml.site.adult_gate.unwrap_or(false);
 
         let readme_md = normalize_web_path(
             &main_toml
@@ -543,6 +776,30 @@ impl ServerConfig {
         });
         let precache_exclude = main_toml.build.precache.exclude.unwrap_or_default();
 
+        let raw_up_remote = main_toml
+            .upstream
+            .remote
+            .unwrap_or_else(|| "upstream".to_string());
+        let up_remote = if is_valid_git_ref_name(&raw_up_remote) {
+            raw_up_remote.trim().to_string()
+        } else {
+            "upstream".to_string()
+        };
+        let raw_up_branch = main_toml
+            .upstream
+            .branch
+            .unwrap_or_else(|| "main".to_string());
+        let up_branch = if is_valid_git_ref_name(&raw_up_branch) {
+            raw_up_branch.trim().to_string()
+        } else {
+            "main".to_string()
+        };
+        let upstream = UpstreamConfig {
+            remote: up_remote,
+            branch: up_branch,
+            auto_push: main_toml.upstream.auto_push.unwrap_or(false),
+        };
+
         let html_candidate = normalize_path(&repo_root.join("html"));
         let html_dir = fs::canonicalize(&html_candidate).unwrap_or(html_candidate);
         let temp_dir = build_dir.join("temp");
@@ -563,6 +820,7 @@ impl ServerConfig {
             index_html: repo_root.join("index.html"),
             bookmark_html: repo_root.join("src").join("tpl").join("bookmark.html"),
             template_html: repo_root.join("src").join("tpl").join("new.html"),
+            core_toml_path,
             swamp_toml_path: main_toml_path,
             discussion_id_mapper: repo_root.join("src").join("discussion_id_mapper.json"),
             legacy_cmt_mapper: repo_root.join("src").join("cmt_mapper.json"),
@@ -586,7 +844,10 @@ impl ServerConfig {
             repo_root,
             build_dir,
             html_dir,
+            site_title,
             github_page,
+            site_repo,
+            adult_gate,
             readme_md,
             data_repo,
             data_repo_id,
@@ -621,6 +882,7 @@ impl ServerConfig {
             watch_assets,
             vscode_path,
             katrain_dir,
+            upstream,
         })
     }
 }
@@ -671,6 +933,7 @@ pub fn discover_repo_root(explicit: Option<PathBuf>) -> Result<PathBuf, String> 
         let mut cur: Option<&Path> = Some(seed.as_path());
         while let Some(dir) = cur {
             let has_cfg = dir.join("_build").join("swamp.toml").is_file()
+                || dir.join("_build").join("core.toml").is_file()
                 || dir.join("_build").join("config.properties").is_file();
             if dir.join("index.html").is_file() && has_cfg {
                 return fs::canonicalize(dir)
@@ -788,7 +1051,7 @@ fn load_swamp_toml_struct(path: &Path) -> SwampToml {
 }
 
 fn replace_marked_block(
-    swamp_toml_path: &Path,
+    toml_path: &Path,
     begin_marker: &str,
     end_marker: &str,
     new_inner: &str,
@@ -796,8 +1059,12 @@ fn replace_marked_block(
     if new_inner.contains(begin_marker) || new_inner.contains(end_marker) {
         return Err("配置内容不能包含内部区块边界标记".to_string());
     }
-    let raw = fs::read_to_string(swamp_toml_path)
-        .map_err(|e| format!("读取 swamp.toml 失败: {}", e))?;
+    let fname = toml_path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("toml");
+    let raw = fs::read_to_string(toml_path)
+        .map_err(|e| format!("读取 {} 失败: {}", fname, e))?;
     let use_crlf = raw.contains("\r\n");
     let norm = raw.replace("\r\n", "\n");
     let block = format!("{}\n{}\n{}", begin_marker, new_inner.trim(), end_marker);
@@ -809,13 +1076,13 @@ fn replace_marked_block(
         (None, None) => format!("{}\n\n{}\n", norm.trim_end(), block),
         _ => {
             return Err(format!(
-                "swamp.toml 中的配置区块标记 ({} / {}) 缺失或乱序，已拒绝写回以防损坏配置",
-                begin_marker, end_marker
+                "{} 中的配置区块标记 ({} / {}) 缺失或乱序，已拒绝写回以防损坏配置",
+                fname, begin_marker, end_marker
             ));
         }
     };
 
-    // 写盘前先用 TOML 解析器完整校验，确保不会写出语法损坏或重复段头的 swamp.toml
+    // 写盘前先用 TOML 解析器完整校验，确保不会写出语法损坏或重复段头的配置
     let check_clean = updated.strip_prefix('\u{FEFF}').unwrap_or(&updated);
     toml::from_str::<SwampToml>(check_clean)
         .map_err(|e| format!("写回前 TOML 校验失败，已中止保存: {}", e))?;
@@ -825,11 +1092,13 @@ fn replace_marked_block(
     } else {
         updated
     };
-    crate::api_files::write_atomic(swamp_toml_path, &final_text, false)
+    crate::api_files::write_atomic(toml_path, &final_text, false)
 }
 
 pub fn read_pack_presets(cfg: &ServerConfig) -> (String, Vec<serde_json::Value>) {
-    let parsed = load_swamp_toml_struct(&cfg.swamp_toml_path);
+    let core_parsed = load_swamp_toml_struct(&cfg.core_toml_path);
+    let site_parsed = load_swamp_toml_struct(&cfg.swamp_toml_path);
+    let parsed = SwampToml::merge_with(core_parsed, site_parsed);
     let skip_re = parsed
         .pack
         .skip_apply_doc_regex
@@ -880,7 +1149,12 @@ pub fn save_pack_presets(
         "[pack]\nskip_apply_doc_regex = {}\npresets_json = '''\n{}\n'''",
         skip_escaped, pretty
     );
-    replace_marked_block(&cfg.swamp_toml_path, PACK_BEGIN, PACK_END, &inner)
+    let target = if cfg.core_toml_path.is_file() {
+        &cfg.core_toml_path
+    } else {
+        &cfg.swamp_toml_path
+    };
+    replace_marked_block(target, PACK_BEGIN, PACK_END, &inner)
 }
 
 fn is_non_empty_synonyms_json(raw: &str) -> bool {

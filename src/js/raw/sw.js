@@ -2,11 +2,11 @@
  * sw.js —— 站点 Service Worker（离线缓存、增量更新、历史快照留档与版本防撕裂）
  * 运行于 ServiceWorkerGlobalScope；经构建器压缩后输出至仓库根目录 /sw.js。
  */
-importScripts('/src/js/core-list.js?v=1795846567191');
+importScripts('/src/js/core-list.js?v=__SW_BUILD_VERSION__');
 const _scMeta = typeof FILE_MANIFEST === 'object' && FILE_MANIFEST && FILE_MANIFEST['/src/js/site-core.js'];
 importScripts('/src/js/site-core.js' + (_scMeta && _scMeta.hash ? ('?v=' + _scMeta.hash) : ''));
 
-self.SW_VERSION = '1795846567191';
+self.SW_VERSION = '__SW_BUILD_VERSION__';
 self.EMERGENCY = 'repair_command_id=2';
 
 // 缓存桶与环境标识
