@@ -43,7 +43,9 @@ const TAB_ID = window.__TAB_ID__ || (window.__TAB_ID__ = (
 ));
 const BUS = window.__LITE_BUS__;
 const ctxId = window.top === window.self ? 'index' : window.childId;
-const isLocalEnv = (location.hostname === 'localhost' || location.hostname === '127.0.0.1' || location.protocol === 'file:') && location.port !== '9000';
+const simPortStr = (typeof sim_port !== 'undefined' && sim_port !== null && String(sim_port).trim()) ? String(sim_port).trim() : '9000';
+window.sim_port = simPortStr;
+const isLocalEnv = (location.hostname === 'localhost' || location.hostname === '127.0.0.1' || location.protocol === 'file:') && location.port !== simPortStr;
 
 // 本地模式清理历史遗留明文令牌并持锁供 /__auth 探测已有主页（会话凭证现由 HttpOnly Cookie 承载）
 (function initLocalSessionLock() {

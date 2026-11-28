@@ -131,6 +131,7 @@ struct LocalToml {
     webp_output_dir2: Option<String>,
     keep_takeout_zip_folder: Option<String>,
     port: Option<u16>,
+    sim_port: Option<u16>,
     log_level: Option<String>,
 }
 
@@ -251,6 +252,7 @@ impl SwampToml {
                     .keep_takeout_zip_folder
                     .or(base.local.keep_takeout_zip_folder),
                 port: overlay.local.port.or(base.local.port),
+                sim_port: overlay.local.sim_port.or(base.local.sim_port),
                 log_level: overlay.local.log_level.or(base.local.log_level),
             },
             upstream: UpstreamToml {
@@ -489,19 +491,27 @@ impl ServerConfig {
             })
         };
 
-        let base_port = local_toml
-            .local
-            .port
-            .or(local_toml.server.port)
-            .or_else(|| legacy_local.get("port").and_then(|s| s.trim().parse().ok()))
-            .or(main_toml.server.port)
-            .or_else(|| legacy.get("port").and_then(|s| s.trim().parse().ok()))
+        let valid_port = |opt: Option<u16>| opt.filter(|&p| p > 0);
+        let base_port = valid_port(local_toml.local.port)
+            .or_else(|| valid_port(local_toml.server.port))
+            .or_else(|| {
+                legacy_local
+                    .get("port")
+                    .and_then(|s| s.trim().parse::<u16>().ok())
+                    .filter(|&p| p > 0)
+            })
+            .or_else(|| valid_port(main_toml.server.port))
+            .or_else(|| {
+                legacy
+                    .get("port")
+                    .and_then(|s| s.trim().parse::<u16>().ok())
+                    .filter(|&p| p > 0)
+            })
             .unwrap_or(8000);
 
-        let sim_port = local_toml
-            .server
-            .sim_port
-            .or(main_toml.server.sim_port)
+        let sim_port = valid_port(local_toml.local.sim_port)
+            .or_else(|| valid_port(local_toml.server.sim_port))
+            .or_else(|| valid_port(main_toml.server.sim_port))
             .unwrap_or(9000);
 
         let port = port_override.unwrap_or(if is_sim { sim_port } else { base_port });
@@ -1204,4 +1214,186 @@ pub fn save_synonyms_custom_json(cfg: &ServerConfig, raw_json: &str) -> Result<S
     let inner = format!("[synonyms]\ncustom_json = '''\n{}\n'''", pretty);
     replace_marked_block(&cfg.swamp_toml_path, SYN_BEGIN, SYN_END, &inner)?;
     Ok(pretty)
+}
+
+/// 在指定 TOML 文本中更新或插入 `[server]` 段的 `port` 与 `sim_port`，保留原有注释与换行风格，并做 TOML 语法预校验
+pub fn update_toml_server_ports_text(raw: &str, port: u16, sim_port: u16) -> Result<String, String> {
+    if port == 0 || sim_port == 0 {
+        return Err("端口号必须在 1–65535 之间".to_string());
+    }
+    if port == sim_port {
+        return Err(format!("本地端口与仿真端口不能相同 ({})", port));
+    }
+    let use_crlf = raw.contains("\r\n");
+    let clean = raw.strip_prefix('\u{FEFF}').unwrap_or(raw).replace("\r\n", "\n");
+    let mut lines: Vec<String> = clean.lines().map(|l| l.to_string()).collect();
+
+    let mut in_server = false;
+    let mut saw_server = false;
+    let mut updated_port = false;
+    let mut updated_sim = false;
+    let mut server_end_idx: Option<usize> = None;
+
+    for (idx, line) in lines.iter_mut().enumerate() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') && !trimmed.starts_with("[[") {
+            if in_server {
+                server_end_idx = Some(idx);
+                in_server = false;
+            }
+            let sec = trimmed.split('#').next().unwrap_or("").trim();
+            if sec == "[server]" {
+                in_server = true;
+                saw_server = true;
+            }
+            continue;
+        }
+        if !in_server || trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        if let Some((k, _)) = trimmed.split_once('=') {
+            match k.trim() {
+                "port" => {
+                    *line = format!("port = {}", port);
+                    updated_port = true;
+                }
+                "sim_port" => {
+                    *line = format!("sim_port = {}", sim_port);
+                    updated_sim = true;
+                }
+                _ => {}
+            }
+        }
+    }
+
+    if saw_server {
+        let mut insert_at = server_end_idx.unwrap_or(lines.len());
+        while insert_at > 0 && lines[insert_at - 1].trim().is_empty() {
+            insert_at -= 1;
+        }
+        let mut extra = Vec::new();
+        if !updated_port {
+            extra.push(format!("port = {}", port));
+        }
+        if !updated_sim {
+            extra.push(format!("sim_port = {}", sim_port));
+        }
+        for (offset, item) in extra.into_iter().enumerate() {
+            lines.insert(insert_at + offset, item);
+        }
+    } else {
+        let syn_idx = lines.iter().position(|l| l.trim() == SYN_BEGIN);
+        let block = vec![
+            "[server]".to_string(),
+            format!("port = {}", port),
+            format!("sim_port = {}", sim_port),
+            String::new(),
+        ];
+        if let Some(pos) = syn_idx {
+            for (offset, item) in block.into_iter().enumerate() {
+                lines.insert(pos + offset, item);
+            }
+        } else {
+            if !lines.is_empty() && !lines.last().unwrap().trim().is_empty() {
+                lines.push(String::new());
+            }
+            lines.extend(block);
+        }
+    }
+
+    let mut out = lines.join("\n");
+    if !out.ends_with('\n') {
+        out.push('\n');
+    }
+    toml::from_str::<SwampToml>(&out)
+        .map_err(|e| format!("写回端口前 TOML 校验失败，已中止保存: {}", e))?;
+
+    if use_crlf {
+        Ok(out.replace('\n', "\r\n"))
+    } else {
+        Ok(out)
+    }
+}
+
+fn update_local_toml_ports_if_overridden(local_path: &Path, port: u16, sim_port: u16) -> Result<bool, String> {
+    if !local_path.is_file() {
+        return Ok(false);
+    }
+    let raw = fs::read_to_string(local_path)
+        .map_err(|e| format!("读取 {} 失败: {}", local_path.display(), e))?;
+    let clean = raw.strip_prefix('\u{FEFF}').unwrap_or(&raw);
+    let parsed: SwampToml = toml::from_str(clean)
+        .map_err(|e| format!("解析 {} 失败: {}", local_path.display(), e))?;
+    let has_override = parsed.local.port.is_some()
+        || parsed.local.sim_port.is_some()
+        || parsed.server.port.is_some()
+        || parsed.server.sim_port.is_some();
+    if !has_override {
+        return Ok(false);
+    }
+    let use_crlf = raw.contains("\r\n");
+    let norm = clean.replace("\r\n", "\n");
+    let mut lines: Vec<String> = norm.lines().map(|l| l.to_string()).collect();
+    let mut cur_sec = String::new();
+    for line in &mut lines {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') && !trimmed.starts_with("[[") {
+            cur_sec = trimmed.split('#').next().unwrap_or("").trim().to_string();
+            continue;
+        }
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        if cur_sec == "[local]" || cur_sec == "[server]" {
+            if let Some((k, _)) = trimmed.split_once('=') {
+                match k.trim() {
+                    "port" => *line = format!("port = {}", port),
+                    "sim_port" => *line = format!("sim_port = {}", sim_port),
+                    _ => {}
+                }
+            }
+        }
+    }
+    let mut out = lines.join("\n");
+    if !out.ends_with('\n') {
+        out.push('\n');
+    }
+    toml::from_str::<SwampToml>(&out)
+        .map_err(|e| format!("写回 privy/local.toml 前 TOML 校验失败: {}", e))?;
+    let final_txt = if use_crlf {
+        out.replace('\n', "\r\n")
+    } else {
+        out
+    };
+    crate::api_files::write_atomic(local_path, &final_txt, false)?;
+    Ok(true)
+}
+
+/// 持久化本地端口与仿真端口至 `_build/swamp.toml`（若 `_build/privy/local.toml` 存在显式端口覆盖，同步更新避免遮蔽）
+pub fn save_server_ports(cfg: &ServerConfig, port: u16, sim_port: u16) -> Result<String, String> {
+    if port == 0 || sim_port == 0 {
+        return Err("端口号必须在 1–65535 之间".to_string());
+    }
+    if port == sim_port {
+        return Err(format!("本地端口与仿真端口不能相同 ({})", port));
+    }
+
+    let mut targets = Vec::new();
+    let swamp_path = &cfg.swamp_toml_path;
+    let raw = if swamp_path.is_file() {
+        fs::read_to_string(swamp_path)
+            .map_err(|e| format!("读取 swamp.toml 失败: {}", e))?
+    } else {
+        String::new()
+    };
+    let updated = update_toml_server_ports_text(&raw, port, sim_port)?;
+    crate::api_files::write_atomic(swamp_path, &updated, false)?;
+    targets.push("_build/swamp.toml");
+
+    let local_path = cfg.privy_dir.join("local.toml");
+    if update_local_toml_ports_if_overridden(&local_path, port, sim_port)? {
+        targets.push("_build/privy/local.toml");
+    }
+
+    Ok(targets.join(" 与 "))
 }

@@ -90,7 +90,7 @@ export function normalizeBookKey(rawPath) {
 
 export function buildBookSearchCacheKey({
     bookSig = '',
-    algoVer = 11,
+    algoVer = 1,
     synVer = '',
     keyword = '',
     noise = 5,

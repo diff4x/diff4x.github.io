@@ -25,7 +25,7 @@ use std::io::{self, Write};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::process::Command;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
 use std::sync::{mpsc as std_mpsc, Arc, OnceLock};
 use std::time::{Duration, Instant};
 use tokio::net::TcpListener;
@@ -35,7 +35,7 @@ use tokio::sync::{Mutex as AsyncMutex, Notify};
 use std::os::windows::process::CommandExt;
 
 use crate::config::{strip_verbatim_prefix, ServerConfig};
-use crate::gui::{run_management_window, WM_APP_LOG, WM_APP_VPN};
+use crate::gui::{run_management_window, WindowExitAction, WM_APP_LOG, WM_APP_VPN};
 use crate::media::keep2html::{run_keep2html, KeepOptions};
 use crate::media::webp::{run_webp_batch, WebpOptions};
 use crate::security::{
@@ -82,6 +82,14 @@ enum SubCommand {
     },
     InitUpstream,
     PullUpstream,
+    Release {
+        version: Option<String>,
+        out_dir: Option<PathBuf>,
+    },
+    Tag {
+        version: Option<String>,
+        dry_run: bool,
+    },
     SelfTest,
 }
 
@@ -115,7 +123,7 @@ fn print_usage() {
          \n\
          服务模式:\n\
            serve                         启动本地服务与管理窗口（默认）\n\
-           sim                           启动线上仿真服务（9000 端口，禁用 /__api、_build、shadow* 与 __ 私有页）\n\
+           sim                           启动线上仿真服务（按配置 sim_port 端口，禁用 /__api、_build、shadow* 与 __ 私有页）\n\
          \n\
          命令行子命令:\n\
            gen                           构建站点（资源压缩、数据切片、同义词、缓存清单与隐私检查）\n\
@@ -127,6 +135,8 @@ fn print_usage() {
            minify <in> <out>             压缩单个 JS 或 CSS 文件\n\
            init-upstream                 首次初始化上游骨架仓并建立本地双父锚点\n\
            pull-upstream                 拉取上游骨架更新或已合并 PR（保护用户独占文件）\n\
+           release [--version vX.Y.Z]    打包开箱即用 win64.zip、upgrade.zip 与 SHA256SUMS.txt\n\
+           tag [vX.Y.Z] [--dry-run]      安全发版打标（核对 Cargo.toml 且仅对上游骨架分支推送 Tag）\n\
            --selftest                    运行内置自检\n\
          \n\
          选项:\n\
@@ -135,6 +145,9 @@ fn print_usage() {
            -g, --log-level <LVL>         日志级别 (error | info)\n\
            --open                        自动打开浏览器或编辑器\n\
            --alt-dir / --update-mapping  webp 输出与引用替换开关\n\
+           --version <VER>               release 版本标签（默认 v<Cargo.toml>）\n\
+           --out-dir <DIR>               release 输出目录（默认系统下载目录）\n\
+           --dry-run                     仅预检不实际创建或推送发版 Tag\n\
            -h, --help                    显示帮助\n\
            -V, --version                 显示版本",
         env!("CARGO_PKG_VERSION")
@@ -150,6 +163,9 @@ fn parse_cli_args() -> Result<CliArgs, String> {
     let mut alt_dir = false;
     let mut update_mapping = false;
     let mut selftest = false;
+    let mut dry_run = false;
+    let mut release_version: Option<String> = None;
+    let mut release_out_dir: Option<PathBuf> = None;
     let mut positionals: Vec<String> = Vec::new();
 
     let mut i = 0usize;
@@ -174,9 +190,25 @@ fn parse_cli_args() -> Result<CliArgs, String> {
             "--alt-dir" => alt_dir = true,
             "--update-mapping" => update_mapping = true,
             "--selftest" => selftest = true,
+            "--dry-run" => dry_run = true,
             "-h" | "--help" => {
                 print_usage();
                 std::process::exit(0);
+            }
+            "--out-dir" => {
+                i += 1;
+                let v = raw.get(i).ok_or("--out-dir 缺少参数")?;
+                release_out_dir = Some(PathBuf::from(v));
+            }
+            "--version"
+                if matches!(
+                    positionals.first().map(|s| s.as_str()),
+                    Some("release") | Some("tag")
+                ) =>
+            {
+                i += 1;
+                let v = raw.get(i).ok_or("--version 缺少参数")?;
+                release_version = Some(v.clone());
             }
             "-V" | "--version" => {
                 println!("swamp {}", env!("CARGO_PKG_VERSION"));
@@ -245,6 +277,14 @@ fn parse_cli_args() -> Result<CliArgs, String> {
         }
         Some("init-upstream") => SubCommand::InitUpstream,
         Some("pull-upstream") => SubCommand::PullUpstream,
+        Some("release") => SubCommand::Release {
+            version: release_version.or_else(|| positionals.get(1).cloned()),
+            out_dir: release_out_dir,
+        },
+        Some("tag") => SubCommand::Tag {
+            version: release_version.or_else(|| positionals.get(1).cloned()),
+            dry_run,
+        },
         Some(other) => return Err(format!("未知子命令: {}（使用 --help 查看用法）", other)),
     };
 
@@ -984,16 +1024,85 @@ fn main() {
                     }
                 }
                 Ok(services::upstream_sync::PullUpstreamOutcome::Conflicts {
-                    conflict_files, ..
+                    remote,
+                    branch,
+                    upstream_commit,
+                    conflict_files,
+                    protected_user_files,
                 }) => {
                     eprintln!(
-                        "[swamp pull-upstream] 合并存在骨架代码冲突，请手动解决后 git commit:\n  {}",
+                        "[swamp pull-upstream] 合并 {}/{} ({}) 存在 {} 个骨架代码冲突（已保护 {} 个用户独占文件），请手动解决后 git commit:\n  {}",
+                        remote,
+                        branch,
+                        &upstream_commit[..upstream_commit.len().min(8)],
+                        conflict_files.len(),
+                        protected_user_files.len(),
                         conflict_files.join("\n  ")
                     );
                     std::process::exit(2);
                 }
                 Err(e) => {
                     eprintln!("[swamp pull-upstream] 失败: {}", e);
+                    std::process::exit(1);
+                }
+            }
+            return;
+        }
+        SubCommand::Release { version, out_dir } => {
+            match services::release_pack::build_release_bundle(&cfg, version.as_deref(), out_dir) {
+                Ok(r) => {
+                    println!("[swamp release] 打包完成 ({}): {}", r.version, r.out_dir.display());
+                    println!(
+                        "  - {} ({} 文件, {:.2} MB)",
+                        r.win64_zip.file_name().unwrap_or_default().to_string_lossy(),
+                        r.win64_entries,
+                        r.win64_size as f64 / 1048576.0
+                    );
+                    println!(
+                        "  - {} ({} 文件, {:.2} MB)",
+                        r.upgrade_zip.file_name().unwrap_or_default().to_string_lossy(),
+                        r.upgrade_entries,
+                        r.upgrade_size as f64 / 1048576.0
+                    );
+                    println!(
+                        "  - {}",
+                        r.standalone_exe.file_name().unwrap_or_default().to_string_lossy()
+                    );
+                    println!(
+                        "  - {}",
+                        r.sums_file.file_name().unwrap_or_default().to_string_lossy()
+                    );
+                }
+                Err(e) => {
+                    eprintln!("[swamp release] 失败: {}", e);
+                    std::process::exit(1);
+                }
+            }
+            return;
+        }
+        SubCommand::Tag { version, dry_run } => {
+            match services::upstream_sync::tag_upstream_release(
+                &cfg,
+                version.as_deref(),
+                dry_run,
+                None,
+            ) {
+                Ok(s) => {
+                    let short_sha = &s.target_commit[..s.target_commit.len().min(8)];
+                    if s.pushed {
+                        println!(
+                            "[swamp tag] 发版标签已推送: {} -> {}/{} ({})",
+                            s.tag, s.remote, s.branch, short_sha
+                        );
+                    } else {
+                        println!(
+                            "[swamp tag] 预检通过 (dry-run): {} -> {}/{} ({})",
+                            s.tag, s.remote, s.branch, short_sha
+                        );
+                    }
+                }
+                Err(e) => {
+                    eprintln!("[swamp tag] 失败: {}", e);
                     std::process::exit(1);
                 }
             }
@@ -1090,6 +1199,7 @@ fn run_server_mode(cfg: ServerConfig, mode: RunMode, open_browser: bool) {
     let state = Arc::new(AppState {
         mode,
         config: cfg.clone(),
+        live_sim_port: AtomicU16::new(cfg.sim_port),
         token: token.clone(),
         auth_codes: AuthCodeStore::new(),
         allowed_origins,
@@ -1229,28 +1339,50 @@ fn run_server_mode(cfg: ServerConfig, mode: RunMode, open_browser: bool) {
     }
 
     #[cfg(windows)]
-    let handoff_build = if !is_sim {
+    let exit_action = if !is_sim {
         run_management_window(state, shutdown_notify)
     } else {
-        None
+        WindowExitAction::Close
     };
 
     let _ = server_handle.join();
 
-    // 直到管理窗口销毁、后台任务归零、HTTP 服务与运行时全部彻底退出后，再接力拉起 build.bat
+    // 直到管理窗口销毁、后台任务归零、HTTP 服务与运行时全部彻底退出后，再接力拉起 build.bat 或重启自身
     #[cfg(windows)]
-    if let Some((crate_dir, build_bat)) = handoff_build {
-        const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
-        unsafe {
-            windows_sys::Win32::UI::WindowsAndMessaging::AllowSetForegroundWindow(0xFFFF_FFFF);
+    match exit_action {
+        WindowExitAction::RunBuildBat {
+            crate_dir,
+            build_bat,
+        } => {
+            const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
+            unsafe {
+                windows_sys::Win32::UI::WindowsAndMessaging::AllowSetForegroundWindow(0xFFFF_FFFF);
+            }
+            let _ = Command::new("cmd.exe")
+                .arg("/d")
+                .arg("/c")
+                .arg(&build_bat)
+                .current_dir(&crate_dir)
+                .env("SWAMP_HANDOFF_TOKEN", &token)
+                .creation_flags(CREATE_NEW_CONSOLE)
+                .spawn();
         }
-        let _ = Command::new("cmd.exe")
-            .arg("/d")
-            .arg("/c")
-            .arg(&build_bat)
-            .current_dir(&crate_dir)
-            .env("SWAMP_HANDOFF_TOKEN", &token)
-            .creation_flags(CREATE_NEW_CONSOLE)
-            .spawn();
+        WindowExitAction::RestartSelf => {
+            if let Ok(exe) = std::env::current_exe() {
+                let root = strip_verbatim_prefix(&cfg.repo_root);
+                unsafe {
+                    windows_sys::Win32::UI::WindowsAndMessaging::AllowSetForegroundWindow(
+                        0xFFFF_FFFF,
+                    );
+                }
+                let _ = Command::new(&exe)
+                    .arg("--root")
+                    .arg(&root)
+                    .current_dir(&root)
+                    .env("SWAMP_HANDOFF_TOKEN", &token)
+                    .spawn();
+            }
+        }
+        WindowExitAction::Close => {}
     }
 }

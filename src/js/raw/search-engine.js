@@ -5,7 +5,7 @@
 import { $, toHalfwidth, hashText, encodePathSegments } from './shared-utils.js';
 
 // 算法版本与 ADS 解析参数
-export const SEARCH_ALGO_VER = 11;           // 变更匹配/评分语义时同步递增以失效旧缓存
+export const SEARCH_ALGO_VER = 1;           // 变更匹配/评分语义时同步递增以失效旧缓存
 const ADS_PREFIX_RE = /^[@＠][\[［【]/;
 const ADS_MAX_DEPTH = 8;                     // 组合表达式括号最大嵌套深度
 const ADS_USAGE = '@[a&!(b|c)]飞机[31]大炮[]机枪[0]';

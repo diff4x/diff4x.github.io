@@ -1,6 +1,7 @@
 //! 双仓单物理目录骨架同步引擎：临时索引孤儿树合成、双父提交锚定、自动分流推送与上游 PR 无痛拉取。
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -18,7 +19,8 @@ use crate::services::pack_apply::is_private_push_path;
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
-const PUBLIC_CILIN_REL: &str = "_build/swamp-server/assets/cilin.txt";
+pub(crate) const PUBLIC_CILIN_REL: &str = "_build/swamp-server/assets/cilin.txt";
+pub(crate) const PREBUILT_PINYIN_JS_REL: &str = "src/js/pinyindata.js";
 
 const INIT_TEMPLATE_PATHS: &[&str] = &[
     ".gitignore",
@@ -43,7 +45,7 @@ pub struct PreparedUpstreamSync {
 
 #[derive(Clone, Debug)]
 pub enum UpstreamSyncPlan {
-    Skip(String),
+    Skip,
     NoSkeletonDiff,
     Ready(PreparedUpstreamSync),
 }
@@ -82,22 +84,28 @@ pub enum PullUpstreamOutcome {
     },
 }
 
+static TEMP_IDX_SEQ: AtomicU64 = AtomicU64::new(1);
+
 struct TempGitIndex {
     path: PathBuf,
 }
 
 impl TempGitIndex {
-    fn new(temp_dir: &Path) -> Result<Self, String> {
-        fs::create_dir_all(temp_dir)
+    fn new() -> Result<Self, String> {
+        // 刻意置于系统临时目录（避开 Dropbox / 网盘同步锁抢占）
+        let base_dir = std::env::temp_dir();
+        fs::create_dir_all(&base_dir)
             .map_err(|e| format!("创建临时索引目录失败: {}", e))?;
         let ms = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_millis())
             .unwrap_or(0);
-        let path = strip_verbatim_prefix(&temp_dir.join(format!(
-            "git_upstream_idx_{}_{}",
+        let seq = TEMP_IDX_SEQ.fetch_add(1, Ordering::Relaxed);
+        let path = strip_verbatim_prefix(&base_dir.join(format!(
+            "swamp_git_idx_{}_{}_{}",
             std::process::id(),
-            ms
+            ms,
+            seq
         )));
         let _ = fs::remove_file(&path);
         Ok(Self { path })
@@ -172,6 +180,9 @@ pub fn is_generated_artifact_path(rel: &str) -> bool {
     {
         return true;
     }
+    if low == PREBUILT_PINYIN_JS_REL {
+        return false;
+    }
     if let Some(rest) = low.strip_prefix("src/js/") {
         if rest.ends_with(".js") && !rest.contains('/') {
             return true;
@@ -210,8 +221,10 @@ pub fn is_skeleton_path(rel: &str) -> bool {
             | "license"
             | "license.md"
             | "license.txt"
+            | "third_party_licenses.md"
             | "_build/core.toml"
             | "_build/local.toml.example"
+            | "src/js/pinyindata.js"
     ) || low.starts_with("_build/swamp-server/")
         || low.starts_with("src/js/raw/")
         || low.starts_with("src/css/raw/")
@@ -226,14 +239,14 @@ pub fn is_skeleton_path(rel: &str) -> bool {
 
 /// 将 index.html 脱敏为中性骨架默认参数（永不携带个人标题、域名、评论仓与成人门禁开关）
 pub fn sanitize_index_html_for_upstream(html: &str) -> String {
-    const NEUTRAL_PARAM: &str = "<script>\n  const github_page = \"\";\n  const site_repo = \"\";\n  const data_repo = \"\";\n  const data_repo_id = \"\";\n  const data_category_id = \"\";\n  const update_interval = 10000;\n  const update_interval_local = 2000;\n  const readme_md = \"/README.md\";\n</script>";
+    const NEUTRAL_PARAM: &str = "<script>\n  const github_page = \"\";\n  const site_repo = \"\";\n  const data_repo = \"\";\n  const data_repo_id = \"\";\n  const data_category_id = \"\";\n  const update_interval = 10000;\n  const update_interval_local = 2000;\n  const readme_md = \"/README.md\";\n  const sim_port = \"9000\";\n</script>";
     render_index_html_meta(html, "Digital Swamp", false, NEUTRAL_PARAM)
         .unwrap_or_else(|| html.to_string())
 }
 
 // --- 中性开箱样板（仅用于 init-upstream 初始化骨架仓） ---
 
-fn neutral_gitignore() -> &'static str {
+pub(crate) fn neutral_gitignore() -> &'static str {
     "# 通用隐私与本地临时文件隔离规则（Swamp 骨架默认）\n\
      html/__*.html\n\
      gallery/diary/\n\
@@ -243,7 +256,7 @@ fn neutral_gitignore() -> &'static str {
      _build/swamp.exe\n"
 }
 
-fn neutral_swamp_toml() -> &'static str {
+pub(crate) fn neutral_swamp_toml() -> &'static str {
     "# _build/swamp.toml —— 个人站点覆写配置（用户独占层，升级骨架时不覆盖）\r\n\
      # 公共引擎默认规则位于 _build/core.toml；本机私有路径请参考 _build/local.toml.example 写入 _build/privy/local.toml\r\n\
      \r\n\
@@ -285,7 +298,7 @@ fn neutral_swamp_toml() -> &'static str {
      # === SYNONYMS-CUSTOM-END ===\r\n"
 }
 
-fn neutral_bookmark_html() -> &'static str {
+pub(crate) fn neutral_bookmark_html() -> &'static str {
     r##"<!doctype html>
 <html>
  <head>
@@ -303,10 +316,6 @@ fn neutral_bookmark_html() -> &'static str {
  </head>
  <body>
   <div id="wallpaper-bg"></div>
-  <header id="site-intro">
-   <h1>Digital Swamp</h1>
-   <p>纯静态个人知识库与多媒体离线阅读站（可在 src/tpl/bookmark.html 自定义本段简介与链接）</p>
-  </header>
   <div id="c">
    <a href="https://github.com/diff4x/swamp" target="_blank">Swamp 项目主页</a>
    <br>
@@ -330,7 +339,7 @@ fn neutral_bookmark_html() -> &'static str {
 "##
 }
 
-fn neutral_welcome_html() -> &'static str {
+pub(crate) fn neutral_welcome_html() -> &'static str {
     r##"<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -447,20 +456,43 @@ fn git_hash_object_bytes(root: &Path, bytes: &[u8]) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
-fn git_index_put_blob(
+/// 通过单次 `git update-index -z --index-info` 批量写入全部索引条目，彻底消除循环改写锁竞态并提速数十倍
+fn git_index_write_entries(
     root: &Path,
     idx: &TempGitIndex,
-    mode: &str,
-    blob_sha: &str,
-    rel_path: &str,
+    entries: &BTreeMap<String, (String, String)>,
 ) -> Result<(), String> {
-    let spec = format!("{},{},{}", mode, blob_sha, rel_path);
-    let _ = git_stdout(root, Some(idx), &["update-index", "--add", "--cacheinfo", &spec])?;
-    Ok(())
-}
+    let mut payload = Vec::with_capacity(entries.len() * 80);
+    for (rel_path, (mode, blob_sha)) in entries {
+        payload.extend_from_slice(mode.as_bytes());
+        payload.extend_from_slice(b" blob ");
+        payload.extend_from_slice(blob_sha.as_bytes());
+        payload.push(b'\t');
+        payload.extend_from_slice(rel_path.as_bytes());
+        payload.push(0);
+    }
 
-fn git_index_remove(root: &Path, idx: &TempGitIndex, rel_path: &str) -> Result<(), String> {
-    let _ = git_stdout(root, Some(idx), &["update-index", "--force-remove", "--", rel_path])?;
+    let mut child = git_cmd(root, Some(idx))
+        .args(["update-index", "-z", "--index-info"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("启动 git update-index --index-info 失败: {}", e))?;
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin
+            .write_all(&payload)
+            .map_err(|e| format!("写入 git update-index --index-info 失败: {}", e))?;
+    }
+    let out = child
+        .wait_with_output()
+        .map_err(|e| format!("等待 git update-index --index-info 失败: {}", e))?;
+    if !out.status.success() {
+        let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        let detail = if !stderr.is_empty() { stderr } else { stdout };
+        return Err(format!("git update-index -z --index-info 失败: {}", detail));
+    }
     Ok(())
 }
 
@@ -491,7 +523,7 @@ fn parse_ls_files_stage_entries(raw: &str) -> Vec<(String, String, String)> {
             continue;
         };
         let parts: Vec<&str> = meta.split_whitespace().collect();
-        if parts.len() >= 3 && parts[2] == "0" {
+        if parts.len() >= 3 && parts[2] == "0" && parts[0] != "160000" {
             out.push((parts[0].to_string(), parts[1].to_string(), path.to_string()));
         }
     }
@@ -600,18 +632,12 @@ fn validate_upstream_cfg(cfg: &ServerConfig) -> Result<(String, String), String>
     Ok((remote, branch))
 }
 
-fn sanitize_and_put_index_html(
-    root: &Path,
-    idx: &TempGitIndex,
-    mode: &str,
-    blob_sha: &str,
-) -> Result<(), String> {
+fn sanitize_index_blob_sha(root: &Path, blob_sha: &str) -> Result<String, String> {
     let raw_bytes = git_stdout_bytes(root, None, &["cat-file", "blob", blob_sha])?;
     let raw_text = String::from_utf8(raw_bytes)
         .map_err(|e| format!("index.html 非 UTF-8 编码: {}", e))?;
     let clean = sanitize_index_html_for_upstream(&raw_text);
-    let sanitized_sha = git_hash_object_bytes(root, clean.as_bytes())?;
-    git_index_put_blob(root, idx, mode, &sanitized_sha, "index.html")
+    git_hash_object_bytes(root, clean.as_bytes())
 }
 
 // --- 核心业务 1：首次初始化上游骨架仓并锚定双父提交 ---
@@ -657,7 +683,7 @@ pub fn init_upstream(
     )?;
     let head_entries = parse_ls_tree_entries(&ls_raw);
 
-    let tmp_idx = TempGitIndex::new(&cfg.temp_dir)?;
+    let mut entries: BTreeMap<String, (String, String)> = BTreeMap::new();
     let mut skeleton_count = 0usize;
     let mut favicon_entry: Option<(String, String)> = None;
 
@@ -671,9 +697,10 @@ pub fn init_upstream(
             continue;
         }
         if low == "index.html" {
-            sanitize_and_put_index_html(&root, &tmp_idx, mode, sha)?;
+            let clean_sha = sanitize_index_blob_sha(&root, sha)?;
+            entries.insert("index.html".to_string(), (mode.clone(), clean_sha));
         } else {
-            git_index_put_blob(&root, &tmp_idx, mode, sha, path)?;
+            entries.insert(path.clone(), (mode.clone(), sha.clone()));
         }
         skeleton_count += 1;
     }
@@ -695,12 +722,14 @@ pub fn init_upstream(
     ];
     for (rel, bytes) in seeds {
         let sha = git_hash_object_bytes(&root, bytes)?;
-        git_index_put_blob(&root, &tmp_idx, "100644", &sha, rel)?;
+        entries.insert(rel.to_string(), ("100644".to_string(), sha));
     }
     if let Some((mode, sha)) = favicon_entry {
-        git_index_put_blob(&root, &tmp_idx, &mode, &sha, "favicon.ico")?;
+        entries.insert("favicon.ico".to_string(), (mode, sha));
     }
 
+    let tmp_idx = TempGitIndex::new()?;
+    git_index_write_entries(&root, &tmp_idx, &entries)?;
     let s0_tree = git_stdout(&root, Some(&tmp_idx), &["write-tree"])?
         .trim()
         .to_string();
@@ -807,7 +836,7 @@ pub fn prepare_upstream_sync(
     logs: Option<&LogBus>,
 ) -> Result<UpstreamSyncPlan, String> {
     if !cfg.upstream.auto_push {
-        return Ok(UpstreamSyncPlan::Skip("auto_push 未启用".to_string()));
+        return Ok(UpstreamSyncPlan::Skip);
     }
 
     let skeleton_staged: Vec<&String> = staged_paths
@@ -815,7 +844,7 @@ pub fn prepare_upstream_sync(
         .filter(|p| is_skeleton_path(p))
         .collect();
     if skeleton_staged.is_empty() {
-        return Ok(UpstreamSyncPlan::Skip("本次提交不含骨架改动".to_string()));
+        return Ok(UpstreamSyncPlan::Skip);
     }
 
     let root = strip_verbatim_prefix(&cfg.repo_root);
@@ -829,10 +858,11 @@ pub fn prepare_upstream_sync(
 
     let (remote, branch) = validate_upstream_cfg(cfg)?;
     if !git_status_ok(&root, None, &["remote", "get-url", &remote]) {
-        return Ok(UpstreamSyncPlan::Skip(format!(
-            "未配置远端 '{}'，跳过骨架自动同步",
-            remote
-        )));
+        log_info(
+            logs,
+            format!("[upstream] 未配置远端 '{}'，跳过骨架自动同步", remote),
+        );
+        return Ok(UpstreamSyncPlan::Skip);
     }
 
     log_info(
@@ -863,18 +893,19 @@ pub fn prepare_upstream_sync(
         .trim()
         .to_string();
 
-    let tmp_idx = TempGitIndex::new(&cfg.temp_dir)?;
-    let _ = git_stdout(&root, Some(&tmp_idx), &["read-tree", &base_commit])?;
-
-    // 先清理临时索引里旧的骨架条目，以精确同步删除动作
-    let base_paths = git_tree_ls_paths(&root, &base_tree)?;
-    for bp in &base_paths {
-        if is_skeleton_path(bp) {
-            git_index_remove(&root, &tmp_idx, bp)?;
+    // 在内存中合成上游新树：保留上游基底中的所有非骨架样板文件 + 替换为本地最新骨架文件
+    let mut entries: BTreeMap<String, (String, String)> = BTreeMap::new();
+    let base_ls_raw = git_stdout(
+        &root,
+        None,
+        &["-c", "core.quotepath=false", "ls-tree", "-r", "-z", &base_tree],
+    )?;
+    for (mode, sha, path) in parse_ls_tree_entries(&base_ls_raw) {
+        if !is_skeleton_path(&path) {
+            entries.insert(path, (mode, sha));
         }
     }
 
-    // 用当前本地主索引（包含刚 git add 的最新改动）回填所有骨架文件
     let staged_all_raw = git_stdout(
         &root,
         None,
@@ -885,12 +916,15 @@ pub fn prepare_upstream_sync(
             continue;
         }
         if normalize_rel(&path).eq_ignore_ascii_case("index.html") {
-            sanitize_and_put_index_html(&root, &tmp_idx, &mode, &sha)?;
+            let clean_sha = sanitize_index_blob_sha(&root, &sha)?;
+            entries.insert("index.html".to_string(), (mode, clean_sha));
         } else {
-            git_index_put_blob(&root, &tmp_idx, &mode, &sha, &path)?;
+            entries.insert(path, (mode, sha));
         }
     }
 
+    let tmp_idx = TempGitIndex::new()?;
+    git_index_write_entries(&root, &tmp_idx, &entries)?;
     let new_tree = git_stdout(&root, Some(&tmp_idx), &["write-tree"])?
         .trim()
         .to_string();
@@ -1179,5 +1213,294 @@ pub fn pull_upstream(
         need_exe,
         need_wasm,
         need_gen,
+    })
+}
+
+// --- 核心业务 4：安全发版打标（仅对上游骨架仓 remote/branch 打 Tag，杜绝误推个人 HEAD） ---
+
+#[derive(Clone, Debug)]
+pub struct TagUpstreamSummary {
+    pub remote: String,
+    pub branch: String,
+    pub tag: String,
+    pub target_commit: String,
+    pub pushed: bool,
+}
+
+/// 规范化并校验发版 Tag（接受 `1.0.1` 或 `v1.0.1`，返回 `("v1.0.1", "1.0.1")`）
+pub fn normalize_release_tag(raw: &str) -> Result<(String, String), String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err("版本号不能为空".to_string());
+    }
+    let ver = trimmed
+        .strip_prefix('v')
+        .or_else(|| trimmed.strip_prefix('V'))
+        .unwrap_or(trimmed);
+    if ver.is_empty() || !ver.as_bytes()[0].is_ascii_digit() || !ver.contains('.') {
+        return Err(format!(
+            "非法语义版本号 '{}'（示例: v1.0.1 或 1.0.1）",
+            raw
+        ));
+    }
+    if !crate::services::release_pack::validate_release_version(ver) {
+        return Err(format!("非法版本号字符: '{}'", raw));
+    }
+    let tag = format!("v{}", ver);
+    if !is_valid_git_ref_name(&tag) {
+        return Err(format!("非法 Git Tag 名称: '{}'", tag));
+    }
+    Ok((tag, ver.to_string()))
+}
+
+/// 从 Cargo.toml 文本精确解析 `[package].version`
+pub fn extract_cargo_package_version(raw: &str) -> Option<String> {
+    let clean = raw.strip_prefix('\u{FEFF}').unwrap_or(raw);
+    let val: toml::Value = toml::from_str(clean).ok()?;
+    val.get("package")?
+        .get("version")?
+        .as_str()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+
+/// 读取本地 `_build/swamp-server/Cargo.toml` 中的 `[package].version`
+pub fn read_local_cargo_version(cfg: &ServerConfig) -> Option<String> {
+    let path = cfg.build_dir.join("swamp-server").join("Cargo.toml");
+    let raw = fs::read_to_string(path).ok()?;
+    extract_cargo_package_version(&raw)
+}
+
+/// 在 Cargo.toml 文本中精准更新 `[package]` 段的 `version` 字段，保留注释、格式与原换行风格并做 TOML 校验
+pub fn update_cargo_toml_version_text(raw: &str, raw_ver: &str) -> Result<(String, String), String> {
+    let (_tag, ver) = normalize_release_tag(raw_ver)?;
+    let use_crlf = raw.contains("\r\n");
+    let clean = raw.strip_prefix('\u{FEFF}').unwrap_or(raw).replace("\r\n", "\n");
+    let mut lines: Vec<String> = clean.lines().map(|l| l.to_string()).collect();
+
+    let mut in_package = false;
+    let mut updated = false;
+
+    for line in &mut lines {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') {
+            let sec = trimmed.split('#').next().unwrap_or("").trim();
+            in_package = sec == "[package]";
+            continue;
+        }
+        if !in_package || trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        if let Some((lhs, _rhs)) = trimmed.split_once('=') {
+            if lhs.trim() == "version" {
+                let indent: String = line.chars().take_while(|c| c.is_whitespace()).collect();
+                *line = format!("{}version = \"{}\"", indent, ver);
+                updated = true;
+                break;
+            }
+        }
+    }
+
+    if !updated {
+        return Err("未在 Cargo.toml 的 [package] 段找到 version 字段".to_string());
+    }
+
+    let mut out = lines.join("\n");
+    if !out.ends_with('\n') {
+        out.push('\n');
+    }
+
+    let parsed_ver = extract_cargo_package_version(&out)
+        .ok_or_else(|| "写回前 Cargo.toml TOML 校验失败，已中止保存".to_string())?;
+    if parsed_ver != ver {
+        return Err("写回前 Cargo.toml 版本号校验不一致，已中止保存".to_string());
+    }
+
+    let final_txt = if use_crlf {
+        out.replace('\n', "\r\n")
+    } else {
+        out
+    };
+    Ok((final_txt, ver))
+}
+
+/// 原子写回本地 `_build/swamp-server/Cargo.toml` 的 `[package].version`
+pub fn save_local_cargo_version(cfg: &ServerConfig, raw_ver: &str) -> Result<String, String> {
+    let path = cfg.build_dir.join("swamp-server").join("Cargo.toml");
+    if !path.is_file() {
+        return Err("未找到 _build/swamp-server/Cargo.toml（仅源码开发环境支持修改版本号）".to_string());
+    }
+    let raw = fs::read_to_string(&path)
+        .map_err(|e| format!("读取 Cargo.toml 失败: {}", e))?;
+    let (updated, ver) = update_cargo_toml_version_text(&raw, raw_ver)?;
+    crate::api_files::write_atomic(&path, &updated, false)?;
+    Ok(ver)
+}
+
+/// 识别 GitHub Pages 站点仓地址（安全底线：禁止将骨架发版 Tag 推往 `*.github.io` 个人站）
+pub fn is_github_pages_remote_url(url: &str) -> bool {
+    url.trim().to_ascii_lowercase().contains(".github.io")
+}
+
+/// 安全给上游骨架仓 `<remote>/<branch>` 打发版 Tag 并推送（强制核对 Cargo.toml 版本与树隐私，绝不指向本地 HEAD）
+pub fn tag_upstream_release(
+    cfg: &ServerConfig,
+    version_override: Option<&str>,
+    dry_run: bool,
+    logs: Option<&LogBus>,
+) -> Result<TagUpstreamSummary, String> {
+    let (remote, branch) = validate_upstream_cfg(cfg)?;
+    let root = strip_verbatim_prefix(&cfg.repo_root);
+
+    let remote_url = git_stdout(&root, None, &["remote", "get-url", &remote])
+        .map_err(|_| {
+            format!(
+                "未配置 Git 远端 '{}'，请先运行: git remote add {} <骨架仓库URL>",
+                remote, remote
+            )
+        })?
+        .trim()
+        .to_string();
+    if is_github_pages_remote_url(&remote_url) {
+        return Err(format!(
+            "安全拦截：远端 '{}' 指向 GitHub Pages 仓库 ({})，禁止向个人站点仓推送骨架发版 Tag",
+            remote, remote_url
+        ));
+    }
+
+    let local_cargo_path = cfg.build_dir.join("swamp-server").join("Cargo.toml");
+    let local_cargo_raw = fs::read_to_string(&local_cargo_path)
+        .map_err(|e| format!("读取本地 Cargo.toml 失败: {}", e))?;
+    let local_ver = extract_cargo_package_version(&local_cargo_raw)
+        .ok_or_else(|| "无法从本地 _build/swamp-server/Cargo.toml 解析 [package].version".to_string())?;
+
+    let (tag, ver) = match version_override.map(|s| s.trim()).filter(|s| !s.is_empty()) {
+        Some(raw) => normalize_release_tag(raw)?,
+        None => normalize_release_tag(&local_ver)?,
+    };
+
+    if local_ver != ver {
+        return Err(format!(
+            "本地 Cargo.toml 版本 ({}) 与目标发版 Tag ({}) 不一致，请先更新 _build/swamp-server/Cargo.toml 并同步到上游",
+            local_ver, tag
+        ));
+    }
+
+    if env!("CARGO_PKG_VERSION") != ver {
+        log_info(
+            logs,
+            format!(
+                "[tag] 提示：当前运行的 swamp.exe 编译版本为 {}，与目标版本 {} 不同（CI 将按上游源码重新编译）",
+                env!("CARGO_PKG_VERSION"),
+                ver
+            ),
+        );
+    }
+
+    log_info(
+        logs,
+        format!("[tag] 正在拉取 {}/{} 最新引用以校验发版目标...", remote, branch),
+    );
+    let _ = git_stdout(&root, None, &["fetch", &remote, &branch])?;
+
+    let remote_ref = format!("refs/remotes/{}/{}", remote, branch);
+    let target_commit = git_stdout(&root, None, &["rev-parse", "--verify", &remote_ref])
+        .map_err(|_| format!("未找到远端分支 {}/{}，请确认已完成 init-upstream", remote, branch))?
+        .trim()
+        .to_string();
+
+    // 核对远端骨架仓目标提交中的 Cargo.toml 版本号，确保新版本确实已推送到上游骨架仓
+    let remote_cargo_spec = format!("{}:_build/swamp-server/Cargo.toml", target_commit);
+    let remote_cargo_raw = git_stdout(&root, None, &["show", &remote_cargo_spec])
+        .map_err(|e| format!("读取远端 {}/{} 中的 Cargo.toml 失败: {}", remote, branch, e))?;
+    let remote_ver = extract_cargo_package_version(&remote_cargo_raw)
+        .ok_or_else(|| format!("无法解析远端 {}/{} 中的 Cargo.toml 版本号", remote, branch))?;
+    if remote_ver != ver {
+        return Err(format!(
+            "远端 {}/{} 中的 Cargo.toml 版本为 {}，与目标标签 {} 不一致；请先在控制台执行 push 将新版本同步到上游后再运行 swamp tag",
+            remote, branch, remote_ver, tag
+        ));
+    }
+
+    // 二次隐私兜底：确认远端目标树不包含任何私密路径
+    let target_tree = git_stdout(&root, None, &["rev-parse", &format!("{}^{{tree}}", target_commit)])?
+        .trim()
+        .to_string();
+    let target_paths = git_tree_ls_paths(&root, &target_tree)?;
+    let priv_hits: Vec<String> = target_paths
+        .into_iter()
+        .filter(|p| {
+            let low = normalize_rel(p).to_ascii_lowercase();
+            low != PUBLIC_CILIN_REL && is_private_push_path(&low)
+        })
+        .collect();
+    if !priv_hits.is_empty() {
+        return Err(format!(
+            "安全拦截：远端目标提交包含私密路径，已中止打标:\n  {}",
+            priv_hits.join("\n  ")
+        ));
+    }
+
+    // 检查远端与本地是否已存在同名 Tag
+    let tag_ref = format!("refs/tags/{}", tag);
+    let remote_tag = git_stdout(&root, None, &["ls-remote", "--tags", &remote, &tag_ref])?;
+    if !remote_tag.trim().is_empty() {
+        return Err(format!("远端 '{}' 已存在标签 {}，请递增版本号后再发布", remote, tag));
+    }
+    if git_status_ok(&root, None, &["rev-parse", "--verify", "--quiet", &tag_ref]) {
+        return Err(format!(
+            "本地已存在标签 {}，如为旧残留请先手动确认并执行 git tag -d {}",
+            tag, tag
+        ));
+    }
+
+    if dry_run {
+        log_info(
+            logs,
+            format!(
+                "[tag] 预检通过 (dry-run): 将对 {}/{} ({}) 打标 {} 并推送至 {}",
+                remote,
+                branch,
+                &target_commit[..target_commit.len().min(8)],
+                tag,
+                remote
+            ),
+        );
+        return Ok(TagUpstreamSummary {
+            remote,
+            branch,
+            tag,
+            target_commit,
+            pushed: false,
+        });
+    }
+
+    let tag_msg = format!("Release {}", tag);
+    let _ = git_stdout(&root, None, &["tag", "-a", &tag, &target_commit, "-m", &tag_msg])?;
+
+    let push_spec = format!("{}:{}", tag_ref, tag_ref);
+    if let Err(e) = git_stdout(&root, None, &["push", &remote, &push_spec]) {
+        let _ = git_stdout(&root, None, &["tag", "-d", &tag]);
+        return Err(format!("推送标签 {} 到 {} 失败（已回滚本地标签）: {}", tag, remote, e));
+    }
+
+    log_info(
+        logs,
+        format!(
+            "[tag] 已安全推送标签 {} -> {}/{} ({})",
+            tag,
+            remote,
+            branch,
+            &target_commit[..target_commit.len().min(8)]
+        ),
+    );
+
+    Ok(TagUpstreamSummary {
+        remote,
+        branch,
+        tag,
+        target_commit,
+        pushed: true,
     })
 }

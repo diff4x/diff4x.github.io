@@ -11,7 +11,7 @@ use crate::builder::log_info;
 use crate::config::ServerConfig;
 use crate::services::log_bus::LogBus;
 
-pub const MINIFIER_VERSION: &str = "swamp-min-v3";
+pub const MINIFIER_VERSION: &str = "swamp-min-v1";
 
 pub fn sha256_hex(bytes: &[u8]) -> String {
     let digest = Sha256::digest(bytes);
@@ -903,37 +903,49 @@ pub fn build_phase1_assets(
 }
 
 pub const SW_BUILD_VERSION_PLACEHOLDER: &str = "__SW_BUILD_VERSION__";
+pub const SW_SIM_PORT_PLACEHOLDER: &str = "__SW_SIM_PORT__";
 
-/// 在内存中将 raw/sw.js 模板中的版本占位符（或旧版字面版本号）替换为当前构建版本，永不回写源码文件
-pub(crate) fn render_sw_source(raw: &str, build_version: &str) -> String {
+/// 在内存中将 raw/sw.js 模板中的版本占位符与仿真端口占位符替换为实际值，永不回写源码文件
+pub(crate) fn render_sw_source(raw: &str, build_version: &str, sim_port: u16) -> String {
     let clean = raw.strip_prefix('\u{FEFF}').unwrap_or(raw);
-    if clean.contains(SW_BUILD_VERSION_PLACEHOLDER) {
-        return clean.replace(SW_BUILD_VERSION_PLACEHOLDER, build_version);
-    }
-    let use_crlf = clean.contains("\r\n");
-    let mut found_ver = false;
-    let mut out_lines: Vec<String> = Vec::new();
-    for line in clean.lines() {
-        let trimmed = line.trim();
-        if trimmed.starts_with("self.SW_VERSION") {
-            out_lines.push(format!("self.SW_VERSION = '{}';", build_version));
-            found_ver = true;
-        } else if trimmed.starts_with("importScripts") && trimmed.contains("core-list.js") {
-            out_lines.push(format!(
-                "importScripts('/src/js/core-list.js?v={}');",
-                build_version
-            ));
-        } else {
-            out_lines.push(line.trim_end_matches('\r').to_string());
+    let sim_str = sim_port.to_string();
+    let mut rendered = if clean.contains(SW_BUILD_VERSION_PLACEHOLDER) {
+        clean.replace(SW_BUILD_VERSION_PLACEHOLDER, build_version)
+    } else {
+        let use_crlf = clean.contains("\r\n");
+        let mut found_ver = false;
+        let mut out_lines: Vec<String> = Vec::new();
+        for line in clean.lines() {
+            let trimmed = line.trim();
+            if trimmed.starts_with("self.SW_VERSION") {
+                out_lines.push(format!("self.SW_VERSION = '{}';", build_version));
+                found_ver = true;
+            } else if trimmed.starts_with("importScripts") && trimmed.contains("core-list.js") {
+                out_lines.push(format!(
+                    "importScripts('/src/js/core-list.js?v={}');",
+                    build_version
+                ));
+            } else {
+                out_lines.push(line.trim_end_matches('\r').to_string());
+            }
         }
+        if !found_ver {
+            out_lines.insert(0, format!("self.SW_VERSION = '{}';", build_version));
+        }
+        let sep = if use_crlf { "\r\n" } else { "\n" };
+        let mut s = out_lines.join(sep);
+        s.push_str(sep);
+        s
+    };
+    if rendered.contains(SW_SIM_PORT_PLACEHOLDER) {
+        rendered = rendered.replace(SW_SIM_PORT_PLACEHOLDER, &sim_str);
+    } else if rendered.contains("self.location.port !== '9000'") {
+        rendered = rendered.replace(
+            "self.location.port !== '9000'",
+            &format!("self.location.port !== '{}'", sim_str),
+        );
     }
-    if !found_ver {
-        out_lines.insert(0, format!("self.SW_VERSION = '{}';", build_version));
-    }
-    let sep = if use_crlf { "\r\n" } else { "\n" };
-    let mut s = out_lines.join(sep);
-    s.push_str(sep);
-    s
+    rendered
 }
 
 fn read_current_build_version(cfg: &ServerConfig) -> Option<String> {
@@ -974,7 +986,7 @@ fn minify_sw_with_version(
         .map(|s| s.to_string())
         .or_else(|| read_current_build_version(cfg))
         .unwrap_or_else(|| "0".to_string());
-    let rendered = render_sw_source(&raw_text, &resolved_ver);
+    let rendered = render_sw_source(&raw_text, &resolved_ver, cfg.sim_port);
     let out_path = cfg.repo_root.join("sw.js");
     let raw_hash = sha256_hex(rendered.as_bytes());
 

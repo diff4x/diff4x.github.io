@@ -1,0 +1,111 @@
+name: Build and Publish Swamp Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release 版本号（如 v1.0.0，留空则取 Cargo.toml 版本）'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+jobs:
+  release-win64:
+    # 仅在骨架仓库运行，防止个人 *.github.io 站点仓库或下游用户站误触发构建
+    if: ${{ !endsWith(github.repository, '.github.io') }}
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Verify Tag matches Cargo.toml version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          $tagVer = $env:GITHUB_REF_NAME.TrimStart('v')
+          $cargoTxt = Get-Content -Raw "_build/swamp-server/Cargo.toml"
+          $m = [regex]::Match($cargoTxt, '(?m)^version\s*=\s*"([^"]+)"')
+          if (-not $m.Success) { throw "无法在 Cargo.toml 中读取 version 字段" }
+          $cargoVer = $m.Groups[1].Value
+          if ($tagVer -ne $cargoVer) {
+            throw "Git Tag (v$tagVer) 与 _build/swamp-server/Cargo.toml 版本 ($cargoVer) 不一致，已中止发布"
+          }
+          Write-Host "Version verified: v$cargoVer"
+
+      - name: Setup Rust toolchain (stable + wasm32)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache Cargo dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: _build/swamp-server -> target
+
+      - name: Install wasm-pack
+        run: |
+          if (-not (Get-Command wasm-pack -ErrorAction SilentlyContinue)) {
+            Invoke-WebRequest -Uri "https://github.com/rustwasm/wasm-pack/releases/latest/download/wasm-pack-init.exe" -OutFile "$env:RUNNER_TEMP\wasm-pack-init.exe"
+            & "$env:RUNNER_TEMP\wasm-pack-init.exe" --yes
+            "$env:USERPROFILE\.cargo\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          }
+
+      - name: Build swamp.exe and run full --selftest gate
+        working-directory: _build/swamp-server
+        run: |
+          cargo build --profile release-exe --bin swamp
+          $exe = Join-Path (Get-Location) "target\release-exe\swamp.exe"
+          & $exe --selftest
+          Copy-Item -Force $exe "..\swamp.exe"
+
+      - name: Build Wasm module and minify glue JS
+        working-directory: _build/swamp-server
+        run: |
+          $stage = Join-Path $env:RUNNER_TEMP "swamp-wasm-stage"
+          if (Test-Path $stage) { Remove-Item -Recurse -Force $stage }
+          wasm-pack build --target web --release --out-dir $stage
+          $wasmOut = "..\..\src\wasm"
+          New-Item -ItemType Directory -Force -Path $wasmOut | Out-Null
+          Copy-Item -Force (Join-Path $stage "compute_intensive_task_processor_bg.wasm") (Join-Path $wasmOut "compute_intensive_task_processor_bg.wasm")
+          & "..\swamp.exe" minify (Join-Path $stage "compute_intensive_task_processor.js") (Join-Path $wasmOut "compute_intensive_task_processor.min.js")
+
+      - name: Package out-of-the-box win64.zip, upgrade.zip & SHA256SUMS
+        id: pack
+        run: |
+          $ver = ""
+          if ($env:GITHUB_EVENT_NAME -eq "push" -and $env:GITHUB_REF_NAME) {
+            $ver = $env:GITHUB_REF_NAME
+          } elseif ("${{ inputs.version }}" -ne "") {
+            $ver = "${{ inputs.version }}"
+          }
+          $outDir = Join-Path $env:GITHUB_WORKSPACE "release-dist"
+          if ($ver -ne "") {
+            & ".\_build\swamp.exe" release --version $ver --out-dir $outDir
+          } else {
+            & ".\_build\swamp.exe" release --out-dir $outDir
+          }
+          Get-ChildItem $outDir | Format-Table Name, Length
+
+      - name: Upload workflow artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: swamp-release-win64
+          path: release-dist/*
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            release-dist/swamp-*-win64.zip
+            release-dist/swamp-*-upgrade.zip
+            release-dist/swamp-*.exe
+            release-dist/SHA256SUMS.txt
