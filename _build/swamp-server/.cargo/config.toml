@@ -1,0 +1,7 @@
+# build.bat 会通过 CARGO_TARGET_DIR 统一将编译产物定向至 %LOCALAPPDATA%\swamp-cargo-target
+# 此处保留相对路径回退，避免在 build.bat 之外直接运行 cargo 时于源码树内生成未忽略的 target/
+[build]
+target-dir = "../temp/target"
+
+[target.wasm32-unknown-unknown]
+rustflags = ["-C", "target-feature=+simd128"]

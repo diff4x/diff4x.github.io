@@ -1,0 +1,214 @@
+@charset "UTF-8";
+/* bookmark.css —— 首页书签区块、站点简介、拖拽反馈与壁纸管理面板（运行于 #content iframe） */
+
+
+/* --- 全局基础与滚动条 --- */
+
+html,
+body,
+pre,
+textarea {
+    font-family: 'Noto Serif SC';
+}
+
+html {
+    background-color: #cae4ff;
+}
+
+body {
+    height: 100vh;
+    margin: 0;
+    background-color: #408fc4;
+    background-size: cover;
+    background-position: center;
+}
+
+::-webkit-scrollbar {
+    width: 4px;
+}
+
+::-webkit-scrollbar-thumb {
+    background-color: #fff;
+}
+
+::-webkit-scrollbar-track {
+    background-color: #afc6de;
+}
+
+a {
+    text-decoration: none;
+}
+
+a::after {
+    content: "\2197";
+}
+
+
+/* --- 站点简介抬头（可选，置于书签页顶部） --- */
+
+#site-intro {
+    margin: 18px 0 4px 40px;
+    padding: 10px 14px;
+    max-width: 520px;
+    background: rgba(0, 0, 0, 0.42);
+    border-left: 3px solid cadetblue;
+    border-radius: 4px;
+    color: #e6edf3;
+    line-height: 1.55;
+}
+
+#site-intro h1 {
+    margin: 0 0 4px;
+    font-size: 16px;
+    font-weight: 600;
+    color: #fff;
+}
+
+#site-intro p {
+    margin: 2px 0 0;
+    font-size: 12.5px;
+    color: #d0d7de;
+}
+
+#site-intro .intro-credit {
+    font-size: 11.5px;
+    color: #9fb3c8;
+}
+
+
+/* --- 书签分组区块与拖拽态 --- */
+
+/* 仅命中书签分组容器，排除壁纸背景与壁纸面板内部 div */
+div:not(#wallpaper-panel):not(#b1):not(#wallpaper-bg) {
+    color: honeydew;
+    padding-top: 20px;
+    margin-left: 40px;
+    min-height: 80px;
+    width: 50%;
+    transition: background 0.2s;
+}
+
+div > a {
+    color: darkgray;
+}
+
+div#a a {
+    color: cadetblue;
+}
+
+div > a:hover,
+div > a[data-touchpad-hover] {
+    color: #d2691e !important;
+}
+
+div:not(#del).dragover {
+    background: #cde9ff;
+}
+
+div#del.dragover {
+    background: #ffc5c5;
+}
+
+#copyright {
+    font-style: italic;
+    position: fixed;
+    bottom: 5px;
+    left: 5px;
+    color: cadetblue;
+    background-color: #000;
+}
+
+
+/* --- 壁纸背景与管理浮窗 --- */
+
+#wallpaper-bg {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    z-index: -1;
+    background-size: contain;
+    background-position: center;
+    background-repeat: no-repeat;
+    transition: background-image 0.5s ease;
+}
+
+#wallpaper-trigger-btn {
+    position: fixed;
+    bottom: 60px;
+    right: 20px;
+    background: rgba(0, 0, 0, 0.6);
+    color: #fff;
+    border: 1px solid #555;
+    border-radius: 50%;
+    width: 40px;
+    height: 40px;
+    cursor: pointer;
+    z-index: 999;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 18px;
+}
+
+#wallpaper-panel {
+    position: fixed;
+    bottom: 70px;
+    right: 20px;
+    width: 320px;
+    background: #1f1f1f;
+    color: #eee;
+    border: 1px solid #444;
+    border-radius: 8px;
+    padding: 12px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+    z-index: 1000;
+    display: none;
+    font-size: 13px;
+    font-family: sans-serif;
+}
+
+#wallpaper-panel.active {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.wp-list {
+    max-height: 150px;
+    overflow-y: auto;
+    border: 1px solid #333;
+    background: #121212;
+    padding: 4px;
+    border-radius: 4px;
+}
+
+.wp-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 4px 6px;
+    cursor: pointer;
+    border-bottom: 1px solid #222;
+}
+
+.wp-item:hover {
+    background: #2a2a2a;
+}
+
+.wp-preview-tooltip {
+    position: fixed;
+    width: 160px;
+    height: 100px;
+    background-size: contain;
+    background-repeat: no-repeat;
+    background-color: #000;
+    background-position: center;
+    border: 2px solid #fff;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.6);
+    pointer-events: none;
+    z-index: 9999;
+    display: none;
+    border-radius: 4px;
+}

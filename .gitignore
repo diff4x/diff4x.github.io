@@ -1,0 +1,7 @@
+# 通用隐私与本地临时文件隔离规则（Swamp 骨架默认）
+html/__*.html
+gallery/diary/
+src/js/data/shadow*
+_build/temp/
+_build/privy/
+_build/swamp.exe

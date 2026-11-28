@@ -1,0 +1,39 @@
+# _build/swamp.toml —— 个人站点覆写配置（用户独占层，升级骨架时不覆盖）
+# 公共引擎默认规则位于 _build/core.toml；本机私有路径请参考 _build/local.toml.example 写入 _build/privy/local.toml
+
+[site]
+title = "Digital Swamp"
+github_page = ""
+site_repo = ""
+adult_gate = false
+readme_md = "/README.md"
+
+[giscus]
+repo = ""
+repo_id = ""
+category_id = ""
+
+[build.media_exclude]
+gallery = ["img"]
+video = []
+audio = []
+ebook = []
+
+[upstream]
+remote = "upstream"
+branch = "main"
+auto_push = false
+
+# === SYNONYMS-CUSTOM-BEGIN ===
+[synonyms]
+custom_json = '''
+{
+"aliases": {},
+"dropEqCodes": [],
+"groups": [],
+"pruneWords": {},
+"splitFixes": {},
+"stopExpand": []
+}
+'''
+# === SYNONYMS-CUSTOM-END ===

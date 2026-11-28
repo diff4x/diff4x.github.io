@@ -1,0 +1,1503 @@
+/**
+ * txn_parser.js —— 交易流水文本 (txnl) 解析、多维筛选、统计与 12 月趋势图
+ * 运行于独立标签页 src/tpl/txn_parser.html；本地模式下自动加载 txn.txt 并支持跳行编辑。
+ */
+
+if ('serviceWorker' in navigator) {
+    let _initSwCtrl = navigator.serviceWorker.controller;
+    let _reloading = false;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+        if (_reloading || (window.top && window.top._isBombing)) return;
+        if (!_initSwCtrl) {
+            _initSwCtrl = navigator.serviceWorker.controller;
+            return;
+        }
+        _reloading = true;
+        window.location.reload();
+    });
+}
+
+// --- 存储代理与文件名隔离状态 ---
+function createStore() {
+    return SiteCore.createStore({}, {
+        fallback(prop) {
+            if (prop.endsWith('_trend')) return { endYear: null, endMonth: null, activeCat: 'net' };
+            if (prop.endsWith('_view')) return { type: 'default', y: null, m: null };
+            if (prop.endsWith('_filter')) return null;
+            if (prop.endsWith('_page')) return {};
+            if (prop.endsWith('_scroll')) return 0;
+            return undefined;
+        }
+    });
+}
+const store = createStore();
+
+let currentFilename = 'txn.txt'; 
+function getFileKey(suffix) {
+    return `txn_${currentFilename}_${suffix}`;
+}
+
+let scrollTid;
+window.addEventListener('scroll', () => {
+    clearTimeout(scrollTid);
+    scrollTid = setTimeout(() => {
+        store[getFileKey('scroll')] = window.scrollY;
+    }, 100);
+});
+
+
+// --- 账户与分类映射常量 ---
+const ACCOUNTS = {
+    a: '现金(♂️)',
+    b: '储蓄(♂️)',
+    c: '信用(♂️)',
+    
+    n: '现金(♀️)',
+    o: '储蓄(♀️)',
+    p: '信用(♀️)'
+};
+
+const DST_MAP = {
+    i: '收入',
+    e: '支出',
+    ...ACCOUNTS
+};
+
+const CAT_MAP = {
+    s: '食物',
+    z: '住所',
+    w: '网络',
+    j: '交通',
+    y: '医疗',
+    r: '日化',
+    f: '服饰',
+    q: '其它'
+};
+
+const HE_ACCTS = ['a', 'b', 'c'];
+const SHE_ACCTS = ['n', 'o', 'p'];
+
+const CAT_MAP_EXT = { ...CAT_MAP, income: '报酬', transfer: '中转' };
+const SRC_MAP = { ...ACCOUNTS };
+const ACCOUNT_KEYS = Object.keys(ACCOUNTS);
+
+let flows = [];
+let stats = null;
+let hasParseError = false; 
+
+const filterState = {
+  y: new Set(),
+  m: new Set(),
+  d: new Set(),
+  src: new Set(),
+  dst: new Set(),
+  cat: new Set(),
+  amtMin: null,
+  amtMax: null,
+  noteRegex: null
+};
+const MAP_LOOKUP = {
+  y: null,
+  m: null,
+  d: null,
+  src: SRC_MAP,
+  dst: DST_MAP,
+  cat: CAT_MAP_EXT
+};
+
+let trendState = {
+  endYear: null,
+  endMonth: null,
+  activeCat: null
+};
+
+let hoverX = null;
+let hoverY = null;
+let hoverActive = false;
+
+const FX_PRESET = {
+  CNY: 1,
+  USD: 0.14,
+  EUR: 0.13,
+  JPY: 15.6
+};
+const FX_KEY = 'fx_rates';
+let FX = { ...FX_PRESET };
+let fxMeta = { source: 'preset', approx: true };
+let fxLoaded = false;
+const cached = JSON.parse(localStorage.getItem(FX_KEY));
+if (cached?.rates) {
+  FX = cached.rates;
+  fxMeta = { source: 'ls', approx: true };
+  console.log('[FX] init from ls');
+}
+
+const PAGE_SIZE = 50;
+let currentFiltered = [];
+let pagedContext = {
+  data: [],
+  page: 1,
+  totals: null,
+  container: null,
+  id: null
+};
+const EDGE_PAGES = 1;   // 左右边缘固定显示的页数
+const WINDOW = 7;      // 当前页附近连续显示多少页
+
+function escapeHtml(str) {
+  return String(str ?? '').replace(/[&<>"']/g, ch => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]
+  ));
+}
+
+const COLORS = {
+  expense: '#c0392b',
+  income: '#0a8f3c',
+  transfer: '#2980b9',
+  axis: '#666',
+  axisIdle: '#999',
+  grid: '#ddd',
+  inactive: '#bbb',
+  text: '#333'
+};
+const CAT_COLORS = {
+  s: COLORS.expense,
+  z: COLORS.expense,
+  w: COLORS.expense,
+  j: COLORS.expense,
+  y: COLORS.expense,
+  r: COLORS.expense,
+  f: COLORS.expense,
+  q: COLORS.expense
+};
+
+const css = `
+html,body { background:#cae4ff }
+.hide { display:none; }
+#fileInput { padding: 20px 0 0 40px; }
+input[type="file"] { color: transparent }
+#output { background:#cae4ff; padding:10px 10px 100vh 40px; font-size:0.8rem; }
+.sep { margin:10px 0; padding-top:5px; border-top:1px solid #000; }
+.error { color:red; }
+#output button, .filter-btn { margin:2px; padding:2px 6px; cursor:pointer; }
+#output table { border-collapse:collapse; margin-top:5px; }
+#output th, #output td { border:1px solid #aaa; padding:2px 4px; text-align:left; }
+#output tr:hover td { background-color:#eef4ff; }
+#output td:nth-last-child(1), #output td:nth-last-child(3) { text-align:right; font-variant-numeric:tabular-nums; }
+.filter-bar { display:flex; flex-wrap:wrap; align-items:center; gap:6px; }
+.filter-item { display:flex; align-items:center; gap:4px; position:relative; }
+.filter-title { white-space:nowrap; }
+.filter-panel { position:absolute; top:100%; left:2rem; z-index:10; display:none; max-height:200px; overflow:auto; padding:4px; border:1px solid #aaa; background:#fff; white-space:nowrap; }
+.filter-item.open .filter-panel { display:block; }
+.amount { margin:0 2px; padding:1px; background-color:#fff; }
+.amount.positive, .amount.income { color:${COLORS.income}; }
+.amount.negative, .amount.expense { color:${COLORS.expense}; }
+.amount.transfer { color:${COLORS.transfer}; }
+.has-tip { position:relative; }
+.has-tip .tip { display:none; position:absolute; left:0; bottom:120%; z-index:20; padding:6px 8px; border-radius:4px; font-size:12px; color:#fff; background:#333; white-space:nowrap; }
+.has-tip:hover .tip { display:block; }
+.tip-row { display:grid; grid-template-columns:auto 1fr; gap:8px; }
+.tip-cur { opacity:0.8; }
+.tip-val { min-width:90px; text-align:right; }
+`;
+
+const style = document.createElement("style");
+style.textContent = css;
+document.head.appendChild(style);
+
+const fileInput = document.createElement("input");
+fileInput.type = "file";
+fileInput.id = "fileInput";
+fileInput.accept = ".txt";
+fileInput.style = "width: 150px;"
+
+const a = document.createElement("a");
+a.href = "data:text/plain;charset=utf-8,%23 ------------------- sample_txn.txt ---------------------%0A%0Aoef-100 外套颜色不对,退款                    %23 如果记成 %22oi100%22 会导致 %22总支%22 和 %22总收%22 双双虚高，财报失真%0Aoef100 外套                                 %23 从储蓄(♀️) 支出100到 服装%0Acew1000 订阅PlayBoy                         %23 从信用(♂️) 支出1000到 网络%0Abp800 替♀️还帐                              %23 从储蓄(♂️) 中转800到 信用(♀️) %0Aci1000 为中情局提供现索得到的赏金             %23 信用(♂️) 收入1000%0A%0A%23 ---------------------------------->  ➗ 金额可写四则运算与括号 (先括号, 再乘除, 后加减; 表达式内不留空格; 最终结果一次性四舍五入到分)%0Abes(86.4%2B13.6)/3 三人AA                     %23 从储蓄(♂️) 支出 (86.4%2B13.6)/3 = 33.33 到 食物%0Abew116.3%2B5*(-2)d3 两件退货各冲5              %23 当月03号 从储蓄(♂️) 支出 116.3%2B5*(-2) = 106.3 到 网络%0A%0A%23 ---------------------------------->  ❤️ 财务高度共享, 谁付钱不重要，重要的是家庭总资产%0Aoew50 给♂️充话费                            %23 从储蓄(♀️) 支出50到 网络%0A%0A%23 ---------------------------------->  🤣 严格AA, ♀️ 给 ♂️ 垫付话费并保留债权%0Abew50 用向♀️借来的钱充话费                   %23 从储蓄(♂️) 支出50到 网络%0Aob50 借给♂️                                 %23 从储蓄(♀️) 中转50到 储蓄(♂️)%0A%0Aab100                                       %23 从现金(♂️) 中转100到 储蓄(♂️)%0Aba300                                       %23 从储蓄(♂️) 中转300到 现金(♂️)%0A1%0A2026%0A%0Aaej20d03 加油                               %23 当月03号 从现金(♂️) 流向 支出20到 交通%0Aob100 转帐给♂️                              %23 从储蓄(♀️)  中转100到 储蓄(♂️)%0Aci-200 初始本金                              %23 ♂️的当前信用账单 (负债登记)%0A12%0Aai500 初始本金                               %23 ♂️的当前现金%0Abi1000 初始本金                              %23 ♂️的当前储蓄%0Api800 初始本金                               %23 ♀️的当前信用溢缴%0Aoi2000 初始本金                              %23 ♀️的当前储蓄%0A11%0A2025";
+a.download = "sample_txn.txt";
+a.innerText = "📥 下载 sample_txn.txt";
+a.style.cssText = "margin-left: 20px; font-size: 0.9rem; text-decoration: none; color: #2980b9;";
+
+const srcLink = document.createElement("a");
+srcLink.href = "https://github.com/diff4x/txnl";
+srcLink.target = "_blank";
+srcLink.innerText = "[Lang: txnl]";
+srcLink.style.cssText = a.style.cssText;
+
+const out = document.createElement("div");
+out.className = "hide";
+out.id = "output";
+document.body.append(fileInput, a, srcLink, out);
+
+// --- 页面交互事件绑定 ---
+document.getElementById('fileInput').addEventListener('change', e => {
+  const file = e.target.files[0];
+  if (!file) return;
+
+  currentFilename = file.name;
+
+  const reader = new FileReader();
+  reader.onload = () => {
+    loadFX();
+    parse(reader.result);
+    e.target.value = '';
+  };
+
+  reader.readAsText(file, 'utf-8');
+  out.classList.remove("hide");
+});
+document.addEventListener('focusin', e => {
+  if (e.target.id === 'fa_min' || e.target.id === 'fa_max' || e.target.id === 'fnote') {
+    e.target.select();
+  }
+});
+document.addEventListener('click', e => {
+  if (e.target.id === 'freset') {
+    resetFilterState();
+    updateFilterOptions();
+    ['y', 'm', 'd', 'src', 'dst', 'cat'].forEach(updateFilterButton);
+    const rs = document.getElementById('rs');
+    if (rs) rs.remove();
+    return;
+  }
+
+  if (e.target.id === 'fgo') {
+    renderFilteredFlows();
+  }
+
+  const btn = e.target.closest('.filter-btn');
+  if (btn) {
+    const item = btn.closest('.filter-item');
+    document.querySelectorAll('.filter-item.open')
+      .forEach(i => {
+        if (i !== item) i.classList.remove('open');
+      });
+    item.classList.toggle('open');
+    return;
+  }
+
+  if (e.target.closest('.filter-panel')) {
+    return;
+  }
+
+  document.querySelectorAll('.filter-item.open')
+    .forEach(i => i.classList.remove('open'));
+});
+
+// --- 金额四则表达式求值（零 eval 递归下降） ---
+const MAX_PAREN_DEPTH = 32;
+function evalAmount(src) {
+  const tokens = [];
+  for (const m of src.matchAll(/(\d+(?:\.\d+)?)|([-+*/()])|(.)/g)) {
+    if (m[3] !== undefined) return { error: '数字格式不合法' };
+    tokens.push(m[1] !== undefined ? { num: Number(m[1]) } : { op: m[2] });
+  }
+
+  let pos = 0, depth = 0;
+  const fail = msg => { throw { msg }; };
+  const nextOp = (...set) => (set.includes(tokens[pos]?.op) ? tokens[pos++].op : null);
+
+  const factor = () => {
+    if (nextOp('(')) {
+      if (++depth > MAX_PAREN_DEPTH) fail('括号嵌套过深');
+      const v = expr();
+      if (!nextOp(')')) fail('括号不匹配');
+      depth--;
+      return v;
+    }
+    if (tokens[pos]?.num === undefined) fail('缺少操作数 (负号只能写在表达式开头或左括号之后, 如 5*(-2))');
+    return tokens[pos++].num;
+  };
+  const term = () => {
+    let v = factor(), op;
+    while ((op = nextOp('*', '/'))) {
+      const n = factor();
+      if (op === '/' && n === 0) fail('除数不能为0');
+      v = scrubFloat(op === '*' ? v * n : v / n);
+    }
+    return v;
+  };
+  const expr = () => {
+    const neg = nextOp('-') !== null;
+    let v = term(), op;
+    if (neg) v = -v;
+    while ((op = nextOp('+', '-'))) {
+      const t = term();
+      v = scrubFloat(op === '+' ? v + t : v - t);
+    }
+    return v;
+  };
+
+  try {
+    const v = expr();
+    if (pos < tokens.length) fail(tokens[pos].op === ')' ? '括号不匹配' : '缺少运算符 (不能省略乘号)');
+    if (!Number.isFinite(v)) fail('金额溢出');
+    return { value: roundCent(v) };
+  } catch (e) {
+    if (e && e.msg) return { error: e.msg };
+    throw e;
+  }
+}
+// 仅在求值终态一次性四舍五入到分，避免中间舍入误差
+function roundCent(x) {
+  if (Math.abs(x) >= 1e13) return x + 0;
+  const r = Math.round(Number((Math.abs(x) * 100).toPrecision(15))) / 100;
+  return (x < 0 ? -r : r) + 0;
+}
+function scrubFloat(x) {
+  return Math.abs(x) >= 1e15 ? x : Number(x.toPrecision(15));
+}
+function normalizeZero(n) {
+  if (typeof n !== 'number' || !Number.isFinite(n)) return 0;
+  return Math.abs(n) < 1e-9 ? 0 : n;
+}
+
+// --- 流水文本解析与视图恢复 ---
+function parse(text) {
+  hasParseError = false;
+
+  const rawLines = text.split(/\r?\n/).map((l, i) => ({ line: l, lineNum: i + 1 }));
+  const revLines = rawLines.slice().reverse();
+
+  const errors = [];
+  flows = [];
+
+  let curYear = null, curMonth = null;
+  const seenYears = new Set();
+  const seenMonths = {};
+
+  for (let idx = 0; idx < revLines.length; idx++) {
+    const { line, lineNum } = revLines[idx];
+    const l = line.replace(/\s+#.*$/, '').trim();
+    if (l === '' || l.startsWith('#')) continue;
+
+    if (/^\d{4}$/.test(l)) {
+      const y = Number(l);
+      if (seenYears.has(y)) { errors.push({ lineNum, msg: `年份${y}重复` }); break; }
+      curYear = y; curMonth = null;
+      seenYears.add(y);
+      seenMonths[curYear] = new Set();
+      continue;
+    }
+
+    if (/^\d{1,2}$/.test(l)) {
+      if (!curYear) { errors.push({ lineNum, msg: '月份行无归属年份' }); break; }
+      const m = Number(l);
+      if (m < 1 || m > 12) { errors.push({ lineNum, msg: `非法月份 ${m}` }); break; }
+      if (seenMonths[curYear].has(m)) { errors.push({ lineNum, msg: `年份${curYear}重复月份${m}` }); break; }
+      curMonth = m;
+      seenMonths[curYear].add(m);
+      continue;
+    }
+
+    if (!curYear) { errors.push({ lineNum, msg: '流水无归属年份' }); continue; }
+    if (!curMonth) { errors.push({ lineNum, msg: '流水无归属月份' }); continue; }
+
+    const ACC = ACCOUNT_KEYS.join('');
+    const REG = new RegExp(
+      `^([${ACC}])([ie${ACC}])([szjwyrfq]?)([\\d.+\\-*/()]+)(d(0?[1-9]|[12]\\d|3[01]))?(?:\\s+(.+))?$`
+    );
+    const m = l.match(REG);
+    if (!m) { errors.push({ lineNum, msg: '流水格式错误' }); continue; }
+
+    const [, src, dst, cat, amt, dayStr, dayNum, note] = m;
+    const ev = evalAmount(amt);
+    if (ev.error) { errors.push({ lineNum, msg: `金额表达式错误：${ev.error}` }); continue; }
+    const amount = ev.value;
+    if (amount === 0) errors.push({ lineNum, msg: '金额不能为0' });
+    if (dst === 'e' && !cat) errors.push({ lineNum, msg: '支出缺少分类' });
+    if (dst !== 'e' && cat) errors.push({ lineNum, msg: '非支出不应有分类' });
+
+    flows.push({
+      year: curYear,
+      month: curMonth,
+      src, dst,
+      cat: dst === 'e' ? cat || null : null,
+      amount,
+      expr: /^-?\d+(?:\.\d+)?$/.test(amt) ? undefined : amt,
+      day: dayNum ? Number(dayNum) : undefined,
+      note,
+      lineNum
+    });
+  }
+
+  if (errors.length) { 
+    hasParseError = true;
+    renderErrors(errors); 
+    return; 
+  }
+
+  computeStats();
+  restoreState();
+}
+
+function restoreState() {
+  if (hasParseError) return;
+
+  const view = store[getFileKey('view')];
+  if (view.type === 'year') {
+    renderYear(view.y);
+  } else if (view.type === 'month') {
+    renderMonth(view.y, view.m);
+  } else {
+    renderDefaultView(); 
+  }
+  
+  setTimeout(() => {
+    window.scrollTo(0, store[getFileKey('scroll')] || 0);
+  }, 50);
+}
+
+// --- 错误报告 ---
+function renderErrors(errors) {
+  out.innerHTML = '<h4 class="error">原始记录错误报告</h4>';
+  errors.sort((a, b) => a.lineNum - b.lineNum).forEach(e => {
+    out.innerHTML += `<div class="error"><span class="error-line-link" data-line="${e.lineNum}">第 ${e.lineNum} 行</span>：${escapeHtml(e.msg)}</div>`;
+  });
+}
+
+// --- 账户与净债权统计 ---
+function computeStats() {
+  stats = {
+    accounts: {},
+    years: {}
+  };
+
+  ACCOUNT_KEYS.forEach(k => {
+    stats.accounts[k] = 0;
+  });
+
+  flows.forEach(f => {
+    if (!stats.years[f.year]) stats.years[f.year] = { income: 0, expense: 0, cats: {}, months: {} };
+    const y = stats.years[f.year];
+    if (f.dst === 'i') { y.income += f.amount; stats.accounts[f.src] += f.amount; }
+    else if (f.dst === 'e') { y.expense += f.amount; y.cats[f.cat] = (y.cats[f.cat] || 0) + f.amount; stats.accounts[f.src] -= f.amount; }
+    else { stats.accounts[f.src] -= f.amount; stats.accounts[f.dst] += f.amount; }
+
+    if (!y.months[f.month]) {
+      y.months[f.month] = [];
+    }
+    y.months[f.month].push(f);
+
+  });
+}
+
+function calcNetDebt(flowList) {
+  let heToShe = 0;
+  let sheToHe = 0;
+  
+  flowList.forEach(f => {
+    if (HE_ACCTS.includes(f.src) && SHE_ACCTS.includes(f.dst)) heToShe += f.amount;
+    if (SHE_ACCTS.includes(f.src) && HE_ACCTS.includes(f.dst)) sheToHe += f.amount;
+  });
+  
+  // netOwe > 0 表示 ♂️ 欠 ♀️，反之 ♀️ 欠 ♂️
+  const netOwe = normalizeZero(sheToHe - heToShe);
+  return { heToShe: normalizeZero(heToShe), sheToHe: normalizeZero(sheToHe), netOwe };
+}
+
+// --- 筛选状态持久化 ---
+function saveFilterState(isActive) {
+  store[getFileKey('filter')] = {
+    y: [...filterState.y],
+    m: [...filterState.m],
+    d: [...filterState.d],
+    src: [...filterState.src],
+    dst: [...filterState.dst],
+    cat: [...filterState.cat],
+    amtMin: document.getElementById('fa_min')?.value,
+    amtMax: document.getElementById('fa_max')?.value,
+    noteStr: document.getElementById('fnote')?.value || '',
+    active: isActive
+  };
+}
+
+function loadFilterState() {
+  const f = store[getFileKey('filter')];
+  if (!f) return;
+  filterState.y = new Set(f.y || []);
+  filterState.m = new Set(f.m || []);
+  filterState.d = new Set(f.d || []);
+  filterState.src = new Set(f.src || []);
+  filterState.dst = new Set(f.dst || []);
+  filterState.cat = new Set(f.cat || []);
+  
+  if (document.getElementById('fnote')) document.getElementById('fnote').value = f.noteStr || '';
+  if (document.getElementById('fa_min') && f.amtMin != null) document.getElementById('fa_min').value = f.amtMin;
+  if (document.getElementById('fa_max') && f.amtMax != null) document.getElementById('fa_max').value = f.amtMax;
+}
+
+function resetFilterState() {
+  Object.keys(filterState).forEach(k => {
+    if (filterState[k] instanceof Set) filterState[k].clear();
+    else filterState[k] = null;
+  });
+  const fn = document.getElementById('fnote');
+  if (fn) fn.value = '';
+  const min = document.getElementById('fa_min');
+  const max = document.getElementById('fa_max');
+  if (min) min.value = -100000;
+  if (max) max.value = 100000;
+  
+  saveFilterState(false);
+  let pages = store[getFileKey('page')] || {};
+  pages.filter = 1;
+  store[getFileKey('page')] = pages;
+}
+
+// --- 多维筛选与选项联动 ---
+function renderFilteredFlows() {
+  const noteVal = document.getElementById('fnote')?.value?.trim();
+  filterState.noteRegex = null;
+  if (noteVal) {
+    try {
+      filterState.noteRegex = new RegExp(noteVal, 'i');
+    } catch (e) {
+      alert('非法正则');
+      return;
+    }
+  }
+
+  const minVal = document.getElementById('fa_min')?.value;
+  const maxVal = document.getElementById('fa_max')?.value;
+  filterState.amtMin = minVal !== '' ? Number(minVal) : null;
+  filterState.amtMax = maxVal !== '' ? Number(maxVal) : null;
+  if (
+    filterState.amtMin != null &&
+    filterState.amtMax != null &&
+    filterState.amtMin > filterState.amtMax
+  ) {
+    [filterState.amtMin, filterState.amtMax] =
+      [filterState.amtMax, filterState.amtMin];
+  }
+
+  currentFiltered = flows.filter(f => {
+    if (filterState.y.size && !filterState.y.has(String(f.year))) return false;
+    if (filterState.m.size && !filterState.m.has(String(f.month))) return false;
+    if (filterState.d.size) {
+      if (f.day == null) return false;
+      if (!filterState.d.has(String(f.day))) return false;
+    }
+    if (filterState.src.size && !filterState.src.has(f.src)) return false;
+    if (filterState.dst.size && !filterState.dst.has(f.dst)) return false;
+    if (filterState.cat.size && !filterState.cat.has(getDisplayCat(f))) return false;
+    if (filterState.amtMin != null && f.amount < filterState.amtMin) return false;
+    if (filterState.amtMax != null && f.amount > filterState.amtMax) return false;
+    if (filterState.noteRegex) {
+      const note = f.note ?? '';
+      if (!filterState.noteRegex.test(note)) return false;
+    }
+    return true;
+  }).reverse();
+
+  let totalIncome = 0;
+  let totalExpense = 0;
+  let totalTransfer = 0;
+  currentFiltered.forEach(f => {
+    if (f.dst === 'i') totalIncome += f.amount;
+    else if (f.dst === 'e') totalExpense += f.amount;
+    else {
+      totalTransfer += f.amount;
+    }
+  });
+
+  let rs = document.getElementById('rs');
+  if (!rs) {
+    rs = document.createElement('div');
+    rs.id = 'rs';
+    out.appendChild(rs);
+  }
+  pagedContext = {
+    data: currentFiltered,
+    page: store[getFileKey('page')].filter || 1,
+    totals: {
+      totalIncome,
+      totalExpense,
+      totalTransfer
+    },
+    container: rs,
+    id: 'filter' 
+  };
+  saveFilterState(true); 
+  renderPagedContext();
+}
+function updateFilterButton(key) {
+  const item = document.querySelector(`.filter-item[data-key="${key}"]`);
+  if (!item) return;
+
+  const btn = item.querySelector('.filter-btn');
+  const vals = [...filterState[key]];
+  const map = MAP_LOOKUP[key];
+
+  if (vals.length === 0) {
+    btn.textContent = ' ?  ▾';
+    return;
+  }
+
+  const labels = vals.map(v => map?.[v] || v);
+
+  btn.textContent =
+    labels.length <= 2
+      ? `${labels.join(', ')} ▾`
+      : `${labels[0]} +${labels.length - 1} ▾`;
+}
+function onMultiFilterChange(key, el) {
+  if (el.checked) {
+    filterState[key].add(el.value);
+  } else {
+    filterState[key].delete(el.value);
+  }
+  updateFilterButton(key);
+  if (filterState[key].size === 0) {
+    document
+      .querySelector(`.filter-item[data-key="${key}"]`)
+      .classList.remove('open');
+  }
+  saveFilterState(store[getFileKey('filter')]?.active || false);
+}
+
+function updateFilterOptions() {
+  document.querySelectorAll('.filter-item').forEach(item => {
+    const key = item.dataset.key;
+    const panel = item.querySelector('.filter-panel');
+    if (key === 'y') buildCheckboxGroup('y', panel, f => f.year);
+    if (key === 'm') buildCheckboxGroup('m', panel, f => f.month);
+    if (key === 'd') buildCheckboxGroup('d', panel, f => f.day);
+    if (key === 'src') buildCheckboxGroup('src', panel, f => f.src, SRC_MAP);
+    if (key === 'dst') buildCheckboxGroup('dst', panel, f => f.dst, DST_MAP);
+    if (key === 'cat') buildCheckboxGroup('cat', panel, getDisplayCat, CAT_MAP_EXT);
+  });
+}
+function buildCheckboxGroup(key, el, getter, map) {
+  el.innerHTML = '';
+  const filtered = flows.filter(f => {
+    if (key !== 'y' && filterState.y.size && !filterState.y.has(String(f.year))) return false;
+    if (key !== 'm' && filterState.m.size && !filterState.m.has(String(f.month))) return false;
+    if (key !== 'd' && filterState.d.size) {
+      if (f.day == null) return false;
+      if (!filterState.d.has(String(f.day))) return false;
+    }
+    if (key !== 'src' && filterState.src.size && !filterState.src.has(f.src)) return false;
+    if (key !== 'dst' && filterState.dst.size && !filterState.dst.has(f.dst)) return false;
+    if (key !== 'cat' && filterState.cat.size && !filterState.cat.has(getDisplayCat(f))) return false;
+    return true;
+  });
+
+  const set = new Set();
+  filtered.forEach(f => {
+    const v = getter(f);
+    if (key === 'd' && f.day == null) return;
+    if (v != null) set.add(String(v));
+  });
+
+  [...set].sort().forEach(v => {
+    const label = map ? map[v] : v;
+    const checked = filterState[key].has(v) ? 'checked' : '';
+    el.innerHTML += `
+      <label>
+        <input type="checkbox" value="${v}" ${checked}
+          onchange="onMultiFilterChange('${key}', this)">
+        ${label}
+      </label><br>
+    `;
+  });
+}
+function getDisplayCat(f) {
+  if (f.dst === 'e') return f.cat;
+  if (f.dst === 'i') return 'income';
+  return 'transfer';
+}
+
+// --- 分页渲染与导航 ---
+function renderPagedContext() {
+  const { data, totals, container } = pagedContext;
+  const total = data.length;
+  const totalPages = Math.ceil(total / PAGE_SIZE);
+
+  if (pagedContext.page > totalPages) pagedContext.page = totalPages || 1;
+  const page = pagedContext.page;
+
+  let html = '';
+
+  if (!total) {
+    container.innerHTML = `<div class="sep"><b>筛选结果:</b><br>无匹配记录</div>`;
+    return;
+  }
+  if (totals) {
+    html += `
+    <div class="sep"><b>筛选结果:</b><br>
+    共 ${total} 条
+    收入: <span class="amount positive">${fmt(totals.totalIncome)}</span>
+    支出: <span class="amount negative">${fmt(totals.totalExpense)}</span>
+    中转: <span class="amount transfer">${fmt(totals.totalTransfer)}</span>
+    </div>
+    `;
+  }
+
+  if (totalPages > 1) {
+    html += renderPager(totalPages);
+  }
+
+  const start = (page - 1) * PAGE_SIZE;
+  const pageData = data.slice(start, start + PAGE_SIZE);
+  html += renderFlowTable(pageData, start);
+
+  container.innerHTML = html;
+}
+
+
+function renderPager(totalPages) {
+  if (totalPages <= 1) return '';
+
+  const page = pagedContext.page;
+  let html = '';
+
+  html += `<button ${page === 1 ? 'disabled' : ''} onclick="gotoPage(${page - 1})">Prev</button>`;
+
+  const pages = new Set();
+  for (let i = 1; i <= EDGE_PAGES; i++) pages.add(i);
+  for (let i = totalPages - EDGE_PAGES + 1; i <= totalPages; i++) pages.add(i);
+
+  const half = Math.floor(WINDOW / 2);
+  let start = page - half;
+  let end = page + half;
+
+  if (start < 1) {
+    start = 1;
+    end = WINDOW;
+  }
+  if (end > totalPages) {
+    end = totalPages;
+    start = totalPages - WINDOW + 1;
+  }
+
+  for (let i = start; i <= end; i++) {
+    if (i >= 1 && i <= totalPages) pages.add(i);
+  }
+
+  const sorted = [...pages].sort((a, b) => a - b);
+
+  let prev = null;
+  for (const p of sorted) {
+    if (prev && p - prev > 1) {
+      html += `<span style="margin:0 4px">…</span>`;
+    }
+    html += `<button ${p === page ? 'disabled' : ''} onclick="gotoPage(${p})">${p}</button>`;
+    prev = p;
+  }
+
+  html += `<button ${page === totalPages ? 'disabled' : ''} onclick="gotoPage(${page + 1})">Next</button>`;
+  return html;
+}
+function gotoPage(p) {
+  const totalPages = Math.ceil(pagedContext.data.length / PAGE_SIZE);
+  if (p < 1 || p > totalPages) return;
+  pagedContext.page = p;
+
+  let pages = store[getFileKey('page')] || {};
+  pages[pagedContext.id] = p;
+  store[getFileKey('page')] = pages;
+
+  renderPagedContext();
+}
+
+// --- 流水明细表格 ---
+function renderFlowTable(flowList, startIndex = 0) {
+  let html = `<table>`;
+  html += `
+  <tr>
+    <th>#</th>
+    <th>时间</th>
+    <th>来源</th>
+    <th>去向</th>
+    <th>类别</th>
+    <th>金额</th>
+    <th>备注</th>
+    <th>文件行</th>
+  </tr>
+  `;
+
+  flowList.forEach((f, idx) => {
+    const seq = startIndex + idx + 1;
+    const time = f.day
+      ? `${f.year}-${String(f.month).padStart(2, '0')}-${String(f.day).padStart(2, '0')}`
+      : `${f.year}-${String(f.month).padStart(2, '0')}`;
+    const src = SRC_MAP[f.src];
+    const dst = DST_MAP[f.dst];
+    const cat = getDisplayCat(f);
+    const catDisplay = cat ? CAT_MAP_EXT[cat] : '中转';
+
+    html += `
+    <tr>
+      <td style="opacity:.6">${seq}</td>
+      <td>${time}</td>
+      <td>${src}</td>
+      <td>${dst}</td>
+      <td>${catDisplay}</td>
+      <td>
+        <span class="amount ${f.dst === 'e' ? 'expense' : f.dst === 'i' ? 'income' : 'transfer'}">
+          ${fmt(f.amount, f.expr)}
+        </span>
+      </td>
+      <td>${f.note ? escapeHtml(f.note) : '-'}</td>
+      <td style="opacity:.6">${f.lineNum}</td>
+    </tr>`;
+  });
+
+  html += `</table>`;
+  return html;
+}
+
+// --- 12 个月趋势数据与绘图 ---
+function initTrendSelector() {
+  const monthInput = document.getElementById('trendEnd');
+  if (!monthInput) return;
+
+  let maxY = 0, maxM = 0;
+  flows.forEach(f => {
+    if (f.year > maxY || (f.year === maxY && f.month > maxM)) {
+      maxY = f.year; maxM = f.month;
+    }
+  });
+
+  const savedTrend = store[getFileKey('trend')] || {};
+  trendState.endYear = savedTrend.endYear || maxY;
+  trendState.endMonth = savedTrend.endMonth || maxM;
+  trendState.activeCat = savedTrend.activeCat || 'net';
+
+  monthInput.value = `${trendState.endYear}-${String(trendState.endMonth).padStart(2, '0')}`;
+
+  let catSelect = document.getElementById('trendCat');
+  if (!catSelect) {
+    catSelect = document.createElement('select');
+    catSelect.id = 'trendCat';
+    catSelect.style.marginLeft = '8px';
+    monthInput.after(catSelect);
+  }
+
+  function updateCatOptions() {
+    const data = collect12MonthData();
+    const usedCats = new Set();
+    data.forEach(d => {
+      Object.entries(d.cats).forEach(([c, v]) => {
+        if (v > 0) usedCats.add(c);
+      });
+    });
+    catSelect.innerHTML = '';
+    catSelect.append(new Option('净变化', 'net'));
+    catSelect.append(new Option('月支出', 'total'));
+    [...usedCats].forEach(c => {
+      catSelect.append(new Option(CAT_MAP[c], c));
+    });
+  }
+
+  monthInput.onchange = () => { 
+    if (!monthInput.value) return;
+    const [y, m] = monthInput.value.split('-').map(Number);
+    trendState.endYear = y; trendState.endMonth = m;
+    store[getFileKey('trend')] = { endYear: y, endMonth: m, activeCat: trendState.activeCat };
+
+    updateCatOptions();
+    renderTrendChart();
+  };
+  catSelect.onchange = () => { 
+    trendState.activeCat = catSelect.value || null;
+    store[getFileKey('trend')] = { endYear: trendState.endYear, endMonth: trendState.endMonth, activeCat: trendState.activeCat };
+    renderTrendChart();
+  };
+
+  updateCatOptions();
+  catSelect.value = trendState.activeCat; 
+}
+function collect12MonthData() {
+  const cacheKey = trendState.endYear + '-' + trendState.endMonth + '-' + flows.length;
+  if (trendState._cacheKey === cacheKey) return trendState._cacheData;
+
+  const months = [];
+  let y = trendState.endYear;
+  let m = trendState.endMonth;
+  for (let i = 0; i < 12; i++) {
+    months.unshift({ year: y, month: m });
+    m--;
+    if (m === 0) { m = 12; y--; }
+  }
+
+  const data = months.map(t => {
+    const monthFlows = flows.filter(f => f.year === t.year && f.month === t.month);
+    const cats = {};
+    let net = 0;
+    Object.keys(CAT_MAP).forEach(c => { cats[c] = 0; });
+    let totalExpense = 0;
+
+    monthFlows.forEach(f => {
+      if (f.dst === 'e') {
+        cats[f.cat] += f.amount;
+        totalExpense += f.amount;
+        net -= f.amount;
+      }
+      if (f.dst === 'i') { net += f.amount; }
+    });
+
+    return {
+      label: `${String(t.year).slice(-2)}-${String(t.month).padStart(2, '0')}`,
+      cats, net, totalExpense
+    };
+  });
+
+  trendState._cacheKey = cacheKey;
+  trendState._cacheData = data;
+  return data;
+}
+
+
+function renderTrendChart() {
+  const canvas = document.getElementById('trendCanvas');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+
+  const dpr = window.devicePixelRatio || 1;
+  const rect = canvas.getBoundingClientRect();
+  const W = rect.width || canvas.offsetWidth || parseFloat(canvas.style.width) || 600;
+  const H = rect.height || canvas.offsetHeight || parseFloat(canvas.style.height) || 200;
+  const targetW = Math.round(W * dpr);
+  const targetH = Math.round(H * dpr);
+  if (canvas.width !== targetW || canvas.height !== targetH) {
+    canvas.width = targetW;
+    canvas.height = targetH;
+  }
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  ctx.clearRect(0,0,W,H);
+  const pad = 40;
+
+  const data = collect12MonthData();
+  if (!data.length) return;
+  const xs = data.map((_, i) => pad + i*((W-pad*2)/(data.length-1||1)));
+  const catMax = Math.max(1, ...data.flatMap(d => [...Object.values(d.cats), d.totalExpense || 0]));
+  const yCat = v => H-pad-(v/catMax)*(H-pad*2);
+  const netVals = data.map(d=>d.net);
+  const netMin = Math.min(...netVals,0);
+  const netMax = Math.max(...netVals,0);
+  const yNet = v => H-pad-((v-netMin)/(netMax-netMin||1))*(H-pad*2);
+
+  ctx.font='10px sans-serif';
+  ctx.strokeStyle = COLORS.axis;
+  ctx.beginPath();
+  ctx.moveTo(pad,H-pad);
+  ctx.lineTo(W-pad,H-pad);
+  ctx.stroke();
+  
+  ctx.fillStyle = COLORS.text;
+  ctx.textAlign='center';
+  data.forEach((d,i)=>{ ctx.fillText(d.label,xs[i],H-pad+18); });
+
+  const leftAxisColor = trendState.activeCat !=='net' ? COLORS.expense : COLORS.axisIdle;
+  const rightAxisColor = trendState.activeCat ==='net' ? COLORS.income : COLORS.axisIdle;
+  
+  ctx.strokeStyle=leftAxisColor;
+  ctx.fillStyle=leftAxisColor;
+  ctx.beginPath();
+  ctx.moveTo(pad,pad);
+  ctx.lineTo(pad,H-pad);
+  ctx.stroke();
+  for(let i=0;i<=5;i++){
+    const v=(catMax/5)*i;
+    const y=yCat(v);
+    ctx.beginPath(); ctx.moveTo(pad-4,y); ctx.lineTo(pad,y); ctx.stroke();
+    ctx.textAlign='right'; ctx.textBaseline='middle'; ctx.fillText(v.toFixed(0), pad-8, y+3);
+  }
+  ctx.textBaseline='bottom'; ctx.textAlign='right'; ctx.fillText('支出', pad-8, pad-6);
+
+  ctx.strokeStyle=rightAxisColor;
+  ctx.fillStyle=rightAxisColor;
+  ctx.beginPath();
+  ctx.moveTo(W-pad,pad);
+  ctx.lineTo(W-pad,H-pad);
+  ctx.stroke();
+  for(let i=0;i<=5;i++){
+    const v=netMin+(netMax-netMin)*(i/5);
+    const y=yNet(v);
+    ctx.beginPath(); ctx.moveTo(W-pad,y); ctx.lineTo(W-pad+4,y); ctx.stroke();
+    ctx.textAlign='left'; ctx.textBaseline='middle'; ctx.fillText(v.toFixed(0), W-pad+8, y);
+  }
+  ctx.textBaseline='bottom'; ctx.textAlign='left'; ctx.fillText('净变化', W-pad+8, pad-6);
+
+  Object.keys(CAT_MAP).forEach(cat=>{
+    const active=trendState.activeCat===cat;
+    ctx.beginPath();
+    ctx.strokeStyle=active?CAT_COLORS[cat]:COLORS.inactive;
+    ctx.lineWidth=active?2.5:1;
+    data.forEach((d,i)=>{
+      const x=xs[i]; const y=yCat(d.cats[cat]||0);
+      if(i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
+    });
+    ctx.stroke();
+  });
+
+  const netActive=trendState.activeCat==='net';
+  ctx.beginPath();
+  ctx.strokeStyle=netActive?COLORS.income:COLORS.inactive;
+  ctx.lineWidth=netActive?2.5:1;
+  data.forEach((d,i)=>{
+    const x=xs[i]; const y=yNet(d.net);
+    if(i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
+  });
+  ctx.stroke();
+
+  const totalActive = trendState.activeCat === 'total';
+  ctx.beginPath();
+  ctx.strokeStyle = totalActive ? COLORS.expense : COLORS.inactive;
+  ctx.lineWidth = totalActive ? 2.5 : 1;
+  data.forEach((d,i)=>{
+    const x = xs[i]; const y = yCat(d.totalExpense || 0);
+    if(i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
+  });
+  ctx.stroke();
+
+  if (!canvas._hoverBound) {
+    canvas._hoverBound = true;
+    canvas.addEventListener('mousemove', e => {
+      const rect = canvas.getBoundingClientRect();
+      hoverX = e.clientX - rect.left; hoverY = e.clientY - rect.top;
+      hoverActive = true; renderTrendChart();
+    });
+    canvas.addEventListener('mouseleave', () => { hoverActive = false; renderTrendChart(); });
+  }
+
+  if (hoverActive && hoverX != null && hoverY != null) {
+    ctx.save();
+    let activePoints = [];
+    let isNet = trendState.activeCat === 'net';
+    let isTotal = trendState.activeCat === 'total';
+    let cat = trendState.activeCat;
+    let pointColor = COLORS.inactive;
+
+    if (isNet) pointColor = COLORS.income;
+    else if (isTotal) pointColor = COLORS.expense;
+    else if (cat && CAT_COLORS[cat]) pointColor = CAT_COLORS[cat];
+
+    data.forEach((d, i) => {
+      let x = xs[i]; let y, val;
+      if (isNet) { y = yNet(d.net); val = d.net; }
+      else if (isTotal) { y = yCat(d.totalExpense || 0); val = d.totalExpense || 0; }
+      else if (cat) { y = yCat(d.cats[cat] || 0); val = d.cats[cat] || 0; }
+      if (y !== undefined) activePoints.push({ x, y, val, label: d.label });
+    });
+
+    let closest = null; let minDist = 20; 
+    activePoints.forEach(p => {
+      let dist = Math.hypot(p.x - hoverX, p.y - hoverY);
+      if (dist < minDist) { minDist = dist; closest = p; }
+    });
+
+    if (closest) {
+      ctx.beginPath();
+      ctx.moveTo(pad, closest.y); ctx.lineTo(W - pad, closest.y);
+      ctx.moveTo(closest.x, pad); ctx.lineTo(closest.x, H - pad);
+      ctx.strokeStyle = 'rgba(0,0,0,0.25)'; ctx.lineWidth = 1; ctx.setLineDash([4, 4]); ctx.stroke();
+
+      ctx.beginPath(); ctx.arc(closest.x, closest.y, 4, 0, Math.PI * 2); ctx.fillStyle = pointColor; ctx.fill();
+      ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.setLineDash([]); ctx.stroke();
+
+      let tipText = `${closest.val.toFixed(2)}`;
+      ctx.font = '12px sans-serif';
+      let tWidth = ctx.measureText(tipText).width;
+      let tX = closest.x - tWidth / 2; let tY = closest.y - 15;
+
+      if (tX < pad) tX = pad;
+      if (tX + tWidth > W - pad) tX = W - pad - tWidth;
+      if (tY < pad) tY = closest.y + 25;
+
+      ctx.fillStyle = 'rgba(0,0,0,0.75)'; ctx.fillRect(tX - 6, tY - 12, tWidth + 12, 24);
+      ctx.fillStyle = '#fff'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle'; ctx.fillText(tipText, tX, tY + 1);
+    } else {
+      ctx.beginPath(); ctx.moveTo(pad, hoverY); ctx.lineTo(W - pad, hoverY);
+      ctx.strokeStyle = 'rgba(0,0,0,0.1)'; ctx.lineWidth = 1; ctx.setLineDash([4, 4]); ctx.stroke();
+    }
+    ctx.restore();
+  }
+}
+
+// --- 总览 / 年 / 月视图渲染 ---
+function renderDefaultView() {
+  store[getFileKey('view')] = { type: 'default' }; 
+  const buf = [];
+
+  const netAsset = normalizeZero(Object.values(stats.accounts).reduce((sum, v) => sum + v, 0));
+  const totalIncome = normalizeZero(Object.values(stats.years).reduce((a, y) => a + y.income, 0));
+  const totalExpense = normalizeZero(Object.values(stats.years).reduce((a, y) => a + y.expense, 0));
+
+  buf.push(`<div class="sep"><b>总览:</b><br>`);
+  buf.push(`总收: <span class="amount positive">${fmt(totalIncome)}</span> `);
+  buf.push(`总支: <span class="amount negative">${fmt(totalExpense)}</span> `);
+  buf.push(`余额: <span class="amount ${netAsset >= 0 ? 'positive' : 'negative'}">${fmt(netAsset)}</span> `);
+  
+  const debt = calcNetDebt(flows);
+  let debtText = ""; let debtColor = "axis";
+  if (debt.netOwe > 0) {
+      debtText = `♂️ 欠 ♀️ ${fmtMain(Math.abs(debt.netOwe))}`; debtColor = "expense";
+  } else if (debt.netOwe < 0) {
+      debtText = `♀️ 欠 ♂️ ${fmtMain(Math.abs(debt.netOwe))}`; debtColor = "income";
+  }
+  buf.push(`<span style="color:var(--${debtColor}, ${COLORS[debtColor]});">${debtText}</span></div>`);
+
+  buf.push(`<div class="sep"><b>帐户分布:</b><br>`);
+  Object.entries(stats.accounts).forEach(([k, rawV]) => {
+    const v = normalizeZero(rawV);
+    buf.push(`${ACCOUNTS[k]}: <span class="amount ${v >= 0 ? 'positive' : 'negative'}">${fmt(v)}</span><br>`);
+  });
+  buf.push(`</div>`);
+
+  const catTotals = {}; let totalCatExpense = 0;
+  flows.forEach(f => {
+    if (f.dst === 'e') { catTotals[f.cat] = (catTotals[f.cat] || 0) + f.amount; totalCatExpense += f.amount; }
+  });
+  buf.push(`<div class="sep"><b>支出占比:</b><br>`);
+  Object.entries(catTotals).sort((a, b) => b[1] - a[1]).forEach(([c, sum]) => {
+      const pct = totalCatExpense ? ((sum / totalCatExpense) * 100).toFixed(1) : 0;
+      buf.push(`<span>${CAT_MAP[c]}</span> <span class="amount negative">${fmt(sum)}</span> (${pct}%)<br>`);
+    });
+  buf.push('</div>');
+
+  buf.push(`
+  <div class="sep" id="trend-sep">
+    <b>趋势:</b><br><br><select id="trendCat"></select><br>
+    <canvas id="trendCanvas" style="width:600px;height:200px"></canvas> 结束月: <input type="month" id="trendEnd"><br>
+  </div>
+  `);
+
+  buf.push('<div class="sep"><b>具体年:</b><br>');
+  Object.keys(stats.years).sort((a, b) => b - a).forEach(y => {
+    buf.push(`<button onclick="renderYear(${y})">${y}年</button>`);
+  });
+  buf.push('</div>');
+
+  function renderFilterItems() {
+    const FILTER_ITEMS = [
+      { key: 'y',   title: '某年', label: '年' }, { key: 'm',   title: '某月', label: '月' },
+      { key: 'd',   title: '某日', label: '日' }, { key: 'src', title: '来源', label: '来源' },
+      { key: 'dst', title: '去向', label: '去向' }, { key: 'cat', title: '类别', label: '类别' }
+    ];
+    return FILTER_ITEMS.map(({ key, title, label }) => `
+      <div class="filter-item" data-key="${key}">
+        <span class="filter-title">${title}</span> <button class="filter-btn" data-label="${label}"> ?  ▾</button>
+        <div class="filter-panel"></div>
+      </div>
+    `).join('');
+  }
+  buf.push(`
+  <div class="sep"><b>筛选:</b>
+    <div class="filter-bar">
+      ${renderFilterItems()}
+      <span class="filter-title">金额</span> 
+      ${withTip(`<input id="fa_min" type="number" value="-100000" step="1000" style="width:70px">`, `<div class="tip-row"><span class="tip-cur">区间可反向</span></div>`)}
+      -<input id="fa_max" type="number" value="100000" step="1000" style="width:70px">
+      <span class="filter-title">备注</span>
+      ${withTip(`<input id="fnote" placeholder="正则" style="width:120px">`, `<div class="tip-row"><span class="tip-cur">.</span><span class="tip-val">有备注</span></div><div class="tip-row"><span class="tip-cur">^$</span><span class="tip-val">无备注</span></div>`)}
+      <button id="fgo">GO</button> <button id="freset">RST</button>
+    </div>
+  </div>
+  `);
+  out.innerHTML = buf.join('');
+
+  initTrendSelector();
+  renderTrendChart();
+
+  loadFilterState();
+  updateFilterOptions();
+  ['y', 'm', 'd', 'src', 'dst', 'cat'].forEach(updateFilterButton);
+  
+  if (store[getFileKey('filter')] && store[getFileKey('filter')].active) {
+    renderFilteredFlows();
+  }
+}
+
+
+function renderYear(y) {
+  store[getFileKey('view')] = { type: 'year', y };
+  const buf = ['<button onclick="resetFilterState();renderDefaultView();">' + y + '年 | 返回' + '</button>'];
+
+  const yData = stats.years[y];
+  const net = normalizeZero(yData.income - yData.expense);
+  const bal = calcBalanceUntil(y);
+  const totalBal = normalizeZero(Object.values(bal).reduce((a, b) => a + b, 0));
+
+  buf.push(`<div class="sep"><b>总览:</b><br>`);
+  buf.push(`净变化: <span class="amount ${net >= 0 ? 'positive' : 'negative'}">${fmt(net)}</span> `);
+  buf.push(`年收: <span class="amount positive">${fmt(yData.income)}</span> `);
+  buf.push(`年支: <span class="amount negative">${fmt(yData.expense)}</span> `);
+  buf.push(`截止余额: <span class="amount ${totalBal >= 0 ? 'positive' : 'negative'}">${fmt(totalBal)}</span></div>`);
+
+  buf.push(`<div class="sep"><b>截止帐户分布:</b><br>`);
+  Object.entries(bal).forEach(([k, rawV]) => {
+    const v = normalizeZero(rawV);
+    buf.push(`${ACCOUNTS[k]}: <span class="amount ${v >= 0 ? 'positive' : 'negative'}">${fmt(v)}</span><br>`);
+  });
+  buf.push(`</div>`);
+
+  let yTotal = normalizeZero(Object.values(yData.cats).reduce((a, b) => a + b, 0));
+  buf.push(`<div class="sep"><b>支出占比:</b><br>`);
+  Object.entries(yData.cats).sort((a, b) => b[1] - a[1]).forEach(([c, sum]) => {
+      const pct = yTotal ? ((sum / yTotal) * 100).toFixed(1) : 0;
+      buf.push(`${CAT_MAP[c]} <span class="amount negative">${fmt(sum)}</span> (${pct}%)<br>`);
+    });
+  buf.push('</div>');
+
+  buf.push('<div class="sep"><b>具体月:</b><br>');
+  Object.keys(yData.months).sort((a, b) => b - a).forEach(m => {
+    buf.push(`<button onclick="renderMonth(${y},${m})">${m}月</button>`);
+  });
+  buf.push('</div>');
+
+  const flowsWithDay = [];
+  for (const m in yData.months) { flowsWithDay.push(...yData.months[m].filter(f => f.day != null)); }
+  flowsWithDay.sort((a, b) => a.lineNum - b.lineNum);
+  
+  if (flowsWithDay.length > 0) {
+    buf.push(`<div class="sep"><b>具体日:</b></div>`);
+  }
+  out.innerHTML = buf.join('');
+
+  if (flowsWithDay.length > 0) {
+    const box = document.createElement('div'); out.appendChild(box);
+    pagedContext = {
+      data: flowsWithDay,
+      page: store[getFileKey('page')].yearDay || 1,
+      totals: null, container: box, id: 'yearDay'
+    };
+    renderPagedContext();
+  }
+}
+
+
+function renderMonth(y, m) {
+  store[getFileKey('view')] = { type: 'month', y, m };
+  const buf = ['<button onclick="renderYear(' + y + ')">' + y + '年' + m + '月 | 返回</button>'];
+
+  const monthAllFlows = flows.filter(f => f.year === y && f.month === m);
+  let income = 0, expense = 0, catSum = {};
+  monthAllFlows.forEach(f => {
+    if (f.dst === 'i') { income += f.amount; } 
+    else if (f.dst === 'e') { expense += f.amount; catSum[f.cat] = (catSum[f.cat] || 0) + f.amount; }
+  });
+  const bal = calcBalanceUntil(y, m);
+  const totalBal = normalizeZero(Object.values(bal).reduce((a, b) => a + b, 0));
+  const monthNet = normalizeZero(income - expense);
+
+  buf.push(`<div class="sep"><b>总览:</b><br>`);
+  buf.push(`净变化: <span class="amount ${monthNet >= 0 ? 'positive' : 'negative'}">${fmt(monthNet)}</span> `);
+  buf.push(`月收: <span class="amount positive">${fmt(income)}</span> `);
+  buf.push(`月支: <span class="amount negative">${fmt(expense)}</span> `);
+  buf.push(`截止余额: <span class="amount ${totalBal >= 0 ? 'positive' : 'negative'}">${fmt(totalBal)}</span></div>`);
+
+  buf.push(`<div class="sep"><b>截止帐户分布:</b><br>`);
+  Object.entries(bal).forEach(([k, rawV]) => {
+    const v = normalizeZero(rawV);
+    buf.push(`${ACCOUNTS[k]}: <span class="amount ${v >= 0 ? 'positive' : 'negative'}">${fmt(v)}</span><br>`);
+  });
+  buf.push(`</div>`);
+
+  let monthTotal = Object.values(catSum).reduce((a, b) => a + b, 0);
+  buf.push(`<div class="sep"><b>支出占比:</b><br>`);
+  Object.entries(catSum).sort((a, b) => b[1] - a[1]).forEach(([c, sum]) => {
+      const pct = monthTotal ? ((sum / monthTotal) * 100).toFixed(1) : 0;
+      buf.push(`${CAT_MAP[c]} <span class="amount negative">${fmt(sum)}</span> (${pct}%)<br>`);
+    });
+  buf.push('</div>');
+
+  const monthFlowsWithDay = monthAllFlows.filter(f => f.day).sort((a, b) => a.lineNum - b.lineNum);
+  if (monthFlowsWithDay.length > 0) {
+    buf.push(`<div class="sep"><b>具体日:</b></div>`);
+  }
+  out.innerHTML = buf.join('');
+
+  if (monthFlowsWithDay.length > 0) {
+    const box = document.createElement('div'); out.appendChild(box);
+    pagedContext = {
+      data: monthFlowsWithDay,
+      page: store[getFileKey('page')].monthDay || 1,
+      totals: null, container: box, id: 'monthDay'
+    };
+    renderPagedContext();
+  }
+}
+
+
+function calcBalanceUntil(year, month = null) {
+  let acc = {}; ACCOUNT_KEYS.forEach(k => acc[k] = 0);
+  flows.forEach(f => {
+    if (f.year > year) return;
+    if (month != null && f.year === year && f.month > month) return;
+
+    if (f.dst === 'i') { acc[f.src] += f.amount; } 
+    else if (f.dst === 'e') { acc[f.src] -= f.amount; } 
+    else { acc[f.src] -= f.amount; acc[f.dst] += f.amount; }
+  });
+  return acc;
+}
+
+// --- 多币种汇率拉取与浮窗格式化 ---
+async function loadFX(retry = 1) {
+  if (fxLoaded) return;
+  fxLoaded = true;
+  try {
+    const rates = await fetchFXOnce();
+    FX = rates; fxMeta = { source: 'api', approx: false };
+    localStorage.setItem(FX_KEY, JSON.stringify({ ts: Date.now(), rates: FX }));
+    console.log('[FX] updated from api');
+    refreshCurrencyTips();
+  } catch (e) {
+    console.warn('[FX] all api failed');
+    if (retry > 0) {
+      console.log('[FX] retry in 3s...');
+      setTimeout(() => { fxLoaded = false; loadFX(retry - 1); }, 3000);
+    }
+  }
+}
+async function fetchFXOnce() {
+  const tasks = [];
+  tasks.push(fetchWithTimeout('https://api.frankfurter.app/latest?from=CNY').then(data => {
+    if (!data?.rates?.USD) throw new Error('invalid frankfurter');
+    return { CNY: 1, USD: data.rates.USD, EUR: data.rates.EUR, JPY: data.rates.JPY };
+  }));
+  tasks.push(fetchWithTimeout('https://open.er-api.com/v6/latest/CNY').then(data => {
+    if (data?.result !== 'success') throw new Error('invalid er-api');
+    return { CNY: 1, USD: data.rates.USD, EUR: data.rates.EUR, JPY: data.rates.JPY };
+  }));
+  return await Promise.any(tasks);
+}
+async function fetchWithTimeout(url, ms = 10000) {
+  const ctrl = new AbortController(); const t = setTimeout(() => ctrl.abort(), ms);
+  try {
+    const res = await fetch(url, { signal: ctrl.signal });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    return await res.json();
+  } finally { clearTimeout(t); }
+}
+function fxSourceLabel() {
+  if (fxMeta.source === 'api') return '';
+  if (fxMeta.source === 'ls') return '⚠ 汇率来自本地存储';
+  return '⚠ 使用预设汇率';
+}
+function fmtMain(n) {
+  return normalizeZero(n).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+function fmtTip(n, expr) {
+  const clean = normalizeZero(n);
+  const approx = fxMeta.approx ? '≈ ' : ''; const header = fxSourceLabel();
+  return `
+    ${expr ? `<div class="tip-row" style="margin-bottom:4px"><span class="tip-cur">算式</span><span class="tip-val">${escapeHtml(expr)}</span></div>` : ''}
+    ${header ? `<div style="opacity:.7;margin-bottom:4px">${header}</div>` : ''}
+    ${Object.entries(FX).map(([c, rate]) => {
+        const value = normalizeZero(clean * rate);
+        const text = value.toLocaleString('zh-CN', { style: 'currency', currency: c, currencyDisplay: 'symbol', minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        return `<div class="tip-row"><span class="tip-cur">${c}</span><span class="tip-val">${approx}${text}</span></div>`;
+      }).join('')}
+  `;
+}
+function fmt(n, expr) {
+  const clean = normalizeZero(n);
+  const exprAttr = expr ? ` data-expr="${escapeHtml(expr)}"` : '';
+  return `<span class="has-tip" data-amt="${clean}"${exprAttr}>${fmtMain(clean)}<span class="tip">${fmtTip(clean, expr)}</span></span>`;
+}
+function withTip(innerHTML, tipHTML) { return `<span class="has-tip">${innerHTML}<span class="tip">${tipHTML}</span></span>`; }
+function refreshCurrencyTips() {
+  document.querySelectorAll('.has-tip[data-amt]').forEach(el => {
+    const amt = Number(el.dataset.amt);
+    if (!Number.isFinite(amt)) return;
+    const tip = el.querySelector('.tip');
+    if (tip) tip.innerHTML = fmtTip(amt, el.dataset.expr || undefined);
+  });
+}
+
+// --- 本地模式自动加载与 VS Code 行号跳转 ---
+if (store.online_flag === "0") {
+  currentFilename = "txn.txt";
+
+  fetch(`../../_build/privy/txn.txt?t=${Date.now()}`)
+    .then(res => {
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      return res.text();
+    })
+    .then(text => {
+      console.log("✅ 检测到本地环境，已自动加载 ../../_build/privy/txn.txt");
+      out.classList.remove("hide");
+      loadFX();
+      parse(text);
+      document.querySelector('a[download="sample_txn.txt"]').style.display = 'none';
+    })
+    .catch(err => {
+      console.warn("⚠️ 本地自动加载 txn.txt 失败:", err);
+    });
+
+  const pointerStyle = document.createElement('style');
+  pointerStyle.textContent = `
+    #output td:nth-last-child(1) { cursor: pointer; color: #2980b9; text-decoration: underline; transition: color 0.2s; }
+    #output td:nth-last-child(1):hover { color: #c0392b; }
+    .error-line-link { cursor: pointer; color: #2980b9; text-decoration: underline; font-weight: bold; transition: color 0.2s; }
+    .error-line-link:hover { color: #c0392b; }
+  `;
+  document.head.appendChild(pointerStyle);
+  
+  const jumpTxnLine = async (lineText) => {
+    try {
+      const lineNum = parseInt(lineText, 10);
+      if (!Number.isInteger(lineNum) || lineNum <= 0) return;
+      const m = await import('/src/js/shared-utils.js');
+      await m.callLocalApi('POST', '/__api/ops/txn', { line: lineNum });
+    } catch (err) {
+      alert('❌ 跳转流水行失败：' + (err && err.message ? err.message : String(err)));
+    }
+  };
+
+  document.addEventListener('click', e => {
+    const td = e.target.closest('td');
+    if (td && td.closest('#output table') && td.cellIndex === 7) {
+      const lineText = td.textContent.trim();
+      if (lineText && !isNaN(lineText)) {
+        jumpTxnLine(lineText);
+      }
+      return;
+    }
+
+    const errLink = e.target.closest('.error-line-link');
+    if (errLink) {
+      const lineText = errLink.dataset.line;
+      if (lineText) {
+        jumpTxnLine(lineText);
+      }
+      return;
+    }
+  });
+
+  document.addEventListener('contextmenu', e => {
+    e.preventDefault();
+    let menu = document.getElementById('local-context-menu');
+    if (menu) menu.remove();
+
+    menu = document.createElement('div');
+    menu.id = 'local-context-menu';
+    menu.innerHTML = '<div id="local-reload-btn">[reload]</div>';
+    menu.style.cssText = `
+      position: fixed; z-index: 10000;
+      right: ${window.innerWidth - e.clientX + 2}px; bottom: ${window.innerHeight - e.clientY + 2}px;
+      background: #333; color: #fff; padding: 6px 12px; border-radius: 4px; cursor: pointer;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.3); font-family: monospace; font-size: 14px;
+    `;
+    
+    document.body.appendChild(menu);
+    menu.querySelector('#local-reload-btn').addEventListener('click', () => { window.location.reload(); });
+
+    if (window._txnCloseCtxMenu) {
+      document.removeEventListener('click', window._txnCloseCtxMenu);
+      window._txnCloseCtxMenu = null;
+    }
+    setTimeout(() => {
+      const closeMenu = (ev) => {
+        if (menu && !menu.contains(ev.target)) { menu.remove(); }
+        document.removeEventListener('click', closeMenu);
+        if (window._txnCloseCtxMenu === closeMenu) window._txnCloseCtxMenu = null;
+      };
+      window._txnCloseCtxMenu = closeMenu;
+      document.addEventListener('click', closeMenu);
+    }, 0);
+  });
+}

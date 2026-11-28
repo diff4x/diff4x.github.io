@@ -1,0 +1,92 @@
+[package]
+name = "swamp"
+version = "3.1.0"
+edition = "2021"
+description = "Single-crate native companion (swamp.exe) & browser Wasm engine (compute_intensive_task_processor) for diff4x.github.io"
+repository = "https://github.com/diff4x/diff4x.github.io"
+license = "MIT"
+
+[lib]
+name = "compute_intensive_task_processor"
+path = "src/lib.rs"
+crate-type = ["cdylib"]
+
+[[bin]]
+name = "swamp"
+path = "src/main.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+regex = "1"
+similar = "2"
+# 置于主依赖表以通过 wasm-pack 对 Cargo.toml 的依赖校验（native 仅编译 --bin swamp，不会链接进 swamp.exe）
+wasm-bindgen = "0.2"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+serde-wasm-bindgen = "0.6"
+js-sys = "0.3"
+lazy_static = "1.4"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+axum = "0.7"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "fs", "io-util", "signal", "sync", "time"] }
+tokio-util = { version = "0.7", features = ["io"] }
+toml = "0.8"
+getrandom = "0.2"
+subtle = "2"
+percent-encoding = "2"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+aho-corasick = "1"
+crc32fast = "1"
+sha2 = "0.10"
+globset = "0.4"
+ignore = "0.4"
+walkdir = "2"
+rayon = "1"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
+webp = { version = "0.3", default-features = false }
+zip = { version = "2", default-features = false, features = ["deflate"] }
+arboard = "3"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+notify = "6"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_System_Console",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Threading",
+    "Win32_UI_Controls",
+    "Win32_UI_Controls_Dialogs",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = [
+    "-Oz",
+    "--enable-simd",
+    "--enable-bulk-memory",
+    "--enable-nontrapping-float-to-int",
+    "--enable-sign-ext",
+    "--enable-mutable-globals",
+    "--enable-reference-types",
+    "--enable-multivalue",
+]
+
+# Wasm 使用默认 release 配置：保留 target_features 自定义段以消除 wasm-bindgen 警告
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+
+# 原生 swamp.exe 专用配置：开启 strip 瘦身，并保留 unwind 以支持 panic 日志落盘
+[profile.release-exe]
+inherits = "release"
+opt-level = "s"
+strip = true
+panic = "unwind"

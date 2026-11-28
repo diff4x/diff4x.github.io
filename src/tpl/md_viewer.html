@@ -1,0 +1,3165 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; connect-src 'self'; object-src 'none'; base-uri 'self';">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Markdown Preview</title>
+<link rel="stylesheet" href="../css/font.css">
+<style>
+:root{--bg:#fff;--fg:#1f2328;--muted:#59636e;--border:#d1d9e0;--code-bg:#f6f8fa;--code-inline:rgba(129,139,152,.12);--link:#0969da;--bar:#333;--toc-bg:#fbfcfd;--toc-active-bg:rgba(9,105,218,.1);--sep:#d1d9e0;
+/* 编辑器：Monaco vs（亮） */
+--ed-bg:#fffffe;--ed-fg:#000;--ed-ln:#237893;--ed-ln-on:#0b216f;--ed-line:#eee;--ed-cursor:#000;--ed-sel:#e5ebf1;--ed-sel-on:#add6ff;--ed-hl:rgba(173,214,255,.3);--ed-bracket:#b9b9b9;
+--ed-kw:#00f;--ed-var:#018;--ed-str:#a31515;--ed-num:#098658;--ed-cmt:#008000;
+
+--h1:#cf222e;--h2:#0a3069;--h3:#0550ae;--h4:#8250df;--h5:#953800;
+--diff-bar-bg:#f3f6fa;--diff-add-bg:rgba(46,160,67,.13);--diff-add-bd:#1a7f37;--diff-add-hl:rgba(46,160,67,.34);--diff-del-bg:rgba(248,81,73,.13);--diff-del-bd:#cf222e;--diff-del-hl:rgba(248,81,73,.34);--diff-mod-dot:#d97706;--diff-fold-bg:#eef2f7;--diff-ring:#0969da;
+--mono:Consolas,Monaco,"Andale Mono","Ubuntu Mono",ui-monospace,SFMono-Regular,Menlo,"Liberation Mono",monospace;
+--sans:'Noto Serif SC',Georgia,"Songti SC","SimSun",serif;
+box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+:root[data-theme="dark"]{--bg:#222830;--fg:#d2d7e1;--muted:#9198a1;--border:#3e444e;--code-bg:#272c37;--code-inline:rgba(101,108,118,.2);--link:#4493f8;--bar:#333;--toc-bg:#1d2229;--toc-active-bg:rgba(68,147,248,.16);--sep:#31363d;
+/* 编辑器：Monaco vs-dark */
+--ed-bg:#1e1e1e;--ed-fg:#d4d4d4;--ed-ln:#858585;--ed-ln-on:#c6c6c6;--ed-line:#282828;--ed-cursor:#aeafad;--ed-sel:#3a3d41;--ed-sel-on:#264f78;--ed-hl:rgba(173,214,255,.15);--ed-bracket:#888;
+--ed-kw:#569cd6;--ed-var:#74b0df;--ed-str:#ce9178;--ed-num:#b5cea8;--ed-cmt:#608b4e;
+--h1:#ff7b72;--h2:#a5d6ff;--h3:#79c0ff;--h4:#d2a8ff;--h5:#ffa657;
+--diff-bar-bg:#1b2028;--diff-add-bg:rgba(46,160,67,.18);--diff-add-bd:#3fb950;--diff-add-hl:rgba(46,160,67,.44);--diff-del-bg:rgba(248,81,73,.18);--diff-del-bd:#f85149;--diff-del-hl:rgba(248,81,73,.44);--diff-mod-dot:#f59e0b;--diff-fold-bg:#282f3a;--diff-ring:#58a6ff}
+html{scroll-padding-top:env(safe-area-inset-top,0px);height:100%;background:var(--bg);font-family:var(--sans)}
+body{margin:0;height:100%;display:flex;flex-direction:column;background:var(--bg);color:var(--fg);font-family:var(--sans);overflow:hidden}
+:focus-visible{outline:2px solid #4493f8;outline-offset:2px}
+.bar{flex:none;display:flex;align-items:center;flex-wrap:wrap;gap:4px 10px;padding:7px 14px;background:var(--bar);color:#fff;user-select:none}
+.bar h1{margin:0 8px 0 0;font-size:14px;font-weight:600}
+.bar button{font:inherit;font-size:13px;color:#fff;background:none;border:0;padding:5px 10px;border-radius:4px;cursor:pointer}
+.bar button:hover,.bar button.tp-hover{background:rgba(255,255,255,.14)}
+.bar button.active{background:rgba(255,255,255,.22)}
+.bar button:disabled{opacity:.5;cursor:not-allowed}
+.bar button.primary{background:#238636}
+.bar button.primary:hover,.bar button.primary.tp-hover{background:#2ea043}
+.status{font-size:12px;color:#8b949e}
+.opts{margin-left:auto;display:flex;align-items:center;gap:14px}
+.opts label{display:flex;align-items:center;gap:5px;font-size:13px;cursor:pointer}
+body.readonly .edit-only,body.readonly .ed,body.readonly #sep,
+body.diff-mode .edit-only,body.diff-mode .ed,body.diff-mode #sep{display:none!important}
+body.readonly #panes,body.diff-mode #panes{flex-direction:row!important}
+body.readonly .pv-wrap,body.diff-mode .pv-wrap{flex:1 1 100%!important}
+#panes{flex:1;min-height:0;display:flex;flex-direction:row}
+.ed{flex:1 1 0;min-width:0;min-height:0;position:relative;background:var(--ed-bg)}
+.pv-wrap{flex:1 1 226px;min-width:0;min-height:0;position:relative;display:flex;flex-direction:row}
+.pv{flex:1 1 0;min-width:0;min-height:0;overflow:auto}
+#ed{width:100%;height:100%;box-sizing:border-box;border:0;resize:none;padding:12px 14px;background:var(--ed-bg);color:var(--ed-fg);font:14px/1.65 var(--mono);outline:none}
+.CodeMirror{position:absolute;inset:0;overflow:hidden;direction:ltr;background:var(--ed-bg);color:var(--ed-fg);font:14px/1.65 var(--mono)}
+.CodeMirror-scroll{overflow:scroll!important;margin-bottom:-50px;margin-right:-50px;padding-bottom:50px;height:100%;outline:0;position:relative;z-index:0}
+.CodeMirror-sizer{position:relative;border-right:50px solid transparent}
+.CodeMirror-vscrollbar,.CodeMirror-hscrollbar,.CodeMirror-scrollbar-filler,.CodeMirror-gutter-filler{position:absolute;z-index:6;display:none;outline:0}
+.CodeMirror-vscrollbar{right:0;top:0;overflow:hidden scroll}
+.CodeMirror-hscrollbar{bottom:0;left:0;overflow:scroll hidden}
+.CodeMirror-scrollbar-filler{right:0;bottom:0}
+.CodeMirror-gutter-filler{left:0;bottom:0}
+.CodeMirror-gutters{position:absolute;left:0;top:0;min-height:100%;z-index:3;background:var(--ed-bg);white-space:nowrap}
+.CodeMirror-gutter{white-space:normal;height:100%;display:inline-block;vertical-align:top;margin-bottom:-50px}
+.CodeMirror-gutter-wrapper{position:absolute;z-index:4;background:none!important;border:0!important}
+.CodeMirror-gutter-background{position:absolute;top:0;bottom:0;z-index:4}
+.CodeMirror-gutter-elt{position:absolute;cursor:default;z-index:4}
+.CodeMirror-linenumber{padding:0 3px 0 5px;min-width:20px;text-align:right;color:var(--ed-ln);white-space:nowrap}
+.CodeMirror-lines{padding:4px 0;cursor:text;min-height:1px}
+.CodeMirror pre.CodeMirror-line,.CodeMirror pre.CodeMirror-line-like{padding:0 4px;border:0;background:transparent;font:inherit;margin:0;white-space:pre;word-wrap:normal;line-height:inherit;color:inherit;z-index:2;position:relative;overflow:visible}
+.CodeMirror-wrap pre.CodeMirror-line,.CodeMirror-wrap pre.CodeMirror-line-like{word-wrap:break-word;white-space:pre-wrap;word-break:normal}
+.CodeMirror-linebackground{position:absolute;inset:0;z-index:0}
+.CodeMirror-measure{position:absolute;width:100%;height:0;overflow:hidden;visibility:hidden}
+.CodeMirror-measure pre{position:static}
+.CodeMirror-cursor{position:absolute;pointer-events:none;width:0;border-left:2px solid var(--ed-cursor)}
+div.CodeMirror-cursors{visibility:hidden;position:relative;z-index:3}
+.CodeMirror-focused div.CodeMirror-cursors{visibility:visible}
+.CodeMirror-selected{background:var(--ed-sel)}
+.CodeMirror-focused .CodeMirror-selected{background:var(--ed-sel-on)}
+/* Monaco 当前行：仅 1px 描边，无填充 */
+.CodeMirror-activeline-background{background:transparent;box-shadow:inset 0 1px 0 var(--ed-line),inset 0 -1px 0 var(--ed-line),inset -1px 0 0 var(--ed-line)}
+.CodeMirror-gutter-background.CodeMirror-activeline-gutter{box-shadow:inset 0 1px 0 var(--ed-line),inset 0 -1px 0 var(--ed-line)}
+.CodeMirror-activeline-gutter .CodeMirror-linenumber{color:var(--ed-ln-on)}
+.CodeMirror-matchingbracket{background:rgba(0,100,0,.1);outline:1px solid var(--ed-bracket)}
+.CodeMirror-scroll,.CodeMirror-sizer,.CodeMirror-gutter,.CodeMirror-gutters,.CodeMirror-linenumber{box-sizing:content-box}
+/* 标题 / 列表符 / --- / 表格线 = keyword；行内代码 = variable；链接与字符串 = string */
+.cm-header,.cm-formatting-header,.cm-hr,.cm-formatting-list,.cm-keyword,.cm-tag,.cm-atom{color:var(--ed-kw)}
+.cm-header{font-weight:400}
+.cm-strong{font-weight:700}.cm-em{font-style:italic}.cm-strikethrough{text-decoration:line-through}
+.cm-comment{color:var(--ed-var)}
+.cm-link,.cm-url,.cm-string,.cm-string-2{color:var(--ed-str)}
+.cm-number{color:var(--ed-num)}
+.cm-formatting-quote{color:var(--ed-cmt)}
+.cm-tbl{color:var(--ed-kw)}
+.cm-matchhighlight{background:var(--ed-hl)}
+#ctx{position:fixed;z-index:20;min-width:220px;padding:4px;background:var(--ed-bg);color:var(--ed-fg);border:1px solid var(--border);border-radius:6px;box-shadow:0 4px 16px rgba(0,0,0,.25);font-size:13px}
+#ctx button{display:flex;justify-content:space-between;gap:24px;width:100%;padding:6px 10px;font:inherit;color:inherit;background:none;border:0;border-radius:4px;cursor:pointer;text-align:left}
+#ctx button:hover,#ctx button.tp-hover{background:var(--code-bg)}
+#ctx kbd{font:inherit;color:var(--muted)}
+#ctx hr{margin:4px 0;border:0;border-top:1px solid var(--border)}
+.sep{flex:none;width:6px;background:var(--sep);cursor:col-resize;touch-action:none}
+.sep:hover,.sep.tp-hover,.sep.on{background:var(--link)}
+#toc{flex:0 0 220px;min-width:110px;display:flex;flex-direction:column;background:var(--toc-bg);font-size:13px;font-family:var(--sans);z-index:10}
+body.readonly #toc{flex:0 0 240px}
+.toc-hd{flex:none;display:flex;align-items:center;justify-content:space-between;padding:8px 12px;border-bottom:1px solid var(--border);font-size:12px;font-weight:600;color:var(--muted);user-select:none}
+#toc-list{flex:1;overflow-y:auto;padding:6px 8px 16px}
+#toc-list a{display:block;padding:4px 8px;border-radius:4px;color:var(--fg);text-decoration:none;line-height:1.45;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;border-left:2px solid transparent}
+#toc-list a:hover,#toc-list a.tp-hover{background:var(--code-bg);color:var(--link)}
+#toc-list a.active{background:var(--toc-active-bg);color:var(--link);border-left-color:var(--link);font-weight:600}
+#toc-list .toc-no{color:var(--muted);font-size:11.5px;margin-right:4px}
+#toc-list .toc-empty{padding:12px 8px;color:var(--muted);font-size:12px}
+.md{max-width:860px;margin:0 auto;padding:24px 32px 64px;font-size:16px;line-height:1.65;word-wrap:break-word;font-family:var(--sans)}
+.md>:first-child{margin-top:0}
+.md h1,.md h2,.md h3,.md h4,.md h5,.md h6{margin:1.5em 0 .6em;font-weight:600;line-height:1.25}
+.md h1,.md h2{padding-bottom:.3em;border-bottom:1px solid var(--border)}
+.md h1{font-size:2em}.md h2{font-size:1.5em}.md h3{font-size:1.25em}.md h4{font-size:1em}.md h5{font-size:.875em}.md h6{font-size:.85em;color:var(--muted)}
+.md p,.md ul,.md ol,.md blockquote,.md pre,.md table{margin:0 0 1em}
+.md ul,.md ol{padding-left:2em}
+.md li+li{margin-top:.25em}
+.md li>input{margin:0 .4em .2em -1.4em;vertical-align:middle}
+.md a{color:var(--link);text-decoration:none}.md a:hover,.md a.tp-hover{text-decoration:underline}
+.md blockquote{padding:0 1em;color:var(--muted);border-left:.25em solid var(--border)}
+.md code{font-family:var(--mono);font-size:88%;padding:.2em .4em;background:var(--code-inline);border-radius:6px}
+.md pre{padding:16px;overflow:auto;background:var(--code-bg);border-radius:6px;line-height:1.45}
+.md pre code{padding:0;background:none;font-family:var(--mono)}
+.md table{border-collapse:collapse;display:block;overflow:auto;width:max-content;max-width:100%}
+.md th,.md td{padding:6px 13px;border:1px solid var(--border)}
+.md th{font-weight:600}
+.md tr:nth-child(2n){background:var(--code-bg)}
+.md hr{height:.25em;margin:1.5em 0;background:var(--border);border:0}
+.md img{max-width:100%}
+.math{font-family:"Cambria Math","STIX Two Math","Latin Modern Math","Times New Roman",var(--sans);font-size:1.04em}
+.math i{font-style:italic}
+.math .tx{font-style:normal;white-space:pre-wrap}
+.math .rm{font-style:normal}
+.math .mr{margin:0 .3em}.math .mb{margin:0 .2em}.math .mp{margin-right:.2em}
+.math sup,.math sub{font-size:.72em;line-height:0}
+.math .ss{display:inline-flex;flex-direction:column;vertical-align:middle;line-height:1.1}
+.math .ss sup,.math .ss sub{position:static;vertical-align:baseline;line-height:1.1}
+.math .frac{display:inline-flex;flex-direction:column;vertical-align:middle;text-align:center;margin:0 .15em;line-height:1.3}
+.math .frac>span{padding:0 .25em}
+.math .frac>span:first-child{border-bottom:1px solid currentColor}
+.math .sqrt>span{border-top:1px solid currentColor;padding:0 .15em}
+.math .ol{border-top:1px solid currentColor}
+.math-display{display:block;margin:.8em 0;text-align:center;overflow-x:auto;font-size:1.12em}
+.math-src{color:var(--muted)}
+.hljs-keyword,.hljs-doctag,.hljs-selector-tag{color:var(--h1)}
+.hljs-string,.hljs-regexp{color:var(--h2)}
+.hljs-number,.hljs-literal,.hljs-attr,.hljs-attribute,.hljs-variable,.hljs-selector-class,.hljs-selector-id{color:var(--h3)}
+.hljs-comment,.hljs-quote{color:var(--muted)}
+.hljs-title,.hljs-section{color:var(--h4)}
+.hljs-built_in,.hljs-type,.hljs-name,.hljs-symbol{color:var(--h5)}
+@media (max-width:900px){
+body:not(.readonly) #panes{flex-direction:column-reverse}
+body:not(.readonly) .ed,body:not(.readonly) .pv-wrap{flex:1 1 0}
+body:not(.readonly) #sep{width:auto;height:6px;cursor:row-resize}
+#toc{flex:0 0 180px}
+.md{padding:16px 18px 48px}
+}
+#md-pinyin-tooltip{position:fixed;display:none;pointer-events:none;z-index:2147483647;background:var(--fg);color:var(--bg);padding:3px 9px;border-radius:4px;font:600 13px/1.4 system-ui,-apple-system,sans-serif;white-space:nowrap;box-shadow:0 4px 12px rgba(0,0,0,.28)}
+#md-excerpt-btn{position:fixed;display:none;z-index:2147483647;background:#516194;color:#fff;padding:2px 8px;border-radius:6px;font:12.5px/1.4 system-ui,-apple-system,"Microsoft YaHei",sans-serif;cursor:pointer;user-select:none;box-shadow:0 4px 12px rgba(0,0,0,.35)}
+#md-excerpt-btn:hover,#md-excerpt-btn.tp-hover{filter:brightness(1.08)}
+#diff-bar{flex:none;display:flex;align-items:center;flex-wrap:wrap;gap:6px 8px;padding:6px 14px;background:var(--diff-bar-bg);border-bottom:1px solid var(--border);color:var(--fg);font:12.5px/1.35 system-ui,-apple-system,"Microsoft YaHei",sans-serif;user-select:none}
+#diff-bar[hidden]{display:none!important}
+#diff-bar select{font:inherit;color:var(--fg);background:var(--bg);border:1px solid var(--border);border-radius:4px;padding:2px 6px;max-width:210px;cursor:pointer}
+#diff-bar button{font:inherit;color:var(--fg);background:var(--bg);border:1px solid var(--border);border-radius:4px;padding:2px 8px;cursor:pointer}
+#diff-bar button:hover,#diff-bar button.tp-hover{background:var(--code-bg);border-color:var(--link)}
+#diff-bar button:disabled{opacity:.45;cursor:not-allowed}
+#diff-bar .diff-lbl{color:var(--muted);font-family:Georgia,serif;font-style:italic}
+#diff-bar .diff-sep{width:1px;height:16px;background:var(--border)}
+#diff-bar .diff-seg{display:inline-flex;border:1px solid var(--border);border-radius:4px;overflow:hidden}
+#diff-bar .diff-seg button{border:0;border-radius:0;padding:2px 9px}
+#diff-bar .diff-seg button+button{border-left:1px solid var(--border)}
+#diff-bar .diff-seg button.active{background:var(--link);color:#fff}
+#diff-bar .diff-chk{display:inline-flex;align-items:center;gap:4px;cursor:pointer;color:var(--fg)}
+#diff-bar .diff-stat{font-family:var(--mono);font-size:12px;display:inline-flex;align-items:center;gap:6px}
+#diff-bar .diff-stat .st-add{color:var(--diff-add-bd);font-weight:600}
+#diff-bar .diff-stat .st-del{color:var(--diff-del-bd);font-weight:600}
+#diff-bar .diff-stat .st-eq{color:var(--muted)}
+#diff-bar .diff-nav{display:inline-flex;align-items:center;gap:4px}
+#diff-bar #diff-pos{font-family:var(--mono);font-size:11.5px;color:var(--muted);min-width:34px;text-align:center}
+#diff-bar .diff-exit{margin-left:auto;color:var(--diff-del-bd);border-color:var(--diff-del-bd)}
+#toc-list a{display:flex;align-items:center}
+#toc-list a .toc-txt{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0}
+.toc-diff-dot{display:inline-block;width:6px;height:6px;border-radius:50%;margin-left:6px;flex-shrink:0}
+.toc-diff-dot.is-add{background:var(--diff-add-bd)}
+.toc-diff-dot.is-del{background:var(--diff-del-bd)}
+.toc-diff-dot.is-mod{background:var(--diff-mod-dot)}
+.md-diff-blk{border-radius:4px;padding:3px 10px 3px 11px;margin:0 -10px .85em -15px;border-left:4px solid transparent}
+.md-diff-add{background:var(--diff-add-bg)!important;border-left-color:var(--diff-add-bd)!important}
+.md-diff-del{background:var(--diff-del-bg)!important;border-left-color:var(--diff-del-bd)!important;opacity:.88}
+.md-diff-blk>:first-child{margin-top:.15em}.md-diff-blk>:last-child{margin-bottom:.15em}
+.md li.md-diff-add,.md li.md-diff-del{padding:2px 8px;margin-left:-8px;border-left:4px solid transparent;border-radius:3px}
+.md tr.md-diff-add,.md tr.md-diff-del{background:transparent!important}
+.md tr.md-diff-add>td,.md tr.md-diff-add>th{background:var(--diff-add-bg)!important}
+.md tr.md-diff-del>td,.md tr.md-diff-del>th{background:var(--diff-del-bg)!important;opacity:.88}
+.md tr.md-diff-add>td:first-child,.md tr.md-diff-add>th:first-child{box-shadow:inset 4px 0 0 var(--diff-add-bd)}
+.md tr.md-diff-del>td:first-child,.md tr.md-diff-del>th:first-child{box-shadow:inset 4px 0 0 var(--diff-del-bd)}
+.md pre.md-diff-pre{padding:12px 16px}
+.md-diff-cline{display:block;padding:0 8px 0 12px;margin:0 -8px 0 -16px;border-left:4px solid transparent;min-height:1.45em}
+.md-diff-wd-add{background:var(--diff-add-hl);border-radius:2px;padding:0 1px}
+.md-diff-wd-del{background:var(--diff-del-hl);border-radius:2px;padding:0 1px;text-decoration:line-through;text-decoration-color:rgba(207,34,46,.55)}
+.md-diff-hunk-active{outline:2px solid var(--diff-ring);outline-offset:2px}
+.md-diff-fold{display:block;width:100%;margin:8px 0;padding:4px 10px;border:1px dashed var(--border);border-radius:4px;background:var(--diff-fold-bg);color:var(--muted);font:12px/1.4 system-ui,-apple-system,"Microsoft YaHei",sans-serif;text-align:center;cursor:pointer}
+.md-diff-fold:hover,.md-diff-fold.tp-hover{color:var(--link);border-color:var(--link)}
+.md-diff-hidden{display:none!important}
+.md-diff-banner{padding:10px 14px;margin-bottom:14px;border:1px solid var(--border);border-radius:6px;background:var(--diff-bar-bg);color:var(--muted);font:13px/1.5 system-ui,-apple-system,"Microsoft YaHei",sans-serif}
+.md.is-source-diff{max-width:1120px}
+.md-src-diff{border:1px solid var(--border);border-radius:6px;overflow-x:auto;font:13px/1.55 var(--mono);background:var(--bg)}
+.md-src-row{display:grid;grid-template-columns:46px 46px 22px minmax(0,1fr);border-left:3px solid transparent}
+.md-src-row.is-add{background:var(--diff-add-bg);border-left-color:var(--diff-add-bd)}
+.md-src-row.is-del{background:var(--diff-del-bg);border-left-color:var(--diff-del-bd)}
+.md-src-row.md-diff-hunk-active{outline:2px solid var(--diff-ring);outline-offset:-2px}
+.md-src-ln{padding:0 6px;color:var(--muted);text-align:right;border-right:1px solid var(--border);user-select:none;font-variant-numeric:tabular-nums;opacity:.75}
+.md-src-sign{text-align:center;user-select:none;font-weight:700}
+.md-src-row.is-add .md-src-sign{color:var(--diff-add-bd)}
+.md-src-row.is-del .md-src-sign{color:var(--diff-del-bd)}
+.md-src-code{white-space:pre-wrap;word-break:break-word;padding:0 8px}
+.md-src-fold{display:block;width:100%;border:0;border-top:1px dashed var(--border);border-bottom:1px dashed var(--border);padding:4px 10px;background:var(--diff-fold-bg);color:var(--muted);font:12px/1.4 system-ui,-apple-system,"Microsoft YaHei",sans-serif;text-align:center;cursor:pointer}
+.md-src-fold:hover,.md-src-fold.tp-hover{color:var(--link)}
+@media print{
+:root{padding:0}.bar,#diff-bar,.ed,#sep,#toc-sep,#ctx,#toc,#md-pinyin-tooltip,#md-excerpt-btn{display:none!important}
+html,body{height:auto;overflow:visible}#panes,.pv-wrap{display:block}.pv{overflow:visible}
+.md-diff-add,.md-diff-del,.md-diff-wd-add,.md-diff-wd-del,.md-src-row{print-color-adjust:exact;-webkit-print-color-adjust:exact}
+}
+</style>
+</head>
+<body>
+<header class="bar">
+  <h1 id="title">README.md</h1>
+  <button id="save" class="primary edit-only" title="一键固化覆盖原文件 (Ctrl+S)">Save</button>
+  <button id="reload" class="edit-only" title="重新从原文件加载">Reload</button>
+  <button id="diff-toggle" hidden title="对比不同版本改动">Diff</button>
+  <button id="copy">Copy</button>
+  <button id="pdf">Export PDF</button>
+  <span id="status" class="status"></span>
+  <div class="opts">
+    <label class="edit-only"><input type="checkbox" id="sync" checked> Sync scroll</label>
+    <label><input type="checkbox" id="dark" checked> Dark mode</label>
+  </div>
+</header>
+<div id="diff-bar" hidden>
+  <select id="diff-to" aria-label="目标版本"></select>
+  <span class="diff-lbl">based on</span>
+  <select id="diff-from" aria-label="基准版本"></select>
+  <button id="diff-swap" type="button" title="交换对比方向">⇌</button>
+  <span class="diff-sep"></span>
+  <div class="diff-seg" role="group" aria-label="对比视图">
+    <button id="diff-mode-render" type="button" class="active" title="渲染态块级与字级对比">渲染</button>
+    <button id="diff-mode-source" type="button" title="Markdown 源码逐行对比">源码</button>
+  </div>
+  <label class="diff-chk" title="折叠未变动的上下文"><input type="checkbox" id="diff-only"> 仅看改动</label>
+  <span class="diff-sep"></span>
+  <span id="diff-stat" class="diff-stat"></span>
+  <div class="diff-nav">
+    <button id="diff-prev" type="button" title="上一处改动 (Shift+F7 / [)">▲</button>
+    <span id="diff-pos">0/0</span>
+    <button id="diff-next" type="button" title="下一处改动 (F7 / ])">▼</button>
+  </div>
+  <button id="diff-exit" type="button" class="diff-exit">退出 Diff</button>
+</div>
+<main id="panes">
+  <section class="ed"><textarea id="ed" spellcheck="false" aria-label="Markdown editor"></textarea></section>
+  <div id="sep" class="sep" role="separator" aria-orientation="vertical" aria-label="Resize editor and preview" title="拖拽调整尺寸，双击恢复默认比例"></div>
+  <div class="pv-wrap" id="pv-wrap">
+    <section class="pv" id="pv"><article class="md" id="out"></article></section>
+    <div id="toc-sep" class="sep" role="separator" aria-orientation="vertical" aria-label="Resize preview and TOC" title="拖拽调整目录宽度，双击恢复默认宽度"></div>
+    <aside id="toc" aria-label="目录大纲">
+      <div class="toc-hd"><span>目录</span></div>
+      <nav id="toc-list"></nav>
+    </aside>
+  </div>
+</main>
+<div id="ctx" role="menu" hidden></div>
+
+<script src="../third/markdown/marked.min.js"></script>
+<script src="../third/markdown/purify.min.js"></script>
+<script src="../third/markdown/highlight.min.js"></script>
+<script>
+/**
+ * md_viewer.html 内联引擎 —— Markdown 预览/编辑、TeX 数学渲染、目录联动与双轨 Diff
+ */
+(() => {
+  if (window.top && window.top.VirtualCursor) {
+    try { window.top.VirtualCursor.attach(window); } catch (_) { }
+  }
+
+  const $ = s => document.querySelector(s), root = document.documentElement;
+  const out = $('#out'), pv = $('#pv'), pvWrap = $('#pv-wrap'), ed = $('#ed');
+  const sync = $('#sync'), dark = $('#dark'), panes = $('#panes'), sep = $('#sep');
+  const statusEl = $('#status'), saveBtn = $('#save');
+  const tocEl = $('#toc'), tocList = $('#toc-list'), tocSep = $('#toc-sep'), edPane = $('.ed');
+  const diffToggleBtn = $('#diff-toggle'), diffBar = $('#diff-bar');
+  const diffToSel = $('#diff-to'), diffFromSel = $('#diff-from'), diffSwapBtn = $('#diff-swap');
+  const diffModeRenderBtn = $('#diff-mode-render'), diffModeSourceBtn = $('#diff-mode-source');
+  const diffOnlyCb = $('#diff-only'), diffStatEl = $('#diff-stat');
+  const diffPrevBtn = $('#diff-prev'), diffNextBtn = $('#diff-next'), diffPosEl = $('#diff-pos'), diffExitBtn = $('#diff-exit');
+
+  const readStore = k => {
+    try { const v = localStorage.getItem(k); return v === null ? undefined : JSON.parse(v); }
+    catch { return localStorage.getItem(k); }
+  };
+
+  const isLocalHost = (location.hostname === 'localhost' || location.hostname === '127.0.0.1' || location.protocol === 'file:') && location.port !== '9000';
+  const isEditable = readStore('online_flag') !== undefined ? (readStore('online_flag') === '0') : isLocalHost;
+  if (!isEditable) document.body.classList.add('readonly');
+
+  const params = new URLSearchParams(location.search);
+  const rawMdPath = (params.get('file') || (window.top && window.top.readme_md) || readStore('readme_md') || '/README.md').trim();
+  let mdPath = '/README.md';
+  let relPath = 'README.md';
+  let invalidMdPathReason = '';
+  try {
+    if (!rawMdPath || /\\/.test(rawMdPath) || /^\/\//.test(rawMdPath)) throw new Error('非法路径格式');
+    const candidate = rawMdPath.startsWith('/') ? rawMdPath : '/' + rawMdPath;
+    const parsed = new URL(candidate, location.origin);
+    if (parsed.origin !== location.origin) throw new Error('禁止跨源路径');
+    let decodedPath = parsed.pathname;
+    try { decodedPath = decodeURIComponent(decodedPath); } catch (_) { }
+    const segs = decodedPath.replace(/^\/+/, '').split('/');
+    if (!segs.length || segs.some(s => !s || s === '.' || s === '..' || s.startsWith('.'))) {
+      throw new Error('路径含非法段');
+    }
+    if (/^_build$/i.test(segs[0])) throw new Error('禁止访问 _build 目录');
+    if (!/\.md$/i.test(decodedPath)) throw new Error('仅支持 .md 文件');
+    mdPath = '/' + segs.map(encodeURIComponent).join('/');
+    relPath = segs.join('/');
+  } catch (err) {
+    invalidMdPathReason = (err && err.message) || '非法 Markdown 路径';
+    relPath = rawMdPath || 'README.md';
+  }
+  const initHash = params.get('hash') || '';
+  $('#title').textContent = relPath;
+
+  const setTheme = d => { root.dataset.theme = d ? 'dark' : 'light'; dark.checked = d; };
+  setTheme(localStorage.getItem('mlp-dark') !== '0');
+  dark.onchange = () => {
+    setTheme(dark.checked);
+    try { localStorage.setItem('mlp-dark', dark.checked ? '1' : '0'); } catch (_) { }
+  };
+
+  (async function syncMainSiteFonts() {
+    try {
+      const topFont = window.top && window.top.getComputedStyle
+        ? window.top.getComputedStyle(window.top.document.body).fontFamily : '';
+      if (topFont) root.style.setProperty('--sans', topFont);
+    } catch (_) { }
+    try {
+      const res = await fetch('../css/content.css');
+      if (!res.ok) return;
+      const css = await res.text();
+      let bodyFont = '', codeFont = '';
+      try {
+        const sheet = new CSSStyleSheet();
+        sheet.replaceSync(css);
+        for (const rule of sheet.cssRules) {
+          if (rule.type !== CSSRule.STYLE_RULE || !rule.style.fontFamily) continue;
+          const sels = rule.selectorText.split(',').map(s => s.trim().toLowerCase());
+          if (sels.some(s => s === 'body' || s === 'html')) bodyFont = rule.style.fontFamily;
+          if (sels.some(s => s === 'code' || s === 'pre code' || s.endsWith(' code') || s.startsWith('code['))) codeFont = rule.style.fontFamily;
+        }
+      } catch (_) {
+        const mBody = /(?:^|[}\s])(?:html|body)\s*\{[^}]*font-family\s*:\s*([^;}]+)/i.exec(css);
+        const mCode = /(?:^|[}\s,])code\s*\{[^}]*font-family\s*:\s*([^;}]+)/i.exec(css);
+        if (mBody) bodyFont = mBody[1].trim();
+        if (mCode) codeFont = mCode[1].trim();
+      }
+      if (bodyFont) root.style.setProperty('--sans', bodyFont);
+      if (codeFont) root.style.setProperty('--mono', codeFont);
+    } catch (_) { }
+  })();
+
+  const ok = !!(window.marked && window.DOMPurify);
+  if (ok) {
+    marked.setOptions({ gfm: true });
+    DOMPurify.addHook('afterSanitizeAttributes', n => {
+      if (n.tagName === 'A' && n.hasAttribute('href') && /^https?:\/\//i.test(n.getAttribute('href'))) {
+        n.setAttribute('target', '_blank'); n.setAttribute('rel', 'noopener noreferrer');
+      }
+    });
+  }
+
+  let cm = null, rawText = '', diskText = '', raf = 0, saving = false;
+  let tocSig = '', tocHeadings = [], tocLinks = [], spyRaf = 0;
+  let syncAnchors = [], lastAnchorLine = 0, isDraggingSep = false;
+  let diffActive = false, diffMode = 'render', diffOnlyChanges = false, diffBusy = false;
+  let diffSnapshots = [], swCacheSnap = null;
+  let diffHunks = [], diffHunkIdx = -1, diffRenderSeq = 0;
+  let lcsDiffFn = null, lcsLoadPromise = null;
+
+  const normLF = s => String(s ?? '').replace(/\r\n?/g, '\n');
+  const getVal = () => cm ? cm.getValue() : (isEditable ? ed.value : rawText);
+  const setVal = v => {
+    rawText = v;
+    if (cm) { cm.setValue(v); cm.scrollTo(0, 0); } else { ed.value = v; ed.scrollTop = 0; }
+    if (raf) { cancelAnimationFrame(raf); raf = 0; }
+    render();
+  };
+
+  // --- Markdown 与轻量 TeX 渲染管线 ---
+
+  const escHtml = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const PH_OPEN = '\uE000', PH_CLOSE = '\uE001';
+
+  // 先用私有区字符保护公式，防止 marked 吞掉反斜杠或表格分隔符
+  function protectMath(src) {
+    const store = [];
+    const hold = (raw, tex, display) => PH_OPEN + (store.push({ raw, tex, display }) - 1) + PH_CLOSE;
+
+    const scan = s => {
+      let out = '', i = 0;
+      while (i < s.length) {
+        const c = s[i];
+        if (c === '\\') { out += s.substr(i, 2); i += 2; continue; }
+        if (c === '`') {
+          let j = i; while (s[j] === '`') j++;
+          const len = j - i; let k = j, end = -1;
+          while (k < s.length) {
+            if (s[k] !== '`') { k++; continue; }
+            let m = k; while (s[m] === '`') m++;
+            if (m - k === len) { end = m; break; }
+            k = m;
+          }
+          if (end < 0) end = j;
+          out += s.slice(i, end); i = end; continue;
+        }
+        if (c === '$') {
+          if (s[i + 1] === '$') {
+            const e = s.indexOf('$$', i + 2);
+            if (e > i + 2 && s.slice(i + 2, e).trim()) { out += hold(s.slice(i, e + 2), s.slice(i + 2, e), true); i = e + 2; }
+            else { out += '$$'; i += 2; }
+            continue;
+          }
+          if (i + 1 < s.length && !/\s/.test(s[i + 1])) {
+            let j = i + 1;
+            while (j < s.length && s[j] !== '$') j += s[j] === '\\' ? 2 : 1;
+            if (j < s.length && !/\s/.test(s[j - 1]) && !/\d/.test(s[j + 1] || '')) {
+              out += hold(s.slice(i, j + 1), s.slice(i + 1, j), false); i = j + 1; continue;
+            }
+          }
+        }
+        out += c; i++;
+      }
+      return out;
+    };
+
+    const lines = src.split('\n'), out = [], lineStarts = [], lineEnds = [];
+    let fence = '';
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const fm = /^\s*(`{3,}|~{3,})/.exec(line);
+      if (fence) {
+        out.push(line); lineStarts.push(i); lineEnds.push(i);
+        if (fm && fm[1][0] === fence[0] && fm[1].length >= fence.length && /^\s*[`~]+\s*$/.test(line)) fence = '';
+        continue;
+      }
+      if (fm) { fence = fm[1]; out.push(line); lineStarts.push(i); lineEnds.push(i); continue; }
+
+      const t = line.trim();
+      if (t.startsWith('$$') && t.indexOf('$$', 2) < 0) {
+        const body = [t.slice(2)], raw = [line];
+        let j = i + 1, tail = null;
+        for (; j < lines.length && j - i <= 30 && lines[j].trim() !== ''; j++) {
+          raw.push(lines[j]);
+          const e = lines[j].indexOf('$$');
+          if (e >= 0) { body.push(lines[j].slice(0, e)); tail = lines[j].slice(e + 2); break; }
+          body.push(lines[j]);
+        }
+        if (tail !== null && body.join('').trim()) {
+          out.push(line.match(/^\s*/)[0] + hold(raw.join('\n'), body.join('\n'), true) + scan(tail));
+          lineStarts.push(i); lineEnds.push(j);
+          i = j; continue;
+        }
+      }
+      out.push(scan(line)); lineStarts.push(i); lineEnds.push(i);
+    }
+    return { text: out.join('\n'), store, lineStarts, lineEnds };
+  }
+
+  function restoreMath(html, store) {
+    if (!store.length) return html;
+    const PH = new RegExp(PH_OPEN + '(\\d+)' + PH_CLOSE, 'g');
+    const asRaw = (_, i) => escHtml(store[i].raw);
+    const asMath = (_, i) => renderMath(store[i]);
+    return html.split(/(<pre[\s\S]*?<\/pre>|<code[\s\S]*?<\/code>)/i).map((seg, k) =>
+      k % 2 ? seg.replace(PH, asRaw)
+        : seg.split(/(<[^>]*>)/).map((p, n) => n % 2 ? p.replace(PH, asRaw) : p.replace(PH, asMath)).join('')
+    ).join('');
+  }
+
+  function renderMath({ raw, tex, display }) {
+    try { return `<span class="math${display ? ' math-display' : ''}">${texToHtml(tex)}</span>`; }
+    catch (_) { return `<code class="math-src">${escHtml(raw)}</code>`; }
+  }
+
+  const TEX_SYM = {
+    sim: '∼', approx: '≈', le: '≤', leq: '≤', ge: '≥', geq: '≥', ne: '≠', neq: '≠', equiv: '≡', ll: '≪', gg: '≫',
+    in: '∈', notin: '∉', subset: '⊂', subseteq: '⊆', supset: '⊃', cup: '∪', cap: '∩', emptyset: '∅', forall: '∀', exists: '∃',
+    to: '→', rightarrow: '→', leftarrow: '←', leftrightarrow: '↔', longrightarrow: '⟶', longleftarrow: '⟵',
+    Rightarrow: '⇒', Leftarrow: '⇐', Leftrightarrow: '⇔', mapsto: '↦',
+    times: '×', div: '÷', cdot: '·', pm: '±', mp: '∓', infty: '∞', partial: '∂', nabla: '∇', sum: '∑', prod: '∏', int: '∫',
+    lfloor: '⌊', rfloor: '⌋', lceil: '⌈', rceil: '⌉', langle: '⟨', rangle: '⟩', vert: '|', mid: '∣', Vert: '‖',
+    ldots: '…', dots: '…', cdots: '⋯', land: '∧', lor: '∨', neg: '¬', oplus: '⊕', otimes: '⊗',
+    quad: '\u2003', qquad: '\u2003\u2003', ',': '\u2009', ';': '\u2005', ':': '\u2005', '!': '', ' ': '\u00a0',
+    '%': '%', '_': '_', '{': '{', '}': '}', '&': '&', '#': '#', '$': '$', '|': '‖',
+    alpha: 'α', beta: 'β', gamma: 'γ', delta: 'δ', epsilon: 'ε', theta: 'θ', lambda: 'λ', mu: 'μ', pi: 'π', rho: 'ρ', sigma: 'σ', tau: 'τ', phi: 'φ', omega: 'ω',
+    Gamma: 'Γ', Delta: 'Δ', Theta: 'Θ', Lambda: 'Λ', Pi: 'Π', Sigma: 'Σ', Phi: 'Φ', Omega: 'Ω'
+  };
+  const TEX_FUNC = new Set(['min', 'max', 'log', 'ln', 'lg', 'exp', 'sin', 'cos', 'tan', 'lim', 'sup', 'inf', 'arg', 'det', 'gcd', 'mod', 'Pr']);
+  const TEX_REL = '=<>≤≥≠≈∼≡≪≫∈∉⊂⊆⊃→←↔⟶⟵⇒⇐⇔↦∣', TEX_BIN = '+−×÷·±∓∪∩∧∨⊕⊗';
+
+  function texToHtml(tex) {
+    let i = 0;
+    const skipWs = () => { while (i < tex.length && /\s/.test(tex[i])) i++; };
+    const unesc = s => s.replace(/\\([_%&#${}\\ ])/g, '$1');
+    const sym = ch => {
+      const e = escHtml(ch);
+      return !ch ? '' : TEX_REL.includes(ch) ? `<span class="mr">${e}</span>` : TEX_BIN.includes(ch) ? `<span class="mb">${e}</span>` : e;
+    };
+    const readRaw = () => {
+      skipWs();
+      if (tex[i] !== '{') return tex[i++] || '';
+      let d = 0, s = '';
+      for (i++; i < tex.length; i++) {
+        const c = tex[i];
+        if (c === '\\') { s += c + (tex[i + 1] || ''); i++; continue; }
+        if (c === '{') d++;
+        else if (c === '}') { if (d === 0) { i++; return s; } d--; }
+        s += c;
+      }
+      throw new Error('unclosed group');
+    };
+    const seq = stop => { let h = ''; while (i < tex.length && tex[i] !== stop) h += atom(true); return h; };
+    const group = () => {
+      skipWs();
+      if (tex[i] !== '{') return atom(false);
+      i++; const h = seq('}');
+      if (tex[i] !== '}') throw new Error('unclosed group');
+      i++; return h;
+    };
+    function atom(scripts) {
+      skipWs();
+      const base = (tex[i] === '^' || tex[i] === '_') ? '' : baseAtom();
+      let sup = '', sub = '';
+      if (scripts) for (; ;) {
+        skipWs();
+        if (tex[i] === '^' && !sup) { i++; sup = group(); }
+        else if (tex[i] === '_' && !sub) { i++; sub = group(); }
+        else break;
+      }
+      if (sup && sub) return `${base}<span class="ss"><sup>${sup}</sup><sub>${sub}</sub></span>`;
+      return sup ? `${base}<sup>${sup}</sup>` : sub ? `${base}<sub>${sub}</sub>` : base;
+    }
+    function baseAtom() {
+      if (i >= tex.length) return '';
+      const c = tex[i];
+      if (c === '\\') return command();
+      i++;
+      if (c === '{') {
+        const h = seq('}');
+        if (tex[i] !== '}') throw new Error('unclosed group');
+        i++; return h;
+      }
+      if (/[A-Za-z]/.test(c)) return `<i>${c}</i>`;
+      if (c === '~') return '\u00a0';
+      if (c === '-') return sym('\u2212');
+      if (c === '*') return '\u2217';
+      if (c === "'") return '\u2032';
+      if (c === ',') return '<span class="mp">,</span>';
+      return sym(c);
+    }
+    function command() {
+      i++;
+      const m = /^[A-Za-z]+/.exec(tex.slice(i));
+      const name = m ? m[0] : (tex[i] || '');
+      i += name.length || 1;
+      switch (name) {
+        case 'text': case 'mbox': case 'textrm': return `<span class="tx">${escHtml(unesc(readRaw()))}</span>`;
+        case 'mathrm': case 'operatorname': return `<span class="rm">${escHtml(unesc(readRaw()))}</span>`;
+        case 'textbf': case 'mathbf': case 'boldsymbol': return `<b>${escHtml(unesc(readRaw()))}</b>`;
+        case 'frac': case 'dfrac': case 'tfrac': { const a = group(), b = group(); return `<span class="frac"><span>${a}</span><span>${b}</span></span>`; }
+        case 'sqrt': return `<span class="sqrt">\u221a<span>${group()}</span></span>`;
+        case 'overline': return `<span class="ol">${group()}</span>`;
+        case 'left': case 'right': case 'big': case 'Big': case 'bigl': case 'bigr': case 'Bigl': case 'Bigr': case 'biggl': case 'biggr':
+          skipWs();
+          if (tex[i] === '.') { i++; return ''; }
+          return baseAtom();
+        case '\\': return '<br>';
+      }
+      if (Object.prototype.hasOwnProperty.call(TEX_SYM, name)) return sym(TEX_SYM[name]);
+      if (TEX_FUNC.has(name)) return `<span class="rm">${name}</span>`;
+      throw new Error('unsupported \\' + name);
+    }
+    const html = seq(null);
+    return html;
+  }
+
+  // 补齐 marked v4 在全角标点/汉字紧接标点时未闭合的 **加粗**
+  function fixBold(root) {
+    const BLOCK = 'ul,ol,pre,table,blockquote,p,div,h1,h2,h3,h4,h5,h6,hr';
+    const groups = new Map();
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    for (let n; (n = walker.nextNode());) {
+      if (!n.nodeValue.includes('**')) continue;
+      const p = n.parentNode;
+      if (p.closest && p.closest('pre,code')) continue;
+      if (!groups.has(p)) groups.set(p, []);
+      groups.get(p).push(n);
+    }
+    for (const nodes of groups.values()) {
+      const marks = [];
+      for (const node of nodes) {
+        const re = /\*+/g; let m;
+        while ((m = re.exec(node.nodeValue))) if (m[0].length === 2) marks.push({ node, idx: m.index });
+      }
+      const pairs = []; let open = null;
+      for (const mk of marks) {
+        const v = mk.node.nodeValue, before = v[mk.idx - 1], after = v[mk.idx + 2];
+        const canClose = before === undefined || !/\s/.test(before);
+        const canOpen = after === undefined || !/\s/.test(after);
+        if (open && canClose) { pairs.push([open, mk]); open = null; }
+        else if (!open && canOpen) open = mk;
+      }
+      for (const [o, c] of pairs.reverse()) {
+        const probe = document.createRange();
+        probe.setStart(o.node, o.idx + 2); probe.setEnd(c.node, c.idx);
+        if (probe.collapsed || probe.cloneContents().querySelector(BLOCK)) continue;
+        const same = o.node === c.node;
+        c.node.nodeValue = c.node.nodeValue.slice(0, c.idx) + c.node.nodeValue.slice(c.idx + 2);
+        o.node.nodeValue = o.node.nodeValue.slice(0, o.idx) + o.node.nodeValue.slice(o.idx + 2);
+        const r = document.createRange();
+        r.setStart(o.node, o.idx); r.setEnd(c.node, same ? c.idx - 2 : c.idx);
+        const strong = document.createElement('strong');
+        strong.appendChild(r.extractContents());
+        r.insertNode(strong);
+      }
+    }
+  }
+
+  function highlightCode(root) {
+    if (!window.hljs) return;
+    root.querySelectorAll('pre > code').forEach(el => {
+      const m = /(?:^|\s)language-([\w+#-]+)/.exec(el.className);
+      const lang = m && m[1].toLowerCase();
+      if (!lang || lang === 'text' || lang === 'plaintext' || lang === 'txt' || !hljs.getLanguage(lang)) return;
+      try { el.innerHTML = hljs.highlight(el.textContent, { language: lang }).value; } catch (_) { }
+    });
+  }
+
+  // --- 目录大纲、文档读写与工具栏 ---
+
+  // 锚点规则对齐 GitHub：不合并连续空格，确保含破折号标题锚点一致
+  function slugify(text) {
+    return String(text || '').trim().toLowerCase()
+      .replace(/[^\p{L}\p{M}\p{N}_\s-]/gu, '')
+      .replace(/\s/g, '-') || 'section';
+  }
+
+
+
+  function buildToc() {
+    const hs = Array.from(out.querySelectorAll('h1,h2,h3,h4,h5,h6'));
+    const usedIds = new Set();
+    hs.forEach(h => {
+      const base = slugify(h.textContent);
+      let id = base, n = 1;
+      while (usedIds.has(id)) id = `${base}-${n++}`;
+      usedIds.add(id);
+      h.id = id;
+    });
+    tocHeadings = hs;
+
+    const sig = hs.map(h => `${h.tagName}|${h.id}|${h.textContent.trim()}`).join('\n');
+    if (sig === tocSig) {
+      updateActiveToc();
+      return;
+    }
+    tocSig = sig;
+    tocList.textContent = '';
+    tocLinks = [];
+
+    if (hs.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'toc-empty';
+      empty.textContent = '暂无标题';
+      tocList.appendChild(empty);
+      return;
+    }
+
+    const minLv = Math.min(...hs.map(h => Number(h.tagName[1])));
+    const counters = [0, 0, 0, 0, 0, 0];
+    const frag = document.createDocumentFragment();
+
+    hs.forEach(h => {
+      const rawLv = Number(h.tagName[1]);
+      const depth = Math.max(0, rawLv - minLv);
+      for (let i = depth + 1; i < counters.length; i++) counters[i] = 0;
+      counters[depth]++;
+      const numStr = counters.slice(0, depth + 1).filter(n => n > 0).join('.');
+
+      const a = document.createElement('a');
+      a.href = '#' + h.id;
+      a.dataset.targetId = h.id;
+      a.style.paddingLeft = (8 + depth * 12) + 'px';
+      const titleText = h.textContent.trim();
+      a.title = `${numStr} ${titleText}`;
+
+      const noSpan = document.createElement('span');
+      noSpan.className = 'toc-no';
+      noSpan.textContent = numStr;
+      const txtSpan = document.createElement('span');
+      txtSpan.className = 'toc-txt';
+      txtSpan.textContent = titleText;
+      a.append(noSpan, txtSpan);
+      frag.appendChild(a);
+      tocLinks.push(a);
+    });
+    tocList.appendChild(frag);
+
+    updateActiveToc();
+  }
+
+  function updateActiveToc() {
+    spyRaf = 0;
+    if (tocHeadings.length === 0 || tocLinks.length === 0) return;
+    const pvRect = pv.getBoundingClientRect();
+    let activeIdx = 0;
+    for (let i = 0; i < tocHeadings.length; i++) {
+      const top = tocHeadings[i].getBoundingClientRect().top - pvRect.top;
+      if (top <= 48) activeIdx = i;
+      else break;
+    }
+    tocLinks.forEach((a, i) => {
+      const on = i === activeIdx;
+      a.classList.toggle('active', on);
+      if (on) {
+        const r = a.getBoundingClientRect();
+        const lr = tocList.getBoundingClientRect();
+        if (r.top < lr.top || r.bottom > lr.bottom) a.scrollIntoView({ block: 'nearest' });
+      }
+    });
+  }
+
+  pv.addEventListener('scroll', () => {
+    if (!spyRaf) spyRaf = requestAnimationFrame(updateActiveToc);
+  });
+
+  tocList.addEventListener('click', e => {
+    const a = e.target.closest && e.target.closest('a[data-target-id]');
+    if (!a) return;
+    e.preventDefault();
+    const target = document.getElementById(a.dataset.targetId);
+    if (!target) return;
+    if (target.classList.contains('md-diff-hidden') && target.dataset.foldId) {
+      expandFoldGroup(target.dataset.foldId);
+    }
+    target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
+
+  const PURIFY_OPTS = {
+    FORBID_TAGS: ['script', 'style', 'iframe', 'object', 'embed', 'form', 'svg', 'math', 'template'],
+    FORBID_ATTR: ['srcdoc', 'formaction'],
+    ALLOW_UNKNOWN_PROTOCOLS: false
+  };
+
+  function countNewlines(s) {
+    let n = 0;
+    for (let i = 0; i < s.length; i++) if (s.charCodeAt(i) === 10) n++;
+    return n;
+  }
+
+  function mapSpanLines(localStart, localEnd, lineStarts, lineEnds) {
+    const maxIdx = Math.max(0, lineStarts.length - 1);
+    const s = Math.max(0, Math.min(maxIdx, localStart));
+    const e = Math.max(s, Math.min(maxIdx, localEnd));
+    return [lineStarts[s] ?? s, lineEnds[e] ?? e];
+  }
+
+  function stampListLines(listEl, items, baseLine, lineStarts, lineEnds) {
+    const lis = Array.from(listEl.children).filter(el => el.tagName === 'LI');
+    let cur = baseLine;
+    for (let i = 0; i < items.length; i++) {
+      const it = items[i];
+      const raw = (it && it.raw) || '';
+      const totalNl = countNewlines(raw);
+      const leadNl = (raw.match(/^\n+/) || [''])[0].length;
+      const trimmedEnd = raw.replace(/\n+$/, '');
+      const innerNl = countNewlines(trimmedEnd.slice(leadNl));
+      const ls = cur + leadNl;
+      const le = ls + innerNl;
+      const li = lis[i];
+      if (li) {
+        const [origSl, origEl] = mapSpanLines(ls, le, lineStarts, lineEnds);
+        li.dataset.sl = String(origSl);
+        li.dataset.el = String(origEl);
+        const childLists = Array.from(li.children).filter(c => c.tagName === 'UL' || c.tagName === 'OL');
+        if (childLists.length > 0 && Array.isArray(it.tokens)) {
+          let subCur = cur;
+          let listIdx = 0;
+          for (const subTok of it.tokens) {
+            const sRaw = subTok.raw || '';
+            const sNl = countNewlines(sRaw);
+            if (subTok.type === 'list' && childLists[listIdx]) {
+              stampListLines(childLists[listIdx], subTok.items || [], subCur, lineStarts, lineEnds);
+              listIdx++;
+            }
+            subCur += sNl;
+          }
+        }
+      }
+      cur += totalNl;
+    }
+  }
+
+  function stampTableLines(tableEl, baseLine, lineStarts, lineEnds) {
+    const headTr = tableEl.querySelector('thead tr');
+    if (headTr) {
+      const [sl, el] = mapSpanLines(baseLine, baseLine, lineStarts, lineEnds);
+      headTr.dataset.sl = String(sl);
+      headTr.dataset.el = String(el);
+    }
+    const bodyTrs = tableEl.querySelectorAll('tbody tr');
+    bodyTrs.forEach((tr, idx) => {
+      const ln = baseLine + 2 + idx;
+      const [sl, el] = mapSpanLines(ln, ln, lineStarts, lineEnds);
+      tr.dataset.sl = String(sl);
+      tr.dataset.el = String(el);
+    });
+  }
+
+  function renderMarkdownInto(container, raw, withLineMap = false) {
+    const text = normLF(raw).replace(/^\uFEFF/, '');
+    if (!ok) { container.textContent = text; return; }
+    const { text: src, store, lineStarts, lineEnds } = protectMath(text);
+
+    if (!withLineMap || typeof marked.lexer !== 'function' || typeof marked.parser !== 'function') {
+      container.innerHTML = DOMPurify.sanitize(restoreMath(marked.parse(src), store), PURIFY_OPTS);
+      fixBold(container);
+      highlightCode(container);
+      return;
+    }
+
+    const tokens = marked.lexer(src);
+    const metaList = [];
+    const htmlParts = [];
+    let curLine = 0;
+
+    for (const tok of tokens) {
+      const rawTok = tok.raw || '';
+      const totalNl = countNewlines(rawTok);
+      if (tok.type === 'space' || tok.type === 'def') {
+        curLine += totalNl;
+        continue;
+      }
+      const leadNl = (rawTok.match(/^\n+/) || [''])[0].length;
+      const trimmedEnd = rawTok.replace(/\n+$/, '');
+      const innerNl = countNewlines(trimmedEnd.slice(leadNl));
+      const ls = curLine + leadNl;
+      const le = ls + innerNl;
+      const [origSl, origEl] = mapSpanLines(ls, le, lineStarts, lineEnds);
+
+      const sub = [tok];
+      sub.links = tokens.links;
+      const chunkHtml = marked.parser(sub);
+      if (chunkHtml && chunkHtml.trim()) {
+        const idx = metaList.length;
+        metaList.push({ origSl, origEl, ls, tok });
+        htmlParts.push(`<div data-md-chunk="${idx}">${chunkHtml}</div>`);
+      }
+      curLine += totalNl;
+    }
+
+    const tmp = document.createElement('div');
+    tmp.innerHTML = DOMPurify.sanitize(restoreMath(htmlParts.join(''), store), PURIFY_OPTS);
+
+    const frag = document.createDocumentFragment();
+    for (const node of Array.from(tmp.childNodes)) {
+      if (node.nodeType === Node.ELEMENT_NODE && node.hasAttribute('data-md-chunk')) {
+        const meta = metaList[Number(node.getAttribute('data-md-chunk'))];
+        for (const child of Array.from(node.childNodes)) {
+          if (child.nodeType === Node.ELEMENT_NODE && meta) {
+            child.dataset.sl = String(meta.origSl);
+            child.dataset.el = String(meta.origEl);
+            if (child.tagName === 'TABLE') {
+              stampTableLines(child, meta.ls, lineStarts, lineEnds);
+            } else if ((child.tagName === 'UL' || child.tagName === 'OL') && meta.tok && meta.tok.type === 'list') {
+              stampListLines(child, meta.tok.items || [], meta.ls, lineStarts, lineEnds);
+            }
+          }
+          frag.appendChild(child);
+        }
+      } else {
+        frag.appendChild(node);
+      }
+    }
+    container.replaceChildren(frag);
+    fixBold(container);
+    highlightCode(container);
+  }
+
+  function rebuildSyncAnchors() {
+    const anchors = [];
+    const pushList = (listEl) => {
+      for (const child of Array.from(listEl.children)) {
+        if (child.tagName !== 'LI') continue;
+        const sl = Number(child.dataset.sl);
+        const elLine = Number(child.dataset.el);
+        const nestedLists = Array.from(child.children).filter(c => c.tagName === 'UL' || c.tagName === 'OL');
+        if (Number.isFinite(sl) && Number.isFinite(elLine)) {
+          if (nestedLists.length > 0) {
+            const firstNestedLi = nestedLists[0].querySelector('li[data-sl]');
+            const nestedSl = firstNestedLi ? Number(firstNestedLi.dataset.sl) : NaN;
+            const ownEnd = Number.isFinite(nestedSl) ? Math.max(sl, Math.min(elLine, nestedSl - 1)) : elLine;
+            anchors.push({ el: child, sl, elLine: ownEnd, stopEl: nestedLists[0] });
+          } else {
+            anchors.push({ el: child, sl, elLine, stopEl: null });
+          }
+        }
+        for (const nl of nestedLists) pushList(nl);
+      }
+    };
+
+    for (const child of Array.from(out.children)) {
+      if (child.tagName === 'TABLE') {
+        const trs = Array.from(child.querySelectorAll('tr[data-sl]'));
+        if (trs.length > 0) {
+          for (const tr of trs) {
+            anchors.push({ el: tr, sl: Number(tr.dataset.sl), elLine: Number(tr.dataset.el), stopEl: null });
+          }
+          continue;
+        }
+      } else if (child.tagName === 'UL' || child.tagName === 'OL') {
+        const prevLen = anchors.length;
+        pushList(child);
+        if (anchors.length > prevLen) continue;
+      }
+      if (child.hasAttribute('data-sl')) {
+        anchors.push({ el: child, sl: Number(child.dataset.sl), elLine: Number(child.dataset.el), stopEl: null });
+      }
+    }
+    syncAnchors = anchors;
+  }
+
+  function render() {
+    raf = 0;
+    if (diffActive) return;
+    out.classList.remove('is-source-diff');
+    renderMarkdownInto(out, getVal(), isEditable);
+    if (isEditable) rebuildSyncAnchors();
+    buildToc();
+  }
+  function onEdit() {
+    if (diffActive) return;
+    rawText = getVal();
+    const dirty = normLF(rawText) !== normLF(diskText);
+    window._mdDirty = dirty;
+    statusEl.textContent = dirty ? '● 未固化' : '';
+    refreshDiffControls();
+    if (!raf) raf = requestAnimationFrame(render);
+  }
+
+  function scrollToHash(hash) {
+    if (!hash) return;
+    let t = hash.replace(/^#/, '');
+    try { t = decodeURIComponent(t); } catch (_) { }
+    const norm = t.trim().toLowerCase();
+    if (!norm) return;
+    const hs = Array.from(out.querySelectorAll('h1,h2,h3,h4,h5,h6'));
+    const slug = slugify(t);
+    const hit = hs.find(h => (h.id || '').toLowerCase() === norm)
+      || hs.find(h => h.id === slug)
+      || hs.find(h => h.textContent.trim().toLowerCase() === norm)
+      || hs.find(h => h.textContent.trim().toLowerCase().includes(norm));
+    if (hit) {
+      const folded = hit.classList.contains('md-diff-hidden') ? hit : (hit.closest && hit.closest('.md-diff-hidden[data-fold-id]'));
+      if (folded && folded.dataset.foldId) expandFoldGroup(folded.dataset.foldId);
+      hit.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  }
+  out.addEventListener('click', e => {
+    const a = e.target.closest && e.target.closest('a[href^="#"]');
+    if (a) { e.preventDefault(); scrollToHash(a.getAttribute('href')); }
+  });
+
+  async function fetchMd() {
+    if (invalidMdPathReason) throw new Error(invalidMdPathReason);
+    const url = mdPath + (isEditable ? '?_t=' + Date.now() : '');
+    const res = await fetch(url, { cache: isEditable ? 'no-store' : 'default' });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    return await res.text();
+  }
+
+  async function loadDoc(hash = '') {
+    statusEl.textContent = '加载中...';
+    try {
+      const text = await fetchMd();
+      diskText = text;
+      setVal(text);
+      window._mdDirty = false;
+      statusEl.textContent = '';
+      await loadMdSnapshots();
+      refreshDiffControls();
+      if (diffActive) {
+        if (getAvailableDiffVersions().length < 2) exitDiff();
+        else await runDiff({ preserveScroll: false });
+      } else if (hash) {
+        requestAnimationFrame(() => {
+          scrollToHash(hash);
+          lastAnchorLine = getPreviewTopLine();
+          if (isEditable && sync.checked) withSuppressedSync(() => scrollEditorToLine(lastAnchorLine));
+        });
+      } else {
+        pv.scrollTop = 0;
+        lastAnchorLine = 0;
+        if (isEditable && sync.checked) withSuppressedSync(() => scrollEditorToLine(0));
+      }
+    } catch (e) {
+      setVal(`# 加载失败\n\n无法读取 \`${mdPath}\`：${e.message}`);
+      statusEl.textContent = '加载失败';
+    }
+  }
+
+  async function copyText(text) {
+    const ta = document.createElement('textarea');
+    ta.value = text; ta.readOnly = true;
+    ta.style.cssText = 'position:fixed;top:-9999px;left:-9999px;opacity:0;';
+    document.body.appendChild(ta); ta.focus(); ta.select();
+    let copied = false;
+    try { copied = document.execCommand('copy'); } catch (_) { }
+    document.body.removeChild(ta);
+    if (copied) return true;
+    try { await navigator.clipboard.writeText(text); return true; } catch (_) { return false; }
+  }
+
+  async function saveDoc() {
+    if (!isEditable || saving || diffActive) return;
+    const text = getVal();
+    if (!text) return alert('内容为空，已中止固化');
+
+    saving = true; saveBtn.disabled = true; statusEl.textContent = '固化中...';
+    try {
+      if (window.top && typeof window.top.callLocalApi === 'function') {
+        await window.top.callLocalApi('PUT', '/__api/files/md', { path: relPath, content: text });
+      } else {
+        const m = await import('/src/js/shared-utils.js');
+        await m.callLocalApi('PUT', '/__api/files/md', { path: relPath, content: text });
+      }
+      diskText = text;
+      window._mdDirty = false;
+      statusEl.textContent = '✓ 已固化';
+      await loadMdSnapshots();
+      refreshDiffControls();
+      setTimeout(() => { if (!window._mdDirty) statusEl.textContent = ''; }, 1800);
+    } catch (err) {
+      alert('❌ 固化失败：' + (err && err.message ? err.message : String(err)));
+      statusEl.textContent = '固化失败';
+    } finally {
+      saving = false; saveBtn.disabled = diffActive;
+    }
+  }
+
+  const flash = (b, t) => { const o = b.textContent; b.textContent = t; setTimeout(() => { b.textContent = o; }, 1200); };
+  saveBtn.onclick = saveDoc;
+  $('#reload').onclick = () => {
+    if (window._mdDirty && !confirm('放弃未固化的修改并重新加载原文件？')) return;
+    loadDoc();
+  };
+  $('#copy').onclick = async e => { flash(e.currentTarget, (await copyText(getVal())) ? 'Copied' : 'Failed'); };
+  $('#pdf').onclick = () => { try { window.print(); } catch (_) { } };
+
+  window.addEventListener('keydown', e => {
+    if (isEditable && !diffActive && (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') { e.preventDefault(); saveDoc(); return; }
+    if (!diffActive) return;
+    if (e.key === 'Escape') {
+      const ctxEl = $('#ctx');
+      if (ctxEl && !ctxEl.hidden) return;
+      exitDiff();
+      return;
+    }
+    const ae = document.activeElement;
+    const inInput = ae && (ae.tagName === 'TEXTAREA' || ae.tagName === 'INPUT' || ae.tagName === 'SELECT' || (ae.closest && ae.closest('.CodeMirror')));
+    if (e.key === 'F7') {
+      e.preventDefault();
+      stepDiffHunk(e.shiftKey ? -1 : 1);
+    } else if (!inInput && e.key === ']') {
+      e.preventDefault();
+      stepDiffHunk(1);
+    } else if (!inInput && e.key === '[') {
+      e.preventDefault();
+      stepDiffHunk(-1);
+    }
+  });
+  window.addEventListener('message', e => {
+    if (e.origin === location.origin && e.data?.type === 'SCROLL_HASH') scrollToHash(e.data.hash);
+  });
+
+  // --- 基于源码行锚定的联动滚动与分隔条拖拽 ---
+
+  let scrollLock = '', scrollLockTm = 0, suppressSync = false, suppressTm = 0;
+
+  function withSuppressedSync(fn) {
+    suppressSync = true;
+    clearTimeout(suppressTm);
+    try { fn(); } finally {
+      suppressTm = setTimeout(() => { suppressSync = false; }, 60);
+    }
+  }
+
+  function totalEditorLines() {
+    if (cm) return Math.max(1, cm.lineCount());
+    return Math.max(1, countNewlines(ed.value) + 1);
+  }
+
+  function measureAnchor(anchor, pvRect, pvScrollTop) {
+    const r = anchor.el.getBoundingClientRect();
+    const top = pvScrollTop + (r.top - pvRect.top);
+    let bottom = pvScrollTop + (r.bottom - pvRect.top);
+    if (anchor.stopEl) {
+      const sr = anchor.stopEl.getBoundingClientRect();
+      const stopTop = pvScrollTop + (sr.top - pvRect.top);
+      if (stopTop > top) bottom = Math.min(bottom, stopTop);
+    }
+    return { top, bottom: Math.max(top + 1, bottom) };
+  }
+
+  function getPreviewTopLine() {
+    if (!syncAnchors.length || pv.scrollTop <= 1) return 0;
+    const pvRect = pv.getBoundingClientRect();
+    const pvTop = pv.scrollTop;
+    const refY = pvTop + 4;
+
+    let lo = 0, hi = syncAnchors.length - 1, idx = -1;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      const m = measureAnchor(syncAnchors[mid], pvRect, pvTop);
+      if (m.top <= refY) { idx = mid; lo = mid + 1; }
+      else hi = mid - 1;
+    }
+    if (idx < 0) {
+      const first = syncAnchors[0];
+      if (first.sl <= 0) return 0;
+      const fm = measureAnchor(first, pvRect, pvTop);
+      const frac = Math.max(0, Math.min(1, refY / Math.max(1, fm.top)));
+      return frac * first.sl;
+    }
+
+    const a = syncAnchors[idx];
+    const ma = measureAnchor(a, pvRect, pvTop);
+    const span = Math.max(1, (a.elLine - a.sl) + 1);
+    if (refY <= ma.bottom) {
+      const frac = Math.max(0, Math.min(1, (refY - ma.top) / Math.max(1, ma.bottom - ma.top)));
+      return a.sl + frac * span;
+    }
+
+    const lineA = a.elLine + 1;
+    if (idx + 1 < syncAnchors.length) {
+      const nxt = syncAnchors[idx + 1];
+      const mn = measureAnchor(nxt, pvRect, pvTop);
+      const lineB = Math.max(lineA, nxt.sl);
+      const frac = Math.max(0, Math.min(1, (refY - ma.bottom) / Math.max(1, mn.top - ma.bottom)));
+      return lineA + frac * (lineB - lineA);
+    }
+    return Math.min(totalEditorLines() - 1, lineA);
+  }
+
+  function scrollPreviewToLine(targetLine) {
+    if (!syncAnchors.length || targetLine <= 0) { pv.scrollTop = 0; return; }
+    const pvRect = pv.getBoundingClientRect();
+    const pvTop = pv.scrollTop;
+
+    const first = syncAnchors[0];
+    if (targetLine < first.sl) {
+      const fm = measureAnchor(first, pvRect, pvTop);
+      const frac = Math.max(0, Math.min(1, targetLine / Math.max(1, first.sl)));
+      pv.scrollTop = Math.max(0, frac * fm.top - 4);
+      return;
+    }
+
+    let lo = 0, hi = syncAnchors.length - 1, idx = 0;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      if (syncAnchors[mid].sl <= targetLine) { idx = mid; lo = mid + 1; }
+      else hi = mid - 1;
+    }
+
+    const a = syncAnchors[idx];
+    const ma = measureAnchor(a, pvRect, pvTop);
+    const lineEnd = a.elLine + 1;
+    if (targetLine <= lineEnd) {
+      const frac = Math.max(0, Math.min(1, (targetLine - a.sl) / Math.max(1, lineEnd - a.sl)));
+      pv.scrollTop = Math.max(0, ma.top + frac * (ma.bottom - ma.top) - 4);
+      return;
+    }
+
+    if (idx + 1 < syncAnchors.length) {
+      const nxt = syncAnchors[idx + 1];
+      const mn = measureAnchor(nxt, pvRect, pvTop);
+      const gapLines = Math.max(1, nxt.sl - lineEnd);
+      const frac = Math.max(0, Math.min(1, (targetLine - lineEnd) / gapLines));
+      pv.scrollTop = Math.max(0, ma.bottom + frac * (mn.top - ma.bottom) - 4);
+      return;
+    }
+    pv.scrollTop = Math.max(0, ma.bottom - 4);
+  }
+
+  function scrollEditorToLine(targetLine) {
+    if (!isEditable) return;
+    if (cm) {
+      const count = cm.lineCount();
+      if (count <= 0) return;
+      if (targetLine <= 0) { cm.scrollTo(null, 0); return; }
+      const clamped = Math.max(0, Math.min(count - 0.001, targetLine));
+      const lineInt = Math.floor(clamped);
+      const frac = clamped - lineInt;
+      const y0 = cm.heightAtLine(lineInt, 'local');
+      const y1 = (lineInt + 1 < count) ? cm.heightAtLine(lineInt + 1, 'local') : cm.getScrollInfo().height;
+      cm.scrollTo(null, Math.max(0, y0 + frac * Math.max(0, y1 - y0)));
+      return;
+    }
+    const maxLine = Math.max(1, totalEditorLines() - 1);
+    const ratio = Math.max(0, Math.min(1, targetLine / maxLine));
+    ed.scrollTop = ratio * Math.max(0, ed.scrollHeight - ed.clientHeight);
+  }
+
+  function getEditorTopLine() {
+    if (cm) {
+      const info = cm.getScrollInfo();
+      if (info.top <= 1) return 0;
+      const count = cm.lineCount();
+      if (count <= 0) return 0;
+      const lineInt = Math.max(0, Math.min(count - 1, cm.lineAtHeight(info.top, 'local')));
+      const y0 = cm.heightAtLine(lineInt, 'local');
+      const y1 = (lineInt + 1 < count) ? cm.heightAtLine(lineInt + 1, 'local') : info.height;
+      const frac = y1 > y0 ? Math.max(0, Math.min(1, (info.top - y0) / (y1 - y0))) : 0;
+      return lineInt + frac;
+    }
+    const maxLine = Math.max(1, totalEditorLines() - 1);
+    const ratio = ed.scrollTop / Math.max(1, ed.scrollHeight - ed.clientHeight);
+    return Math.max(0, Math.min(maxLine, ratio * maxLine));
+  }
+
+  function syncEditorFromPreview() {
+    if (!isEditable || diffActive) return;
+    const line = getPreviewTopLine();
+    lastAnchorLine = line;
+    if (!sync.checked) return;
+    withSuppressedSync(() => scrollEditorToLine(line));
+  }
+
+  function realignBothToLine(line) {
+    if (!isEditable || diffActive) return;
+    withSuppressedSync(() => {
+      if (sync.checked) {
+        scrollPreviewToLine(line);
+        if (cm) cm.refresh();
+        scrollEditorToLine(line);
+      } else if (cm) {
+        cm.refresh();
+      }
+    });
+  }
+
+  const onPreviewScroll = () => {
+    if (!isEditable || diffActive || suppressSync || scrollLock === 'e') return;
+    const line = getPreviewTopLine();
+    lastAnchorLine = line;
+    if (!sync.checked) return;
+    scrollLock = 'p';
+    clearTimeout(scrollLockTm);
+    scrollLockTm = setTimeout(() => { scrollLock = ''; }, 80);
+    scrollEditorToLine(line);
+  };
+
+  const onEditorScroll = () => {
+    if (!isEditable || !sync.checked || diffActive || suppressSync || scrollLock === 'p') return;
+    scrollLock = 'e';
+    clearTimeout(scrollLockTm);
+    scrollLockTm = setTimeout(() => { scrollLock = ''; }, 80);
+    const line = getEditorTopLine();
+    lastAnchorLine = line;
+    scrollPreviewToLine(line);
+  };
+
+  let pvSyncBound = false;
+  const bindSync = sc => {
+    if (!pvSyncBound) {
+      pvSyncBound = true;
+      pv.addEventListener('scroll', onPreviewScroll, { passive: true });
+    }
+    sc.addEventListener('scroll', onEditorScroll, { passive: true });
+  };
+  ed.addEventListener('input', onEdit);
+  bindSync(ed);
+  sync.addEventListener('change', () => {
+    if (sync.checked && !diffActive) syncEditorFromPreview();
+  });
+
+  const isStacked = () => isEditable && !diffActive && getComputedStyle(panes).flexDirection.startsWith('column');
+  let lastStacked = isStacked();
+
+  function clampPaneSizes() {
+    const stacked = isStacked();
+    sep.setAttribute('aria-orientation', stacked ? 'horizontal' : 'vertical');
+
+    if (stacked !== lastStacked) {
+      lastStacked = stacked;
+      edPane.style.flex = '';
+      pvWrap.style.flex = '';
+    }
+
+    const pr = panes.getBoundingClientRect();
+    if (isEditable && !diffActive && edPane.style.flex) {
+      if (stacked) {
+        const curH = edPane.getBoundingClientRect().height;
+        const maxH = Math.max(120, pr.height - 6 - 120);
+        const clampedH = Math.min(maxH, Math.max(120, curH));
+        edPane.style.flex = '0 0 ' + Math.round(clampedH) + 'px';
+      } else {
+        const tocW = tocEl.getBoundingClientRect().width || 220;
+        const curW = edPane.getBoundingClientRect().width;
+        const maxW = Math.max(160, pr.width - 6 - tocW - 6 - 160);
+        const clampedW = Math.min(maxW, Math.max(160, curW));
+        edPane.style.flex = '0 0 ' + Math.round(clampedW) + 'px';
+      }
+    }
+
+    if (tocEl.style.flex) {
+      const pwr = pvWrap.getBoundingClientRect();
+      if (pwr.width > 0) {
+        const curToc = tocEl.getBoundingClientRect().width;
+        const maxToc = Math.max(110, pwr.width - 6 - 160);
+        const clampedToc = Math.min(maxToc, Math.max(110, curToc));
+        tocEl.style.flex = '0 0 ' + Math.round(clampedToc) + 'px';
+      }
+    }
+  }
+
+  sep.addEventListener('pointerdown', e => {
+    if (!isEditable || diffActive) return;
+    try { sep.setPointerCapture(e.pointerId); } catch (_) { }
+    sep.classList.add('on');
+    isDraggingSep = true;
+    const pinnedLine = getPreviewTopLine();
+    lastAnchorLine = pinnedLine;
+    const stacked = isStacked();
+    const onMove = ev => {
+      const r = panes.getBoundingClientRect();
+      if (stacked) {
+        const rawH = r.bottom - ev.clientY - 3;
+        const minH = Math.min(120, r.height * 0.2);
+        const maxH = Math.max(minH, r.height - 6 - Math.min(120, r.height * 0.2));
+        edPane.style.flex = '0 0 ' + Math.round(Math.min(maxH, Math.max(minH, rawH))) + 'px';
+        pvWrap.style.flex = '1 1 0';
+      } else {
+        const tocW = tocEl.getBoundingClientRect().width || 220;
+        const rawW = ev.clientX - r.left - 3;
+        const minW = 160;
+        const maxW = Math.max(minW, r.width - 6 - tocW - 6 - 160);
+        edPane.style.flex = '0 0 ' + Math.round(Math.min(maxW, Math.max(minW, rawW))) + 'px';
+        pvWrap.style.flex = '1 1 0';
+      }
+      realignBothToLine(pinnedLine);
+    };
+    const endDrag = () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', endDrag);
+      window.removeEventListener('pointercancel', endDrag);
+      try { sep.releasePointerCapture(e.pointerId); } catch (_) { }
+      sep.classList.remove('on');
+      isDraggingSep = false;
+      requestAnimationFrame(() => realignBothToLine(pinnedLine));
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', endDrag);
+    window.addEventListener('pointercancel', endDrag);
+  });
+  sep.addEventListener('dblclick', () => {
+    if (!isEditable || diffActive) return;
+    const pinnedLine = getPreviewTopLine();
+    lastAnchorLine = pinnedLine;
+    edPane.style.flex = '';
+    pvWrap.style.flex = '';
+    realignBothToLine(pinnedLine);
+    requestAnimationFrame(() => realignBothToLine(pinnedLine));
+  });
+
+  tocSep.addEventListener('pointerdown', e => {
+    try { tocSep.setPointerCapture(e.pointerId); } catch (_) { }
+    tocSep.classList.add('on');
+    isDraggingSep = true;
+    const pinnedLine = (!diffActive && isEditable) ? getPreviewTopLine() : 0;
+    if (!diffActive && isEditable) lastAnchorLine = pinnedLine;
+    const onMove = ev => {
+      const r = pvWrap.getBoundingClientRect();
+      const rawW = r.right - ev.clientX - 3;
+      const minW = 110;
+      const maxW = Math.max(minW, r.width - 6 - 160);
+      tocEl.style.flex = '0 0 ' + Math.round(Math.min(maxW, Math.max(minW, rawW))) + 'px';
+      realignBothToLine(pinnedLine);
+    };
+    const endDrag = () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', endDrag);
+      window.removeEventListener('pointercancel', endDrag);
+      try { tocSep.releasePointerCapture(e.pointerId); } catch (_) { }
+      tocSep.classList.remove('on');
+      isDraggingSep = false;
+      requestAnimationFrame(() => realignBothToLine(pinnedLine));
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', endDrag);
+    window.addEventListener('pointercancel', endDrag);
+  });
+  tocSep.addEventListener('dblclick', () => {
+    const pinnedLine = (!diffActive && isEditable) ? getPreviewTopLine() : 0;
+    if (!diffActive && isEditable) lastAnchorLine = pinnedLine;
+    tocEl.style.flex = '';
+    realignBothToLine(pinnedLine);
+    requestAnimationFrame(() => realignBothToLine(pinnedLine));
+  });
+
+  if (typeof ResizeObserver === 'function') {
+    new ResizeObserver(() => {
+      if (isDraggingSep) return;
+      clampPaneSizes();
+      if (isEditable && !diffActive) {
+        realignBothToLine(lastAnchorLine);
+      } else if (cm) {
+        cm.refresh();
+      }
+    }).observe(panes);
+  }
+
+  // --- 本地 CodeMirror 5 编辑器按需加载 ---
+
+  async function initLocalCodeMirror() {
+    const base = '../third/markdown/codemirror/';
+    const files = [
+      'codemirror.min.js',
+      'mode/xml.min.js', 'mode/meta.min.js', 'mode/markdown.min.js',
+      'mode/javascript.min.js', 'mode/css.min.js', 'mode/htmlmixed.min.js',
+      'mode/python.min.js', 'mode/shell.min.js',
+      'addon/closebrackets.min.js', 'addon/matchbrackets.min.js',
+      'addon/active-line.min.js', 'addon/match-highlighter.min.js'
+    ];
+    for (const f of files) {
+      await new Promise((res, rej) => {
+        const s = document.createElement('script');
+        s.src = base + f; s.async = false; s.onload = res; s.onerror = rej;
+        document.head.appendChild(s);
+      });
+    }
+    if (typeof window.CodeMirror !== 'function') return;
+
+    function nextOcc(c) {
+      const sels = c.listSelections(), main = sels[sels.length - 1];
+      if (main.empty()) { c.setSelections(sels.map(s => { const w = c.findWordAt(s.head); return { anchor: w.anchor, head: w.head }; })); return; }
+      const t = c.getRange(main.from(), main.to()), doc = c.getValue(), have = new Set(sels.map(s => c.indexFromPos(s.from())));
+      const occ = []; let i = -1; while ((i = doc.indexOf(t, i + 1)) >= 0) occ.push(i);
+      const end = c.indexFromPos(main.to());
+      const p = occ.find(x => x >= end && !have.has(x)) ?? occ.find(x => !have.has(x));
+      if (p == null) return;
+      c.setSelections(sels.concat({ anchor: c.posFromIndex(p), head: c.posFromIndex(p + t.length) }), sels.length);
+      c.scrollIntoView(c.getCursor('head'));
+    }
+    function allOcc(c) {
+      const esc = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      let t = c.getSelection(), re;
+      if (t) re = new RegExp(esc(t), 'gu');
+      else {
+        const w = c.findWordAt(c.getCursor()); t = c.getRange(w.anchor, w.head);
+        if (!/[\p{L}\p{N}]/u.test(t)) return;
+        re = new RegExp('(?<![\\p{L}\\p{N}_])' + esc(t) + '(?![\\p{L}\\p{N}_])', 'gu');
+      }
+      const doc = c.getValue(), r = []; let m;
+      while ((m = re.exec(doc))) r.push({ anchor: c.posFromIndex(m.index), head: c.posFromIndex(m.index + t.length) });
+      if (r.length) c.setSelections(r);
+    }
+    const addCur = d => c => {
+      const h = c.getCursor('head'), n = h.line + d;
+      if (n >= 0 && n < c.lineCount()) c.addSelection({ line: n, ch: Math.min(h.ch, c.getLine(n).length) });
+    };
+
+    cm = CodeMirror.fromTextArea(ed, {
+      mode: { name: 'markdown', highlightFormatting: true, fencedCodeBlockHighlighting: true },
+      lineNumbers: true, lineWrapping: true, tabSize: 2, indentUnit: 2, styleActiveLine: true, matchBrackets: true, autoCloseBrackets: true,
+      highlightSelectionMatches: { minChars: 2, showToken: /[\p{L}\p{N}_$]/u, delay: 60 },
+      configureMouse: (c, r, ev) => ({ addNew: ev.altKey || ev.ctrlKey || ev.metaKey }),
+      extraKeys: {
+        'Ctrl-S': saveDoc, 'Cmd-S': saveDoc, 'Ctrl-D': nextOcc, 'Cmd-D': nextOcc,
+        'Ctrl-F2': allOcc, 'Cmd-F2': allOcc, 'Ctrl-Alt-Up': addCur(-1), 'Ctrl-Alt-Down': addCur(1),
+        Tab: c => c.execCommand(c.somethingSelected() ? 'indentMore' : 'insertSoftTab'), 'Shift-Tab': 'indentLess'
+      }
+    });
+    cm.on('change', onEdit);
+    try {
+      const sepRe = /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)*\|?\s*$/;
+      cm.addOverlay({
+        token(stream) {
+          const s = stream.string;
+          if (!/^\s*\|/.test(s)) { stream.skipToEnd(); return null; }
+          if (sepRe.test(s)) { stream.skipToEnd(); return 'tbl'; }
+          const nx = typeof stream.lookAhead === 'function' ? stream.lookAhead(1) : null;
+          if (nx != null && sepRe.test(nx)) { stream.skipToEnd(); return 'tbl'; }
+          if (stream.peek() === '|') { stream.next(); return 'tbl'; }
+          stream.eatWhile(c => c !== '|');
+          return null;
+        }
+      });
+    } catch (_) { }
+    bindSync(cm.getScrollerElement());
+
+    const ctx = $('#ctx'), hide = () => { ctx.hidden = true; };
+    const clip = async cut => { const t = cm.getSelection(); if (t && await copyText(t) && cut) cm.replaceSelection(''); };
+    const paste = () => navigator.clipboard.readText().then(t => cm.replaceSelection(t)).catch(() => { });
+    const items = [
+      ['Save', 'Ctrl+S', saveDoc], ['Change All Occurrences', 'Ctrl+F2', () => allOcc(cm)], null,
+      ['Undo', 'Ctrl+Z', () => cm.undo()], ['Redo', 'Ctrl+Y', () => cm.redo()], null,
+      ['Cut', 'Ctrl+X', () => clip(true)], ['Copy', 'Ctrl+C', () => clip(false)], ['Paste', 'Ctrl+V', paste],
+      ['Select All', 'Ctrl+A', () => cm.execCommand('selectAll')]
+    ];
+    cm.getWrapperElement().addEventListener('contextmenu', e => {
+      e.preventDefault(); e.stopPropagation();
+      if (!cm.somethingSelected()) cm.setCursor(cm.coordsChar({ left: e.clientX, top: e.clientY }));
+      ctx.replaceChildren(...items.map(it => {
+        if (!it) return document.createElement('hr');
+        const b = document.createElement('button'), s = document.createElement('span'), k = document.createElement('kbd');
+        b.type = 'button'; b.setAttribute('role', 'menuitem'); s.textContent = it[0]; k.textContent = it[1]; b.append(s, k);
+        b.onclick = () => { hide(); cm.focus(); it[2](); };
+        return b;
+      }));
+      ctx.hidden = false;
+      ctx.style.left = Math.max(4, Math.min(e.clientX, innerWidth - ctx.offsetWidth - 4)) + 'px';
+      ctx.style.top = Math.max(4, Math.min(e.clientY, innerHeight - ctx.offsetHeight - 4)) + 'px';
+    }, true);
+    addEventListener('pointerdown', e => { if (!ctx.contains(e.target)) hide(); }, true);
+    addEventListener('keydown', e => { if (e.key === 'Escape') hide(); });
+    addEventListener('blur', hide);
+  }
+
+  // --- BUS 通信、拼音与摘抄 ---
+
+  let mdBus = null;
+  try { mdBus = new BroadcastChannel('bus'); } catch (_) { }
+  window.addEventListener('pagehide', (e) => {
+    if (!e.persisted && mdBus) {
+      try { mdBus.close(); } catch (_) { }
+      mdBus = null;
+    }
+  });
+  function emitToIndex(type, payload) {
+    if (!mdBus) return;
+    try {
+      const tabId = (window.top && window.top.__TAB_ID__) || '';
+      mdBus.postMessage({ type, payload, from: 'md_viewer', target: 'index', tabId });
+    } catch (_) { }
+  }
+
+  function initMdPinyinAndExcerpt() {
+    const pyTip = document.createElement('div');
+    pyTip.id = 'md-pinyin-tooltip';
+    document.body.appendChild(pyTip);
+
+    const exBtn = document.createElement('div');
+    exBtn.id = 'md-excerpt-btn';
+    exBtn.textContent = '✏️';
+    document.body.appendChild(exBtn);
+
+    let lastExcerptText = '';
+    const bookName = relPath.split('/').pop() || 'README.md';
+
+    const hideAll = () => {
+      pyTip.style.display = 'none';
+      exBtn.style.display = 'none';
+    };
+
+    const getEditorSelection = (ev) => {
+      if (cm && cm.somethingSelected()) {
+        const text = cm.getSelection().trim();
+        if (text) {
+          const head = cm.cursorCoords('head', 'window');
+          return { text, endRect: head, isCM: true };
+        }
+      }
+      if (!cm && document.activeElement === ed) {
+        const s = ed.selectionStart, e = ed.selectionEnd;
+        if (typeof s === 'number' && typeof e === 'number' && e > s) {
+          const text = ed.value.slice(s, e).trim();
+          if (text) {
+            return {
+              text,
+              endRect: { left: ev.clientX, right: ev.clientX, top: ev.clientY - 12, bottom: ev.clientY + 6, width: 0, height: 18 },
+              isTextarea: true
+            };
+          }
+        }
+      }
+      return null;
+    };
+
+    const getDomEndRect = (sel, ev) => {
+      if (sel && sel.rangeCount > 0) {
+        try {
+          if (sel.focusNode) {
+            const caret = document.createRange();
+            caret.setStart(sel.focusNode, sel.focusOffset);
+            caret.collapse(true);
+            const r = caret.getBoundingClientRect();
+            if (r && r.height > 0) return r;
+            if (sel.focusNode.nodeType === Node.TEXT_NODE && sel.focusNode.length > 0) {
+              const r2 = document.createRange();
+              if (sel.focusOffset > 0) {
+                r2.setStart(sel.focusNode, sel.focusOffset - 1);
+                r2.setEnd(sel.focusNode, sel.focusOffset);
+                const rr = r2.getBoundingClientRect();
+                if (rr && rr.height > 0) return { left: rr.right, right: rr.right, top: rr.top, bottom: rr.bottom, width: 0, height: rr.height };
+              } else {
+                r2.setStart(sel.focusNode, 0);
+                r2.setEnd(sel.focusNode, 1);
+                const rr = r2.getBoundingClientRect();
+                if (rr && rr.height > 0) return { left: rr.left, right: rr.left, top: rr.top, bottom: rr.bottom, width: 0, height: rr.height };
+              }
+            }
+          }
+        } catch (_) { }
+        try {
+          const rects = Array.from(sel.getRangeAt(0).getClientRects()).filter(r => r.width > 0 || r.height > 0);
+          if (rects.length > 0) {
+            let isBackward = false;
+            if (sel.anchorNode && sel.focusNode) {
+              isBackward = sel.anchorNode === sel.focusNode
+                ? sel.focusOffset < sel.anchorOffset
+                : !!(sel.anchorNode.compareDocumentPosition(sel.focusNode) & Node.DOCUMENT_POSITION_PRECEDING);
+            }
+            const r = isBackward ? rects[0] : rects[rects.length - 1];
+            const x = isBackward ? r.left : r.right;
+            return { left: x, right: x, top: r.top, bottom: r.bottom, width: 0, height: r.height };
+          }
+        } catch (_) { }
+      }
+      return { left: ev.clientX, right: ev.clientX, top: ev.clientY - 12, bottom: ev.clientY + 6, width: 0, height: 18 };
+    };
+
+    const getSelectionInfo = (ev) => {
+      const edSel = getEditorSelection(ev);
+      if (edSel) return edSel;
+      const sel = window.getSelection();
+      const text = sel ? sel.toString().trim() : '';
+      if (!text) return null;
+      return { text, endRect: getDomEndRect(sel, ev), sel };
+    };
+
+    const doExcerpt = () => {
+      const info = getSelectionInfo({ clientX: 0, clientY: 0 });
+      if (!info || Array.from(info.text).length <= 1) return;
+      emitToIndex('SAVE_EXCERPT', { text: info.text, bookName });
+      const oldText = exBtn.textContent;
+      exBtn.textContent = '✅ 已摘抄';
+      exBtn.style.background = '#10b981';
+      setTimeout(() => {
+        exBtn.style.display = 'none';
+        exBtn.textContent = oldText;
+        exBtn.style.background = '#516194';
+        if (info.isCM && cm) cm.setCursor(cm.getCursor('head'));
+        else if (info.sel) info.sel.removeAllRanges();
+        lastExcerptText = '';
+      }, 800);
+    };
+
+    ['mousedown', 'mouseup', 'click', 'touchstart', 'touchend', 'pointerdown', 'pointerup'].forEach(evt => {
+      window.addEventListener(evt, (e) => {
+        if (e.target && e.target.closest && e.target.closest('#md-excerpt-btn')) {
+          e.stopPropagation();
+          e.stopImmediatePropagation();
+          if (evt === 'mousedown') e.preventDefault();
+          if (evt === 'click') doExcerpt();
+        }
+      }, true);
+    });
+
+    document.addEventListener('mousedown', (e) => {
+      if (e.target && e.target.closest && e.target.closest('#md-excerpt-btn')) return;
+      hideAll();
+      lastExcerptText = '';
+    }, true);
+
+    pv.addEventListener('scroll', hideAll, { passive: true });
+    document.addEventListener('scroll', hideAll, true);
+
+    document.addEventListener('mouseup', (e) => {
+      if (e.target && e.target.closest && e.target.closest('#md-excerpt-btn, .bar, #ctx')) return;
+      setTimeout(() => {
+        const info = getSelectionInfo(e);
+        if (!info) {
+          hideAll();
+          lastExcerptText = '';
+          return;
+        }
+        const chars = Array.from(info.text);
+        const endRect = info.endRect;
+
+        if (chars.length === 1) {
+          exBtn.style.display = 'none';
+          lastExcerptText = '';
+          const dict = window.top && window.top.pinyinData;
+          const py = dict && dict[chars[0]];
+          if (py) {
+            pyTip.textContent = py;
+            pyTip.style.visibility = 'hidden';
+            pyTip.style.display = 'block';
+            const tw = pyTip.offsetWidth || 48;
+            const th = pyTip.offsetHeight || 24;
+            const anchorX = (endRect.left + endRect.right) / 2;
+            const left = Math.max(8, Math.min(window.innerWidth - tw - 8, anchorX - tw / 2));
+            const top = endRect.top - th - 6 >= 8 ? (endRect.top - th - 6) : Math.min(window.innerHeight - th - 8, endRect.bottom + 6);
+            pyTip.style.left = Math.round(left) + 'px';
+            pyTip.style.top = Math.round(top) + 'px';
+            pyTip.style.visibility = 'visible';
+          } else {
+            pyTip.style.display = 'none';
+          }
+          return;
+        }
+
+        pyTip.style.display = 'none';
+        if (info.text !== lastExcerptText) {
+          exBtn.style.visibility = 'hidden';
+          exBtn.style.display = 'block';
+          const bw = exBtn.offsetWidth || 32;
+          const bh = exBtn.offsetHeight || 24;
+          const endX = (endRect.left + endRect.right) / 2;
+          const left = Math.max(8, Math.min(window.innerWidth - bw - 8, endX - bw / 2));
+          let top = endRect.bottom + 6;
+          if (top + bh > window.innerHeight - 8 && endRect.top - bh - 6 >= 8) {
+            top = endRect.top - bh - 6;
+          } else {
+            top = Math.max(8, Math.min(window.innerHeight - bh - 8, top));
+          }
+          exBtn.style.left = Math.round(left) + 'px';
+          exBtn.style.top = Math.round(top) + 'px';
+          exBtn.style.visibility = 'visible';
+          lastExcerptText = info.text;
+        }
+      }, 10);
+    }, true);
+  }
+
+  // --- 双轨历史 Diff 引擎（渲染态 + 源码态） ---
+
+  function formatSnapTime(ts) {
+    if (!ts) return '未知时间';
+    const d = new Date(ts);
+    const pad = n => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  }
+
+  async function ensureLcsDiff() {
+    if (lcsDiffFn) return lcsDiffFn;
+    if (lcsLoadPromise) return lcsLoadPromise;
+    lcsLoadPromise = (async () => {
+      try {
+        const topSw = window.top && window.top.sharedWasm;
+        if (topSw) {
+          if (topSw.ready && typeof topSw.compute_lcs_diff === 'function') {
+            lcsDiffFn = topSw.compute_lcs_diff;
+            return lcsDiffFn;
+          }
+          if (!topSw.failed) {
+            const okTop = await new Promise(resolve => {
+              let tries = 0;
+              const iv = setInterval(() => {
+                if (topSw.ready && typeof topSw.compute_lcs_diff === 'function') { clearInterval(iv); resolve(true); }
+                else if (topSw.failed || ++tries > 200) { clearInterval(iv); resolve(false); }
+              }, 30);
+            });
+            if (okTop) {
+              lcsDiffFn = topSw.compute_lcs_diff;
+              return lcsDiffFn;
+            }
+          }
+        }
+      } catch (_) { }
+      const mod = await import('../wasm/compute_intensive_task_processor.min.js');
+      await mod.default();
+      lcsDiffFn = mod.compute_lcs_diff;
+      return lcsDiffFn;
+    })().catch(err => {
+      lcsLoadPromise = null;
+      throw err;
+    });
+    return lcsLoadPromise;
+  }
+
+  async function openMainDbReadonly() {
+    try {
+      if (window.top && window.top.SiteCore && typeof window.top.SiteCore.openMainDB === 'function') {
+        return await window.top.SiteCore.openMainDB();
+      }
+    } catch (_) { }
+    return await new Promise((resolve, reject) => {
+      const req = indexedDB.open('MainDB');
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+  }
+
+  const isBinarySnap = v => ArrayBuffer.isView(v) || Object.prototype.toString.call(v) === '[object ArrayBuffer]';
+  const toLocalU8 = v => ArrayBuffer.isView(v)
+    ? new Uint8Array(v.buffer, v.byteOffset, v.byteLength)
+    : new Uint8Array(v);
+
+  async function decompressSnapshot(item) {
+    if (!item) return '';
+    if (typeof item._plain === 'string') return item._plain;
+    let text = '';
+    if (item.compressed && isBinarySnap(item.text)) {
+      const stream = new Blob([toLocalU8(item.text)]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
+      text = await new Response(stream).text();
+    } else {
+      text = String(item.text ?? '');
+    }
+    item._plain = text;
+    return text;
+  }
+
+  function parseCoreCacheVer(name) {
+    const m = /^core-cache-(\d{13,15})$/.exec(name || '');
+    return m ? Number(m[1]) : 0;
+  }
+
+  async function readLatestSwCachedMd(tryKeys) {
+    if (!('caches' in window)) return null;
+    try {
+      const keys = await caches.keys();
+      const coreNames = keys
+        .filter(n => n.startsWith('core-cache-'))
+        .sort((a, b) => (parseCoreCacheVer(a) - parseCoreCacheVer(b)) || (a < b ? -1 : a > b ? 1 : 0));
+      const coreName = coreNames.pop();
+      if (!coreName) return null;
+      const cache = await caches.open(coreName);
+      let res = null;
+      for (const k of tryKeys) {
+        const url = k.startsWith('/') ? k : '/' + k;
+        const hit = await cache.match(url, { ignoreSearch: true });
+        if (hit && hit.ok) { res = hit; break; }
+      }
+      if (!res) {
+        const lowerSet = new Set(tryKeys.map(k => (k.startsWith('/') ? k : '/' + k).toLowerCase()));
+        const reqs = await cache.keys();
+        for (const req of reqs) {
+          try {
+            const p = new URL(req.url).pathname;
+            let dp = p;
+            try { dp = decodeURIComponent(p); } catch (_) { }
+            if (lowerSet.has(p.toLowerCase()) || lowerSet.has(dp.toLowerCase())) {
+              const hit = await cache.match(req);
+              if (hit && hit.ok) { res = hit; break; }
+            }
+          } catch (_) { }
+        }
+      }
+      if (!res) return null;
+      const text = normLF(await res.text()).replace(/^\uFEFF/, '');
+      return { text, ts: parseCoreCacheVer(coreName) };
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function readSnapshotRecordInSingleTx(idb, tryKeys) {
+    return new Promise((resolve) => {
+      if (!idb || !idb.objectStoreNames.contains('html_snapshots')) { resolve(null); return; }
+      try {
+        const tx = idb.transaction('html_snapshots', 'readonly');
+        const st = tx.objectStore('html_snapshots');
+        const lowerSet = new Set(tryKeys.map(k => String(k).toLowerCase()));
+        const keysReq = st.getAllKeys();
+        keysReq.onsuccess = () => {
+          const allKeys = Array.isArray(keysReq.result) ? keysReq.result : [];
+          let hitKey = null;
+          for (const tk of tryKeys) {
+            if (allKeys.includes(tk)) { hitKey = tk; break; }
+          }
+          if (hitKey === null) {
+            for (const ak of allKeys) {
+              const s = String(ak);
+              let ds = s;
+              try { ds = decodeURI(s); } catch (_) { }
+              if (lowerSet.has(s.toLowerCase()) || lowerSet.has(ds.toLowerCase())) {
+                hitKey = ak;
+                break;
+              }
+            }
+          }
+          if (hitKey === null) { resolve(null); return; }
+          const getReq = st.get(hitKey);
+          getReq.onsuccess = () => resolve(getReq.result || null);
+          getReq.onerror = () => resolve(null);
+        };
+        keysReq.onerror = () => resolve(null);
+        tx.onabort = () => resolve(null);
+      } catch (_) {
+        resolve(null);
+      }
+    });
+  }
+
+  async function loadMdSnapshots() {
+    diffSnapshots = [];
+    swCacheSnap = null;
+    if (invalidMdPathReason) return;
+
+    let decoded = mdPath;
+    try { decoded = decodeURI(mdPath); } catch (_) { }
+    const encoded = encodeURI(decoded);
+    const stripped = decoded.replace(/^\/+/, '');
+    const tryKeys = Array.from(new Set([decoded, mdPath, encoded, stripped, '/' + stripped]));
+
+    let idb = null;
+    try {
+      idb = await openMainDbReadonly();
+      const rec = await readSnapshotRecordInSingleTx(idb, tryKeys);
+      if (rec) {
+        let list = [];
+        if (Array.isArray(rec.history)) {
+          list = rec.history.filter(it => it && (typeof it.text === 'string' || isBinarySnap(it.text)));
+        } else if (typeof rec.text === 'string' || isBinarySnap(rec.text)) {
+          list = [{ text: rec.text, ts: rec.ts || 0, compressed: rec.compressed }];
+        }
+        diffSnapshots = list.slice().sort((a, b) => (b.ts || 0) - (a.ts || 0));
+      }
+    } catch (e) {
+      console.warn('[MD Diff] 历史快照读取失败:', e);
+    } finally {
+      if (idb) { try { idb.close(); } catch (_) { } }
+    }
+
+    // 本地模式下读取最新 core-cache-* 缓存版作为最新 SW 版本（仅在已与最新历史快照完全相同时去重，不因与硬盘相同而隐藏）
+    if (isEditable) {
+      const swLatest = await readLatestSwCachedMd(tryKeys);
+      if (swLatest && swLatest.text) {
+        let sameAsNewestHist = false;
+        if (diffSnapshots.length > 0) {
+          try {
+            const newestHistText = normLF(await decompressSnapshot(diffSnapshots[0])).replace(/^\uFEFF/, '');
+            sameAsNewestHist = newestHistText === swLatest.text;
+          } catch (_) { }
+        }
+        if (!sameAsNewestHist) {
+          swCacheSnap = swLatest;
+        }
+      }
+    }
+  }
+
+  function getAvailableDiffVersions() {
+    const versions = [];
+    const totalSnaps = diffSnapshots.length;
+    const hasSwHead = isEditable && !!swCacheSnap;
+
+    if (isEditable) {
+      if (window._mdDirty) {
+        versions.push({ val: 'draft', label: '当前草稿 (未固化)', title: '编辑器中尚未保存的内容' });
+      }
+      versions.push({
+        val: 'current',
+        label: '硬盘当前版 (最新)',
+        title: '硬盘上当前落盘的最新文件'
+      });
+      if (hasSwHead) {
+        const tStr = formatSnapTime(swCacheSnap.ts);
+        versions.push({
+          val: 'sw_head',
+          label: `v${totalSnaps + 1} · ${tStr} (SW 当前)`,
+          title: `当前 SW 缓存中的最新版本 (${tStr})`
+        });
+      }
+      for (let i = 0; i < totalSnaps; i++) {
+        const vNum = totalSnaps - i;
+        const tStr = formatSnapTime(diffSnapshots[i].ts);
+        versions.push({ val: String(i), label: `v${vNum} · ${tStr} (SW)`, title: `SW 历史快照 (${tStr})` });
+      }
+      return versions;
+    }
+
+    const totalVersions = totalSnaps + 1;
+    versions.push({
+      val: 'current',
+      label: totalSnaps > 0 ? `v${totalVersions} (最新)` : '当前版本',
+      title: '当前最新版本'
+    });
+    for (let i = 0; i < totalSnaps; i++) {
+      const vNum = totalVersions - 1 - i;
+      const tStr = formatSnapTime(diffSnapshots[i].ts);
+      versions.push({ val: String(i), label: `v${vNum} · ${tStr}`, title: tStr });
+    }
+    return versions;
+  }
+
+  function syncVersionSelects(preferredTo, preferredFrom) {
+    const versions = getAvailableDiffVersions();
+    const prevTo = preferredTo ?? diffToSel.value;
+    const prevFrom = preferredFrom ?? diffFromSel.value;
+
+    const fill = (sel) => {
+      sel.textContent = '';
+      for (const v of versions) {
+        const opt = document.createElement('option');
+        opt.value = v.val;
+        opt.textContent = v.label;
+        opt.title = v.title;
+        sel.appendChild(opt);
+      }
+    };
+    fill(diffToSel);
+    fill(diffFromSel);
+
+    const hasVal = (v) => versions.some(item => item.val === v);
+    if (hasVal(prevTo)) diffToSel.value = prevTo;
+    else if (versions[0]) diffToSel.value = versions[0].val;
+
+    if (hasVal(prevFrom) && prevFrom !== diffToSel.value) diffFromSel.value = prevFrom;
+    else {
+      const alt = versions.find(v => v.val !== diffToSel.value);
+      if (alt) diffFromSel.value = alt.val;
+    }
+    return versions;
+  }
+
+  function refreshDiffControls() {
+    const versions = getAvailableDiffVersions();
+    const available = versions.length >= 2;
+    diffToggleBtn.hidden = !available && !diffActive;
+    diffToggleBtn.title = '对比不同版本改动';
+    if (diffActive) syncVersionSelects();
+  }
+
+  async function getVersionText(val) {
+    if (val === 'draft') return normLF(getVal()).replace(/^\uFEFF/, '');
+    if (val === 'current') return normLF(diskText).replace(/^\uFEFF/, '');
+    if (val === 'sw_head' && swCacheSnap) return swCacheSnap.text;
+    const idx = Number(val);
+    if (Number.isInteger(idx) && idx >= 0 && idx < diffSnapshots.length) {
+      return normLF(await decompressSnapshot(diffSnapshots[idx])).replace(/^\uFEFF/, '');
+    }
+    return '';
+  }
+
+  function splitInlineTokens(str) {
+    if (!str) return [];
+    const re = /[A-Za-z0-9_]+|\s+|[\s\S]/gu;
+    const toks = [];
+    let m;
+    while ((m = re.exec(str))) {
+      toks.push({ str: m[0], start: m.index, end: m.index + m[0].length });
+    }
+    return toks;
+  }
+
+  function quickCharSimilarity(a, b) {
+    const sa = String(a || '').replace(/\s+/g, '');
+    const sb = String(b || '').replace(/\s+/g, '');
+    if (!sa && !sb) return 1;
+    if (!sa || !sb) return 0;
+    const ca = Array.from(sa), cb = Array.from(sb);
+    const freq = new Map();
+    for (const ch of ca) freq.set(ch, (freq.get(ch) || 0) + 1);
+    let common = 0;
+    for (const ch of cb) {
+      const c = freq.get(ch) || 0;
+      if (c > 0) { common++; freq.set(ch, c - 1); }
+    }
+    return (2 * common) / (ca.length + cb.length);
+  }
+
+  function collectDomInlineTokens(el) {
+    const toks = [];
+    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+    const re = /[A-Za-z0-9_]+|\s+|[\s\S]/gu;
+    let node;
+    while ((node = walker.nextNode())) {
+      const val = node.nodeValue;
+      if (!val) continue;
+      re.lastIndex = 0;
+      let m;
+      while ((m = re.exec(val))) {
+        toks.push({ str: m[0], node, start: m.index, end: m.index + m[0].length });
+      }
+    }
+    return toks;
+  }
+
+  function wrapDomNodeRanges(markMap, clsName) {
+    for (const [node, ranges] of markMap.entries()) {
+      if (!node.parentNode || !ranges.length) continue;
+      ranges.sort((a, b) => a[0] - b[0]);
+      const merged = [];
+      for (const r of ranges) {
+        const last = merged[merged.length - 1];
+        if (last && r[0] <= last[1]) last[1] = Math.max(last[1], r[1]);
+        else merged.push([r[0], r[1]]);
+      }
+      const val = node.nodeValue;
+      const frag = document.createDocumentFragment();
+      let pos = 0;
+      for (const [s, e] of merged) {
+        if (s > pos) frag.appendChild(document.createTextNode(val.slice(pos, s)));
+        const sp = document.createElement('span');
+        sp.className = clsName;
+        sp.textContent = val.slice(s, e);
+        frag.appendChild(sp);
+        pos = e;
+      }
+      if (pos < val.length) frag.appendChild(document.createTextNode(val.slice(pos)));
+      node.parentNode.replaceChild(frag, node);
+    }
+  }
+
+  function applyInlineDomDiff(oldEl, newEl, lcs) {
+    const oldToks = collectDomInlineTokens(oldEl);
+    const newToks = collectDomInlineTokens(newEl);
+    if (!oldToks.length || !newToks.length) return;
+    if (oldToks.length * newToks.length > 220000) return;
+
+    const ops = lcs(oldToks.map(t => t.str), newToks.map(t => t.str));
+    let eqChars = 0, oldChars = 0, newChars = 0;
+    for (const t of oldToks) oldChars += t.str.length;
+    for (const t of newToks) newChars += t.str.length;
+    for (const op of ops) {
+      if (op.type === 'equal') eqChars += oldToks[op.oldIdx].str.length;
+    }
+    if (eqChars / Math.max(oldChars, newChars, 1) < 0.22) return;
+
+    const oldMarks = new Map(), newMarks = new Map();
+    const pushMark = (map, tok) => {
+      let arr = map.get(tok.node);
+      if (!arr) { arr = []; map.set(tok.node, arr); }
+      arr.push([tok.start, tok.end]);
+    };
+    for (const op of ops) {
+      if (op.type === 'delete') pushMark(oldMarks, oldToks[op.oldIdx]);
+      else if (op.type === 'insert') pushMark(newMarks, newToks[op.newIdx]);
+    }
+    wrapDomNodeRanges(oldMarks, 'md-diff-wd-del');
+    wrapDomNodeRanges(newMarks, 'md-diff-wd-add');
+  }
+
+  function renderInlineTextPair(oldStr, newStr, lcs) {
+    const oldToks = splitInlineTokens(oldStr);
+    const newToks = splitInlineTokens(newStr);
+    if (!oldToks.length || !newToks.length || oldToks.length * newToks.length > 160000) return null;
+    const ops = lcs(oldToks.map(t => t.str), newToks.map(t => t.str));
+    let eqChars = 0;
+    for (const op of ops) {
+      if (op.type === 'equal') eqChars += oldToks[op.oldIdx].str.length;
+    }
+    if (eqChars / Math.max(oldStr.length, newStr.length, 1) < 0.22) return null;
+
+    const buildFrag = (toks, targetType, cls) => {
+      const frag = document.createDocumentFragment();
+      let plainBuf = '', markBuf = '';
+      const flushPlain = () => { if (plainBuf) { frag.appendChild(document.createTextNode(plainBuf)); plainBuf = ''; } };
+      const flushMark = () => {
+        if (markBuf) {
+          const sp = document.createElement('span');
+          sp.className = cls;
+          sp.textContent = markBuf;
+          frag.appendChild(sp);
+          markBuf = '';
+        }
+      };
+      for (const op of ops) {
+        if (op.type === 'equal') {
+          flushMark();
+          plainBuf += toks[targetType === 'delete' ? op.oldIdx : op.newIdx].str;
+        } else if (op.type === targetType) {
+          flushPlain();
+          markBuf += toks[targetType === 'delete' ? op.oldIdx : op.newIdx].str;
+        }
+      }
+      flushMark();
+      flushPlain();
+      return frag;
+    };
+    return {
+      oldFrag: buildFrag(oldToks, 'delete', 'md-diff-wd-del'),
+      newFrag: buildFrag(newToks, 'insert', 'md-diff-wd-add')
+    };
+  }
+
+  function pairReplaceRun(delItems, insItems, scoreFn) {
+    const m = delItems.length, n = insItems.length;
+    if (m === 0 || n === 0) {
+      const out = [];
+      for (const d of delItems) out.push({ kind: 'del', oldItem: d });
+      for (const i of insItems) out.push({ kind: 'ins', newItem: i });
+      return out;
+    }
+    if (m * n > 1600) {
+      const out = [];
+      const k = Math.min(m, n);
+      for (let idx = 0; idx < k; idx++) {
+        if (scoreFn(delItems[idx], insItems[idx]) > 0) {
+          out.push({ kind: 'pair', oldItem: delItems[idx], newItem: insItems[idx] });
+        } else {
+          out.push({ kind: 'del', oldItem: delItems[idx] });
+          out.push({ kind: 'ins', newItem: insItems[idx] });
+        }
+      }
+      for (let idx = k; idx < m; idx++) out.push({ kind: 'del', oldItem: delItems[idx] });
+      for (let idx = k; idx < n; idx++) out.push({ kind: 'ins', newItem: insItems[idx] });
+      return out;
+    }
+
+    const dp = Array.from({ length: m + 1 }, () => new Float64Array(n + 1));
+    const choice = Array.from({ length: m + 1 }, () => new Uint8Array(n + 1));
+    for (let i = 1; i <= m; i++) {
+      for (let j = 1; j <= n; j++) {
+        let best = dp[i - 1][j];
+        let act = 1;
+        if (dp[i][j - 1] > best) { best = dp[i][j - 1]; act = 2; }
+        const sc = scoreFn(delItems[i - 1], insItems[j - 1]);
+        if (sc > 0 && dp[i - 1][j - 1] + sc > best) {
+          best = dp[i - 1][j - 1] + sc;
+          act = 3;
+        }
+        dp[i][j] = best;
+        choice[i][j] = act;
+      }
+    }
+
+    const out = [];
+    let i = m, j = n;
+    while (i > 0 || j > 0) {
+      if (i > 0 && j > 0 && choice[i][j] === 3) {
+        out.push({ kind: 'pair', oldItem: delItems[i - 1], newItem: insItems[j - 1] });
+        i--; j--;
+      } else if (j > 0 && (i === 0 || choice[i][j] === 2)) {
+        out.push({ kind: 'ins', newItem: insItems[j - 1] });
+        j--;
+      } else {
+        out.push({ kind: 'del', oldItem: delItems[i - 1] });
+        i--;
+      }
+    }
+    out.reverse();
+    return out;
+  }
+
+  function splitBalancedHtmlLines(html) {
+    const lines = [];
+    let cur = '';
+    const openSpans = [];
+    const tagRe = /<span\b[^>]*>|<\/span>|\n|[^<\n]+|</g;
+    let m;
+    while ((m = tagRe.exec(html))) {
+      const tok = m[0];
+      if (tok === '\n') {
+        cur += '</span>'.repeat(openSpans.length);
+        lines.push(cur);
+        cur = openSpans.join('');
+      } else if (tok.startsWith('<span')) {
+        openSpans.push(tok);
+        cur += tok;
+      } else if (tok === '</span>') {
+        if (openSpans.length > 0) openSpans.pop();
+        cur += tok;
+      } else {
+        cur += tok;
+      }
+    }
+    cur += '</span>'.repeat(openSpans.length);
+    lines.push(cur);
+    if (lines.length > 1 && lines[lines.length - 1] === '') lines.pop();
+    return lines;
+  }
+
+  function extractTableRows(tableEl) {
+    const rows = [];
+    const trs = tableEl.querySelectorAll('tr');
+    trs.forEach(tr => {
+      const inHead = !!(tr.parentElement && tr.parentElement.tagName === 'THEAD');
+      rows.push({
+        inHead,
+        el: tr,
+        key: (inHead ? 'H:' : 'B:') + tr.outerHTML,
+        plain: tr.textContent.trim(),
+        colCount: tr.children.length
+      });
+    });
+    return rows;
+  }
+
+  function flattenListItems(listEl, depth = 0, out = []) {
+    const listTag = listEl.tagName.toLowerCase();
+    for (const child of Array.from(listEl.children)) {
+      if (child.tagName !== 'LI') continue;
+      const ownWrap = document.createElement('div');
+      const nestedLists = [];
+      for (const n of Array.from(child.childNodes)) {
+        if (n.nodeType === Node.ELEMENT_NODE && (n.tagName === 'UL' || n.tagName === 'OL')) {
+          nestedLists.push(n);
+        } else {
+          ownWrap.appendChild(n.cloneNode(true));
+        }
+      }
+      const ownHtml = ownWrap.innerHTML.trim();
+      const plain = ownWrap.textContent.trim();
+      out.push({
+        depth,
+        listTag,
+        ownHtml,
+        plain,
+        key: `${depth}:${listTag}:${ownHtml}`
+      });
+      for (const nl of nestedLists) flattenListItems(nl, depth + 1, out);
+    }
+    return out;
+  }
+
+  function extractTopUnits(host) {
+    const units = [];
+    for (const node of Array.from(host.children)) {
+      const tag = node.tagName.toLowerCase();
+      if (tag === 'table') {
+        const rows = extractTableRows(node);
+        units.push({
+          groupType: 'table',
+          tag,
+          el: node,
+          rows,
+          plain: node.textContent.trim(),
+          key: 'table:' + node.outerHTML
+        });
+      } else if (tag === 'ul' || tag === 'ol') {
+        const items = flattenListItems(node);
+        units.push({
+          groupType: 'list',
+          tag,
+          el: node,
+          items,
+          plain: node.textContent.trim(),
+          key: tag + ':' + node.outerHTML
+        });
+      } else if (tag === 'pre') {
+        const codeEl = node.querySelector('code');
+        const rawHtml = codeEl ? codeEl.innerHTML : node.innerHTML;
+        const lines = splitBalancedHtmlLines(rawHtml).map(lh => {
+          const tmp = document.createElement('span');
+          tmp.innerHTML = lh;
+          return { html: lh, plain: tmp.textContent, key: tmp.textContent };
+        });
+        units.push({
+          groupType: 'code',
+          tag,
+          el: node,
+          codeClass: codeEl ? codeEl.className : '',
+          lines,
+          plain: node.textContent,
+          key: 'pre:' + (codeEl ? codeEl.className : '') + ':' + node.textContent
+        });
+      } else if (/^h[1-6]$/.test(tag)) {
+        units.push({
+          groupType: 'heading',
+          tag,
+          el: node,
+          plain: node.textContent.trim(),
+          key: tag + ':' + node.outerHTML
+        });
+      } else {
+        units.push({
+          groupType: tag === 'blockquote' ? 'blockquote' : 'block',
+          tag,
+          el: node,
+          plain: node.textContent.trim(),
+          key: tag + ':' + node.outerHTML
+        });
+      }
+    }
+    return units;
+  }
+
+  function groupDiffOps(ops) {
+    const groups = [];
+    let i = 0;
+    while (i < ops.length) {
+      if (ops[i].type === 'equal') {
+        groups.push({ kind: 'equal', oldIdx: ops[i].oldIdx, newIdx: ops[i].newIdx });
+        i++;
+      } else {
+        const dels = [], ins = [];
+        while (i < ops.length && ops[i].type !== 'equal') {
+          if (ops[i].type === 'delete') dels.push(ops[i].oldIdx);
+          else ins.push(ops[i].newIdx);
+          i++;
+        }
+        groups.push({ kind: 'change', dels, ins });
+      }
+    }
+    return groups;
+  }
+
+  function buildDiffTable(oldUnit, newUnit, lcs, stats) {
+    const oldRows = oldUnit.rows, newRows = newUnit.rows;
+    const ops = lcs(oldRows.map(r => r.key), newRows.map(r => r.key));
+    const table = document.createElement('table');
+    const thead = document.createElement('thead');
+    const tbody = document.createElement('tbody');
+
+    const emitRow = (tr, inHead) => {
+      if (inHead) thead.appendChild(tr);
+      else tbody.appendChild(tr);
+    };
+
+    for (const grp of groupDiffOps(ops)) {
+      if (grp.kind === 'equal') {
+        const r = newRows[grp.newIdx];
+        emitRow(r.el.cloneNode(true), r.inHead);
+        continue;
+      }
+      const paired = pairReplaceRun(
+        grp.dels.map(i => oldRows[i]),
+        grp.ins.map(i => newRows[i]),
+        (d, ins) => {
+          if (d.inHead !== ins.inHead || d.colCount !== ins.colCount) return 0;
+          const sim = quickCharSimilarity(d.plain, ins.plain);
+          return sim >= 0.2 ? sim : 0;
+        }
+      );
+      for (const act of paired) {
+        if (act.kind === 'pair') {
+          const oldTr = act.oldItem.el.cloneNode(true);
+          const newTr = act.newItem.el.cloneNode(true);
+          oldTr.classList.add('md-diff-del');
+          newTr.classList.add('md-diff-add');
+          oldTr.dataset.diff = 'del';
+          newTr.dataset.diff = 'add';
+          const cols = Math.min(oldTr.children.length, newTr.children.length);
+          for (let c = 0; c < cols; c++) {
+            if (oldTr.children[c].innerHTML !== newTr.children[c].innerHTML) {
+              applyInlineDomDiff(oldTr.children[c], newTr.children[c], lcs);
+            }
+          }
+          emitRow(oldTr, act.oldItem.inHead);
+          emitRow(newTr, act.newItem.inHead);
+          stats.del++; stats.add++;
+        } else if (act.kind === 'del') {
+          const oldTr = act.oldItem.el.cloneNode(true);
+          oldTr.classList.add('md-diff-del');
+          oldTr.dataset.diff = 'del';
+          emitRow(oldTr, act.oldItem.inHead);
+          stats.del++;
+        } else {
+          const newTr = act.newItem.el.cloneNode(true);
+          newTr.classList.add('md-diff-add');
+          newTr.dataset.diff = 'add';
+          emitRow(newTr, act.newItem.inHead);
+          stats.add++;
+        }
+      }
+    }
+    if (thead.children.length > 0) table.appendChild(thead);
+    if (tbody.children.length > 0) table.appendChild(tbody);
+    return table;
+  }
+
+  function buildDiffList(oldUnit, newUnit, lcs, stats) {
+    const oldItems = oldUnit.items, newItems = newUnit.items;
+    const ops = lcs(oldItems.map(x => x.key), newItems.map(x => x.key));
+    const rootWrap = document.createDocumentFragment();
+    const stack = [];
+
+    const getContainer = (tag, depth) => {
+      while (stack.length > 0 && stack[stack.length - 1].depth > depth) stack.pop();
+      if (stack.length > 0 && stack[stack.length - 1].depth === depth && stack[stack.length - 1].tag !== tag) {
+        stack.pop();
+      }
+      while (stack.length === 0 || stack[stack.length - 1].depth < depth) {
+        const nextDepth = stack.length;
+        const listEl = document.createElement(tag);
+        if (stack.length === 0) {
+          rootWrap.appendChild(listEl);
+        } else {
+          const parentList = stack[stack.length - 1].el;
+          let hostLi = parentList.lastElementChild;
+          if (!hostLi || hostLi.tagName !== 'LI') {
+            hostLi = document.createElement('li');
+            hostLi.style.listStyle = 'none';
+            parentList.appendChild(hostLi);
+          }
+          hostLi.appendChild(listEl);
+        }
+        stack.push({ tag, depth: nextDepth, el: listEl });
+      }
+      return stack[stack.length - 1].el;
+    };
+
+    const appendLi = (item, diffType, prebuiltEl = null) => {
+      const parent = getContainer(item.listTag, item.depth);
+      const li = prebuiltEl || document.createElement('li');
+      if (!prebuiltEl) li.innerHTML = item.ownHtml;
+      if (diffType === 'add') { li.classList.add('md-diff-add'); li.dataset.diff = 'add'; stats.add++; }
+      else if (diffType === 'del') { li.classList.add('md-diff-del'); li.dataset.diff = 'del'; stats.del++; }
+      parent.appendChild(li);
+    };
+
+    for (const grp of groupDiffOps(ops)) {
+      if (grp.kind === 'equal') {
+        appendLi(newItems[grp.newIdx], null);
+        continue;
+      }
+      const paired = pairReplaceRun(
+        grp.dels.map(i => oldItems[i]),
+        grp.ins.map(i => newItems[i]),
+        (d, ins) => {
+          if (d.depth !== ins.depth) return 0;
+          const sim = quickCharSimilarity(d.plain, ins.plain);
+          return sim >= 0.25 ? sim : 0;
+        }
+      );
+      for (const act of paired) {
+        if (act.kind === 'pair') {
+          const oldLi = document.createElement('li');
+          oldLi.innerHTML = act.oldItem.ownHtml;
+          const newLi = document.createElement('li');
+          newLi.innerHTML = act.newItem.ownHtml;
+          applyInlineDomDiff(oldLi, newLi, lcs);
+          appendLi(act.oldItem, 'del', oldLi);
+          appendLi(act.newItem, 'add', newLi);
+        } else if (act.kind === 'del') {
+          appendLi(act.oldItem, 'del');
+        } else {
+          appendLi(act.newItem, 'add');
+        }
+      }
+    }
+    return rootWrap;
+  }
+
+  function buildDiffCodeBlock(oldUnit, newUnit, lcs, stats) {
+    const oldLines = oldUnit.lines, newLines = newUnit.lines;
+    const ops = lcs(oldLines.map(x => x.key), newLines.map(x => x.key));
+    const pre = document.createElement('pre');
+    pre.className = 'md-diff-pre';
+    const code = document.createElement('code');
+    if (newUnit.codeClass || oldUnit.codeClass) code.className = newUnit.codeClass || oldUnit.codeClass;
+
+    const makeLine = (html, diffType) => {
+      const sp = document.createElement('span');
+      sp.className = 'md-diff-cline' + (diffType === 'add' ? ' md-diff-add' : diffType === 'del' ? ' md-diff-del' : '');
+      if (diffType) sp.dataset.diff = diffType;
+      sp.innerHTML = html || '\u00A0';
+      return sp;
+    };
+
+    for (const grp of groupDiffOps(ops)) {
+      if (grp.kind === 'equal') {
+        code.appendChild(makeLine(newLines[grp.newIdx].html, null));
+        continue;
+      }
+      const paired = pairReplaceRun(
+        grp.dels.map(i => oldLines[i]),
+        grp.ins.map(i => newLines[i]),
+        (d, ins) => {
+          const sim = quickCharSimilarity(d.plain, ins.plain);
+          return sim >= 0.28 ? sim : 0;
+        }
+      );
+      for (const act of paired) {
+        if (act.kind === 'pair') {
+          const oldSp = makeLine(act.oldItem.html, 'del');
+          const newSp = makeLine(act.newItem.html, 'add');
+          applyInlineDomDiff(oldSp, newSp, lcs);
+          code.append(oldSp, newSp);
+          stats.del++; stats.add++;
+        } else if (act.kind === 'del') {
+          code.appendChild(makeLine(act.oldItem.html, 'del'));
+          stats.del++;
+        } else {
+          code.appendChild(makeLine(act.newItem.html, 'add'));
+          stats.add++;
+        }
+      }
+    }
+    pre.appendChild(code);
+    return pre;
+  }
+
+  function wrapWholeBlock(el, diffType) {
+    const wrap = document.createElement('div');
+    wrap.className = 'md-diff-blk ' + (diffType === 'add' ? 'md-diff-add' : 'md-diff-del');
+    wrap.dataset.diff = diffType;
+    wrap.appendChild(el);
+    return wrap;
+  }
+
+  function expandFoldGroup(foldId) {
+    out.querySelectorAll(`[data-fold-id="${CSS.escape(foldId)}"]`).forEach(el => {
+      el.classList.remove('md-diff-hidden');
+      delete el.dataset.foldId;
+    });
+    const btn = out.querySelector(`button[data-fold-trigger="${CSS.escape(foldId)}"]`);
+    if (btn) btn.remove();
+  }
+
+  function applyRenderedOnlyChangesFold() {
+    if (!diffOnlyChanges) return;
+    const kids = Array.from(out.children);
+    const keep = new Uint8Array(kids.length);
+    for (let i = 0; i < kids.length; i++) {
+      const el = kids[i];
+      const isHeading = /^H[1-6]$/.test(el.tagName);
+      const isChanged = el.dataset.diff === 'add' || el.dataset.diff === 'del' || !!el.querySelector('[data-diff]');
+      if (isHeading || isChanged) {
+        keep[i] = 1;
+        if (isChanged) {
+          if (i > 0) keep[i - 1] = 1;
+          if (i + 1 < kids.length) keep[i + 1] = 1;
+        }
+      }
+    }
+    let foldSeq = 0;
+    let i = 0;
+    while (i < kids.length) {
+      if (keep[i]) { i++; continue; }
+      let j = i;
+      while (j < kids.length && !keep[j]) j++;
+      const count = j - i;
+      if (count >= 2) {
+        const fid = 'rf_' + (++foldSeq);
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'md-diff-fold';
+        btn.dataset.foldTrigger = fid;
+        btn.textContent = `··· 展开 ${count} 个未变动区块 ···`;
+        btn.onclick = () => expandFoldGroup(fid);
+        out.insertBefore(btn, kids[i]);
+        for (let k = i; k < j; k++) {
+          kids[k].classList.add('md-diff-hidden');
+          kids[k].dataset.foldId = fid;
+        }
+      }
+      i = j;
+    }
+  }
+
+  function renderRenderedDiff(oldText, newText, lcs) {
+    out.classList.remove('is-source-diff');
+    const oldHost = document.createElement('div');
+    const newHost = document.createElement('div');
+    renderMarkdownInto(oldHost, oldText);
+    renderMarkdownInto(newHost, newText);
+
+    const oldUnits = extractTopUnits(oldHost);
+    const newUnits = extractTopUnits(newHost);
+    const ops = lcs(oldUnits.map(u => u.key), newUnits.map(u => u.key));
+
+    const frag = document.createDocumentFragment();
+    const stats = { add: 0, del: 0 };
+
+    for (const grp of groupDiffOps(ops)) {
+      if (grp.kind === 'equal') {
+        frag.appendChild(newUnits[grp.newIdx].el.cloneNode(true));
+        continue;
+      }
+      const dels = grp.dels.map(i => oldUnits[i]);
+      const ins = grp.ins.map(i => newUnits[i]);
+      const paired = pairReplaceRun(dels, ins, (d, n) => {
+        if (d.groupType !== n.groupType) return 0;
+        if (d.groupType === 'table' || d.groupType === 'list' || d.groupType === 'code') {
+          if (dels.length === 1 && ins.length === 1) return 1;
+          const sim = quickCharSimilarity(d.plain, n.plain);
+          return sim >= 0.15 ? 0.5 + 0.5 * sim : 0;
+        }
+        const sim = quickCharSimilarity(d.plain, n.plain);
+        return sim >= 0.25 ? sim : 0;
+      });
+
+      for (const act of paired) {
+        if (act.kind === 'pair') {
+          const o = act.oldItem, n = act.newItem;
+          if (o.groupType === 'table') {
+            frag.appendChild(buildDiffTable(o, n, lcs, stats));
+          } else if (o.groupType === 'list') {
+            frag.appendChild(buildDiffList(o, n, lcs, stats));
+          } else if (o.groupType === 'code') {
+            frag.appendChild(buildDiffCodeBlock(o, n, lcs, stats));
+          } else {
+            const oldClone = o.el.cloneNode(true);
+            const newClone = n.el.cloneNode(true);
+            applyInlineDomDiff(oldClone, newClone, lcs);
+            frag.append(wrapWholeBlock(oldClone, 'del'), wrapWholeBlock(newClone, 'add'));
+            stats.del++; stats.add++;
+          }
+        } else if (act.kind === 'del') {
+          frag.appendChild(wrapWholeBlock(act.oldItem.el.cloneNode(true), 'del'));
+          stats.del++;
+        } else {
+          frag.appendChild(wrapWholeBlock(act.newItem.el.cloneNode(true), 'add'));
+          stats.add++;
+        }
+      }
+    }
+
+    out.replaceChildren(frag);
+    applyRenderedOnlyChangesFold();
+    tocSig = '';
+    buildToc();
+    annotateRenderedTocDots();
+    collectDiffHunks();
+    return stats;
+  }
+
+  function annotateRenderedTocDots() {
+    if (!tocHeadings.length || !tocLinks.length) return;
+    const allChanged = Array.from(out.querySelectorAll('[data-diff="add"],[data-diff="del"]'));
+    if (!allChanged.length) return;
+
+    const states = new Array(tocHeadings.length).fill(0);
+    const headingTopIdx = (el) => {
+      let lo = 0, hi = tocHeadings.length - 1, ans = -1;
+      while (lo <= hi) {
+        const mid = (lo + hi) >> 1;
+        const h = tocHeadings[mid];
+        if (h === el || h.contains(el) || el.contains(h)) return mid;
+        const pos = h.compareDocumentPosition(el);
+        if (pos & Node.DOCUMENT_POSITION_FOLLOWING) { ans = mid; lo = mid + 1; }
+        else hi = mid - 1;
+      }
+      return ans;
+    };
+
+    for (const el of allChanged) {
+      const idx = headingTopIdx(el);
+      if (idx >= 0) {
+        states[idx] |= (el.dataset.diff === 'add' ? 1 : 2);
+      }
+    }
+
+    tocLinks.forEach((a, i) => {
+      const oldDot = a.querySelector('.toc-diff-dot');
+      if (oldDot) oldDot.remove();
+      const mask = states[i];
+      if (!mask) return;
+      const dot = document.createElement('span');
+      dot.className = 'toc-diff-dot ' + (mask === 3 ? 'is-mod' : mask === 1 ? 'is-add' : 'is-del');
+      dot.title = mask === 3 ? '本节含修改' : mask === 1 ? '本节含新增' : '本节含删除';
+      a.appendChild(dot);
+    });
+  }
+
+  function renderSourceDiff(oldText, newText, lcs) {
+    out.classList.add('is-source-diff');
+    const oldLines = oldText.split('\n');
+    const newLines = newText.split('\n');
+    const ops = lcs(oldLines, newLines);
+
+    const wrap = document.createElement('div');
+    wrap.className = 'md-src-diff';
+    const rows = [];
+    const stats = { add: 0, del: 0 };
+
+    const makeRow = (type, oldNo, newNo, contentNode) => {
+      const r = document.createElement('div');
+      r.className = 'md-src-row' + (type === 'add' ? ' is-add' : type === 'del' ? ' is-del' : '');
+      if (type) r.dataset.diff = type;
+      const ln1 = document.createElement('span'); ln1.className = 'md-src-ln'; ln1.textContent = oldNo != null ? String(oldNo) : '';
+      const ln2 = document.createElement('span'); ln2.className = 'md-src-ln'; ln2.textContent = newNo != null ? String(newNo) : '';
+      const sg = document.createElement('span'); sg.className = 'md-src-sign'; sg.textContent = type === 'add' ? '+' : type === 'del' ? '-' : '';
+      const cd = document.createElement('span'); cd.className = 'md-src-code';
+      if (typeof contentNode === 'string') cd.textContent = contentNode || '\u00A0';
+      else cd.appendChild(contentNode);
+      r.append(ln1, ln2, sg, cd);
+      rows.push({ el: r, type, raw: type === 'del' ? oldLines[oldNo - 1] : newLines[newNo - 1] });
+      return r;
+    };
+
+    for (const grp of groupDiffOps(ops)) {
+      if (grp.kind === 'equal') {
+        makeRow(null, grp.oldIdx + 1, grp.newIdx + 1, newLines[grp.newIdx]);
+        continue;
+      }
+      const dels = grp.dels.map(i => ({ idx: i, text: oldLines[i] }));
+      const ins = grp.ins.map(i => ({ idx: i, text: newLines[i] }));
+      const paired = pairReplaceRun(dels, ins, (d, n) => {
+        const sim = quickCharSimilarity(d.text, n.text);
+        return sim >= 0.25 ? sim : 0;
+      });
+      for (const act of paired) {
+        if (act.kind === 'pair') {
+          const inl = renderInlineTextPair(act.oldItem.text, act.newItem.text, lcs);
+          makeRow('del', act.oldItem.idx + 1, null, inl ? inl.oldFrag : act.oldItem.text);
+          makeRow('add', null, act.newItem.idx + 1, inl ? inl.newFrag : act.newItem.text);
+          stats.del++; stats.add++;
+        } else if (act.kind === 'del') {
+          makeRow('del', act.oldItem.idx + 1, null, act.oldItem.text);
+          stats.del++;
+        } else {
+          makeRow('add', null, act.newItem.idx + 1, act.newItem.text);
+          stats.add++;
+        }
+      }
+    }
+
+    const keep = new Uint8Array(rows.length);
+    if (!diffOnlyChanges) {
+      keep.fill(1);
+    } else {
+      for (let i = 0; i < rows.length; i++) {
+        if (rows[i].type) {
+          for (let k = Math.max(0, i - 3); k <= Math.min(rows.length - 1, i + 3); k++) keep[k] = 1;
+        }
+      }
+    }
+
+    let foldSeq = 0;
+    let i = 0;
+    while (i < rows.length) {
+      if (keep[i]) {
+        wrap.appendChild(rows[i].el);
+        i++;
+        continue;
+      }
+      let j = i;
+      while (j < rows.length && !keep[j]) j++;
+      const cnt = j - i;
+      if (cnt >= 3) {
+        const fid = 'sf_' + (++foldSeq);
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'md-src-fold';
+        btn.dataset.foldTrigger = fid;
+        btn.textContent = `··· 展开 ${cnt} 行未变源码 ···`;
+        btn.onclick = () => expandFoldGroup(fid);
+        wrap.appendChild(btn);
+        for (let k = i; k < j; k++) {
+          rows[k].el.classList.add('md-diff-hidden');
+          rows[k].el.dataset.foldId = fid;
+          wrap.appendChild(rows[k].el);
+        }
+      } else {
+        for (let k = i; k < j; k++) wrap.appendChild(rows[k].el);
+      }
+      i = j;
+    }
+
+    out.replaceChildren(wrap);
+    buildSourceDiffToc(rows);
+    collectDiffHunks();
+    return stats;
+  }
+
+  function buildSourceDiffToc(rows) {
+    const hs = [];
+    let fence = '';
+    const usedIds = new Set();
+    let curHIdx = -1;
+
+    for (const r of rows) {
+      const line = r.raw || '';
+      const fm = /^\s*(`{3,}|~{3,})/.exec(line);
+      if (fence) {
+        if (fm && fm[1][0] === fence[0] && fm[1].length >= fence.length && /^\s*[`~]+\s*$/.test(line)) fence = '';
+      } else if (fm) {
+        fence = fm[1];
+      } else if (r.type !== 'del') {
+        const hm = /^(#{1,6})\s+(.+)$/.exec(line.trim());
+        if (hm) {
+          const lv = hm[1].length;
+          const title = hm[2].replace(/\s+#+\s*$/, '').trim();
+          const base = 'src-' + slugify(title);
+          let id = base, n = 1;
+          while (usedIds.has(id)) id = `${base}-${n++}`;
+          usedIds.add(id);
+          r.el.id = id;
+          curHIdx = hs.length;
+          hs.push({ id, lv, title, el: r.el, mask: r.type === 'add' ? 1 : 0 });
+        }
+      }
+      if (curHIdx >= 0 && r.type) {
+        hs[curHIdx].mask |= (r.type === 'add' ? 1 : 2);
+      }
+    }
+
+    tocSig = '';
+    tocHeadings = hs.map(h => h.el);
+    tocList.textContent = '';
+    tocLinks = [];
+
+    if (!hs.length) {
+      const empty = document.createElement('div');
+      empty.className = 'toc-empty';
+      empty.textContent = '暂无标题';
+      tocList.appendChild(empty);
+      return;
+    }
+
+    const minLv = Math.min(...hs.map(h => h.lv));
+    const counters = [0, 0, 0, 0, 0, 0];
+    const frag = document.createDocumentFragment();
+    hs.forEach(h => {
+      const depth = Math.max(0, h.lv - minLv);
+      for (let k = depth + 1; k < counters.length; k++) counters[k] = 0;
+      counters[depth]++;
+      const numStr = counters.slice(0, depth + 1).filter(n => n > 0).join('.');
+
+      const a = document.createElement('a');
+      a.href = '#' + h.id;
+      a.dataset.targetId = h.id;
+      a.style.paddingLeft = (8 + depth * 12) + 'px';
+      a.title = `${numStr} ${h.title}`;
+
+      const noSpan = document.createElement('span');
+      noSpan.className = 'toc-no';
+      noSpan.textContent = numStr;
+      const txtSpan = document.createElement('span');
+      txtSpan.className = 'toc-txt';
+      txtSpan.textContent = h.title;
+      a.append(noSpan, txtSpan);
+      if (h.mask) {
+        const dot = document.createElement('span');
+        dot.className = 'toc-diff-dot ' + (h.mask === 3 ? 'is-mod' : h.mask === 1 ? 'is-add' : 'is-del');
+        dot.title = h.mask === 3 ? '本节含修改' : h.mask === 1 ? '本节含新增' : '本节含删除';
+        a.appendChild(dot);
+      }
+      frag.appendChild(a);
+      tocLinks.push(a);
+    });
+    tocList.appendChild(frag);
+    updateActiveToc();
+  }
+
+  function collectDiffHunks() {
+    const els = Array.from(out.querySelectorAll('[data-diff="add"],[data-diff="del"]'));
+    diffHunks = [];
+    let prevEl = null;
+    for (const el of els) {
+      const contiguous = prevEl && prevEl.parentNode === el.parentNode && prevEl.nextElementSibling === el;
+      if (!contiguous) diffHunks.push(el);
+      prevEl = el;
+    }
+    diffHunkIdx = -1;
+    updateDiffNavUI();
+  }
+
+  function updateDiffNavUI() {
+    const total = diffHunks.length;
+    diffPosEl.textContent = total > 0 ? `${diffHunkIdx >= 0 ? diffHunkIdx + 1 : 0}/${total}` : '0/0';
+    diffPrevBtn.disabled = total === 0;
+    diffNextBtn.disabled = total === 0;
+  }
+
+  function stepDiffHunk(delta) {
+    const total = diffHunks.length;
+    if (!total) return;
+    if (diffHunkIdx >= 0 && diffHunks[diffHunkIdx]) {
+      diffHunks[diffHunkIdx].classList.remove('md-diff-hunk-active');
+    }
+    if (diffHunkIdx < 0) diffHunkIdx = delta > 0 ? 0 : total - 1;
+    else diffHunkIdx = (diffHunkIdx + delta + total) % total;
+
+    const target = diffHunks[diffHunkIdx];
+    if (target) {
+      if (target.classList.contains('md-diff-hidden') && target.dataset.foldId) {
+        expandFoldGroup(target.dataset.foldId);
+      }
+      target.classList.add('md-diff-hunk-active');
+      target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+    updateDiffNavUI();
+  }
+
+  function updateDiffStatsUI(stats, sameVersion = false) {
+    diffStatEl.textContent = '';
+    if (sameVersion) {
+      const sp = document.createElement('span');
+      sp.className = 'st-eq';
+      sp.textContent = '相同版本';
+      diffStatEl.appendChild(sp);
+      return;
+    }
+    if (stats.add === 0 && stats.del === 0) {
+      const sp = document.createElement('span');
+      sp.className = 'st-eq';
+      sp.textContent = '无差异';
+      diffStatEl.appendChild(sp);
+      return;
+    }
+    const sAdd = document.createElement('span'); sAdd.className = 'st-add'; sAdd.textContent = `+${stats.add}`;
+    const sDel = document.createElement('span'); sDel.className = 'st-del'; sDel.textContent = `-${stats.del}`;
+    diffStatEl.append(sAdd, sDel);
+  }
+
+  async function runDiff({ preserveScroll = false } = {}) {
+    if (!diffActive) return;
+    const seq = ++diffRenderSeq;
+    const savedScroll = preserveScroll ? pv.scrollTop : 0;
+
+    diffBusy = true;
+    diffStatEl.textContent = '计算中...';
+    try {
+      const fromVal = diffFromSel.value;
+      const toVal = diffToSel.value;
+      const [oldText, newText] = await Promise.all([getVersionText(fromVal), getVersionText(toVal)]);
+      if (seq !== diffRenderSeq || !diffActive) return;
+
+      if (fromVal === toVal || oldText === newText) {
+        out.classList.remove('is-source-diff');
+        const banner = document.createElement('div');
+        banner.className = 'md-diff-banner';
+        banner.textContent = fromVal === toVal ? '当前选择的基准版本与目标版本相同。' : '所选两个版本内容完全一致，无差异。';
+        const body = document.createElement('div');
+        renderMarkdownInto(body, newText);
+        out.replaceChildren(banner, ...Array.from(body.childNodes));
+        tocSig = '';
+        buildToc();
+        diffHunks = []; diffHunkIdx = -1;
+        updateDiffNavUI();
+        updateDiffStatsUI({ add: 0, del: 0 }, fromVal === toVal);
+        pv.scrollTop = preserveScroll ? savedScroll : 0;
+        return;
+      }
+
+      const lcs = await ensureLcsDiff();
+      if (seq !== diffRenderSeq || !diffActive) return;
+
+      const stats = diffMode === 'source'
+        ? renderSourceDiff(oldText, newText, lcs)
+        : renderRenderedDiff(oldText, newText, lcs);
+
+      updateDiffStatsUI(stats, false);
+      if (preserveScroll) {
+        pv.scrollTop = savedScroll;
+      } else if (diffHunks.length > 0) {
+        stepDiffHunk(1);
+      } else {
+        pv.scrollTop = 0;
+      }
+    } catch (err) {
+      if (seq !== diffRenderSeq) return;
+      console.error('[MD Diff] 对比失败:', err);
+      diffStatEl.textContent = '对比失败';
+    } finally {
+      if (seq === diffRenderSeq) diffBusy = false;
+    }
+  }
+
+  function setEditorDisabled(disabled) {
+    if (!isEditable) return;
+    const ctxEl = $('#ctx');
+    if (disabled && ctxEl) ctxEl.hidden = true;
+    if (cm) cm.setOption('readOnly', disabled ? 'nocursor' : false);
+    ed.disabled = disabled;
+    saveBtn.disabled = disabled || saving;
+    const reloadBtn = $('#reload');
+    if (reloadBtn) reloadBtn.disabled = disabled;
+  }
+
+  function enterDiff() {
+    const versions = getAvailableDiffVersions();
+    if (versions.length < 2) return;
+    diffActive = true;
+    document.body.classList.add('diff-mode');
+    setEditorDisabled(true);
+    diffBar.hidden = false;
+    diffToggleBtn.classList.add('active');
+    const defTo = versions[0].val;
+    let defFrom = versions[1].val;
+    if (isEditable && defTo === 'current' && defFrom === 'sw_head' && swCacheSnap && versions.length >= 3) {
+      const diskNorm = normLF(diskText).replace(/^\uFEFF/, '');
+      if (swCacheSnap.text === diskNorm) {
+        defFrom = versions[2].val;
+      }
+    }
+    syncVersionSelects(defTo, defFrom);
+    runDiff({ preserveScroll: false });
+  }
+
+  function exitDiff() {
+    if (!diffActive) return;
+    diffRenderSeq++;
+    diffActive = false;
+    document.body.classList.remove('diff-mode');
+    setEditorDisabled(false);
+    diffBar.hidden = true;
+    diffToggleBtn.classList.remove('active');
+    diffHunks = [];
+    diffHunkIdx = -1;
+    tocSig = '';
+    render();
+    refreshDiffControls();
+    if (isEditable) {
+      requestAnimationFrame(() => {
+        if (cm) cm.refresh();
+        syncEditorFromPreview();
+      });
+    }
+  }
+
+  diffToggleBtn.onclick = async () => {
+    if (diffActive) { exitDiff(); return; }
+    if (isEditable) {
+      statusEl.textContent = '正在刷新硬盘版与 SW 快照...';
+      try {
+        if ('serviceWorker' in navigator) {
+          const reg = await navigator.serviceWorker.getRegistration();
+          if (reg) {
+            await reg.update().catch(() => { });
+            if (reg.waiting) reg.waiting.postMessage({ type: 'SKIP_WAITING' });
+          }
+        }
+      } catch (_) { }
+      try {
+        const freshText = await fetchMd();
+        const diskChanged = normLF(freshText) !== normLF(diskText);
+        diskText = freshText;
+        if (diskChanged && !window._mdDirty) {
+          rawText = freshText;
+          if (cm) cm.setValue(freshText);
+          else ed.value = freshText;
+        }
+      } catch (_) { }
+      await loadMdSnapshots();
+      refreshDiffControls();
+      statusEl.textContent = window._mdDirty ? '● 未固化' : '';
+      if (getAvailableDiffVersions().length < 2) return;
+    }
+    enterDiff();
+  };
+  diffExitBtn.onclick = exitDiff;
+  diffToSel.onchange = () => runDiff({ preserveScroll: false });
+  diffFromSel.onchange = () => runDiff({ preserveScroll: false });
+  diffSwapBtn.onclick = () => {
+    const a = diffToSel.value, b = diffFromSel.value;
+    diffToSel.value = b;
+    diffFromSel.value = a;
+    runDiff({ preserveScroll: false });
+  };
+  diffModeRenderBtn.onclick = () => {
+    if (diffMode === 'render') return;
+    diffMode = 'render';
+    diffModeRenderBtn.classList.add('active');
+    diffModeSourceBtn.classList.remove('active');
+    runDiff({ preserveScroll: false });
+  };
+  diffModeSourceBtn.onclick = () => {
+    if (diffMode === 'source') return;
+    diffMode = 'source';
+    diffModeSourceBtn.classList.add('active');
+    diffModeRenderBtn.classList.remove('active');
+    runDiff({ preserveScroll: false });
+  };
+  diffOnlyCb.onchange = () => {
+    diffOnlyChanges = diffOnlyCb.checked;
+    runDiff({ preserveScroll: false });
+  };
+  diffPrevBtn.onclick = () => stepDiffHunk(-1);
+  diffNextBtn.onclick = () => stepDiffHunk(1);
+
+  // --- 启动引导 ---
+
+  initMdPinyinAndExcerpt();
+
+  (async () => {
+    if (isEditable) { try { await initLocalCodeMirror(); } catch (_) { } }
+    await loadDoc(initHash);
+  })();
+})();
+</script>
+</body>
+</html>

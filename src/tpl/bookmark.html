@@ -1,0 +1,41 @@
+<!doctype html>
+<html>
+ <head>
+  <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+  <meta http-equiv="Content-Security-Policy" content="script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; worker-src 'self' blob:; object-src 'none'; base-uri 'self';">
+  <link rel="stylesheet" href="../css/font.css">
+  <script>
+    if (window.top === window.self) {
+        window.location.href = location.origin;
+    } else if (window.parent !== window.top) {
+        window.top.location.href = location.origin;
+    }
+  </script>
+  <link rel="stylesheet" href="../css/bookmark.css">
+ </head>
+ <body>
+  <div id="wallpaper-bg"></div>
+  <header id="site-intro">
+   <h1>Digital Swamp</h1>
+   <p>纯静态个人知识库与多媒体离线阅读站（可在 src/tpl/bookmark.html 自定义本段简介与链接）</p>
+  </header>
+  <div id="c">
+   <a href="https://github.com/diff4x/swamp" target="_blank">Swamp 项目主页</a>
+   <br>
+  </div>
+  <div id="b">
+   <a href="txn_parser.html" target="_blank">txn_parser</a>
+   <br>
+  </div>
+  <div id="a">
+   <a href="go_board.html" target="_blank">⚪ go_board</a>
+   <br id="katrain-br" style="display:none"><a id="katrain-link" href="#katrain" style="display:none">⚫ KaTrain</a>
+   <br><a href="https://github.com/diff4x/swamp" target="_blank">❓ README</a>
+  </div>
+  <div id="del"></div><a id="end_flag" href="0" style="display:none"></a>
+  <footer id="copyright">
+   Powered by Swamp
+  </footer>
+  <script src="../js/bookmark.js"></script>
+ </body>
+</html>
