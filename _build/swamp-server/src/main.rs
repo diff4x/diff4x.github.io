@@ -1169,7 +1169,7 @@ fn run_server_mode(cfg: ServerConfig, mode: RunMode, open_browser: bool) {
     let logs = if is_sim {
         Arc::new(LogBus::new(log_msg))
     } else {
-        let log_file = cfg.build_dir.join("temp").join("swamp_runtime.log");
+        let log_file = cfg.temp_dir.join("swamp_runtime.log");
         Arc::new(LogBus::with_file(log_msg, log_file))
     };
     let runtime = Arc::new(RuntimeStatus::new(vpn_msg));
@@ -1258,7 +1258,7 @@ fn run_server_mode(cfg: ServerConfig, mode: RunMode, open_browser: bool) {
                         logs_bg.warn(format!("[startup] 启动同步前端文件失败: {}", e));
                     }
                 }
-                let _ = std::fs::remove_dir_all(cfg_bg.build_dir.join("temp").join("diff_preview"));
+                let _ = std::fs::remove_dir_all(cfg_bg.temp_dir.join("diff_preview"));
                 spawn_asset_watcher(cfg_bg.clone(), logs_bg.clone(), state_bg.html_change_tx.clone());
                 spawn_background_monitors(cfg_bg.clone(), runtime_bg, logs_bg.clone());
             }
