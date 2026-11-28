@@ -37,9 +37,10 @@ body{margin:0;height:100%;display:flex;flex-direction:column;background:var(--bg
 .status{font-size:12px;color:#8b949e}
 .opts{margin-left:auto;display:flex;align-items:center;gap:14px}
 .opts label{display:flex;align-items:center;gap:5px;font-size:13px;cursor:pointer}
-body.readonly .edit-only,body.readonly .ed,body.readonly #sep{display:none!important}
-body.readonly #panes{flex-direction:row!important}
-body.readonly .pv-wrap{flex:1 1 100%!important}
+body.readonly .edit-only,body.readonly .ed,body.readonly #sep,
+body.diff-mode .edit-only,body.diff-mode .ed,body.diff-mode #sep{display:none!important}
+body.readonly #panes,body.diff-mode #panes{flex-direction:row!important}
+body.readonly .pv-wrap,body.diff-mode .pv-wrap{flex:1 1 100%!important}
 #panes{flex:1;min-height:0;display:flex;flex-direction:row}
 .ed{flex:1 1 0;min-width:0;min-height:0;position:relative;background:var(--ed-bg)}
 .pv-wrap{flex:1 1 226px;min-width:0;min-height:0;position:relative;display:flex;flex-direction:row}
@@ -375,9 +376,10 @@ html,body{height:auto;overflow:visible}#panes,.pv-wrap{display:block}.pv{overflo
 
   let cm = null, rawText = '', diskText = '', raf = 0, saving = false;
   let tocSig = '', tocHeadings = [], tocLinks = [], spyRaf = 0;
+  let syncAnchors = [], lastAnchorLine = 0, isDraggingSep = false;
   let diffActive = false, diffMode = 'render', diffOnlyChanges = false, diffBusy = false;
-  let diffSnapshots = [], localMdVersions = [], localLatestVer = '', localRevCache = new Map(), localAuthExpired = false;
-  let diffHunks = [], diffHunkIdx = -1, diffLiveTimer = 0, diffRenderSeq = 0;
+  let diffSnapshots = [], swCacheSnap = null;
+  let diffHunks = [], diffHunkIdx = -1, diffRenderSeq = 0;
   let lcsDiffFn = null, lcsLoadPromise = null;
 
   const normLF = s => String(s ?? '').replace(/\r\n?/g, '\n');
@@ -436,17 +438,17 @@ html,body{height:auto;overflow:visible}#panes,.pv-wrap{display:block}.pv{overflo
       return out;
     };
 
-    const lines = src.split('\n'), out = [];
+    const lines = src.split('\n'), out = [], lineStarts = [], lineEnds = [];
     let fence = '';
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
       const fm = /^\s*(`{3,}|~{3,})/.exec(line);
       if (fence) {
-        out.push(line);
+        out.push(line); lineStarts.push(i); lineEnds.push(i);
         if (fm && fm[1][0] === fence[0] && fm[1].length >= fence.length && /^\s*[`~]+\s*$/.test(line)) fence = '';
         continue;
       }
-      if (fm) { fence = fm[1]; out.push(line); continue; }
+      if (fm) { fence = fm[1]; out.push(line); lineStarts.push(i); lineEnds.push(i); continue; }
 
       const t = line.trim();
       if (t.startsWith('$$') && t.indexOf('$$', 2) < 0) {
@@ -460,12 +462,13 @@ html,body{height:auto;overflow:visible}#panes,.pv-wrap{display:block}.pv{overflo
         }
         if (tail !== null && body.join('').trim()) {
           out.push(line.match(/^\s*/)[0] + hold(raw.join('\n'), body.join('\n'), true) + scan(tail));
+          lineStarts.push(i); lineEnds.push(j);
           i = j; continue;
         }
       }
-      out.push(scan(line));
+      out.push(scan(line)); lineStarts.push(i); lineEnds.push(i);
     }
-    return { text: out.join('\n'), store };
+    return { text: out.join('\n'), store, lineStarts, lineEnds };
   }
 
   function restoreMath(html, store) {
@@ -748,41 +751,205 @@ html,body{height:auto;overflow:visible}#panes,.pv-wrap{display:block}.pv{overflo
     target.scrollIntoView({ behavior: 'smooth', block: 'start' });
   });
 
-  function renderMarkdownInto(container, raw) {
+  const PURIFY_OPTS = {
+    FORBID_TAGS: ['script', 'style', 'iframe', 'object', 'embed', 'form', 'svg', 'math', 'template'],
+    FORBID_ATTR: ['srcdoc', 'formaction'],
+    ALLOW_UNKNOWN_PROTOCOLS: false
+  };
+
+  function countNewlines(s) {
+    let n = 0;
+    for (let i = 0; i < s.length; i++) if (s.charCodeAt(i) === 10) n++;
+    return n;
+  }
+
+  function mapSpanLines(localStart, localEnd, lineStarts, lineEnds) {
+    const maxIdx = Math.max(0, lineStarts.length - 1);
+    const s = Math.max(0, Math.min(maxIdx, localStart));
+    const e = Math.max(s, Math.min(maxIdx, localEnd));
+    return [lineStarts[s] ?? s, lineEnds[e] ?? e];
+  }
+
+  function stampListLines(listEl, items, baseLine, lineStarts, lineEnds) {
+    const lis = Array.from(listEl.children).filter(el => el.tagName === 'LI');
+    let cur = baseLine;
+    for (let i = 0; i < items.length; i++) {
+      const it = items[i];
+      const raw = (it && it.raw) || '';
+      const totalNl = countNewlines(raw);
+      const leadNl = (raw.match(/^\n+/) || [''])[0].length;
+      const trimmedEnd = raw.replace(/\n+$/, '');
+      const innerNl = countNewlines(trimmedEnd.slice(leadNl));
+      const ls = cur + leadNl;
+      const le = ls + innerNl;
+      const li = lis[i];
+      if (li) {
+        const [origSl, origEl] = mapSpanLines(ls, le, lineStarts, lineEnds);
+        li.dataset.sl = String(origSl);
+        li.dataset.el = String(origEl);
+        const childLists = Array.from(li.children).filter(c => c.tagName === 'UL' || c.tagName === 'OL');
+        if (childLists.length > 0 && Array.isArray(it.tokens)) {
+          let subCur = cur;
+          let listIdx = 0;
+          for (const subTok of it.tokens) {
+            const sRaw = subTok.raw || '';
+            const sNl = countNewlines(sRaw);
+            if (subTok.type === 'list' && childLists[listIdx]) {
+              stampListLines(childLists[listIdx], subTok.items || [], subCur, lineStarts, lineEnds);
+              listIdx++;
+            }
+            subCur += sNl;
+          }
+        }
+      }
+      cur += totalNl;
+    }
+  }
+
+  function stampTableLines(tableEl, baseLine, lineStarts, lineEnds) {
+    const headTr = tableEl.querySelector('thead tr');
+    if (headTr) {
+      const [sl, el] = mapSpanLines(baseLine, baseLine, lineStarts, lineEnds);
+      headTr.dataset.sl = String(sl);
+      headTr.dataset.el = String(el);
+    }
+    const bodyTrs = tableEl.querySelectorAll('tbody tr');
+    bodyTrs.forEach((tr, idx) => {
+      const ln = baseLine + 2 + idx;
+      const [sl, el] = mapSpanLines(ln, ln, lineStarts, lineEnds);
+      tr.dataset.sl = String(sl);
+      tr.dataset.el = String(el);
+    });
+  }
+
+  function renderMarkdownInto(container, raw, withLineMap = false) {
     const text = normLF(raw).replace(/^\uFEFF/, '');
-    if (ok) {
-      const { text: src, store } = protectMath(text);
-      container.innerHTML = DOMPurify.sanitize(restoreMath(marked.parse(src), store), {
-        FORBID_TAGS: ['script', 'style', 'iframe', 'object', 'embed', 'form', 'svg', 'math', 'template'],
-        FORBID_ATTR: ['srcdoc', 'formaction'],
-        ALLOW_UNKNOWN_PROTOCOLS: false
-      });
+    if (!ok) { container.textContent = text; return; }
+    const { text: src, store, lineStarts, lineEnds } = protectMath(text);
+
+    if (!withLineMap || typeof marked.lexer !== 'function' || typeof marked.parser !== 'function') {
+      container.innerHTML = DOMPurify.sanitize(restoreMath(marked.parse(src), store), PURIFY_OPTS);
       fixBold(container);
       highlightCode(container);
-    } else container.textContent = text;
+      return;
+    }
+
+    const tokens = marked.lexer(src);
+    const metaList = [];
+    const htmlParts = [];
+    let curLine = 0;
+
+    for (const tok of tokens) {
+      const rawTok = tok.raw || '';
+      const totalNl = countNewlines(rawTok);
+      if (tok.type === 'space' || tok.type === 'def') {
+        curLine += totalNl;
+        continue;
+      }
+      const leadNl = (rawTok.match(/^\n+/) || [''])[0].length;
+      const trimmedEnd = rawTok.replace(/\n+$/, '');
+      const innerNl = countNewlines(trimmedEnd.slice(leadNl));
+      const ls = curLine + leadNl;
+      const le = ls + innerNl;
+      const [origSl, origEl] = mapSpanLines(ls, le, lineStarts, lineEnds);
+
+      const sub = [tok];
+      sub.links = tokens.links;
+      const chunkHtml = marked.parser(sub);
+      if (chunkHtml && chunkHtml.trim()) {
+        const idx = metaList.length;
+        metaList.push({ origSl, origEl, ls, tok });
+        htmlParts.push(`<div data-md-chunk="${idx}">${chunkHtml}</div>`);
+      }
+      curLine += totalNl;
+    }
+
+    const tmp = document.createElement('div');
+    tmp.innerHTML = DOMPurify.sanitize(restoreMath(htmlParts.join(''), store), PURIFY_OPTS);
+
+    const frag = document.createDocumentFragment();
+    for (const node of Array.from(tmp.childNodes)) {
+      if (node.nodeType === Node.ELEMENT_NODE && node.hasAttribute('data-md-chunk')) {
+        const meta = metaList[Number(node.getAttribute('data-md-chunk'))];
+        for (const child of Array.from(node.childNodes)) {
+          if (child.nodeType === Node.ELEMENT_NODE && meta) {
+            child.dataset.sl = String(meta.origSl);
+            child.dataset.el = String(meta.origEl);
+            if (child.tagName === 'TABLE') {
+              stampTableLines(child, meta.ls, lineStarts, lineEnds);
+            } else if ((child.tagName === 'UL' || child.tagName === 'OL') && meta.tok && meta.tok.type === 'list') {
+              stampListLines(child, meta.tok.items || [], meta.ls, lineStarts, lineEnds);
+            }
+          }
+          frag.appendChild(child);
+        }
+      } else {
+        frag.appendChild(node);
+      }
+    }
+    container.replaceChildren(frag);
+    fixBold(container);
+    highlightCode(container);
   }
+
+  function rebuildSyncAnchors() {
+    const anchors = [];
+    const pushList = (listEl) => {
+      for (const child of Array.from(listEl.children)) {
+        if (child.tagName !== 'LI') continue;
+        const sl = Number(child.dataset.sl);
+        const elLine = Number(child.dataset.el);
+        const nestedLists = Array.from(child.children).filter(c => c.tagName === 'UL' || c.tagName === 'OL');
+        if (Number.isFinite(sl) && Number.isFinite(elLine)) {
+          if (nestedLists.length > 0) {
+            const firstNestedLi = nestedLists[0].querySelector('li[data-sl]');
+            const nestedSl = firstNestedLi ? Number(firstNestedLi.dataset.sl) : NaN;
+            const ownEnd = Number.isFinite(nestedSl) ? Math.max(sl, Math.min(elLine, nestedSl - 1)) : elLine;
+            anchors.push({ el: child, sl, elLine: ownEnd, stopEl: nestedLists[0] });
+          } else {
+            anchors.push({ el: child, sl, elLine, stopEl: null });
+          }
+        }
+        for (const nl of nestedLists) pushList(nl);
+      }
+    };
+
+    for (const child of Array.from(out.children)) {
+      if (child.tagName === 'TABLE') {
+        const trs = Array.from(child.querySelectorAll('tr[data-sl]'));
+        if (trs.length > 0) {
+          for (const tr of trs) {
+            anchors.push({ el: tr, sl: Number(tr.dataset.sl), elLine: Number(tr.dataset.el), stopEl: null });
+          }
+          continue;
+        }
+      } else if (child.tagName === 'UL' || child.tagName === 'OL') {
+        const prevLen = anchors.length;
+        pushList(child);
+        if (anchors.length > prevLen) continue;
+      }
+      if (child.hasAttribute('data-sl')) {
+        anchors.push({ el: child, sl: Number(child.dataset.sl), elLine: Number(child.dataset.el), stopEl: null });
+      }
+    }
+    syncAnchors = anchors;
+  }
+
   function render() {
     raf = 0;
     if (diffActive) return;
     out.classList.remove('is-source-diff');
-    renderMarkdownInto(out, getVal());
+    renderMarkdownInto(out, getVal(), isEditable);
+    if (isEditable) rebuildSyncAnchors();
     buildToc();
   }
   function onEdit() {
+    if (diffActive) return;
     rawText = getVal();
     const dirty = normLF(rawText) !== normLF(diskText);
     window._mdDirty = dirty;
     statusEl.textContent = dirty ? '● 未固化' : '';
     refreshDiffControls();
-    if (diffActive) {
-      if (diffToSel.value === 'draft' || diffFromSel.value === 'draft') {
-        clearTimeout(diffLiveTimer);
-        diffLiveTimer = setTimeout(() => {
-          if (diffActive) runDiff({ preserveScroll: true });
-        }, 380);
-      }
-      return;
-    }
     if (!raf) raf = requestAnimationFrame(render);
   }
 
@@ -831,9 +998,15 @@ html,body{height:auto;overflow:visible}#panes,.pv-wrap{display:block}.pv{overflo
         if (getAvailableDiffVersions().length < 2) exitDiff();
         else await runDiff({ preserveScroll: false });
       } else if (hash) {
-        requestAnimationFrame(() => scrollToHash(hash));
+        requestAnimationFrame(() => {
+          scrollToHash(hash);
+          lastAnchorLine = getPreviewTopLine();
+          if (isEditable && sync.checked) withSuppressedSync(() => scrollEditorToLine(lastAnchorLine));
+        });
       } else {
         pv.scrollTop = 0;
+        lastAnchorLine = 0;
+        if (isEditable && sync.checked) withSuppressedSync(() => scrollEditorToLine(0));
       }
     } catch (e) {
       setVal(`# 加载失败\n\n无法读取 \`${mdPath}\`：${e.message}`);
@@ -854,7 +1027,7 @@ html,body{height:auto;overflow:visible}#panes,.pv-wrap{display:block}.pv{overflo
   }
 
   async function saveDoc() {
-    if (!isEditable || saving) return;
+    if (!isEditable || saving || diffActive) return;
     const text = getVal();
     if (!text) return alert('内容为空，已中止固化');
 
@@ -869,27 +1042,14 @@ html,body{height:auto;overflow:visible}#panes,.pv-wrap{display:block}.pv{overflo
       diskText = text;
       window._mdDirty = false;
       statusEl.textContent = '✓ 已固化';
-      const prevTo = diffToSel.value;
-      const prevFrom = diffFromSel.value;
       await loadMdSnapshots();
       refreshDiffControls();
-      if (diffActive) {
-        const latestVal = (isEditable && localLatestVer) ? localLatestVer : 'current';
-        let nextTo = prevTo === 'draft' ? latestVal : prevTo;
-        let nextFrom = prevFrom === 'draft' ? latestVal : prevFrom;
-        if (nextTo === nextFrom) {
-          const alt = getAvailableDiffVersions().find(v => v.val !== nextTo);
-          if (alt) nextFrom = alt.val;
-        }
-        syncVersionSelects(nextTo, nextFrom);
-        runDiff({ preserveScroll: true });
-      }
       setTimeout(() => { if (!window._mdDirty) statusEl.textContent = ''; }, 1800);
     } catch (err) {
       alert('❌ 固化失败：' + (err && err.message ? err.message : String(err)));
       statusEl.textContent = '固化失败';
     } finally {
-      saving = false; saveBtn.disabled = false;
+      saving = false; saveBtn.disabled = diffActive;
     }
   }
 
@@ -903,7 +1063,7 @@ html,body{height:auto;overflow:visible}#panes,.pv-wrap{display:block}.pv{overflo
   $('#pdf').onclick = () => { try { window.print(); } catch (_) { } };
 
   window.addEventListener('keydown', e => {
-    if (isEditable && (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') { e.preventDefault(); saveDoc(); return; }
+    if (isEditable && !diffActive && (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') { e.preventDefault(); saveDoc(); return; }
     if (!diffActive) return;
     if (e.key === 'Escape') {
       const ctxEl = $('#ctx');
@@ -928,21 +1088,208 @@ html,body{height:auto;overflow:visible}#panes,.pv-wrap{display:block}.pv{overflo
     if (e.origin === location.origin && e.data?.type === 'SCROLL_HASH') scrollToHash(e.data.hash);
   });
 
-  // --- 同步滚动与分隔条拖拽 ---
+  // --- 基于源码行锚定的联动滚动与分隔条拖拽 ---
 
-  let lock = '', tm = 0;
-  const bindSync = sc => {
-    const link = (a, b, id) => a.addEventListener('scroll', () => {
-      if (!isEditable || !sync.checked || diffActive || (lock && lock !== id)) return;
-      lock = id; clearTimeout(tm); tm = setTimeout(() => { lock = ''; }, 100);
-      b.scrollTop = (a.scrollTop / Math.max(1, a.scrollHeight - a.clientHeight)) * (b.scrollHeight - b.clientHeight);
+  let scrollLock = '', scrollLockTm = 0, suppressSync = false, suppressTm = 0;
+
+  function withSuppressedSync(fn) {
+    suppressSync = true;
+    clearTimeout(suppressTm);
+    try { fn(); } finally {
+      suppressTm = setTimeout(() => { suppressSync = false; }, 60);
+    }
+  }
+
+  function totalEditorLines() {
+    if (cm) return Math.max(1, cm.lineCount());
+    return Math.max(1, countNewlines(ed.value) + 1);
+  }
+
+  function measureAnchor(anchor, pvRect, pvScrollTop) {
+    const r = anchor.el.getBoundingClientRect();
+    const top = pvScrollTop + (r.top - pvRect.top);
+    let bottom = pvScrollTop + (r.bottom - pvRect.top);
+    if (anchor.stopEl) {
+      const sr = anchor.stopEl.getBoundingClientRect();
+      const stopTop = pvScrollTop + (sr.top - pvRect.top);
+      if (stopTop > top) bottom = Math.min(bottom, stopTop);
+    }
+    return { top, bottom: Math.max(top + 1, bottom) };
+  }
+
+  function getPreviewTopLine() {
+    if (!syncAnchors.length || pv.scrollTop <= 1) return 0;
+    const pvRect = pv.getBoundingClientRect();
+    const pvTop = pv.scrollTop;
+    const refY = pvTop + 4;
+
+    let lo = 0, hi = syncAnchors.length - 1, idx = -1;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      const m = measureAnchor(syncAnchors[mid], pvRect, pvTop);
+      if (m.top <= refY) { idx = mid; lo = mid + 1; }
+      else hi = mid - 1;
+    }
+    if (idx < 0) {
+      const first = syncAnchors[0];
+      if (first.sl <= 0) return 0;
+      const fm = measureAnchor(first, pvRect, pvTop);
+      const frac = Math.max(0, Math.min(1, refY / Math.max(1, fm.top)));
+      return frac * first.sl;
+    }
+
+    const a = syncAnchors[idx];
+    const ma = measureAnchor(a, pvRect, pvTop);
+    const span = Math.max(1, (a.elLine - a.sl) + 1);
+    if (refY <= ma.bottom) {
+      const frac = Math.max(0, Math.min(1, (refY - ma.top) / Math.max(1, ma.bottom - ma.top)));
+      return a.sl + frac * span;
+    }
+
+    const lineA = a.elLine + 1;
+    if (idx + 1 < syncAnchors.length) {
+      const nxt = syncAnchors[idx + 1];
+      const mn = measureAnchor(nxt, pvRect, pvTop);
+      const lineB = Math.max(lineA, nxt.sl);
+      const frac = Math.max(0, Math.min(1, (refY - ma.bottom) / Math.max(1, mn.top - ma.bottom)));
+      return lineA + frac * (lineB - lineA);
+    }
+    return Math.min(totalEditorLines() - 1, lineA);
+  }
+
+  function scrollPreviewToLine(targetLine) {
+    if (!syncAnchors.length || targetLine <= 0) { pv.scrollTop = 0; return; }
+    const pvRect = pv.getBoundingClientRect();
+    const pvTop = pv.scrollTop;
+
+    const first = syncAnchors[0];
+    if (targetLine < first.sl) {
+      const fm = measureAnchor(first, pvRect, pvTop);
+      const frac = Math.max(0, Math.min(1, targetLine / Math.max(1, first.sl)));
+      pv.scrollTop = Math.max(0, frac * fm.top - 4);
+      return;
+    }
+
+    let lo = 0, hi = syncAnchors.length - 1, idx = 0;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      if (syncAnchors[mid].sl <= targetLine) { idx = mid; lo = mid + 1; }
+      else hi = mid - 1;
+    }
+
+    const a = syncAnchors[idx];
+    const ma = measureAnchor(a, pvRect, pvTop);
+    const lineEnd = a.elLine + 1;
+    if (targetLine <= lineEnd) {
+      const frac = Math.max(0, Math.min(1, (targetLine - a.sl) / Math.max(1, lineEnd - a.sl)));
+      pv.scrollTop = Math.max(0, ma.top + frac * (ma.bottom - ma.top) - 4);
+      return;
+    }
+
+    if (idx + 1 < syncAnchors.length) {
+      const nxt = syncAnchors[idx + 1];
+      const mn = measureAnchor(nxt, pvRect, pvTop);
+      const gapLines = Math.max(1, nxt.sl - lineEnd);
+      const frac = Math.max(0, Math.min(1, (targetLine - lineEnd) / gapLines));
+      pv.scrollTop = Math.max(0, ma.bottom + frac * (mn.top - ma.bottom) - 4);
+      return;
+    }
+    pv.scrollTop = Math.max(0, ma.bottom - 4);
+  }
+
+  function scrollEditorToLine(targetLine) {
+    if (!isEditable) return;
+    if (cm) {
+      const count = cm.lineCount();
+      if (count <= 0) return;
+      if (targetLine <= 0) { cm.scrollTo(null, 0); return; }
+      const clamped = Math.max(0, Math.min(count - 0.001, targetLine));
+      const lineInt = Math.floor(clamped);
+      const frac = clamped - lineInt;
+      const y0 = cm.heightAtLine(lineInt, 'local');
+      const y1 = (lineInt + 1 < count) ? cm.heightAtLine(lineInt + 1, 'local') : cm.getScrollInfo().height;
+      cm.scrollTo(null, Math.max(0, y0 + frac * Math.max(0, y1 - y0)));
+      return;
+    }
+    const maxLine = Math.max(1, totalEditorLines() - 1);
+    const ratio = Math.max(0, Math.min(1, targetLine / maxLine));
+    ed.scrollTop = ratio * Math.max(0, ed.scrollHeight - ed.clientHeight);
+  }
+
+  function getEditorTopLine() {
+    if (cm) {
+      const info = cm.getScrollInfo();
+      if (info.top <= 1) return 0;
+      const count = cm.lineCount();
+      if (count <= 0) return 0;
+      const lineInt = Math.max(0, Math.min(count - 1, cm.lineAtHeight(info.top, 'local')));
+      const y0 = cm.heightAtLine(lineInt, 'local');
+      const y1 = (lineInt + 1 < count) ? cm.heightAtLine(lineInt + 1, 'local') : info.height;
+      const frac = y1 > y0 ? Math.max(0, Math.min(1, (info.top - y0) / (y1 - y0))) : 0;
+      return lineInt + frac;
+    }
+    const maxLine = Math.max(1, totalEditorLines() - 1);
+    const ratio = ed.scrollTop / Math.max(1, ed.scrollHeight - ed.clientHeight);
+    return Math.max(0, Math.min(maxLine, ratio * maxLine));
+  }
+
+  function syncEditorFromPreview() {
+    if (!isEditable || diffActive) return;
+    const line = getPreviewTopLine();
+    lastAnchorLine = line;
+    if (!sync.checked) return;
+    withSuppressedSync(() => scrollEditorToLine(line));
+  }
+
+  function realignBothToLine(line) {
+    if (!isEditable || diffActive) return;
+    withSuppressedSync(() => {
+      if (sync.checked) {
+        scrollPreviewToLine(line);
+        if (cm) cm.refresh();
+        scrollEditorToLine(line);
+      } else if (cm) {
+        cm.refresh();
+      }
     });
-    link(sc, pv, 'e'); link(pv, sc, 'p');
+  }
+
+  const onPreviewScroll = () => {
+    if (!isEditable || diffActive || suppressSync || scrollLock === 'e') return;
+    const line = getPreviewTopLine();
+    lastAnchorLine = line;
+    if (!sync.checked) return;
+    scrollLock = 'p';
+    clearTimeout(scrollLockTm);
+    scrollLockTm = setTimeout(() => { scrollLock = ''; }, 80);
+    scrollEditorToLine(line);
+  };
+
+  const onEditorScroll = () => {
+    if (!isEditable || !sync.checked || diffActive || suppressSync || scrollLock === 'p') return;
+    scrollLock = 'e';
+    clearTimeout(scrollLockTm);
+    scrollLockTm = setTimeout(() => { scrollLock = ''; }, 80);
+    const line = getEditorTopLine();
+    lastAnchorLine = line;
+    scrollPreviewToLine(line);
+  };
+
+  let pvSyncBound = false;
+  const bindSync = sc => {
+    if (!pvSyncBound) {
+      pvSyncBound = true;
+      pv.addEventListener('scroll', onPreviewScroll, { passive: true });
+    }
+    sc.addEventListener('scroll', onEditorScroll, { passive: true });
   };
   ed.addEventListener('input', onEdit);
   bindSync(ed);
+  sync.addEventListener('change', () => {
+    if (sync.checked && !diffActive) syncEditorFromPreview();
+  });
 
-  const isStacked = () => isEditable && getComputedStyle(panes).flexDirection.startsWith('column');
+  const isStacked = () => isEditable && !diffActive && getComputedStyle(panes).flexDirection.startsWith('column');
   let lastStacked = isStacked();
 
   function clampPaneSizes() {
@@ -956,7 +1303,7 @@ html,body{height:auto;overflow:visible}#panes,.pv-wrap{display:block}.pv{overflo
     }
 
     const pr = panes.getBoundingClientRect();
-    if (isEditable && edPane.style.flex) {
+    if (isEditable && !diffActive && edPane.style.flex) {
       if (stacked) {
         const curH = edPane.getBoundingClientRect().height;
         const maxH = Math.max(120, pr.height - 6 - 120);
@@ -983,9 +1330,12 @@ html,body{height:auto;overflow:visible}#panes,.pv-wrap{display:block}.pv{overflo
   }
 
   sep.addEventListener('pointerdown', e => {
-    if (!isEditable) return;
+    if (!isEditable || diffActive) return;
     try { sep.setPointerCapture(e.pointerId); } catch (_) { }
     sep.classList.add('on');
+    isDraggingSep = true;
+    const pinnedLine = getPreviewTopLine();
+    lastAnchorLine = pinnedLine;
     const stacked = isStacked();
     const onMove = ev => {
       const r = panes.getBoundingClientRect();
@@ -1003,7 +1353,7 @@ html,body{height:auto;overflow:visible}#panes,.pv-wrap{display:block}.pv{overflo
         edPane.style.flex = '0 0 ' + Math.round(Math.min(maxW, Math.max(minW, rawW))) + 'px';
         pvWrap.style.flex = '1 1 0';
       }
-      if (cm) cm.refresh();
+      realignBothToLine(pinnedLine);
     };
     const endDrag = () => {
       window.removeEventListener('pointermove', onMove);
@@ -1011,27 +1361,36 @@ html,body{height:auto;overflow:visible}#panes,.pv-wrap{display:block}.pv{overflo
       window.removeEventListener('pointercancel', endDrag);
       try { sep.releasePointerCapture(e.pointerId); } catch (_) { }
       sep.classList.remove('on');
+      isDraggingSep = false;
+      requestAnimationFrame(() => realignBothToLine(pinnedLine));
     };
     window.addEventListener('pointermove', onMove);
     window.addEventListener('pointerup', endDrag);
     window.addEventListener('pointercancel', endDrag);
   });
   sep.addEventListener('dblclick', () => {
+    if (!isEditable || diffActive) return;
+    const pinnedLine = getPreviewTopLine();
+    lastAnchorLine = pinnedLine;
     edPane.style.flex = '';
     pvWrap.style.flex = '';
-    if (cm) cm.refresh();
+    realignBothToLine(pinnedLine);
+    requestAnimationFrame(() => realignBothToLine(pinnedLine));
   });
 
   tocSep.addEventListener('pointerdown', e => {
     try { tocSep.setPointerCapture(e.pointerId); } catch (_) { }
     tocSep.classList.add('on');
+    isDraggingSep = true;
+    const pinnedLine = (!diffActive && isEditable) ? getPreviewTopLine() : 0;
+    if (!diffActive && isEditable) lastAnchorLine = pinnedLine;
     const onMove = ev => {
       const r = pvWrap.getBoundingClientRect();
       const rawW = r.right - ev.clientX - 3;
       const minW = 110;
       const maxW = Math.max(minW, r.width - 6 - 160);
       tocEl.style.flex = '0 0 ' + Math.round(Math.min(maxW, Math.max(minW, rawW))) + 'px';
-      if (cm) cm.refresh();
+      realignBothToLine(pinnedLine);
     };
     const endDrag = () => {
       window.removeEventListener('pointermove', onMove);
@@ -1039,20 +1398,30 @@ html,body{height:auto;overflow:visible}#panes,.pv-wrap{display:block}.pv{overflo
       window.removeEventListener('pointercancel', endDrag);
       try { tocSep.releasePointerCapture(e.pointerId); } catch (_) { }
       tocSep.classList.remove('on');
+      isDraggingSep = false;
+      requestAnimationFrame(() => realignBothToLine(pinnedLine));
     };
     window.addEventListener('pointermove', onMove);
     window.addEventListener('pointerup', endDrag);
     window.addEventListener('pointercancel', endDrag);
   });
   tocSep.addEventListener('dblclick', () => {
+    const pinnedLine = (!diffActive && isEditable) ? getPreviewTopLine() : 0;
+    if (!diffActive && isEditable) lastAnchorLine = pinnedLine;
     tocEl.style.flex = '';
-    if (cm) cm.refresh();
+    realignBothToLine(pinnedLine);
+    requestAnimationFrame(() => realignBothToLine(pinnedLine));
   });
 
   if (typeof ResizeObserver === 'function') {
     new ResizeObserver(() => {
+      if (isDraggingSep) return;
       clampPaneSizes();
-      if (cm) cm.refresh();
+      if (isEditable && !diffActive) {
+        realignBothToLine(lastAnchorLine);
+      } else if (cm) {
+        cm.refresh();
+      }
     }).observe(panes);
   }
 
@@ -1443,54 +1812,42 @@ html,body{height:auto;overflow:visible}#panes,.pv-wrap{display:block}.pv{overflo
     return text;
   }
 
-  async function callMdLocalApi(method, endpoint, body = null, options = {}) {
-    if (window.top && typeof window.top.callLocalApi === 'function') {
-      return await window.top.callLocalApi(method, endpoint, body, options);
+  async function readLatestSwCachedMd(tryKeys) {
+    if (!('caches' in window)) return null;
+    try {
+      const keys = await caches.keys();
+      const coreName = keys.filter(n => n.startsWith('core-cache-')).sort().pop();
+      if (!coreName) return null;
+      const cache = await caches.open(coreName);
+      let res = null;
+      for (const k of tryKeys) {
+        const url = k.startsWith('/') ? k : '/' + k;
+        const hit = await cache.match(url, { ignoreSearch: true });
+        if (hit && hit.ok) { res = hit; break; }
+      }
+      if (!res) return null;
+      const text = normLF(await res.text()).replace(/^\uFEFF/, '');
+      const m = /^core-cache-(\d{13,15})$/.exec(coreName);
+      const ts = m ? Number(m[1]) : 0;
+      return { text, ts };
+    } catch (_) {
+      return null;
     }
-    const m = await import('/src/js/shared-utils.js');
-    return await m.callLocalApi(method, endpoint, body, options);
   }
 
-  function formatLocalVerTooltip(v) {
-    const s = String(v && v.ver || '');
-    const timeStr = /^\d{12}$/.test(s)
-      ? `20${s.slice(0, 2)}-${s.slice(2, 4)}-${s.slice(4, 6)} ${s.slice(6, 8)}:${s.slice(8, 10)}:${s.slice(10, 12)}`
-      : s;
-    const deltaStr = (v && (v.added || v.deleted)) ? ` (+${v.added} / -${v.deleted} 行)` : '';
-    return (v && v.is_latest ? '最新落盘 · ' : '') + timeStr + deltaStr;
-  }
-
-  async function loadMdSnapshots(interactive = false) {
+  async function loadMdSnapshots() {
     diffSnapshots = [];
-    localMdVersions = [];
-    localLatestVer = '';
-    localRevCache.clear();
-    localAuthExpired = false;
-
+    swCacheSnap = null;
     if (invalidMdPathReason) return;
 
-    if (isEditable) {
-      try {
-        const res = await callMdLocalApi('GET', `/__api/ops/md-history?path=${encodeURIComponent(relPath)}`, null, { interactive });
-        if (res && Array.isArray(res.versions)) {
-          localMdVersions = res.versions;
-          localLatestVer = res.latest_ver || (res.versions[0] && res.versions[0].ver) || '';
-        }
-      } catch (e) {
-        if (e && e.status === 401) localAuthExpired = true;
-        console.warn('[MD Diff] 本地版本历史读取失败:', e);
-      }
-      return;
-    }
+    let decoded = mdPath;
+    try { decoded = decodeURI(mdPath); } catch (_) { }
+    const encoded = encodeURI(decoded);
+    const stripped = decoded.replace(/^\/+/, '');
+    const tryKeys = Array.from(new Set([decoded, mdPath, encoded, stripped, '/' + stripped]));
 
     let idb = null;
     try {
-      let decoded = mdPath;
-      try { decoded = decodeURI(mdPath); } catch (_) { }
-      const encoded = encodeURI(decoded);
-      const stripped = decoded.replace(/^\/+/, '');
-      const tryKeys = Array.from(new Set([decoded, mdPath, encoded, stripped, '/' + stripped]));
-
       idb = await openMainDbReadonly();
       if (idb && idb.objectStoreNames.contains('html_snapshots')) {
         const tx = idb.transaction('html_snapshots', 'readonly');
@@ -1519,34 +1876,61 @@ html,body{height:auto;overflow:visible}#panes,.pv-wrap{display:block}.pv{overflo
     } finally {
       if (idb) { try { idb.close(); } catch (_) { } }
     }
+
+    // 本地模式下额外读取最新 core-cache-* 缓存版：若与硬盘当前版及最新历史快照均不同，则作为最新 SW 版本供对比
+    if (isEditable) {
+      const swLatest = await readLatestSwCachedMd(tryKeys);
+      if (swLatest && swLatest.text) {
+        const diskNorm = normLF(diskText).replace(/^\uFEFF/, '');
+        let sameAsNewestHist = false;
+        if (diffSnapshots.length > 0) {
+          try {
+            const newestHistText = normLF(await decompressSnapshot(diffSnapshots[0])).replace(/^\uFEFF/, '');
+            sameAsNewestHist = newestHistText === swLatest.text;
+          } catch (_) { }
+        }
+        if (swLatest.text !== diskNorm && !sameAsNewestHist) {
+          swCacheSnap = swLatest;
+        }
+      }
+    }
   }
 
   function getAvailableDiffVersions() {
     const versions = [];
+    const totalSnaps = diffSnapshots.length;
+    const hasSwHead = isEditable && !!swCacheSnap;
+
     if (isEditable) {
       if (window._mdDirty) {
         versions.push({ val: 'draft', label: '当前草稿 (未固化)', title: '编辑器中尚未保存的内容' });
       }
-      if (localMdVersions.length > 0) {
-        for (const v of localMdVersions) {
-          versions.push({
-            val: v.ver,
-            label: v.is_latest ? `${v.ver} (最新)` : v.ver,
-            title: formatLocalVerTooltip(v)
-          });
-        }
-      } else {
-        versions.push({ val: 'current', label: '磁盘原版', title: '当前落盘的最新版本' });
+      versions.push({
+        val: 'current',
+        label: '硬盘当前版 (最新)',
+        title: '硬盘上当前落盘的最新文件'
+      });
+      if (hasSwHead) {
+        const tStr = formatSnapTime(swCacheSnap.ts);
+        versions.push({
+          val: 'sw_head',
+          label: `v${totalSnaps + 1} · ${tStr} (SW)`,
+          title: `最近一次构建的 SW 缓存版 (${tStr})`
+        });
+      }
+      for (let i = 0; i < totalSnaps; i++) {
+        const vNum = totalSnaps - i;
+        const tStr = formatSnapTime(diffSnapshots[i].ts);
+        versions.push({ val: String(i), label: `v${vNum} · ${tStr}`, title: tStr });
       }
       return versions;
     }
 
-    const totalSnaps = diffSnapshots.length;
     const totalVersions = totalSnaps + 1;
     versions.push({
       val: 'current',
-      label: totalSnaps > 0 ? `v${totalVersions} (最新)` : '磁盘原版',
-      title: '当前落盘的最新版本'
+      label: totalSnaps > 0 ? `v${totalVersions} (最新)` : '当前版本',
+      title: '当前最新版本'
     });
     for (let i = 0; i < totalSnaps; i++) {
       const vNum = totalVersions - 1 - i;
@@ -1589,30 +1973,15 @@ html,body{height:auto;overflow:visible}#panes,.pv-wrap{display:block}.pv{overflo
   function refreshDiffControls() {
     const versions = getAvailableDiffVersions();
     const available = versions.length >= 2;
-    const needAuthRetry = isEditable && localAuthExpired && !diffActive;
-    diffToggleBtn.hidden = !available && !diffActive && !needAuthRetry;
-    diffToggleBtn.title = needAuthRetry ? '本地会话已失效，点击续签并加载历史版本' : '对比不同版本改动';
+    diffToggleBtn.hidden = !available && !diffActive;
+    diffToggleBtn.title = '对比不同版本改动';
     if (diffActive) syncVersionSelects();
   }
 
   async function getVersionText(val) {
     if (val === 'draft') return normLF(getVal()).replace(/^\uFEFF/, '');
     if (val === 'current') return normLF(diskText).replace(/^\uFEFF/, '');
-    if (isEditable) {
-      if (localLatestVer && val === localLatestVer) {
-        return normLF(diskText).replace(/^\uFEFF/, '');
-      }
-      if (localRevCache.has(val)) return localRevCache.get(val);
-      const res = await callMdLocalApi(
-        'GET',
-        `/__api/ops/md-rev?path=${encodeURIComponent(relPath)}&ver=${encodeURIComponent(val)}`,
-        null,
-        { interactive: true }
-      );
-      const txt = normLF(res && typeof res.content === 'string' ? res.content : '').replace(/^\uFEFF/, '');
-      localRevCache.set(val, txt);
-      return txt;
-    }
+    if (val === 'sw_head' && swCacheSnap) return swCacheSnap.text;
     const idx = Number(val);
     if (Number.isInteger(idx) && idx >= 0 && idx < diffSnapshots.length) {
       return normLF(await decompressSnapshot(diffSnapshots[idx])).replace(/^\uFEFF/, '');
@@ -2619,10 +2988,23 @@ html,body{height:auto;overflow:visible}#panes,.pv-wrap{display:block}.pv{overflo
     }
   }
 
+  function setEditorDisabled(disabled) {
+    if (!isEditable) return;
+    const ctxEl = $('#ctx');
+    if (disabled && ctxEl) ctxEl.hidden = true;
+    if (cm) cm.setOption('readOnly', disabled ? 'nocursor' : false);
+    ed.disabled = disabled;
+    saveBtn.disabled = disabled || saving;
+    const reloadBtn = $('#reload');
+    if (reloadBtn) reloadBtn.disabled = disabled;
+  }
+
   function enterDiff() {
     const versions = getAvailableDiffVersions();
     if (versions.length < 2) return;
     diffActive = true;
+    document.body.classList.add('diff-mode');
+    setEditorDisabled(true);
     diffBar.hidden = false;
     diffToggleBtn.classList.add('active');
     const defTo = versions[0].val;
@@ -2633,9 +3015,10 @@ html,body{height:auto;overflow:visible}#panes,.pv-wrap{display:block}.pv{overflo
 
   function exitDiff() {
     if (!diffActive) return;
-    clearTimeout(diffLiveTimer);
     diffRenderSeq++;
     diffActive = false;
+    document.body.classList.remove('diff-mode');
+    setEditorDisabled(false);
     diffBar.hidden = true;
     diffToggleBtn.classList.remove('active');
     diffHunks = [];
@@ -2643,23 +3026,31 @@ html,body{height:auto;overflow:visible}#panes,.pv-wrap{display:block}.pv{overflo
     tocSig = '';
     render();
     refreshDiffControls();
+    if (isEditable) {
+      requestAnimationFrame(() => {
+        if (cm) cm.refresh();
+        syncEditorFromPreview();
+      });
+    }
   }
 
   diffToggleBtn.onclick = async () => {
     if (diffActive) { exitDiff(); return; }
     if (isEditable) {
-      statusEl.textContent = localAuthExpired ? '正在续签并加载版本...' : '正在刷新版本列表...';
-      const prevLatest = localLatestVer;
-      await loadMdSnapshots(true);
-      if (!localAuthExpired && localLatestVer && localLatestVer !== prevLatest) {
-        try {
-          const freshText = await fetchMd();
-          diskText = freshText;
-          if (!window._mdDirty) setVal(freshText);
-        } catch (_) { }
-      }
+      statusEl.textContent = '正在刷新硬盘版与 SW 快照...';
+      try {
+        const freshText = await fetchMd();
+        const diskChanged = normLF(freshText) !== normLF(diskText);
+        diskText = freshText;
+        if (diskChanged && !window._mdDirty) {
+          rawText = freshText;
+          if (cm) cm.setValue(freshText);
+          else ed.value = freshText;
+        }
+      } catch (_) { }
+      await loadMdSnapshots();
       refreshDiffControls();
-      statusEl.textContent = localAuthExpired ? '未授权，无法加载历史版本' : (window._mdDirty ? '● 未固化' : '');
+      statusEl.textContent = window._mdDirty ? '● 未固化' : '';
       if (getAvailableDiffVersions().length < 2) return;
     }
     enterDiff();

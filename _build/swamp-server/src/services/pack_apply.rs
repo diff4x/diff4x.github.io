@@ -1133,14 +1133,6 @@ pub fn execute_apply_zip(
 
     guard.flush()?;
 
-    for rel in guard.overwritten.iter().chain(guard.created.iter()) {
-        if rel.to_ascii_lowercase().ends_with(".md")
-            && crate::security::validate_rel_md_path(rel).is_some()
-        {
-            let _ = crate::services::md_history::record_if_changed(cfg, rel, None);
-        }
-    }
-
     Ok(ApplyResult {
         overwritten: guard.overwritten.len(),
         created: guard.created.len(),
@@ -1461,11 +1453,6 @@ pub fn rollback_apply_backup(cfg: &ServerConfig, backup_name: &str) -> Result<(u
                 let _ = fs::create_dir_all(p);
             }
             fs::copy(&src_bak, &full).map_err(|e| format!("还原 {} 失败: {}", clean, e))?;
-            if clean.to_ascii_lowercase().ends_with(".md")
-                && crate::security::validate_rel_md_path(&clean).is_some()
-            {
-                let _ = crate::services::md_history::record_if_changed(cfg, &clean, None);
-            }
             restored += 1;
         }
     }

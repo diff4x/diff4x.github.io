@@ -153,7 +153,7 @@ pub async fn put_md(
 
     let state_bg = state.clone();
     let content = req.content;
-    let res = tokio::task::spawn_blocking(move || -> Result<(String, String), (StatusCode, String)> {
+    let res = tokio::task::spawn_blocking(move || -> Result<String, (StatusCode, String)> {
         let mut target = state_bg.config.repo_root.clone();
         for seg in &segs {
             target.push(seg);
@@ -194,27 +194,14 @@ pub async fn put_md(
             return Err((StatusCode::INTERNAL_SERVER_ERROR, e));
         }
 
-        let latest_ver = match crate::services::md_history::record_if_changed(
-            &state_bg.config,
-            &rel_joined,
-            Some(&state_bg.logs),
-        ) {
-            Ok((ver, _)) => ver,
-            Err(e) => {
-                state_bg
-                    .logs
-                    .warn(format!("[md-hist] 记录 {} 变更失败: {}", rel_joined, e));
-                String::new()
-            }
-        };
-        Ok((rel_joined, latest_ver))
+        Ok(rel_joined)
     })
     .await;
 
     match res {
-        Ok(Ok((rel_joined, latest_ver))) => {
+        Ok(Ok(rel_joined)) => {
             state.logs.info(format!("[api] 已保存文件: {}", rel_joined));
-            Json(json!({ "ok": true, "ver": latest_ver })).into_response()
+            Json(json!({ "ok": true })).into_response()
         }
         Ok(Err((code, msg))) => err_resp(code, msg),
         Err(e) => err_resp(

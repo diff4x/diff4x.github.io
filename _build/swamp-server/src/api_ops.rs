@@ -46,17 +46,6 @@ pub struct TxnReq {
     pub line: u32,
 }
 
-#[derive(Deserialize)]
-pub struct MdHistoryQuery {
-    pub path: String,
-}
-
-#[derive(Deserialize)]
-pub struct MdRevQuery {
-    pub path: String,
-    pub ver: String,
-}
-
 fn err_resp(status: StatusCode, msg: impl Into<String>) -> Response {
     (status, Json(json!({ "ok": false, "error": msg.into() }))).into_response()
 }
@@ -667,51 +656,3 @@ pub async fn post_katrain(State(state): State<Arc<AppState>>) -> Response {
     }
 }
 
-/// GET /__api/ops/md-history?path=README.md（严格只读，移交阻塞线程池避免卡住异步 worker）
-pub async fn get_md_history(
-    State(state): State<Arc<AppState>>,
-    Query(q): Query<MdHistoryQuery>,
-) -> Response {
-    let cfg = state.config.clone();
-    let path = q.path;
-    let res = tokio::task::spawn_blocking(move || {
-        crate::services::md_history::list_versions(&cfg, &path)
-    })
-    .await;
-    match res {
-        Ok(Ok(listing)) => Json(json!({
-            "ok": true,
-            "path": listing.rel_path,
-            "latest_ver": listing.latest_ver,
-            "versions": listing.versions
-        }))
-        .into_response(),
-        Ok(Err(e)) => err_resp(StatusCode::BAD_REQUEST, e),
-        Err(e) => err_resp(StatusCode::INTERNAL_SERVER_ERROR, format!("查询异常: {}", e)),
-    }
-}
-
-/// GET /__api/ops/md-rev?path=README.md&ver=261126173005（严格只读，移交阻塞线程池）
-pub async fn get_md_rev(
-    State(state): State<Arc<AppState>>,
-    Query(q): Query<MdRevQuery>,
-) -> Response {
-    let cfg = state.config.clone();
-    let path = q.path;
-    let ver = q.ver;
-    let ver_clean = ver.trim().to_string();
-    let res = tokio::task::spawn_blocking(move || {
-        crate::services::md_history::get_version_content(&cfg, &path, &ver)
-    })
-    .await;
-    match res {
-        Ok(Ok(content)) => Json(json!({
-            "ok": true,
-            "ver": ver_clean,
-            "content": content
-        }))
-        .into_response(),
-        Ok(Err(e)) => err_resp(StatusCode::BAD_REQUEST, e),
-        Err(e) => err_resp(StatusCode::INTERNAL_SERVER_ERROR, format!("还原异常: {}", e)),
-    }
-}

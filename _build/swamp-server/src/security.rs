@@ -839,34 +839,6 @@ const d = obj.return / 2;"#;
     check("private-leak-lite-data-scan", lite_meta_ok && lite_leak_caught);
 
     check(
-        "md-hist-ver-validation",
-        crate::services::md_history::is_valid_md_ver("261126173005")
-            && !crate::services::md_history::is_valid_md_ver("20261126173005")
-            && !crate::services::md_history::is_valid_md_ver("261399999999")
-            && !crate::services::md_history::is_valid_md_ver("../2611261730"),
-    );
-    check(
-        "md-hist-monotonic-same-sec",
-        crate::services::md_history::next_monotonic_ver("261126235959", "261126235959")
-            == "261127000000",
-    );
-    check(
-        "md-hist-reverse-delta-roundtrip",
-        crate::services::md_history::selftest_reverse_delta_roundtrip(),
-    );
-    check(
-        "md-hist-evict-over-50",
-        crate::services::md_history::selftest_evict_over_50(),
-    );
-    check(
-        "md-hist-coalesce-within-window",
-        crate::services::md_history::selftest_coalesce_within_window(),
-    );
-    check(
-        "md-hist-corrupt-store-preserved",
-        crate::services::md_history::selftest_corrupt_store_preserved(),
-    );
-    check(
         "pack-diff-preview-safe-workspace-ext",
         crate::services::pack_apply::safe_diff_preview_filename("my.code-workspace")
             == "my.code-workspace.txt"

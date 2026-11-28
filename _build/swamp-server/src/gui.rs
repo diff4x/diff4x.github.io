@@ -30,24 +30,29 @@ use windows_sys::Win32::UI::Controls::{
     TVM_INSERTITEMW, TVM_SETIMAGELIST, TVM_SETITEMW, TVN_KEYDOWN, TVSIL_STATE,
 };
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
-use windows_sys::Win32::UI::Shell::{DragAcceptFiles, DragFinish, DragQueryFileW, HDROP};
+use windows_sys::Win32::UI::Shell::{
+    DragAcceptFiles, DragFinish, DragQueryFileW, Shell_NotifyIconW, HDROP, NIF_ICON, NIF_MESSAGE,
+    NIF_TIP, NIM_ADD, NIM_DELETE, NIM_MODIFY, NOTIFYICONDATAW,
+};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CallWindowProcW, CreateIconIndirect, CreateWindowExW, DefWindowProcW, DestroyIcon,
-    DestroyWindow, DispatchMessageW, GetClientRect, GetCursorPos, GetMessageW, GetWindowLongPtrW,
-    GetWindowTextLengthW, GetWindowTextW, KillTimer, LoadCursorW, MessageBoxW, MoveWindow,
-    PostMessageW, PostQuitMessage, RegisterClassW, SendMessageW, SetTimer, SetWindowLongPtrW,
-    SetWindowPos,
-    SetWindowTextW, ShowWindow, TranslateMessage, BS_AUTOCHECKBOX as RAW_BS_AUTOCHECKBOX,
-    BS_GROUPBOX as RAW_BS_GROUPBOX, BS_PUSHBUTTON as RAW_BS_PUSHBUTTON,
-    CBS_DROPDOWNLIST as RAW_CBS_DROPDOWNLIST, CREATESTRUCTW, ES_AUTOHSCROLL as RAW_ES_AUTOHSCROLL,
-    ES_AUTOVSCROLL as RAW_ES_AUTOVSCROLL, ES_MULTILINE as RAW_ES_MULTILINE,
-    ES_READONLY as RAW_ES_READONLY, GWLP_USERDATA, GWLP_WNDPROC, HICON, HMENU, HWND_BOTTOM,
-    ICONINFO, ICON_BIG, ICON_SMALL, IDC_ARROW, IDYES, MB_ICONINFORMATION, MB_ICONWARNING, MB_OK,
-    MB_YESNO, MINMAXINFO, MSG, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SW_HIDE, SW_SHOW, WM_APP,
-    WM_CLOSE, WM_COMMAND, WM_CREATE, WM_CTLCOLORSTATIC, WM_DESTROY, WM_DROPFILES, WM_ERASEBKGND,
-    WM_GETMINMAXINFO, WM_NOTIFY, WM_SETFONT, WM_SETICON, WM_SIZE, WM_TIMER, WNDCLASSW, WS_CHILD,
-    WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_EX_CLIENTEDGE, WS_HSCROLL, WS_OVERLAPPEDWINDOW,
-    WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
+    AppendMenuW, CallWindowProcW, CreateIconIndirect, CreatePopupMenu, CreateWindowExW,
+    DefWindowProcW, DestroyIcon, DestroyMenu, DestroyWindow, DispatchMessageW, GetClientRect,
+    GetCursorPos, GetMessageW, GetWindowLongPtrW, GetWindowTextLengthW, GetWindowTextW, IsIconic,
+    KillTimer, LoadCursorW, MessageBoxW, MoveWindow, PostMessageW, PostQuitMessage, RegisterClassW,
+    RegisterWindowMessageW, SendMessageW, SetForegroundWindow, SetTimer, SetWindowLongPtrW,
+    SetWindowPos, SetWindowTextW, ShowWindow, TrackPopupMenu, TranslateMessage,
+    BS_AUTOCHECKBOX as RAW_BS_AUTOCHECKBOX, BS_GROUPBOX as RAW_BS_GROUPBOX,
+    BS_PUSHBUTTON as RAW_BS_PUSHBUTTON, CBS_DROPDOWNLIST as RAW_CBS_DROPDOWNLIST, CREATESTRUCTW,
+    ES_AUTOHSCROLL as RAW_ES_AUTOHSCROLL, ES_AUTOVSCROLL as RAW_ES_AUTOVSCROLL,
+    ES_MULTILINE as RAW_ES_MULTILINE, ES_READONLY as RAW_ES_READONLY, GWLP_USERDATA, GWLP_WNDPROC,
+    HICON, HMENU, HWND_BOTTOM, ICONINFO, ICON_BIG, ICON_SMALL, IDC_ARROW, IDYES, MB_ICONINFORMATION,
+    MB_ICONWARNING, MB_OK, MB_YESNO, MF_STRING, MINMAXINFO, MSG, SWP_NOACTIVATE, SWP_NOMOVE,
+    SWP_NOSIZE, SW_HIDE, SW_RESTORE, SW_SHOW, TPM_RETURNCMD, TPM_RIGHTBUTTON, WM_APP, WM_CLOSE,
+    WM_COMMAND, WM_CREATE, WM_CTLCOLORSTATIC, WM_DESTROY, WM_DROPFILES, WM_ENDSESSION,
+    WM_ERASEBKGND, WM_GETMINMAXINFO, WM_LBUTTONDBLCLK, WM_LBUTTONUP, WM_NOTIFY, WM_NULL,
+    WM_RBUTTONUP, WM_SETFONT, WM_SETICON, WM_SIZE, WM_TIMER, WNDCLASSW, WS_CHILD, WS_CLIPCHILDREN,
+    WS_CLIPSIBLINGS, WS_EX_CLIENTEDGE, WS_HSCROLL, WS_OVERLAPPEDWINDOW, WS_TABSTOP, WS_VISIBLE,
+    WS_VSCROLL,
 };
 
 // 统一将控件样式与标准消息常量对齐为 u32（windows-sys 0.59 中部分 BS_*/ES_*/CBS_* 定义为 i32）
@@ -125,7 +130,10 @@ const WM_APP_CLEAR_COMMIT: u32 = WM_APP + 12;
 const WM_APP_SV_STATUS: u32 = WM_APP + 13;
 const WM_APP_SV_PHOTO_ID: u32 = WM_APP + 14;
 const WM_APP_SV_FILE_PATH: u32 = WM_APP + 15;
+const WM_APP_TRAY: u32 = WM_APP + 16;
 const TIMER_SAFE_CLOSE: usize = 1001;
+const TRAY_ICON_ID: u32 = 1;
+const IDM_TRAY_EXIT: u16 = 9001;
 
 const BM_GETCHECK: u32 = 0x00F0;
 const BM_SETCHECK: u32 = 0x00F1;
@@ -875,6 +883,7 @@ struct GuiData {
     closing: bool,
     close_started_at: Option<Instant>,
     close_pending_handoff: Option<(PathBuf, PathBuf)>,
+    msg_taskbar_created: u32,
 }
 
 unsafe fn create_ctrl(
@@ -1171,6 +1180,7 @@ pub fn run_management_window(
             closing: false,
             close_started_at: None,
             close_pending_handoff: None,
+            msg_taskbar_created: 0,
         });
 
         let title_w = to_wide(&format!(
@@ -2293,6 +2303,89 @@ unsafe fn drain_logs_to_edit(g: &mut GuiData) {
     update_log_header_and_button(g);
 }
 
+fn fill_utf16_buf(dst: &mut [u16], text: &str) {
+    dst.fill(0);
+    let max_len = dst.len().saturating_sub(1);
+    for (i, u) in OsStr::new(text).encode_wide().take(max_len).enumerate() {
+        dst[i] = u;
+    }
+}
+
+unsafe fn build_tray_nid(g: &GuiData, hwnd: HWND) -> NOTIFYICONDATAW {
+    let mut nid: NOTIFYICONDATAW = std::mem::zeroed();
+    nid.cbSize = std::mem::size_of::<NOTIFYICONDATAW>() as u32;
+    nid.hWnd = hwnd;
+    nid.uID = TRAY_ICON_ID;
+    nid.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
+    nid.uCallbackMessage = WM_APP_TRAY;
+    let (icon, label) = match g.last_vpn_online {
+        Some(true) => (g.icon_green_small, "正常"),
+        Some(false) => (g.icon_red_small, "离线"),
+        None => (g.icon_red_small, "检测中"),
+    };
+    nid.hIcon = icon;
+    let tip = format!("Swamp (localhost:{}) | 网络: {}", g.state.config.port, label);
+    fill_utf16_buf(&mut nid.szTip, &tip);
+    nid
+}
+
+unsafe fn add_tray_icon(g: &GuiData, hwnd: HWND) {
+    let nid = build_tray_nid(g, hwnd);
+    Shell_NotifyIconW(NIM_ADD, &nid);
+}
+
+unsafe fn modify_tray_icon(g: &GuiData, hwnd: HWND) {
+    let nid = build_tray_nid(g, hwnd);
+    Shell_NotifyIconW(NIM_MODIFY, &nid);
+}
+
+unsafe fn remove_tray_icon(hwnd: HWND) {
+    let mut nid: NOTIFYICONDATAW = std::mem::zeroed();
+    nid.cbSize = std::mem::size_of::<NOTIFYICONDATAW>() as u32;
+    nid.hWnd = hwnd;
+    nid.uID = TRAY_ICON_ID;
+    Shell_NotifyIconW(NIM_DELETE, &nid);
+}
+
+unsafe fn restore_from_tray(hwnd: HWND) {
+    ShowWindow(hwnd, SW_SHOW);
+    if IsIconic(hwnd) != 0 {
+        ShowWindow(hwnd, SW_RESTORE);
+    }
+    SetForegroundWindow(hwnd);
+}
+
+unsafe fn show_tray_menu(g: &mut GuiData, hwnd: HWND) {
+    let hmenu = CreatePopupMenu();
+    if hmenu.is_null() {
+        return;
+    }
+    let exit_w = to_wide("Exit");
+    AppendMenuW(hmenu, MF_STRING, IDM_TRAY_EXIT as usize, exit_w.as_ptr());
+
+    let mut pt: POINT = std::mem::zeroed();
+    GetCursorPos(&mut pt);
+    SetForegroundWindow(hwnd);
+    let cmd = TrackPopupMenu(
+        hmenu,
+        TPM_RETURNCMD | TPM_RIGHTBUTTON,
+        pt.x,
+        pt.y,
+        0,
+        hwnd,
+        std::ptr::null(),
+    );
+    DestroyMenu(hmenu);
+    PostMessageW(hwnd, WM_NULL, 0, 0);
+
+    if cmd as u32 == IDM_TRAY_EXIT as u32 {
+        if g.state.runtime.active_ops() > 0 {
+            restore_from_tray(hwnd);
+        }
+        begin_safe_close(g, hwnd, None);
+    }
+}
+
 unsafe fn update_vpn_indicator(g: &mut GuiData, hwnd: HWND, online: bool) {
     if g.last_vpn_online == Some(online) {
         return;
@@ -2310,6 +2403,7 @@ unsafe fn update_vpn_indicator(g: &mut GuiData, hwnd: HWND, online: bool) {
         g.state.config.port, label
     );
     set_window_text(hwnd, &title);
+    modify_tray_icon(g, hwnd);
 }
 
 // --- TreeView 三态复选框辅助 ---
@@ -3061,10 +3155,13 @@ unsafe extern "system" fn wnd_proc(
             g.font_mono = new_mono;
         }
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, cs.lpCreateParams as isize);
+        let tb_msg_w = to_wide("TaskbarCreated");
+        g.msg_taskbar_created = RegisterWindowMessageW(tb_msg_w.as_ptr());
         DragAcceptFiles(hwnd, 1);
         build_all_controls(g, hwnd);
         layout_controls(g, hwnd);
         update_log_header_and_button(g);
+        add_tray_icon(g, hwnd);
         spawn_load_pack_tree(
             g.state.config.clone(),
             g.state.logs.clone(),
@@ -3320,6 +3417,19 @@ unsafe extern "system" fn wnd_proc(
             }
             0
         }
+        WM_APP_TRAY => {
+            let ev = (lparam & 0xFFFF) as u32;
+            match ev {
+                WM_LBUTTONUP | WM_LBUTTONDBLCLK => {
+                    restore_from_tray(hwnd);
+                }
+                WM_RBUTTONUP => {
+                    show_tray_menu(g, hwnd);
+                }
+                _ => {}
+            }
+            0
+        }
         WM_DROPFILES => {
             let hdrop = wparam as HDROP;
             let count = DragQueryFileW(hdrop, 0xFFFF_FFFF, std::ptr::null_mut(), 0);
@@ -3515,18 +3625,34 @@ unsafe extern "system" fn wnd_proc(
             DefWindowProcW(hwnd, msg, wparam, lparam)
         }
         WM_CLOSE => {
-            begin_safe_close(g, hwnd, None);
+            if !g.closing {
+                ShowWindow(hwnd, SW_HIDE);
+            }
+            0
+        }
+        WM_ENDSESSION => {
+            if wparam != 0 {
+                remove_tray_icon(hwnd);
+                g.mailbox.kill_sim_child();
+            }
             0
         }
         WM_DESTROY => {
             KillTimer(hwnd, TIMER_SAFE_CLOSE);
+            remove_tray_icon(hwnd);
             let _ = std::fs::remove_dir_all(g.state.config.build_dir.join("temp").join("diff_preview"));
             g.mailbox.clear_hwnd();
             g.mailbox.kill_sim_child();
             PostQuitMessage(0);
             0
         }
-        _ => DefWindowProcW(hwnd, msg, wparam, lparam),
+        _ => {
+            if g.msg_taskbar_created != 0 && msg == g.msg_taskbar_created {
+                add_tray_icon(g, hwnd);
+                return 0;
+            }
+            DefWindowProcW(hwnd, msg, wparam, lparam)
+        }
     }
 }
 

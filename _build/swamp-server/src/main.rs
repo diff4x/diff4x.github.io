@@ -623,8 +623,6 @@ fn build_router(mode: RunMode, state: Arc<AppState>) -> Router {
                 .route("/ops/cli", post(api_ops::post_cli))
                 .route("/ops/txn", post(api_ops::post_txn))
                 .route("/ops/katrain", post(api_ops::post_katrain))
-                .route("/ops/md-history", get(api_ops::get_md_history))
-                .route("/ops/md-rev", get(api_ops::get_md_rev))
                 .layer(DefaultBodyLimit::max(32 * 1024 * 1024))
                 .layer(middleware::from_fn_with_state(
                     state.clone(),
@@ -998,10 +996,6 @@ fn run_server_mode(cfg: ServerConfig, mode: RunMode, open_browser: bool) {
                     }
                 }
                 let _ = std::fs::remove_dir_all(cfg_bg.build_dir.join("temp").join("diff_preview"));
-                let md_synced = crate::services::md_history::scan_and_sync_all_md(&cfg_bg, Some(&logs_bg));
-                if md_synced > 0 {
-                    logs_bg.info(format!("[startup] 已同步 {} 个 Markdown 文件的版本状态", md_synced));
-                }
                 spawn_asset_watcher(cfg_bg.clone(), logs_bg.clone(), state_bg.html_change_tx.clone());
                 spawn_background_monitors(cfg_bg.clone(), runtime_bg, logs_bg.clone());
             }

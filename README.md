@@ -2,7 +2,7 @@
 
 > 本人觉得有趣的、有启发性的、阴暗的东西，以及各类总结、备忘、导航
 >
-> 基建：初代 by diff4x | 进化 by Gemini & Claude & ChatGPT & Grok
+> 架构初代 by diff4x | 进化 by Gemini & Claude & ChatGPT & Grok
 ---
 
 # 💡 查阅（访客）
@@ -150,7 +150,7 @@
 
 ## 2.1 启动、令牌与配置
 
-- 状态与日志：窗口标题显示服务地址和网络心跳（绿 / 红球图标同步到任务栏）。底部是运行日志，最新的在上，落盘到 `_build/temp/swamp_runtime.log`；重启后用带时间戳的虚线衔接，超过阈值会自动瘦身，体积超过 100 KB 时 `清空日志` 按钮变红。关闭窗口时，程序会等写盘和构建收尾，并回收 `sim (9000)` 子进程。
+- 状态与日志：窗口标题显示服务地址和网络心跳（绿 / 红球图标同步到任务栏和系统托盘）。底部是运行日志，最新的在上，落盘到 `_build/temp/swamp_runtime.log`；重启后用带时间戳的虚线衔接，超过阈值会自动瘦身，体积超过 100 KB 时 `清空日志` 按钮变红。点击窗口右上角 `X` 会隐藏到系统托盘继续运行，左键单击托盘图标重新打开窗口，右键托盘图标选 `Exit` 才会真正退出（退出前等待写盘和构建收尾，并回收 `sim (9000)` 子进程）。
 - 会话令牌：启动时在内存里生成 64 位随机令牌。点 `Open Site`，令牌经 `/__auth` 写入浏览器，随后地址栏被清掉；如果主页已经开着，过渡页同步完令牌就自动关闭，不会重复开窗。重编译重启时，令牌自动交给新进程，旧标签页不用重新登录。令牌失效时，站内的写操作会弹出桌面确认框，确认后续签。
 - 两层配置，不要混写：
 
@@ -191,9 +191,8 @@ HTML 笔记是站里的主要内容。
 
 ### Markdown（含 `README.md`）
 
-- 在书签页左击 `README`，打开左右分栏的编辑器；`Save` 或 `Ctrl+S` 原地落盘（中击跳 GitHub）。
-- 本地在 `_build/temp/md_history/` 记录反向差异链：最新版加 50 个历史版，共 51 版，版名格式为 `yymmddhhmmss`。外部编辑器 60 秒内的自动保存会合并成一版；站内保存和补丁回填不合并。
-- 点顶栏 `Diff` 会刷新版本列表，可在渲染态字级高亮和源码态两种视图间切换。
+- 在书签页左击 `README`，打开左右分栏的编辑器；`Save` 或 `Ctrl+S` 原地落盘（中击跳 GitHub）。开启 `Sync scroll` 时按源码行号锚定联动，编辑器视口第一行始终跟随预览器视口第一行，拖动调整栏宽或缩放窗口时也会保持对齐。
+- 点顶栏 `Diff` 时会自动禁用并隐藏编辑栏；本地与线上统一使用 SW 快照源（`MainDB.html_snapshots` 最多 10 版 + 最近一次构建的 SW 缓存版），本地额外附带一份实时读取的“硬盘当前版”作为最新对照（若有未固化草稿也可参与对比），可在渲染态字级高亮和源码态两种视图间切换。
 
 ### 书签与只在本机显示的入口
 
@@ -224,30 +223,32 @@ HTML 笔记是站里的主要内容。
 - 右栏实时显示构建产出的 `oov_report.txt`，列出公开语料里高频、但词林没收录的词，可以据此决定补哪些规则。
 - 改完点 `保存并重建构建`：强制刷新 `synonyms.js`，并执行一次 `gen`。
 
-常用规则键：
+常用规则键示例：
 
 ```json
-  {
-    "dropEqCodes": ["Bh08A38"],
-    "pruneWords": { "code7": ["词1", "词2"] },
-    "splitFixes": { "保险丝冰箱": ["保险丝", "冰箱"] },
-    "stopExpand": ["指针", "堆栈", "对象"],
-    "groups": [
-      { "c5": "Bo01A", "words": ["电动机", "电机", "马达"] },
-      { "c5": "Dd06A", "exclusive": false, "words": ["报错", "异常"] }
-    ],
-    "aliases": {
-      "梯子": ["VPN", "翻墙", "代理"]
-    }
+{
+  "dropEqCodes": ["Bh08A38"],
+  "pruneWords": { "code7": ["词1", "词2"] },
+  "splitFixes": { "保险丝冰箱": ["保险丝", "冰箱"] },
+  "stopExpand": ["指针", "堆栈", "对象"],
+  "groups": [
+    { "c5": "Bo01A", "words": ["电动机", "电机", "马达"] },
+    { "c5": "Dd06A", "exclusive": false, "words": ["报错", "异常"] }
+  ],
+  "aliases": {
+    "梯子": ["VPN", "翻墙", "代理"]
   }
 }
 ```
-- 含义如下：
-  - `groups`（双向同义词组）：组内词互相扩展。`exclusive` 默认为 `true`（独占覆盖），会自动将这些词从词林的旧义项中剥离
-  - `aliases`（单向别名）：搜索键名可召回目标词，但搜索目标词不会反向召回键名。适合俗称、黑话或上下位归类
-@@ -195,27 +220,30 @@
-    - `=`（等义行）：参与近义词扩展。
-    - `#`（同类行）/ `@`（独立词）：不参与扩展，但保留在词表内，以保护分词边界。
+
+- 字段含义：
+  - `groups`（双向同义词组）：组内词互相扩展；`exclusive` 默认为 `true`（独占覆盖），会自动将这些词从词林的旧义项中剥离。
+  - `aliases`（单向别名）：搜索键名可召回目标词，但搜索目标词不会反向召回键名，适合俗称、黑话或上下位归类。
+  - `stopExpand`：禁止扩展的技术专词，保留在词表内保护分词边界。
+  - `dropEqCodes` / `pruneWords` / `splitFixes`：清洗词林里的脏行或黏连词。
+- 词林标记说明：
+  - `=`（等义行）：参与近义词扩展。
+  - `#`（同类行）/ `@`（独立词）：不参与扩展，但保留在词表内，以保护分词边界。
 
 常用的 5 位分类码（`c5`）：
 
@@ -316,12 +317,12 @@ HTML 笔记是站里的主要内容。
 | `swamp webp [maxW] [quality] [--alt-dir] [--update-mapping]` | 批量转 WebP，文件名复制到剪贴板 |
 | `swamp keep2html [single\|merge] [tag] [category]` | 转换 Google Keep Takeout 压缩包 |
 | `swamp synonyms` | 强制重建 `synonyms.js` 和未收录词报告，并执行 `gen` |
-| `swamp --selftest` | 运行 93 项内置的安全与构建自检 |
+| `swamp --selftest` | 运行 87 项内置的安全与构建自检 |
 
 ## 2.6 出问题时先看这里
 
 - OAuth 过期或要换账号：Tasks 在「常规」页点 `重新授权 Tasks`；街景在「街景上传」页点 `清除令牌`，再重新 `登录授权`。
-- 怀疑构建或安全规则出了问题：点 `selfcheck` 运行 93 项自检；原生端异常崩溃时，看 `_build/temp/backup/swamp_panic.log`。
+- 怀疑构建或安全规则出了问题：点 `selfcheck` 运行 87 项自检；原生端异常崩溃时，看 `_build/temp/backup/swamp_panic.log`。
 - 浏览器缓存卡死或异常：访问 `?repair=1` 并确认弹窗，会重置 SW、Cache、`MainDB` 和 `BookDB`，不删除摘抄本、已阅标记和个人收藏。
 - 补丁回填后出了问题：见 3.2.5。
 
@@ -395,10 +396,7 @@ HTML 笔记是站里的主要内容。
 3. `content.js` 只把直属文本节点交给 Wasm 的 `format_markdown`：先全量转义 `& < > " '`，再把图片名和 URL 生成 `<img>` / `<a>`。
 4. 本地点 `edit`：更新 `#anchor` → 直接启动 `Code.exe` → 25 秒长轮询 `watch-html` → `Ctrl+S` 后记下 `scrollY`，原地重载。
 
-历史 Diff 分两条路：
-
-- HTML 和线上的 MD：靠 SW 在发版时顺手留底（`MainDB.html_snapshots`，至多 10 版）。
-- 本地的 MD（README）：编辑频率高，不能等发版，所以由 `swamp.exe` 维护反向 Myers 差异链（最新版加 50 个反向差异，共 51 版）。外部编辑器 60 秒内的自动保存合并成一版；还原时必须校验 SHA-256，损坏的文件留档为 `.corrupt`。
+历史 Diff 统一由 SW 在发版 / `gen` 时留底（`MainDB.html_snapshots`，至多 10 版）；本地打开 Markdown 对比时再叠加最近一次 SW 缓存版与实时读取的硬盘当前版，并自动禁用、隐藏编辑栏。
 
 为什么这么做：在 `<pre>` 里写纯文本之所以安全，靠两步接力：DOM 解析阶段先分流，Wasm 再做纯文本转义。即使 Keep 笔记原文里夹带 HTML 标签，入库和渲染两端也都会被转义。
 
@@ -407,7 +405,7 @@ HTML 笔记是站里的主要内容。
 1. 服务只绑定 `127.0.0.1`，并校验 Host 白名单。
 2. `/__api/*` 要过四重鉴权：Origin、`Sec-Fetch-Site`、常量时间比较的 Token、32 MB 体积上限。
 3. 补丁回填：硬性禁止写入 `.git`、`.vscode`、`privy` 等路径；高危的构建文件必须在 VS Code Diff 里看过，才会解锁自动编译。
-4. 自动编译交接：等 `active_ops == 0` → 停掉 sim → `server_handle.join()` → 用 `SWAMP_HANDOFF_TOKEN` 把令牌交给 `build.bat`（它在独立 `setlocal` 子过程中同时清空 `SWAMP_HANDOFF_TOKEN` 与 `_SWAMP_HANDOFF_TOKEN` 后再调 `cargo` / `wasm-pack`）→ 跑完 93 项 `--selftest` 后覆盖 `swamp.exe` → 新进程接收令牌，旧标签页无感续用。
+4. 自动编译交接：等 `active_ops == 0` → 停掉 sim → `server_handle.join()` → 用 `SWAMP_HANDOFF_TOKEN` 把令牌交给 `build.bat`（它在独立 `setlocal` 子过程中同时清空 `SWAMP_HANDOFF_TOKEN` 与 `_SWAMP_HANDOFF_TOKEN` 后再调 `cargo` / `wasm-pack`）→ 跑完 87 项 `--selftest` 后覆盖 `swamp.exe` → 新进程接收令牌，旧标签页无感续用。
 
 补充：Tasks 和控制台的「街景上传」页共用 `/__oauth/callback`（PKCE S256，先验证 `state` 再消费，`oauth_pending` 防止并发冲突）。凭据可以共用，令牌分存在 `tokens.json` 和 `streetview_tokens.json`，从而把只读的任务权限和街景的发布权限分开。
 
@@ -446,7 +444,7 @@ HTML 笔记是站里的主要内容。
 
 `build.bat`（位于 `_build/swamp-server/`）的三个选项：
 
-- `[1]` 编译 `swamp.exe`：改了非 `lib.rs` 的 Rust 源码后运行。先对新产物跑完 93 项 `--selftest`，全部通过后，才带重试地覆盖 `_build/swamp.exe`，并交接令牌重启。
+- `[1]` 编译 `swamp.exe`：改了非 `lib.rs` 的 Rust 源码后运行。先对新产物跑完 87 项 `--selftest`，全部通过后，才带重试地覆盖 `_build/swamp.exe`，并交接令牌重启。
 - `[2]` 编译 Wasm（`src\wasm`）：改了 `src/lib.rs` 后运行。经 `wasm-stage` 完成 `wasm-pack` 和 `wasm-opt`，复制 `.wasm` 并压缩胶水脚本；完成后必须跑一次 `gen`。
 - `[3]` 全部编译：依次执行 `[1]` 和 `[2]`，并启动新版管理窗。
 
@@ -475,7 +473,7 @@ AI 的补丁只能修改源码区；产物区由 `gen` 或 `build.bat` 生成，
 - 产物区（由 `gen` 或 `build.bat` 覆盖，禁止手改）：`/sw.js`、`src/js/*.js`（含 `core-list.js`、`synonyms.js`）、`src/css/*.css`、`src/js/data/*`、`src/wasm/*`、`src/discussion_id_mapper.json`、`gallery/img/idle-list.txt`。
 - 私有与临时区（被 `.gitignore` 忽略，不得修改或打包）：
   - `_build/privy/`：`local.toml`、`credentials.json`、`tokens.json`、`streetview_{credentials,tokens}.json`、`upcoming_tasks.json`、`txn.txt`；
-  - `_build/temp/`：`swamp_runtime.log`、`md_history/`、`diff_preview/`、`staging_data_*/`、`backup/`；
+  - `_build/temp/`：`swamp_runtime.log`、`diff_preview/`、`staging_data_*/`、`backup/`；
   - `.git/`、`.vscode/`。
 
 ### 3.2.2 架构硬边界
@@ -504,7 +502,7 @@ AI 的补丁只能修改源码区；产物区由 `gen` 或 `build.bat` 生成，
 5. 单一事实源与门禁
    - `MainDB` 的 Schema、20 个隔离键、`createStore` 只在 `site-core.js` 里定义。
    - 环境分支只认 `store.online_flag`（没有 `localStorage` 的 `sw.js` 除外）。
-   - 任何要替换 `_build/swamp.exe` 的改动，都必须通过 93 项 `--selftest`。
+   - 任何要替换 `_build/swamp.exe` 的改动，都必须通过 87 项 `--selftest`。
 6. 历史契约与锚点不可变
    - `store.lightbox_stauts`、`store.bookmarkhtml_modifing`、`MainDB.html_snapshots`、`__TXT_SEARCH_BRIDGE__`、`<span id="anchor">`、`<a id="end_flag">`、`_f`、`_uncategorized`，都是跨文件的契约，禁止单点“顺手纠错”或改名。
    - 所有构建产物（含 `src/js/raw/core-list.js`）都由 `gen` 独占生成，禁止手改。
@@ -576,7 +574,7 @@ AI 的补丁只能修改源码区；产物区由 `gen` 或 `build.bat` 生成，
 
 目标：新会话中，AI 仅凭本文档加一部分相关源码，就能判断站点怎么运行、问题大概在哪里，并交付不引入回归的补丁。
 
-基线：单 Crate 双目标的 Rust 工程 `_build/swamp-server`（`v3.1.0`）+ 纯静态前端（11 个视图模板，没有外部工具脚本 CDN）+ 93 项 `--selftest` 自检。
+基线：单 Crate 双目标的 Rust 工程 `_build/swamp-server`（`v3.1.0`）+ 纯静态前端（11 个视图模板，没有外部工具脚本 CDN）+ 87 项 `--selftest` 自检。
 
 读法：
 
@@ -592,7 +590,7 @@ AI 的补丁只能修改源码区；产物区由 `gen` 或 `build.bat` 生成，
 - Win32 Per-Monitor HiDPI 的 5 标签页控制台（`gui.rs` + `Arc<GuiMailbox>`）。
 - Axum HTTP（Serve 为 `127.0.0.1:8000`，Sim 为 `9000`）：`host_guard` → `security_headers` → Router。
 - 事务构建器（`builder/*`）：`GEN_LOCK` → `ASSET_LOCK`，做增量压缩、切片、同义词和隔离检查。
-- 文件监听器（`watcher.rs`）：raw 文件 300 ms 热压缩；html 保存时广播；追踪根目录 md 的历史。
+- 文件监听器（`watcher.rs`）：raw 文件 300 ms 热压缩；html 保存时广播。
 - 后台与媒体服务：VPN 心跳、Tasks 轮询、Street View 上传、WebP、Keep2HTML、Pack。
 
 浏览器自治端有 6 个执行上下文（`/__api/*`、`/__auth`、`/__oauth` 只在 Serve 模式下可用）：
@@ -618,7 +616,7 @@ AI 的补丁只能修改源码区；产物区由 `gen` 或 `build.bat` 生成，
 | 私有内容访问 | 可读可搜（`html/__*.html`、`shadow*`、私有图库） | 强制拒绝（硬拦 `shadow*`、`html/__*`、`gallery/{diary,playboy}`，并联动 `.gitignore` 返回 404） | 不入库（目录标 `🔒`，切片占位 `"localOnly"`） |
 | SW `fetch` 策略 | Network-Only（`no-store`），断网回退缓存；放行 `/__api`、`/__auth*`、`/__oauth` | Cache-First；活跃 SW 实时合成 `core-list.js` | 同 Sim |
 | 站内写能力 | HTML `edit` 热重载、双语固化、书签拖拽、MD 编辑保存、KaTrain、`txn_parser` 跳行 | 全部关闭（双语页移除 `contenteditable`） | 全部关闭 |
-| MD Diff 历史源 | 本地反向差异链 `/__api/ops/md-{history,rev}`（最多 51 版，`yymmddhhmmss`）+ 草稿 | SW 快照 `MainDB.html_snapshots`（最多 10 版，`vN`） | 同 Sim |
+| MD Diff 历史源 | SW 快照 `MainDB.html_snapshots`（最多 10 版）+ SW 当前缓存版 + 硬盘当前版（及未固化草稿） | SW 快照 `MainDB.html_snapshots`（最多 10 版，`vN`） | 同 Sim |
 | 评论与同步 | 不弹 Giscus 窗，保留评论索引入口 | 加载映射表和 Giscus 弹窗 | 完整启用，每 10 分钟同步 `comments.json` |
 
 ### 3.3.3 需求到源码的路由表
@@ -635,7 +633,7 @@ AI 的补丁只能修改源码区；产物区由 `gen` 或 `build.bat` 生成，
 | 同义词词林扩展与 OOV 报告 | `_build/swamp-server/src/builder/{synonyms.rs,synonyms_tpl.js}`、`_build/swamp.toml` 的 `[synonyms]` | `worker.js` 搜全站用 Bloom，搜电子书必传 `skipCorpusFilter: true` | 改 Rust：`exe` + `gen`；仅改规则：在控制台重建 |
 | HTML 渲染、页内高亮、代码工具、HTML Diff | `src/js/raw/content.js`、`src/lib.rs`（`format_markdown`、`compute_lcs_diff`）、`src/css/raw/content.css` | 新增挂在 `body` 上的运行期 DOM，必须补入 `bilingual.js` 的 `garbageSelectors` | 改 `lib.rs`：`wasm` + `gen`；否则 `gen` |
 | 双语对照页编辑与固化 | `src/js/raw/bilingual.js`、`src/css/raw/bilingual.css`、`src/tpl/bilingual.html`、`src/api_files.rs`（`put_html`） | `content.js` 里早期的 `MutationObserver` 劫持 `#zhText.value` | `gen`（改 Rust 需 `exe`） |
-| Markdown 阅读、编辑与双轨 Diff | `src/tpl/md_viewer.html`、`src/services/md_history.rs`、`src/api_files.rs`（`put_md`）、`src/api_ops.rs`（`get_md_*`） | `md_viewer.html` 解析 `content.css` 来同步字体；CodeMirror 被排除出 precache | 改 Rust：`exe`；改模板：`gen` |
+| Markdown 阅读、编辑与双轨 Diff | `src/tpl/md_viewer.html`、`src/api_files.rs`（`put_md`） | `md_viewer.html` 解析 `content.css` 来同步字体；CodeMirror 被排除出 precache | 改 Rust：`exe`；改模板：`gen` |
 | 电子书阅读与书内搜（TXT / PDF / EPUB） | `src/tpl/{txt,epub,pdf}.html`、`src/js/raw/{pdf-viewer,book-db}.js`、`src/css/raw/pdf-viewer.css` | `BookDB` 只在删书时定向清理；PDF.js v6 用 `_textHighlighter` 适配文本层 | `gen` |
 | 图库、视频灯箱、全景与悬浮音乐 | `src/js/raw/{lightbox-logic,audio-player,shared-utils}.js`、`src/tpl/pano.html` | 灯箱 `about:blank` 禁止内联脚本；进度持久化走 `shared-utils.js` | `gen` |
 | 侧边栏目录、已读标记、右键菜单 | `src/js/raw/side.js`、`src/css/raw/side.css`、`src/tpl/side.html`、`src/js/raw/deferred-features.js` | `buildCatalogFromLiteData` 重建 DOM 后，必须重新调用 `attachMarkButtonsToDOM` | `gen` |
@@ -650,7 +648,7 @@ AI 的补丁只能修改源码区；产物区由 `gen` 或 `build.bat` 生成，
 
 单 Crate 双目标编译（Windows）：
 
-- 原生端（`--bin swamp`）：`cargo build --profile release-exe`，参数为 `opt-level="s"`、`lto=true`、`codegen-units=1`、`strip=true`、`panic="unwind"`（崩溃日志写到 `_build/temp/backup/swamp_panic.log`）。`build.bat` 固定把 `CARGO_TARGET_DIR` 指到同步盘之外的 `%LOCALAPPDATA%\swamp-cargo-target`，并且先通过全部 93 项 `--selftest`，再带重试地替换 `_build/swamp.exe`。
+- 原生端（`--bin swamp`）：`cargo build --profile release-exe`，参数为 `opt-level="s"`、`lto=true`、`codegen-units=1`、`strip=true`、`panic="unwind"`（崩溃日志写到 `_build/temp/backup/swamp_panic.log`）。`build.bat` 固定把 `CARGO_TARGET_DIR` 指到同步盘之外的 `%LOCALAPPDATA%\swamp-cargo-target`，并且先通过全部 87 项 `--selftest`，再带重试地替换 `_build/swamp.exe`。
 - Wasm 端（`--lib`，`compute_intensive_task_processor`，`cdylib`）：`wasm-pack build --target web`，`.cargo/config.toml` 开启 `+simd128`，`release` 配置为 `opt-level="z"`、`panic="abort"`，再跑 `wasm-opt -Oz`。先在 `%LOCALAPPDATA%\swamp-cargo-target\wasm-stage` 暂存（避开网盘抢锁），再复制 `.wasm`，并用 `swamp.exe minify` 压缩胶水 JS。
 
 同源第三方库及其定制：
@@ -708,10 +706,9 @@ AI 的补丁只能修改源码区；产物区由 `gen` 或 `build.bat` 生成，
 | `/__auth/refresh` | POST | 401 时自动续签：校验 Origin、Sec-Fetch-Site 和 JSON；同一时刻只弹一个 Win32 物理确认框（拒绝后冷却 10 s，通过后宽限 3 s） |
 | `/__oauth/callback` | GET | Google Tasks 和 Street View 共用：先核对 `state`，再消费 `PendingOAuth`；CSP 为 `script-src 'none'` |
 | `/__api/health`、`/__api/tasks` | GET | 探活；返回内存中近期到期的 Tasks |
-| `/__api/files/html`、`/__api/files/md` | PUT | 原子写盘：双语页（带 BOM，只限已存在的文件）；MD（`spawn_blocking`，排除 `_build` 和 `.git`，同时记录 `md_history`） |
+| `/__api/files/html`、`/__api/files/md` | PUT | 原子写盘：双语页（带 BOM，只限已存在的文件）；MD（`spawn_blocking`，排除 `_build` 和 `.git`） |
 | `/__api/bookmarks` | POST | 原子地增、删、移 `src/tpl/bookmark.html` 里的书签，并更新 `#end_flag` 的毫秒时间戳 |
 | `/__api/ops/edit`、`/__api/ops/watch-html` | POST、GET | 更新 `<span id="anchor">`（兼容无时间戳的旧页）并拉起 VS Code；25 s 长轮询监听保存广播，另有 2 s 兜底，`shutting_down` 时立即退出 |
-| `/__api/ops/md-history`、`/__api/ops/md-rev` | GET | 严格只读（零写盘，`spawn_blocking`）：返回本地 51 版目录，并沿反向差异链还原历史全文 |
 | `/__api/ops/{explorer,cli,txn,katrain}` | POST | 打开仓库根目录；触发 `gen`；用 VS Code 的 `-g txn.txt:<line>` 跳行；聚焦或用 `uv run` 启动 KaTrain |
 
 #### 存储 Schema 与淘汰规则
@@ -726,7 +723,7 @@ AI 的补丁只能修改源码区；产物区由 `gen` 或 `build.bat` 生成，
 | IDB | `MainDB` v3 | `chunks`、`update_logs`、`search_cache`、`sys_state`、`html_snapshots` | `search_cache` 为 500 条 LRU（单次命中 $>300$ 的不入库）；`html_snapshots` 每页 10 版，`deflate-raw` 压缩 |
 | IDB | `BookDB` v1 | `book_extracts`、`search_cache`（TXT / PDF / EPUB） | 提取内容最多 30 本 / 32 MB（单本 12 MB）；搜索缓存最多 600 条 / 16 MB（单书 80 条，单条 512 KB）；超过 4 KB 的压缩；站点更新不清空，只在删书时由 `pruneDeletedBooks` 清理 |
 | IDB | `ExcerptsDB`、`SideDB`、`AlignDrafts`（均为 v1） | 摘抄（`books`）、已读（`marks`）、双语草稿（`draft_texts`） | 持久保留；`@bomb` 删库前必须先显式 `.close()` |
-| 本地文件 | `_build/temp/` | `swamp_runtime.log`（800 条，启动时超过 1000 条或 512 KB 就瘦身）、`md_history/*.json`（51 版）、`diff_preview/`（保留 10 份）、`backup/` | 受 `.gitignore` 和 HTTP 默认拒绝保护 |
+| 本地文件 | `_build/temp/` | `swamp_runtime.log`（800 条，启动时超过 1000 条或 512 KB 就瘦身）、`diff_preview/`（保留 10 份）、`backup/` | 受 `.gitignore` 和 HTTP 默认拒绝保护 |
 
 ### 3.3.6 四条数据流管线
 
@@ -777,7 +774,7 @@ AI 的补丁只能修改源码区；产物区由 `gen` 或 `build.bat` 生成，
 - HTML 渲染与 Diff：
   - `content.js` 只把 `<pre>` 的直属文本节点交给 Wasm 的 `format_markdown`；生成 `<img>` / `<a>` 之前先全量转义 `& < > " '`，防止标签复活；`<p>` 表格和 `<code>` 元素节点保持原样。
   - HTML Diff 跟踪 `inCode`，防止改语言时出现嵌套的 `<code>`。
-  - 本地 MD 的 Diff 由 `md_history.rs` 维护：反向 Myers 差异链，51 版，版名 `yymmddhhmmss`；watcher 对外部保存有 60 s 合并窗口；还原时校验 SHA-256，损坏的文件留档为 `.corrupt`；点 `Diff` 会主动拉取最新列表。
+  - MD 的 Diff 统一由 SW 留底（`MainDB.html_snapshots`，至多 10 版），本地额外读取最新 SW 缓存版与实时硬盘当前版；进入 Diff 时禁用并隐藏编辑栏；正常编辑态下通过 `marked.lexer` 源码行映射实现预览与编辑器的行级锚定联动滚动。
 
 #### 管线 D：补丁回填、安全交接与伴生服务
 
@@ -811,4 +808,4 @@ AI 的补丁只能修改源码区；产物区由 `gen` 或 `build.bat` 生成，
 - 信任边界：
   - 完全信任的来源只有本机私有配置，见 3.2.2 第 2 条；兼容旧的 `local.properties`。
   - 受限来源：`swamp.toml`（`webp_output_dir` 限制在仓库内，`heartbeat_url` 限制为 `http(s)://`，写回前必须通过 `toml::from_str::<SwampToml>`）、AI 补丁 `.zip`、Keep `.zip`、外部浏览器页面。
-  - 纵深防线：全站没有外部工具脚本 CDN，也没有 `eval`；拉起 VS Code 时，直接启动 `Code.exe` 失败后才会回退，回退路径会拦截全部 cmd 元字符；93 项 `--selftest` 是编译发布的硬门禁。
+  - 纵深防线：全站没有外部工具脚本 CDN，也没有 `eval`；拉起 VS Code 时，直接启动 `Code.exe` 失败后才会回退，回退路径会拦截全部 cmd 元字符；87 项 `--selftest` 是编译发布的硬门禁。

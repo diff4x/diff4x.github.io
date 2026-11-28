@@ -128,7 +128,6 @@ presets_json = '''
       "_build/swamp-server/src/media/webp.rs",
       "_build/swamp-server/src/security.rs",
       "_build/swamp-server/src/services/log_bus.rs",
-      "_build/swamp-server/src/services/md_history.rs",
       "_build/swamp-server/src/services/mod.rs",
       "_build/swamp-server/src/services/pack_apply.rs",
       "_build/swamp-server/src/services/street_view.rs",
