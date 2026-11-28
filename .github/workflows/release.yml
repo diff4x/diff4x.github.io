@@ -19,6 +19,8 @@ jobs:
     # 仅在骨架仓库运行，防止个人 *.github.io 站点仓库或下游用户站误触发构建
     if: ${{ !endsWith(github.repository, '.github.io') }}
     runs-on: windows-latest
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}\_build\swamp-server\target
     defaults:
       run:
         shell: pwsh
@@ -54,31 +56,91 @@ jobs:
           if (-not (Get-Command wasm-pack -ErrorAction SilentlyContinue)) {
             Invoke-WebRequest -Uri "https://github.com/rustwasm/wasm-pack/releases/latest/download/wasm-pack-init.exe" -OutFile "$env:RUNNER_TEMP\wasm-pack-init.exe"
             & "$env:RUNNER_TEMP\wasm-pack-init.exe" --yes
+            if ($LASTEXITCODE -ne 0) { throw "wasm-pack-init failed with exit code $LASTEXITCODE" }
             "$env:USERPROFILE\.cargo\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
           }
 
       - name: Build swamp.exe and run full --selftest gate
         working-directory: _build/swamp-server
         run: |
-          cargo build --profile release-exe --bin swamp
-          $exe = Join-Path (Get-Location) "target\release-exe\swamp.exe"
-          & $exe --selftest
+          function Invoke-SwampSync {
+            param([string]$ExePath, [string[]]$ArgsList)
+            $outFile = Join-Path $env:RUNNER_TEMP ("swamp_out_" + [guid]::NewGuid().ToString("N") + ".txt")
+            $errFile = Join-Path $env:RUNNER_TEMP ("swamp_err_" + [guid]::NewGuid().ToString("N") + ".txt")
+            $quoted = $ArgsList | ForEach-Object { if ($_ -match '\s') { '"' + $_ + '"' } else { $_ } }
+            $p = Start-Process -FilePath $ExePath -ArgumentList $quoted -Wait -PassThru -RedirectStandardOutput $outFile -RedirectStandardError $errFile
+            if (Test-Path $outFile) { $o = Get-Content -Raw $outFile; if ($o) { Write-Host $o.TrimEnd() }; Remove-Item -Force $outFile }
+            if (Test-Path $errFile) { $e = Get-Content -Raw $errFile; if ($e) { Write-Host $e.TrimEnd() }; Remove-Item -Force $errFile }
+            if ($p.ExitCode -ne 0) { throw "swamp.exe ($($ArgsList -join ' ')) exited with code $($p.ExitCode)" }
+          }
+
+          $jsonLines = cargo build --profile release-exe --bin swamp --message-format=json-render-diagnostics
+          if ($LASTEXITCODE -ne 0) { throw "cargo build failed with exit code $LASTEXITCODE" }
+
+          $exe = $null
+          foreach ($line in $jsonLines) {
+            if ($line -and $line.StartsWith('{')) {
+              try {
+                $obj = $line | ConvertFrom-Json -ErrorAction Stop
+                if ($obj.reason -eq 'compiler-artifact' -and $obj.target.name -eq 'swamp' -and $obj.executable) {
+                  $exe = $obj.executable
+                }
+              } catch {}
+            }
+          }
+          if (-not $exe -or -not (Test-Path $exe)) {
+            $found = Get-ChildItem -Path $env:CARGO_TARGET_DIR -Recurse -Filter "swamp.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($found) { $exe = $found.FullName }
+          }
+          if (-not $exe -or -not (Test-Path $exe)) {
+            throw "未能定位编译产出的 swamp.exe (CARGO_TARGET_DIR=$env:CARGO_TARGET_DIR)"
+          }
+          Write-Host "Built executable: $exe"
+          Invoke-SwampSync -ExePath $exe -ArgsList @("--selftest")
           Copy-Item -Force $exe "..\swamp.exe"
 
       - name: Build Wasm module and minify glue JS
         working-directory: _build/swamp-server
         run: |
+          function Invoke-SwampSync {
+            param([string]$ExePath, [string[]]$ArgsList)
+            $outFile = Join-Path $env:RUNNER_TEMP ("swamp_out_" + [guid]::NewGuid().ToString("N") + ".txt")
+            $errFile = Join-Path $env:RUNNER_TEMP ("swamp_err_" + [guid]::NewGuid().ToString("N") + ".txt")
+            $quoted = $ArgsList | ForEach-Object { if ($_ -match '\s') { '"' + $_ + '"' } else { $_ } }
+            $p = Start-Process -FilePath $ExePath -ArgumentList $quoted -Wait -PassThru -RedirectStandardOutput $outFile -RedirectStandardError $errFile
+            if (Test-Path $outFile) { $o = Get-Content -Raw $outFile; if ($o) { Write-Host $o.TrimEnd() }; Remove-Item -Force $outFile }
+            if (Test-Path $errFile) { $e = Get-Content -Raw $errFile; if ($e) { Write-Host $e.TrimEnd() }; Remove-Item -Force $errFile }
+            if ($p.ExitCode -ne 0) { throw "swamp.exe ($($ArgsList -join ' ')) exited with code $($p.ExitCode)" }
+          }
+
           $stage = Join-Path $env:RUNNER_TEMP "swamp-wasm-stage"
           if (Test-Path $stage) { Remove-Item -Recurse -Force $stage }
           wasm-pack build --target web --release --out-dir $stage
-          $wasmOut = "..\..\src\wasm"
-          New-Item -ItemType Directory -Force -Path $wasmOut | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "wasm-pack build failed with exit code $LASTEXITCODE" }
+
+          $wasmOut = Resolve-Path (New-Item -ItemType Directory -Force -Path "..\..\src\wasm")
           Copy-Item -Force (Join-Path $stage "compute_intensive_task_processor_bg.wasm") (Join-Path $wasmOut "compute_intensive_task_processor_bg.wasm")
-          & "..\swamp.exe" minify (Join-Path $stage "compute_intensive_task_processor.js") (Join-Path $wasmOut "compute_intensive_task_processor.min.js")
+          $swampExe = (Resolve-Path "..\swamp.exe").Path
+          Invoke-SwampSync -ExePath $swampExe -ArgsList @(
+            "minify",
+            (Join-Path $stage "compute_intensive_task_processor.js"),
+            (Join-Path $wasmOut "compute_intensive_task_processor.min.js")
+          )
 
       - name: Package out-of-the-box win64.zip, upgrade.zip & SHA256SUMS
         id: pack
         run: |
+          function Invoke-SwampSync {
+            param([string]$ExePath, [string[]]$ArgsList)
+            $outFile = Join-Path $env:RUNNER_TEMP ("swamp_out_" + [guid]::NewGuid().ToString("N") + ".txt")
+            $errFile = Join-Path $env:RUNNER_TEMP ("swamp_err_" + [guid]::NewGuid().ToString("N") + ".txt")
+            $quoted = $ArgsList | ForEach-Object { if ($_ -match '\s') { '"' + $_ + '"' } else { $_ } }
+            $p = Start-Process -FilePath $ExePath -ArgumentList $quoted -Wait -PassThru -RedirectStandardOutput $outFile -RedirectStandardError $errFile
+            if (Test-Path $outFile) { $o = Get-Content -Raw $outFile; if ($o) { Write-Host $o.TrimEnd() }; Remove-Item -Force $outFile }
+            if (Test-Path $errFile) { $e = Get-Content -Raw $errFile; if ($e) { Write-Host $e.TrimEnd() }; Remove-Item -Force $errFile }
+            if ($p.ExitCode -ne 0) { throw "swamp.exe ($($ArgsList -join ' ')) exited with code $($p.ExitCode)" }
+          }
+
           $ver = ""
           if ($env:GITHUB_EVENT_NAME -eq "push" -and $env:GITHUB_REF_NAME) {
             $ver = $env:GITHUB_REF_NAME
@@ -86,12 +148,16 @@ jobs:
             $ver = "${{ inputs.version }}"
           }
           $outDir = Join-Path $env:GITHUB_WORKSPACE "release-dist"
+          $swampExe = (Resolve-Path ".\_build\swamp.exe").Path
           if ($ver -ne "") {
-            & ".\_build\swamp.exe" release --version $ver --out-dir $outDir
+            Invoke-SwampSync -ExePath $swampExe -ArgsList @("release", "--version", $ver, "--out-dir", $outDir)
           } else {
-            & ".\_build\swamp.exe" release --out-dir $outDir
+            Invoke-SwampSync -ExePath $swampExe -ArgsList @("release", "--out-dir", $outDir)
           }
-          Get-ChildItem $outDir | Format-Table Name, Length
+
+          $items = Get-ChildItem $outDir
+          $items | Format-Table Name, Length
+          if ($items.Count -lt 4) { throw "release-dist 产物不完整，仅找到 $($items.Count) 个文件" }
 
       - name: Upload workflow artifacts
         uses: actions/upload-artifact@v4
